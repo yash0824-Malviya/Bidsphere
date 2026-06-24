@@ -3,6 +3,7 @@ import { Outlet } from "react-router-dom";
 
 
 import { LayoutProvider, useLayout } from "../../contexts/LayoutContext";
+import { useDocumentTitle } from "../../hooks/useDocumentTitle";
 
 import ProcurementChat from "../ChatBot/ProcurementChat";
 
@@ -29,6 +30,8 @@ function sidebarOffsetPx(mode: "drawer" | "collapsed" | "full"): number {
 function MainLayoutShell() {
 
   const { mobileNavOpen, closeMobileNav, sidebarMode } = useLayout();
+
+  useDocumentTitle();
 
 
 

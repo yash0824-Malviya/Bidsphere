@@ -12,6 +12,7 @@ import {
   Send,
 } from "lucide-react";
 
+import { APP_NAME } from "../../config/branding";
 import { getCompanyInfo, getSystemSettings } from "../../api/admin";
 import { getEmailConfig, saveEmailConfig } from "../../api/notifications";
 import type { EmailConfig } from "../../api/notifications";
@@ -116,7 +117,7 @@ export default function SystemSettingsPage() {
               <EmailField label="SMTP Port" value={String(emailCfg.smtpPort)} onChange={(v) => setEmailCfg((c) => ({ ...c, smtpPort: Number(v) || 587 }))} placeholder="587" type="number" />
               <EmailField label="Email Address" value={emailCfg.emailAddress} onChange={(v) => setEmailCfg((c) => ({ ...c, emailAddress: v }))} placeholder="notifications@company.com" />
               <EmailField label="Password" value={emailCfg.password} onChange={(v) => setEmailCfg((c) => ({ ...c, password: v }))} placeholder="••••••••" type="password" />
-              <EmailField label="Sender Name" value={emailCfg.senderName} onChange={(v) => setEmailCfg((c) => ({ ...c, senderName: v }))} placeholder="BidSphere Notifications" />
+              <EmailField label="Sender Name" value={emailCfg.senderName} onChange={(v) => setEmailCfg((c) => ({ ...c, senderName: v }))} placeholder={`${APP_NAME} Notifications`} />
               <div className="flex items-center gap-3 pt-4">
                 <label className="inline-flex items-center gap-2 text-xs text-neutral-700 cursor-pointer">
                   <input type="checkbox" checked={emailCfg.enableNotifications} onChange={(e) => setEmailCfg((c) => ({ ...c, enableNotifications: e.target.checked }))} className="h-3.5 w-3.5 rounded border-neutral-300 text-primary-600 focus:ring-primary-500" />
@@ -132,7 +133,7 @@ export default function SystemSettingsPage() {
 
           {/* System Info */}
           <SettingsCard icon={Server} iconBg="bg-neutral-100" iconColor="text-neutral-600" title="System Information">
-            <FieldRow label="Platform" value="BidSphere v1.0" />
+            <FieldRow label="Platform" value={`${APP_NAME} v1.0`} />
             <FieldRow label="Backend" value="ERPNext / Frappe" />
             <FieldRow label="Frontend" value="React + TypeScript" />
           </SettingsCard>

@@ -20,6 +20,7 @@ import {
   Truck,
 } from "lucide-react";
 
+import { APP_NAME } from "../../config/branding";
 import { getInvoicesForPO } from "../../api/accounts";
 import type { InvoiceRow } from "../../api/accounts";
 import {
@@ -273,7 +274,7 @@ export default function PurchaseOrderDetailPage() {
               <InfoField label="PO Date" value={formatDate(po.transaction_date)} />
               <InfoField label="Required By" value={po.schedule_date ? formatDate(po.schedule_date) : "—"} />
               <InfoField label="Currency" value={po.currency ?? "USD"} />
-              <InfoField label="Owner" value="BidSphere" />
+              <InfoField label="Owner" value={APP_NAME} />
             </div>
           </div>
 

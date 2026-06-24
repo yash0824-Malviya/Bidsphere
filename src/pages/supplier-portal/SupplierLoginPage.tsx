@@ -16,6 +16,7 @@ import {
 
 import { apiGet, buildResourceUrl } from "../../api/erpnext";
 import SupplierLoginHeroPanel from "../../components/supplier-portal/SupplierLoginHeroPanel";
+import { useDocumentTitle } from "../../hooks/useDocumentTitle";
 
 const SUPPLIER_PINS: Record<string, string> = {};
 const DEFAULT_PIN = "1234";
@@ -34,6 +35,7 @@ function validateLogin(supplierName: string, pin: string): boolean {
 
 export default function SupplierLoginPage() {
   const navigate = useNavigate();
+  useDocumentTitle();
   const [supplierName, setSupplierName] = useState("");
   const [supplierCode, setSupplierCode] = useState("");
   const [pin, setPin] = useState("");

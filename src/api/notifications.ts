@@ -62,6 +62,8 @@ function uid(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+import { APP_NAME } from "../config/branding";
+
 /* ─── Email Templates ─────────────────────────────────────────────────────── */
 
 export const EMAIL_TEMPLATES: EmailTemplate[] = [
@@ -69,7 +71,7 @@ export const EMAIL_TEMPLATES: EmailTemplate[] = [
     id: "rfq_created",
     name: "RFQ Created",
     subject: "New RFQ Created: {{rfq_id}}",
-    body: "Dear Team,\n\nA new Request for Quotation ({{rfq_id}}) has been created.\n\nItems: {{item_count}}\nCreated by: {{created_by}}\nDeadline: {{deadline}}\n\nPlease review and submit your quotation at your earliest convenience.\n\nRegards,\nBidSphere Procurement",
+    body: `Dear Team,\n\nA new Request for Quotation ({{rfq_id}}) has been created.\n\nItems: {{item_count}}\nCreated by: {{created_by}}\nDeadline: {{deadline}}\n\nPlease review and submit your quotation at your earliest convenience.\n\nRegards,\n${APP_NAME}`,
     triggerEvent: "Request for Quotation → Submitted",
     recipients: "Suppliers, Procurement Team",
     enabled: true,
@@ -78,7 +80,7 @@ export const EMAIL_TEMPLATES: EmailTemplate[] = [
     id: "quotation_submitted",
     name: "Supplier Quotation Submitted",
     subject: "Quotation Received for {{rfq_id}} from {{supplier}}",
-    body: "Dear Procurement Team,\n\nA supplier quotation has been submitted:\n\nRFQ: {{rfq_id}}\nSupplier: {{supplier}}\nTotal Amount: {{amount}}\nItems: {{item_count}}\n\nPlease review the quotation in BidSphere.\n\nRegards,\nBidSphere",
+    body: `Dear Procurement Team,\n\nA supplier quotation has been submitted:\n\nRFQ: {{rfq_id}}\nSupplier: {{supplier}}\nTotal Amount: {{amount}}\nItems: {{item_count}}\n\nPlease review the quotation in ${APP_NAME}.\n\nRegards,\n${APP_NAME}`,
     triggerEvent: "Supplier Quotation → Submitted",
     recipients: "Procurement Manager",
     enabled: true,
@@ -87,7 +89,7 @@ export const EMAIL_TEMPLATES: EmailTemplate[] = [
     id: "legal_review_required",
     name: "Legal Review Required",
     subject: "Legal Review Required: {{rfq_id}}",
-    body: "Dear Legal Team,\n\nAn RFQ requires legal review before proceeding:\n\nRFQ: {{rfq_id}}\nTotal Value: {{amount}}\nSupplier: {{supplier}}\n\nPlease complete your legal review in BidSphere.\n\nRegards,\nBidSphere Workflow",
+    body: `Dear Legal Team,\n\nAn RFQ requires legal review before proceeding:\n\nRFQ: {{rfq_id}}\nTotal Value: {{amount}}\nSupplier: {{supplier}}\n\nPlease complete your legal review in ${APP_NAME}.\n\nRegards,\n${APP_NAME}`,
     triggerEvent: "RFQ Approval → Legal Stage",
     recipients: "Legal Reviewer",
     enabled: true,
@@ -96,7 +98,7 @@ export const EMAIL_TEMPLATES: EmailTemplate[] = [
     id: "finance_review_required",
     name: "Finance Review Required",
     subject: "Finance Review Required: {{rfq_id}}",
-    body: "Dear Finance Team,\n\nAn RFQ has passed legal review and requires finance approval:\n\nRFQ: {{rfq_id}}\nTotal Value: {{amount}}\nBudget Impact: {{budget_status}}\n\nPlease complete the finance review in BidSphere.\n\nRegards,\nBidSphere Workflow",
+    body: `Dear Finance Team,\n\nAn RFQ has passed legal review and requires finance approval:\n\nRFQ: {{rfq_id}}\nTotal Value: {{amount}}\nBudget Impact: {{budget_status}}\n\nPlease complete the finance review in ${APP_NAME}.\n\nRegards,\n${APP_NAME}`,
     triggerEvent: "RFQ Approval → Finance Stage",
     recipients: "Finance Manager",
     enabled: true,
@@ -105,7 +107,7 @@ export const EMAIL_TEMPLATES: EmailTemplate[] = [
     id: "po_created",
     name: "Purchase Order Created",
     subject: "Purchase Order Created: {{po_id}}",
-    body: "Dear Team,\n\nA new Purchase Order has been created:\n\nPO Number: {{po_id}}\nSupplier: {{supplier}}\nTotal Amount: {{amount}}\nDelivery Date: {{delivery_date}}\n\nThe supplier has been notified.\n\nRegards,\nBidSphere Procurement",
+    body: `Dear Team,\n\nA new Purchase Order has been created:\n\nPO Number: {{po_id}}\nSupplier: {{supplier}}\nTotal Amount: {{amount}}\nDelivery Date: {{delivery_date}}\n\nThe supplier has been notified.\n\nRegards,\n${APP_NAME}`,
     triggerEvent: "Purchase Order → Created",
     recipients: "Supplier, Warehouse, Finance",
     enabled: true,
@@ -114,7 +116,7 @@ export const EMAIL_TEMPLATES: EmailTemplate[] = [
     id: "payment_released",
     name: "Payment Released",
     subject: "Payment Released: {{payment_id}} to {{supplier}}",
-    body: "Dear {{supplier}},\n\nPayment has been released for your invoice:\n\nPayment Reference: {{payment_id}}\nAmount: {{amount}}\nInvoice: {{invoice_id}}\n\nPlease allow 2-3 business days for the funds to reflect in your account.\n\nRegards,\nBidSphere Finance",
+    body: `Dear {{supplier}},\n\nPayment has been released for your invoice:\n\nPayment Reference: {{payment_id}}\nAmount: {{amount}}\nInvoice: {{invoice_id}}\n\nPlease allow 2-3 business days for the funds to reflect in your account.\n\nRegards,\n${APP_NAME}`,
     triggerEvent: "Payment Entry → Submitted",
     recipients: "Supplier, Finance Team",
     enabled: true,
@@ -183,7 +185,7 @@ const DEFAULT_EMAIL_CONFIG: EmailConfig = {
   smtpPort: 587,
   emailAddress: "",
   password: "",
-  senderName: "BidSphere Notifications",
+  senderName: `${APP_NAME} Notifications`,
   enableNotifications: true,
   enableEmailDigest: false,
 };

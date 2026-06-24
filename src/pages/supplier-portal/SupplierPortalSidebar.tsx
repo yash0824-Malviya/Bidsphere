@@ -15,7 +15,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 
 import BrandLogo from "../../components/BrandLogo";
-import { APP_NAME, COMPANY_NAME } from "../../config/branding";
+import { APP_NAME, APP_SUPPLIER_PORTAL, COMPANY_NAME } from "../../config/branding";
 
 interface NavChild {
   label: string;
@@ -91,9 +91,9 @@ export default function SupplierPortalSidebar({ supplierName }: Props) {
     <aside className="hidden h-full w-[260px] shrink-0 flex-col border-r border-neutral-200 bg-slate-900 text-slate-300 lg:flex">
       <div className="border-b border-white/5 px-4 py-5">
         <Link to="/supplier/dashboard" className="flex items-center gap-2.5">
-          <BrandLogo size="xs" />
+          <BrandLogo size="xs" markOnly />
           <div className="min-w-0">
-            <p className="text-sm font-bold text-white">{APP_NAME} Supplier Portal</p>
+            <p className="text-sm font-bold text-white">{APP_SUPPLIER_PORTAL}</p>
             <p className="mt-0.5 truncate text-[10px] uppercase tracking-wider text-slate-500">
               {supplierName}
             </p>

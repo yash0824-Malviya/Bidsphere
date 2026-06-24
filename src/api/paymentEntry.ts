@@ -8,6 +8,7 @@
  */
 
 import { apiPost, COMPANY } from "./erpnext";
+import { APP_NAME } from "../config/branding";
 import {
   createInvoiceFromPO,
   createPaymentEntry,
@@ -242,7 +243,7 @@ export async function processInvoicePayment(
       attachments: [],
       uiStatus: "Paid",
     },
-    note ?? "Payment released from BidSphere"
+    note ?? `Payment released from ${APP_NAME}`
   );
 
   // Ensure posting_date and reference_date are not before the invoice date.
@@ -314,7 +315,7 @@ export async function processInvoicePayment(
         attachments: attachmentUrls,
         uiStatus: "Paid",
       },
-      note ?? "Payment released from BidSphere"
+      note ?? `Payment released from ${APP_NAME}`
     );
     await updatePaymentEntry(draft.name, { remarks: remarksWithUrls });
   }

@@ -1,7 +1,10 @@
 import type { ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Building2, LogOut, User } from "lucide-react";
+import { LogOut, User } from "lucide-react";
 
+import { APP_SUPPLIER_PORTAL } from "../../config/branding";
+import { useDocumentTitle } from "../../hooks/useDocumentTitle";
+import BrandLogo from "../../components/BrandLogo";
 import SupplierPortalSidebar, {
   SupplierPortalMobileNav,
 } from "./SupplierPortalSidebar";
@@ -16,6 +19,7 @@ export default function SupplierPortalLayout({
   children,
 }: Props) {
   const navigate = useNavigate();
+  useDocumentTitle();
 
   function handleLogout() {
     sessionStorage.removeItem("supplier_session");
@@ -39,11 +43,9 @@ export default function SupplierPortalLayout({
               }
               className="flex min-w-0 items-center gap-2 lg:hidden"
             >
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent-600 text-white">
-                <Building2 className="h-4 w-4" />
-              </div>
+              <BrandLogo markOnly />
               <span className="truncate text-sm font-semibold text-neutral-900">
-                BidSphere Supplier Portal
+                {APP_SUPPLIER_PORTAL}
               </span>
             </Link>
 
@@ -76,7 +78,7 @@ export default function SupplierPortalLayout({
         </main>
 
         <footer className="shrink-0 border-t border-neutral-200 bg-white px-4 py-3 text-center text-[11px] text-neutral-400">
-          © Netlink Software Group · BidSphere Supplier Portal
+          © Netlink Software Group · {APP_SUPPLIER_PORTAL}
         </footer>
       </div>
     </div>

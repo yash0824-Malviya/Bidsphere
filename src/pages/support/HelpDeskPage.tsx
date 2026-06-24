@@ -17,6 +17,7 @@ import type { LucideIcon } from "lucide-react";
 
 import PageHeader from "../../components/PageHeader";
 import FaqAccordion from "../../components/support/FaqAccordion";
+import { APP_NAME } from "../../config/branding";
 
 const SUPPORT_EMAIL = "support@netlink.com";
 
@@ -202,7 +203,7 @@ export default function HelpDeskPage() {
     <div className="mx-auto max-w-5xl space-y-8">
       <PageHeader
         title="Help"
-        description="Documentation, workflow guides, and support resources for BidSphere."
+        description={`Documentation, workflow guides, and support resources for ${APP_NAME}.`}
       />
 
       {/* Workflow guide */}
@@ -271,7 +272,7 @@ export default function HelpDeskPage() {
             Frequently Asked Questions
           </h3>
           <p className="text-xs text-neutral-500">
-            Common questions about BidSphere workflows and features
+            Common questions about {APP_NAME} workflows and features
           </p>
         </div>
         <FaqAccordion items={FAQ_ITEMS} />
@@ -343,7 +344,7 @@ export default function HelpDeskPage() {
               </h3>
             </div>
             <p className="mt-3 text-sm leading-relaxed text-neutral-600">
-              Need assistance with BidSphere? Contact our support team and we'll
+              Need assistance with {APP_NAME}? Contact our support team and we'll
               help you resolve your issue.
             </p>
 
@@ -352,7 +353,7 @@ export default function HelpDeskPage() {
                 Support Email
               </p>
               <a
-                href={`mailto:${SUPPORT_EMAIL}?subject=BidSphere%20Support%20Request`}
+                href={`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(`${APP_NAME} Support Request`)}`}
                 className="mt-1 inline-flex items-center gap-2 text-base font-semibold text-primary hover:underline"
               >
                 <Mail className="h-4 w-4" />
@@ -387,7 +388,7 @@ export default function HelpDeskPage() {
               </li>
             </ul>
             <a
-              href={`mailto:${SUPPORT_EMAIL}?subject=BidSphere%20Support%20Request&body=Issue%20description%3A%0A%0ASteps%20to%20reproduce%3A%0A1.%20%0A2.%20%0A%0ADocument%20number%20(if%20any)%3A%0A%0AScreenshots%3A%20(attached)`}
+              href={`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(`${APP_NAME} Support Request`)}&body=Issue%20description%3A%0A%0ASteps%20to%20reproduce%3A%0A1.%20%0A2.%20%0A%0ADocument%20number%20(if%20any)%3A%0A%0AScreenshots%3A%20(attached)`}
               className="btn-primary mt-4 w-full justify-center"
             >
               <Mail className="h-4 w-4" />

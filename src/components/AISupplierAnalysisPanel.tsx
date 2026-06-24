@@ -19,6 +19,7 @@ import type {
   SupplierAnalysisRow,
   SupplierVerdict,
 } from "../types/erpnext";
+import { APP_NAME } from "../config/branding";
 import { formatCurrency } from "../utils/format";
 
 const LOADING_STEPS = [
@@ -96,7 +97,7 @@ export default function AISupplierAnalysisPanel({
               AI Procurement Intelligence
             </div>
             <div className="text-xs text-white/60">
-              Powered by Claude AI • BidSphere
+              Powered by Claude AI • {APP_NAME}
             </div>
           </div>
         </div>

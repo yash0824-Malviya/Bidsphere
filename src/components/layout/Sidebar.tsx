@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import type { NavItem } from "../../utils/routes";
 import { useAuthStore } from "../../store/authStore";
-import { APP_NAME, APP_TAGLINE } from "../../config/branding";
+import { APP_SIDEBAR_TITLE, APP_SIDEBAR_TAGLINE } from "../../config/branding";
 import { getNavGroupsForRole, ROLE_LABELS } from "../../config/roles";
 import BrandLogo from "../BrandLogo";
 
@@ -82,14 +82,14 @@ export default function Sidebar({
           collapsed ? "justify-center px-2" : "gap-3 px-4"
         }`}
       >
-        <BrandLogo size="sm" />
+        <BrandLogo size="sm" markOnly />
         {!collapsed && (
           <div className="min-w-0 leading-tight">
             <div className="truncate text-sm font-bold text-white">
-              {APP_NAME}
+              {APP_SIDEBAR_TITLE}
             </div>
             <div className="truncate text-[10px] font-medium uppercase tracking-[0.12em] text-primary-400">
-              {APP_TAGLINE}
+              {APP_SIDEBAR_TAGLINE}
             </div>
           </div>
         )}

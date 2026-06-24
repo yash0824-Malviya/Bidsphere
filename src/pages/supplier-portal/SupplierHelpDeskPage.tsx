@@ -14,6 +14,7 @@ import type { LucideIcon } from "lucide-react";
 
 import PageHeader from "../../components/PageHeader";
 import FaqAccordion from "../../components/support/FaqAccordion";
+import { APP_NAME, APP_SUPPLIER_PORTAL } from "../../config/branding";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
 import SupplierPortalLayout from "./SupplierPortalLayout";
 
@@ -140,7 +141,7 @@ const FAQ_ITEMS = [
         >
           Contact Support
         </Link>{" "}
-        or email the BidSphere support team with a description and
+        or email the {APP_NAME} support team with a description and
         screenshots of the issue.
       </>
     ),
@@ -164,7 +165,7 @@ export default function SupplierHelpDeskPage() {
     <SupplierPortalLayout supplierName={supplierName}>
       <PageHeader
         title="Help"
-        description="Workflow guides and answers for using the BidSphere Supplier Portal."
+        description={`Workflow guides and answers for using the ${APP_SUPPLIER_PORTAL}.`}
       />
 
       <div className="space-y-6">
@@ -239,7 +240,7 @@ export default function SupplierHelpDeskPage() {
                 </h3>
               </div>
               <p className="mt-2 text-sm text-neutral-600">
-                Contact the BidSphere support team for bugs, access issues, or
+                Contact the {APP_NAME} support team for bugs, access issues, or
                 questions not covered above.
               </p>
             </div>

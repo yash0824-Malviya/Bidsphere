@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 
 import { getRoles } from "../../api/admin";
+import { APP_NAME } from "../../config/branding";
 import { Skeleton } from "../../components/Skeleton";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
 
@@ -80,8 +81,7 @@ export default function RoleManagementPage() {
         </div>
       ) : (
         <>
-          {/* BidSphere Roles */}
-          <h2 className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-neutral-400">BidSphere Role Mappings</h2>
+          <h2 className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-neutral-400">{APP_NAME} Role Mappings</h2>
           <div className="mb-4 overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm">
             <table className="w-full text-xs">
               <thead className="bg-neutral-50">

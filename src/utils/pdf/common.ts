@@ -3,7 +3,7 @@ import { APP_NAME, COMPANY_NAME } from "../../config/branding";
 import { DEFAULT_CURRENCY } from "../format";
 import { drawPdfLogo } from "./logo";
 
-/** BidSphere brand palette (RGB). */
+/** Netlink Procurement brand palette (RGB). */
 export const BRAND = {
   primary: [74, 144, 217] as [number, number, number],
   primaryDark: [44, 82, 130] as [number, number, number],

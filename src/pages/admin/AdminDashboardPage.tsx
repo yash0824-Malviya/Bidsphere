@@ -19,6 +19,7 @@ import {
   XCircle,
 } from "lucide-react";
 
+import { APP_NAME } from "../../config/branding";
 import { getAdminKpis } from "../../api/admin";
 import { getAuditTrail } from "../../api/auditTrail";
 import { Skeleton } from "../../components/Skeleton";
@@ -54,7 +55,7 @@ export default function AdminDashboardPage() {
           <Shield className="h-4 w-4 text-white" />
         </div>
         <div>
-          <h1 className="text-sm font-bold text-neutral-900">BidSphere Administration Center</h1>
+          <h1 className="text-sm font-bold text-neutral-900">{APP_NAME} Administration Center</h1>
           <p className="text-[10px] text-neutral-500">Governance &middot; Monitoring &middot; Executive Visibility</p>
         </div>
       </div>

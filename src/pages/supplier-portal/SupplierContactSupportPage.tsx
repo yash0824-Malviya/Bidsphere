@@ -1,11 +1,12 @@
 import { Mail, MessageSquare } from "lucide-react";
 
 import PageHeader from "../../components/PageHeader";
+import { APP_NAME, APP_SUPPLIER_PORTAL } from "../../config/branding";
 import { SUPPORT_EMAIL } from "../../utils/supplierPortalUtils";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
 import SupplierPortalLayout from "./SupplierPortalLayout";
 
-const MAILTO_SUBJECT = "BidSphere%20Supplier%20Portal%20Support%20Request";
+const MAILTO_SUBJECT = encodeURIComponent(`${APP_SUPPLIER_PORTAL} Support Request`);
 const MAILTO_BODY =
   "Issue%20description%3A%0A%0ASteps%20to%20reproduce%3A%0A1.%20%0A2.%20%0A%0ADocument%20number%20(if%20any)%3A%0A%0AScreenshots%3A%20(attached)";
 
@@ -26,7 +27,7 @@ export default function SupplierContactSupportPage() {
     <SupplierPortalLayout supplierName={supplierName}>
       <PageHeader
         title="Contact Support"
-        description="Reach the BidSphere team for portal issues, access problems, or workflow questions."
+        description={`Reach the ${APP_NAME} team for portal issues, access problems, or workflow questions.`}
       />
 
       <div className="card p-6">

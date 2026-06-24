@@ -5,6 +5,7 @@
  */
 
 import type { RFQTemplate } from "../types/erpnext";
+import { APP_NAME } from "../config/branding";
 import {
   DEFAULT_REQUIRED_DOCUMENTS,
   DEFAULT_WORKFLOW_RULES,
@@ -78,7 +79,7 @@ export function createLocalTemplate(
     workflow_rules: data.workflow_rules ?? { ...DEFAULT_WORKFLOW_RULES },
     creation: now,
     modified: now,
-    owner: "BidSphere",
+    owner: APP_NAME,
   };
   return saveLocalTemplate(template);
 }
