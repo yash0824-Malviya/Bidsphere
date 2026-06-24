@@ -1002,7 +1002,7 @@ export default function AIAnalysisModal({
   quoteAmount,
   quotationCount,
   creatingPO,
-  hasApiKey,
+  hasApiKey: _hasApiKey,
   poAlreadyExists = false,
   chosenSupplier = null,
   ctaLabel,

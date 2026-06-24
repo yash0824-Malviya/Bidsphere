@@ -186,7 +186,11 @@ export default function SupplierQuotationsPage() {
 
                   const detailUrl = `/supplier/quotations/${encodeURIComponent(sq.name)}`;
                   const legalDocs = getLegalDocs(sq.name);
-                  const hasLegalDocs = !!(legalDocs?.terms_pdf_url && legalDocs?.warranty_pdf_url && legalDocs?.insurance_pdf_url);
+                  const hasLegalDocs = !!(
+                    legalDocs?.terms_pdf_key &&
+                    legalDocs?.warranty_pdf_key &&
+                    legalDocs?.insurance_pdf_key
+                  );
 
                   return (
                     <tr

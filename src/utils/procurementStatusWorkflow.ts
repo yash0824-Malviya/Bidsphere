@@ -1,7 +1,5 @@
 import type { LucideIcon } from "lucide-react";
 import {
-  CheckCircle2,
-  CreditCard,
   FileSearch,
   FileText,
   PackageCheck,
@@ -40,7 +38,7 @@ const STEP_DEFS: Array<{ id: string; label: string; icon: LucideIcon }> = [
   { id: "in_transit", label: "In Transit", icon: Truck },
   { id: "grn_received", label: "GRN Received", icon: PackageCheck },
   { id: "invoice_generated", label: "Invoice Generated", icon: Receipt },
-  { id: "supplier_payment_confirmed", label: "Supplier Payment Confirmed", icon: CreditCard },
+  { id: "supplier_payment_confirmed", label: "Supplier Payment Confirmed", icon: Wallet },
   { id: "payment_completed", label: "Payment Completed", icon: Wallet },
 ];
 

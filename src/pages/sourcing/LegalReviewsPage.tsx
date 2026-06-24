@@ -398,7 +398,7 @@ function ReviewCard({
   onOpen,
   navigate,
   urgent,
-  rejected,
+  rejected: _rejected,
 }: {
   review: LegalReviewItem;
   index?: number;

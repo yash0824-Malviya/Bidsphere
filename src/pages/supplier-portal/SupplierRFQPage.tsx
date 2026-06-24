@@ -9,22 +9,17 @@ import {
   Calendar,
   CheckCircle2,
   Clock,
-  Eye,
   FileText,
   Lock,
   Loader2,
   Send,
   ShieldAlert,
   Sparkles,
-  Upload,
-  X,
 } from "lucide-react";
 
 import { checkQuotationStatus, createSupplierQuotation, getRFQ } from "../../api/sourcing";
-import { uploadPdfUnattached, FileValidationError } from "../../api/fileUpload";
 import { saveLegalDocs } from "../../api/legalDocs";
 import { storeFileBlob, getFileBlob, deleteFileBlob } from "../../api/legalDocsStorage";
-import type { UploadResult } from "../../api/fileUpload";
 import { Skeleton } from "../../components/Skeleton";
 import type { RFQ, RFQItem } from "../../types/erpnext";
 import {
@@ -1309,124 +1304,6 @@ function ReadOnlyField({ label, value }: { label: string; value: string }) {
     <div>
       <p className="mb-1 text-xs font-medium text-neutral-500">{label}</p>
       <div className="rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-800">{value}</div>
-    </div>
-  );
-}
-
-interface DocUploadShape { file: File; result?: { file_url: string; file_name: string }; uploading?: boolean; error?: string }
-
-function PdfUploadField({
-  label,
-  doc,
-  onSelect,
-  onClear,
-  note,
-  onNoteChange,
-  notePlaceholder,
-}: {
-  label: string;
-  doc: DocUploadShape | null;
-  onSelect: (file: File) => void;
-  onClear: () => void;
-  note?: string;
-  onNoteChange?: (val: string) => void;
-  notePlaceholder?: string;
-}) {
-  const inputId = `pdf-upload-${label.replace(/\s+/g, "-").toLowerCase()}`;
-
-  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) onSelect(file);
-    e.target.value = "";
-  }
-
-  const noteInput = onNoteChange && (
-    <div className="mt-2.5 border-t border-neutral-100 pt-2.5">
-      <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-neutral-400">
-        Supplier Explanation
-      </label>
-      <textarea
-        rows={2}
-        value={note ?? ""}
-        onChange={(e) => onNoteChange(e.target.value)}
-        placeholder={notePlaceholder ?? "Brief description of document contents…"}
-        className="w-full rounded-md border border-neutral-200 bg-neutral-50 px-3 py-1.5 text-xs text-neutral-700 placeholder:text-neutral-400 focus:border-primary-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-      />
-    </div>
-  );
-
-  if (doc?.result) {
-    return (
-      <div className="rounded-lg border border-success-200 bg-success-50/50 px-4 py-3">
-        <div className="flex items-center gap-3">
-          <CheckCircle2 className="h-5 w-5 shrink-0 text-success-600" />
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-success-800">{label}</p>
-            <p className="truncate text-xs text-success-600">{doc.result.file_name}</p>
-          </div>
-          <a
-            href={doc.result.file_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="inline-flex items-center gap-1 rounded-lg bg-white px-2.5 py-1.5 text-xs font-semibold text-primary-700 ring-1 ring-inset ring-primary-200 hover:bg-primary-50"
-          >
-            <Eye className="h-3 w-3" /> View
-          </a>
-          <button
-            type="button"
-            onClick={onClear}
-            className="rounded-lg p-1.5 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        {noteInput}
-      </div>
-    );
-  }
-
-  if (doc?.uploading) {
-    return (
-      <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3">
-        <div className="flex items-center gap-3">
-          <Loader2 className="h-5 w-5 shrink-0 animate-spin text-primary-500" />
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-neutral-700">{label}</p>
-            <p className="text-xs text-neutral-500">Uploading {doc.file.name}…</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className={`rounded-lg border px-4 py-3 ${doc?.error ? "border-danger-200 bg-danger-50/30" : "border-neutral-200 bg-white"}`}>
-      <div className="flex items-center gap-3">
-        <FileText className={`h-5 w-5 shrink-0 ${doc?.error ? "text-danger-400" : "text-neutral-400"}`} />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-neutral-900">{label}</p>
-          {doc?.error ? (
-            <p className="text-xs text-danger-600">{doc.error}</p>
-          ) : (
-            <p className="text-xs text-neutral-500">PDF only, max 10 MB</p>
-          )}
-        </div>
-        <label
-          htmlFor={inputId}
-          className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary-50 px-3 py-1.5 text-xs font-semibold text-primary-700 ring-1 ring-inset ring-primary-200 transition hover:bg-primary-100"
-        >
-          <Upload className="h-3 w-3" /> Upload PDF
-        </label>
-        <input
-          id={inputId}
-          type="file"
-          accept="application/pdf"
-          onChange={handleChange}
-          className="hidden"
-        />
-      </div>
-      {noteInput}
     </div>
   );
 }

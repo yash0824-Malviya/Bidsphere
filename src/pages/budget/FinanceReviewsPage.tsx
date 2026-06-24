@@ -12,13 +12,9 @@ import {
 
   Clock,
 
-  DollarSign,
-
   Shield,
 
   ShieldCheck,
-
-  Wallet,
 
   XCircle,
 

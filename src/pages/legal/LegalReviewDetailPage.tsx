@@ -8,20 +8,17 @@ import {
   Award,
   Bot,
   Building2,
-  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock,
   DollarSign,
-  Eye,
   FileText,
   Gavel,
   Info,
   Layers,
   Loader2,
   MessageSquare,
-  RefreshCw,
   Scale,
   Send,
   ShieldCheck,
@@ -32,8 +29,6 @@ import {
 import { getRFQ, getSupplierQuotations, fetchRawSQ } from "../../api/sourcing";
 import {
   getLegalDocs,
-  getOrCreateLegalDocs,
-  updateLegalDocField,
   updateLegalDocFlag,
   submitLegalReview,
 } from "../../api/legalDocs";
@@ -44,7 +39,7 @@ import {
 } from "../../api/rfqApprovalWorkflow";
 import { updateReviewStatus, addComment } from "../../api/legalReviews";
 import { addNotification } from "../../api/notifications";
-import { getFileObjectUrl, storeFileBlob } from "../../api/legalDocsStorage";
+import { getFileObjectUrl } from "../../api/legalDocsStorage";
 import { useAuthStore } from "../../store/authStore";
 import { formatCurrency, formatDate } from "../../utils/format";
 import { Skeleton } from "../../components/Skeleton";
@@ -270,7 +265,6 @@ export default function LegalReviewDetailPage() {
   }, [rawSQ, selectedSQName]);
 
   const [legalDocs, setLegalDocs] = useState<LegalDocumentSet | null>(null);
-  const [uploading, setUploading] = useState<string | null>(null);
   const [pdfUrls, setPdfUrls] = useState<Record<string, string>>({});
   const [pdfLoadError, setPdfLoadError] = useState<Record<string, boolean>>({});
 
@@ -346,35 +340,6 @@ export default function LegalReviewDetailPage() {
     };
   }, [legalDocs]);
 
-  const handleUpload = async (
-    field: 'terms_pdf' | 'warranty_pdf' | 'insurance_pdf',
-    file: File
-  ) => {
-    if (!selectedSQName) return;
-    setUploading(field);
-    try {
-      const permanentKey = `${selectedSQName}_${field}_pdf`;
-      await storeFileBlob(permanentKey, file);
-      let updated = updateLegalDocField(selectedSQName, `${field}_key` as any, permanentKey);
-      updated = updateLegalDocField(selectedSQName, `${field}_name` as any, file.name);
-      setLegalDocs(updated);
-      toast.success(`${field.replace('_pdf', '').toUpperCase()} document uploaded`);
-    } catch (err: any) {
-      toast.error('Upload failed: ' + err.message);
-    } finally {
-      setUploading(null);
-    }
-  };
-
-  const handleNoteChange = (
-    field: 'terms_note' | 'warranty_note' | 'insurance_note',
-    value: string
-  ) => {
-    if (!selectedSQName) return;
-    const updated = updateLegalDocField(selectedSQName, field, value);
-    setLegalDocs(updated);
-  };
-
   const handleViewPdf = useCallback((
     field: 'terms_pdf' | 'warranty_pdf' | 'insurance_pdf',
     erpnextUrl?: string
@@ -437,7 +402,6 @@ export default function LegalReviewDetailPage() {
   }, []);
 
   /* ── Submission state ── */
-  const [submitting, setSubmitting] = useState<LegalReviewStatus | null>(null);
   const [submitted, setSubmitted] = useState(false);
 
   useEffect(() => {
@@ -451,52 +415,6 @@ export default function LegalReviewDetailPage() {
   /* ── Comments ── */
   const [newComment, setNewComment] = useState("");
   const [addingComment, setAddingComment] = useState(false);
-
-  const canSubmit = (action: string) => {
-    if (submitted) return false;
-    if (!checklistComplete) return false;
-    if (!actionReason.trim()) return false;
-    if (action === "reject" && actionReason.trim().length < 10) return false;
-    return true;
-  };
-
-  const handleAction = useCallback(
-    async (action: "approve" | "reject") => {
-      const statusMap: Record<string, LegalReviewStatus> = {
-        approve: "Approved",
-        reject: "Rejected",
-      };
-      const status = statusMap[action];
-      setSubmitting(status);
-
-      const fullComment = [
-        reviewNotes.trim() ? `Review Notes: ${reviewNotes.trim()}` : "",
-        actionReason.trim(),
-      ]
-        .filter(Boolean)
-        .join("\n\n");
-
-      try {
-        if (approvalState) {
-          approvalState.terms_approved = !!legalDocs?.terms_approved;
-          approvalState.warranty_approved = !!legalDocs?.warranty_approved;
-          approvalState.insurance_approved = !!legalDocs?.insurance_approved;
-          approvalState.legal_reviewer = user?.email ?? "";
-          approvalState.legal_review_date = new Date().toISOString();
-          saveApprovalState(approvalState);
-        }
-        await updateReviewStatus(decodedId, status, user?.email ?? "", fullComment);
-        const labels = { approve: "approved", reject: "rejected" };
-        toast.success(`RFQ ${decodedId} ${labels[action]}`);
-        setSubmitted(true);
-      } catch {
-        toast.error("Failed to update review status");
-      } finally {
-        setSubmitting(null);
-      }
-    },
-    [decodedId, user?.email, reviewNotes, actionReason, legalDocs, approvalState]
-  );
 
   const handleAddComment = useCallback(async () => {
     if (!newComment.trim()) return;
@@ -1511,12 +1429,6 @@ function LegalStatusBadge({ status }: { status: LegalReviewStatus }) {
   );
 }
 
-function StatusIcon({ status }: { status: LegalReviewStatus }) {
-  if (status === "Approved") return <CheckCircle2 className="h-6 w-6 text-success-600" />;
-  if (status === "Rejected") return <XCircle className="h-6 w-6 text-danger-600" />;
-  return <Clock className="h-6 w-6 text-warning-600" />;
-}
-
 function ActionBadge({ action }: { action: LegalReviewStatus | "Comment" | "Resubmit" }) {
   const cls =
     action === "Approved"
@@ -1571,19 +1483,6 @@ function TimelineStep({
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function RequirementRow({ met, label }: { met: boolean; label: string }) {
-  return (
-    <div className="flex items-center gap-2 text-sm">
-      {met ? (
-        <CheckCircle2 className="h-4 w-4 text-success-500" />
-      ) : (
-        <XCircle className="h-4 w-4 text-neutral-300" />
-      )}
-      <span className={met ? "text-neutral-700" : "text-neutral-400"}>{label}</span>
     </div>
   );
 }
