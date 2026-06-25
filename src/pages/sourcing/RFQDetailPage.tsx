@@ -46,9 +46,7 @@ import type { LinkedPORow } from "../../api/purchasing";
 import {
   AI_FALLBACK_NOTICE,
   buildLocalProcurementRecommendation,
-  getAIProviderAvailability,
   resolveAIRecommendation,
-  type AIProvider,
 } from "../../api/ai";
 import type { AIQuotation, AIQuotationLine, AnalysisWeights } from "../../api/ai";
 import type { AIRecommendation, RFQApprovalState } from "../../types/erpnext";
@@ -348,8 +346,6 @@ export default function RFQDetailPage() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiLoadingStep, setAiLoadingStep] = useState(0);
   const [aiError, setAiError] = useState<string | null>(null);
-  const [aiProvider, setAiProvider] = useState<AIProvider | null>(null);
-  const [aiFallbackNotice, setAiFallbackNotice] = useState<string | null>(null);
   const aiStepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [creatingPO, setCreatingPO] = useState(false);
   const [savedAnalysis, setSavedAnalysis] = useState<SavedAnalysisRecord | null>(
@@ -784,8 +780,6 @@ export default function RFQDetailPage() {
     setAiLoadingStep(0);
     setAiError(null);
     setAiResult(null);
-    setAiProvider(null);
-    setAiFallbackNotice(null);
 
     if (aiStepIntervalRef.current) clearInterval(aiStepIntervalRef.current);
     aiStepIntervalRef.current = setInterval(() => {
@@ -843,12 +837,8 @@ export default function RFQDetailPage() {
       const resolved = await resolveAIRecommendation(aiRequest, analysisWeights);
       if (resolved) {
         recommendation = resolved.recommendation;
-        setAiProvider(resolved.provider);
-        setAiFallbackNotice(null);
       } else {
         recommendation = buildLocalProcurementRecommendation(aiRequest, engineResult);
-        setAiProvider("local");
-        setAiFallbackNotice(AI_FALLBACK_NOTICE);
         toast(AI_FALLBACK_NOTICE, { icon: "ℹ️", duration: 6_000 });
       }
 
@@ -931,8 +921,6 @@ export default function RFQDetailPage() {
         );
         const localRec = buildLocalProcurementRecommendation(aiRequest, engineResult);
         setAiResult(localRec);
-        setAiProvider("local");
-        setAiFallbackNotice(AI_FALLBACK_NOTICE);
         setAiError(null);
         saveAnalysis(rfq.name, localRec);
         toast(AI_FALLBACK_NOTICE, { icon: "ℹ️", duration: 6_000 });
@@ -1268,9 +1256,6 @@ export default function RFQDetailPage() {
                 ? `${approvalState?.selected_supplier ?? "Supplier"} has been awarded this RFQ.`
                 : undefined
           }
-          activeProvider={aiProvider}
-          fallbackNotice={aiFallbackNotice}
-          providerAvailability={getAIProviderAvailability()}
           onClose={closeAIModal}
           onRetry={isReadOnly ? () => {} : () => void runAIAnalysis()}
           onCreatePO={isReadOnly ? () => {} : createPOFromRecommendation}

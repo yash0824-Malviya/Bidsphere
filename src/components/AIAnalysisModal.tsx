@@ -1,18 +1,23 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
+  Award,
   BarChart3,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  ClipboardList,
   GitCompare,
   Loader2,
   Lock,
   Shield,
+  ShieldCheck,
   ShoppingCart,
   Sparkles,
+  TrendingDown,
+  Truck,
   X,
 } from "lucide-react";
 
@@ -21,13 +26,13 @@ import type {
   SupplierAnalysisRow,
   SupplierVerdict,
 } from "../types/erpnext";
-import type { AIProvider, AIProviderAvailability } from "../api/ai";
 import { formatCurrency } from "../utils/format";
 import { ANALYSIS_STEPS } from "./aiAnalysisSteps";
 
 export { ANALYSIS_STEPS };
 
 type TabId = "overview" | "rankings" | "compare";
+type ResultsViewMode = "recommendation" | "comparison";
 type RiskLevel = "Low" | "Medium" | "High";
 
 /**
@@ -62,67 +67,11 @@ interface Props {
   ctaLoadingLabel?: string;
   /** Override the "already exists" message shown when poAlreadyExists is true. */
   ctaDoneMessage?: string;
-  /** Which provider produced the current result. */
-  activeProvider?: AIProvider | null;
-  /** Friendly notice when cloud AI was unavailable. */
-  fallbackNotice?: string | null;
-  /** Which providers are configured / available. */
-  providerAvailability?: AIProviderAvailability;
   onClose: () => void;
   onRetry: () => void;
   onCreatePO: () => void;
   /** Called when the user confirms supplier selection via the new dialog. */
   onSelectSupplier?: (payload: SupplierSelectionPayload) => void;
-}
-
-function AIProviderStatusBar({
-  active,
-  availability,
-}: {
-  active: AIProvider | null;
-  availability: AIProviderAvailability;
-}) {
-  const items: { id: AIProvider; label: string; configured: boolean }[] = [
-    { id: "claude", label: "Claude", configured: availability.claude },
-    { id: "openai", label: "OpenAI", configured: availability.openai },
-    { id: "local", label: "Local Engine", configured: availability.local },
-  ];
-
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      {items.map(({ id, label, configured }) => {
-        const isActive = active === id;
-        return (
-          <span
-            key={id}
-            className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[10px] font-semibold ring-1 ring-inset ${
-              isActive
-                ? "bg-success-50 text-success-700 ring-success-200"
-                : configured
-                  ? "bg-neutral-50 text-neutral-500 ring-neutral-200"
-                  : "bg-neutral-50/60 text-neutral-400 ring-neutral-100"
-            }`}
-          >
-            <span
-              className={`h-1.5 w-1.5 rounded-full ${
-                isActive ? "bg-success-500" : configured ? "bg-neutral-300" : "bg-neutral-200"
-              }`}
-            />
-            {label} {isActive ? "Active" : configured ? "Standby" : "Off"}
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
-function FallbackNoticeBanner({ message }: { message: string }) {
-  return (
-    <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-      <Sparkles className="mt-0.5 h-4 w-4 flex-shrink-0 text-sky-600" />
-      <p>{message}</p>
-    </div>
-  );
 }
 
 const TABS: { id: TabId; label: string; icon: typeof BarChart3 }[] = [
@@ -186,6 +135,55 @@ function qualityScore(s: SupplierAnalysisRow): number {
   }
   // Fallback: use overall score as proxy (never average unrelated dimensions)
   return clampScore(s.score?.overall ?? 0);
+}
+
+function complianceScore(s: SupplierAnalysisRow, result: AIRecommendation): number {
+  const sources = getScoreSources(s);
+  const compliance = sources.find((src) => src.dimension === "Compliance");
+  if (compliance && compliance.value >= 0) return clampScore(compliance.value);
+
+  const quality = qualityScore(s);
+  const termsFlags = (result.risk_flags ?? []).filter(
+    (f) =>
+      f.type === "terms" &&
+      f.message.toLowerCase().includes(s.name.toLowerCase())
+  );
+  if (termsFlags.some((f) => f.severity === "high")) return clampScore(35);
+  if (termsFlags.some((f) => f.severity === "medium")) return clampScore(55);
+  if (quality >= 0 && !hasInsufficientData(s)) return quality;
+  return clampScore(((s.score?.reliability ?? 50) + 50) / 2);
+}
+
+function formatConfidenceLevel(
+  score: number,
+  supplier?: SupplierAnalysisRow
+): string {
+  const level = supplier
+    ? getConfidenceLevel(supplier)
+    : score >= 80
+      ? "high"
+      : score >= 60
+        ? "medium"
+        : "low";
+  const label = level.charAt(0).toUpperCase() + level.slice(1);
+  return `${label} · ${clampScore(score)}%`;
+}
+
+function getExpectedSavings(
+  result: AIRecommendation,
+  recommended: SupplierAnalysisRow
+) {
+  const totals = result.supplier_analysis
+    .map((s) => s.grand_total)
+    .filter((t) => t > 0);
+  const highest = totals.length ? Math.max(...totals) : 0;
+  const amount =
+    highest > recommended.grand_total ? highest - recommended.grand_total : 0;
+  const pct =
+    highest > 0
+      ? Math.round((amount / highest) * 100)
+      : (result.cost_analysis?.savings_percentage ?? 0);
+  return { amount, pct };
 }
 
 function hasInsufficientData(s: SupplierAnalysisRow): boolean {
@@ -663,6 +661,362 @@ function ReAnalysisComparisonBanner({
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Recommendation Results — enterprise decision center                          */
+/* -------------------------------------------------------------------------- */
+
+function KpiTile({
+  label,
+  value,
+  sub,
+  valueClassName = "text-neutral-900",
+}: {
+  label: string;
+  value: ReactNode;
+  sub?: string;
+  valueClassName?: string;
+}) {
+  return (
+    <div className="rounded-xl border border-neutral-200/80 bg-white p-4 shadow-sm ring-1 ring-neutral-100/80">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+        {label}
+      </p>
+      <p className={`mt-1.5 text-xl font-bold tabular-nums sm:text-2xl ${valueClassName}`}>
+        {value}
+      </p>
+      {sub && <p className="mt-0.5 text-xs text-neutral-500">{sub}</p>}
+    </div>
+  );
+}
+
+function DimensionScoreCard({
+  label,
+  value,
+  icon: Icon,
+  barClass,
+}: {
+  label: string;
+  value: number;
+  icon: typeof BarChart3;
+  barClass: string;
+}) {
+  const v = value < 0 ? 0 : clampScore(value);
+  const missing = value < 0;
+  return (
+    <div className="rounded-xl border border-neutral-200/80 bg-white p-4 shadow-sm">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-neutral-50 ring-1 ring-neutral-200/80">
+            <Icon className="h-4 w-4 text-neutral-500" />
+          </span>
+          <span className="text-xs font-semibold text-neutral-600">{label}</span>
+        </div>
+        <span className="text-lg font-bold tabular-nums text-neutral-900">
+          {missing ? "—" : `${v}%`}
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-neutral-100">
+        <div
+          className={`h-full rounded-full transition-all duration-700 ${missing ? "bg-neutral-200" : barClass}`}
+          style={{ width: `${missing ? 0 : v}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function SupplierLeaderboard({
+  suppliers,
+  recommendedName,
+  onSelect,
+}: {
+  suppliers: SupplierAnalysisRow[];
+  recommendedName: string;
+  onSelect: (name: string) => void;
+}) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[640px] text-left text-sm">
+          <thead>
+            <tr className="border-b border-neutral-200 bg-neutral-50/90 text-[10px] font-bold uppercase tracking-wider text-neutral-500">
+              <th className="px-4 py-3">Rank</th>
+              <th className="px-4 py-3">Supplier</th>
+              <th className="px-4 py-3">AI Score</th>
+              <th className="px-4 py-3">Quote Total</th>
+              <th className="px-4 py-3">Risk</th>
+              <th className="px-4 py-3">Verdict</th>
+              <th className="px-4 py-3" />
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-neutral-100">
+            {suppliers.map((s, idx) => {
+              const isRecommended =
+                s.name.toLowerCase() === recommendedName.toLowerCase();
+              const risk = supplierRiskLevel(s);
+              const verdictStyle =
+                VERDICT_STYLES[s.verdict] ?? VERDICT_STYLES["GOOD OPTION"];
+              return (
+                <tr
+                  key={s.name}
+                  className={`transition hover:bg-neutral-50/80 ${
+                    isRecommended ? "bg-primary-50/40" : ""
+                  }`}
+                >
+                  <td className="px-4 py-3">
+                    <RankBadge rank={idx + 1} />
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-neutral-900">{s.name}</span>
+                      {isRecommended && (
+                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700">
+                          Recommended
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 font-bold tabular-nums text-primary-700">
+                    {clampScore(s.score?.overall ?? 0)}
+                  </td>
+                  <td className="px-4 py-3 font-medium tabular-nums text-neutral-800">
+                    {formatCurrency(s.grand_total)}
+                  </td>
+                  <td className="px-4 py-3">
+                    <RiskBadge level={risk} />
+                  </td>
+                  <td className="px-4 py-3">
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${verdictStyle.bg} ${verdictStyle.text}`}
+                    >
+                      {s.verdict}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => onSelect(s.name)}
+                      className="text-xs font-semibold text-primary-700 hover:text-primary-900"
+                    >
+                      Details →
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function RecommendationResultsScreen({
+  result,
+  ranked,
+  recommendedRow,
+  quoteAmount,
+  chosenSupplier,
+  onSelectSupplier,
+  onViewComparison,
+}: {
+  result: AIRecommendation;
+  ranked: SupplierAnalysisRow[];
+  recommendedRow: SupplierAnalysisRow;
+  quoteAmount: number;
+  chosenSupplier?: string | null;
+  onSelectSupplier: (name: string) => void;
+  onViewComparison: () => void;
+}) {
+  const overallScore = clampScore(recommendedRow.score?.overall ?? result.confidence_score);
+  const risk = supplierRiskLevel(recommendedRow);
+  const savings = getExpectedSavings(result, recommendedRow);
+  const priceScore = recommendedRow.score?.cost ?? -1;
+  const deliveryScore = recommendedRow.score?.delivery ?? -1;
+  const reliabilityScore = recommendedRow.score?.reliability ?? -1;
+  const compliance = complianceScore(recommendedRow, result);
+  const executiveSummary =
+    result.final_verdict?.trim() ||
+    result.recommendation_summary ||
+    `${result.recommended_supplier} delivers the strongest overall value across price, delivery, reliability, and compliance for this RFQ.`;
+
+  return (
+    <div className="space-y-6">
+      {chosenSupplier && (
+        <ReAnalysisComparisonBanner
+          previousSupplier={chosenSupplier}
+          result={result}
+        />
+      )}
+
+      {/* Recommended supplier hero */}
+      <div className="relative overflow-hidden rounded-2xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50 via-white to-primary-50/30 p-6 shadow-sm ring-1 ring-emerald-100/80">
+        <div className="pointer-events-none absolute -right-8 -top-8 h-32 w-32 rounded-full bg-emerald-200/30 blur-2xl" />
+        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0 flex-1">
+            <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-600 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-white shadow-sm">
+              <Award className="h-3 w-3" />
+              Recommended Supplier
+            </div>
+            <h3 className="mt-3 text-2xl font-bold tracking-tight text-neutral-900 sm:text-3xl">
+              {result.recommended_supplier}
+            </h3>
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-neutral-600">
+              {result.recommendation_summary}
+            </p>
+            <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-neutral-600">
+              <span className="inline-flex items-center gap-1.5 rounded-lg bg-white/80 px-3 py-1.5 ring-1 ring-neutral-200/80">
+                <ShoppingCart className="h-3.5 w-3.5 text-neutral-400" />
+                Quote:{" "}
+                <strong className="text-neutral-900">
+                  {formatCurrency(recommendedRow.grand_total || quoteAmount)}
+                </strong>
+              </span>
+              <RiskBadge level={risk} />
+            </div>
+          </div>
+
+          <div className="flex shrink-0 flex-col items-center justify-center rounded-2xl border border-white/80 bg-white/90 px-8 py-6 shadow-md ring-1 ring-neutral-200/60">
+            <div className="relative flex h-24 w-24 items-center justify-center">
+              <svg className="absolute inset-0 h-24 w-24 -rotate-90" viewBox="0 0 100 100">
+                <circle cx="50" cy="50" r="42" fill="none" stroke="#e5e7eb" strokeWidth="8" />
+                <circle
+                  cx="50"
+                  cy="50"
+                  r="42"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="8"
+                  strokeLinecap="round"
+                  className="text-primary-600"
+                  strokeDasharray={`${overallScore * 2.64} 264`}
+                />
+              </svg>
+              <div className="text-center">
+                <p className="text-3xl font-bold tabular-nums text-neutral-900">{overallScore}</p>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                  AI Score
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* KPI row */}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <KpiTile
+          label="Overall AI Score"
+          value={`${overallScore}/100`}
+          valueClassName="text-primary-700"
+        />
+        <KpiTile
+          label="Confidence Level"
+          value={formatConfidenceLevel(result.confidence_score, recommendedRow)}
+          valueClassName="text-neutral-900"
+        />
+        <KpiTile
+          label="Risk Level"
+          value={<RiskBadge level={risk} />}
+        />
+        <KpiTile
+          label="Expected Savings"
+          value={
+            savings.amount > 0 ? formatCurrency(savings.amount) : "—"
+          }
+          sub={
+            savings.pct > 0
+              ? `${savings.pct}% vs highest bid`
+              : "No material spread detected"
+          }
+          valueClassName={savings.amount > 0 ? "text-emerald-700" : "text-neutral-500"}
+        />
+      </div>
+
+      {/* Dimension scores */}
+      <div>
+        <p className="mb-3 text-xs font-bold uppercase tracking-wider text-neutral-500">
+          Evaluation Breakdown
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <DimensionScoreCard
+            label="Price Score"
+            value={priceScore}
+            icon={TrendingDown}
+            barClass="bg-emerald-500"
+          />
+          <DimensionScoreCard
+            label="Delivery Score"
+            value={deliveryScore}
+            icon={Truck}
+            barClass="bg-primary-500"
+          />
+          <DimensionScoreCard
+            label="Reliability Score"
+            value={reliabilityScore}
+            icon={Shield}
+            barClass="bg-indigo-500"
+          />
+          <DimensionScoreCard
+            label="Compliance Score"
+            value={compliance}
+            icon={ShieldCheck}
+            barClass="bg-violet-500"
+          />
+        </div>
+      </div>
+
+      {/* Leaderboard */}
+      <div>
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wider text-neutral-500">
+              Supplier Ranking Leaderboard
+            </p>
+            <p className="mt-0.5 text-sm text-neutral-600">
+              Ranked by composite AI score across all evaluation criteria
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onViewComparison}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary-700 hover:text-primary-900"
+          >
+            <GitCompare className="h-3.5 w-3.5" />
+            View Detailed Comparison
+          </button>
+        </div>
+        <SupplierLeaderboard
+          suppliers={ranked}
+          recommendedName={result.recommended_supplier}
+          onSelect={onSelectSupplier}
+        />
+      </div>
+
+      {/* Executive summary */}
+      <div className="rounded-2xl border border-neutral-800/10 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-6 text-white shadow-lg">
+        <div className="mb-3 flex items-center gap-2">
+          <ClipboardList className="h-4 w-4 text-primary-300" />
+          <p className="text-xs font-bold uppercase tracking-wider text-primary-200/90">
+            AI Executive Summary
+          </p>
+        </div>
+        <p className="text-sm leading-relaxed text-slate-100/95">{executiveSummary}</p>
+        {recommendedRow.strengths.length > 0 && (
+          <ul className="mt-4 space-y-1.5 border-t border-white/10 pt-4">
+            {recommendedRow.strengths.slice(0, 3).map((item) => (
+              <li key={item} className="flex gap-2 text-sm text-slate-200/90">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                {item}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Supplier Selection Confirmation Dialog                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -1000,7 +1354,7 @@ export default function AIAnalysisModal({
   result,
   error,
   quoteAmount,
-  quotationCount,
+  quotationCount: _quotationCount,
   creatingPO,
   hasApiKey: _hasApiKey,
   poAlreadyExists = false,
@@ -1008,15 +1362,13 @@ export default function AIAnalysisModal({
   ctaLabel,
   ctaLoadingLabel,
   ctaDoneMessage,
-  activeProvider = null,
-  fallbackNotice = null,
-  providerAvailability = { claude: false, openai: false, local: true },
   onClose,
   onRetry,
   onCreatePO,
   onSelectSupplier,
 }: Props) {
-  const [activeTab, setActiveTab] = useState<TabId>("overview");
+  const [activeTab, setActiveTab] = useState<TabId>("compare");
+  const [viewMode, setViewMode] = useState<ResultsViewMode>("recommendation");
   const [selectedSupplier, setSelectedSupplier] = useState<string | null>(null);
   const [confirmingSupplier, setConfirmingSupplier] = useState<SupplierAnalysisRow | null>(null);
 
@@ -1039,7 +1391,8 @@ export default function AIAnalysisModal({
 
   useEffect(() => {
     if (result && !loading) {
-      setActiveTab("overview");
+      setViewMode("recommendation");
+      setActiveTab("compare");
       setSelectedSupplier(null);
       setConfirmingSupplier(null);
     }
@@ -1047,6 +1400,7 @@ export default function AIAnalysisModal({
 
   useEffect(() => {
     if (!open) {
+      setViewMode("recommendation");
       setSelectedSupplier(null);
       setConfirmingSupplier(null);
     }
@@ -1058,7 +1412,30 @@ export default function AIAnalysisModal({
   );
 
   const rank1 = ranked[0];
+  const recommendedRow =
+    ranked.find(
+      (s) =>
+        result?.recommended_supplier &&
+        s.name.toLowerCase() === result.recommended_supplier.toLowerCase()
+    ) ?? rank1;
   const selectedRow = ranked.find((s) => s.name === selectedSupplier);
+
+  const primaryActionLabel = ctaLabel ?? "Create Purchase Order";
+  const primaryLoadingLabel = ctaLoadingLabel ?? "Creating Purchase Order…";
+
+  function handlePrimaryAction() {
+    if (!recommendedRow) return;
+    if (onSelectSupplier && !poAlreadyExists && !chosenSupplier) {
+      handleSelectSupplierClick(recommendedRow);
+      return;
+    }
+    onCreatePO();
+  }
+
+  function openComparisonView() {
+    setViewMode("comparison");
+    setActiveTab("compare");
+  }
 
   function handleSelectSupplierClick(supplier: SupplierAnalysisRow) {
     setConfirmingSupplier(supplier);
@@ -1115,14 +1492,26 @@ export default function AIAnalysisModal({
                 </div>
                 <div>
                   <h2 id="ai-modal-title" className="text-lg font-bold text-white">
-                    {chosenSupplier ? "Market Re-Analysis" : "AI Procurement Intelligence"}
+                    {loading
+                      ? "AI Procurement Analysis"
+                      : selectedSupplier
+                        ? "Supplier Analysis"
+                        : viewMode === "comparison"
+                          ? "Detailed Comparison"
+                          : chosenSupplier
+                            ? "Market Re-Analysis"
+                            : "Recommendation Results"}
                   </h2>
                   <p className="text-xs text-white/70">
-                    {selectedSupplier
-                      ? `Detailed analysis — ${selectedSupplier}`
-                      : chosenSupplier
-                      ? "Comparing current market data against selected supplier"
-                      : `${quotationCount} supplier quotation${quotationCount === 1 ? "" : "s"} evaluated`}
+                    {loading
+                      ? "Evaluating supplier quotations and generating recommendations"
+                      : selectedSupplier
+                        ? `Detailed analysis — ${selectedSupplier}`
+                        : viewMode === "comparison"
+                          ? "Side-by-side supplier evaluation and rankings"
+                          : chosenSupplier
+                            ? "Comparing current market data against selected supplier"
+                            : "Procurement decision ready — review recommendation and proceed"}
                   </p>
                 </div>
               </div>
@@ -1144,17 +1533,20 @@ export default function AIAnalysisModal({
                 />
               </div>
             )}
-            <div className="relative mt-3">
-              <AIProviderStatusBar
-                active={activeProvider}
-                availability={providerAvailability}
-              />
-            </div>
           </div>
 
-          {result && !loading && !selectedSupplier && (
+          {result && !loading && !selectedSupplier && viewMode === "comparison" && (
             <div className="shrink-0 border-b border-neutral-200 bg-slate-50/80 px-4">
-              <div className="flex gap-1 overflow-x-auto py-2">
+              <div className="flex items-center gap-2 overflow-x-auto py-2">
+                <button
+                  type="button"
+                  onClick={() => setViewMode("recommendation")}
+                  className="inline-flex shrink-0 items-center gap-1 rounded-lg px-3 py-2 text-xs font-semibold text-neutral-600 transition hover:bg-white hover:text-primary-700"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                  Back to Recommendation
+                </button>
+                <span className="text-neutral-300">|</span>
                 {TABS.map(({ id, label, icon: Icon }) => (
                   <button
                     key={id}
@@ -1176,23 +1568,34 @@ export default function AIAnalysisModal({
 
           <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
             {loading && (
-              <div className="py-8 text-center">
-                <Loader2 className="mx-auto mb-4 h-12 w-12 animate-spin text-primary-600" />
-                <p className="font-semibold text-neutral-900">Running intelligent analysis…</p>
-                <p className="mt-1 text-xs text-neutral-500">
-                  Claude → OpenAI → Local Engine fallback chain
-                </p>
-                <div className="mx-auto mt-6 max-w-sm space-y-2">
+              <div className="py-10">
+                <div className="relative mx-auto mb-8 flex h-24 w-24 items-center justify-center">
+                  <span className="absolute inset-0 animate-ping rounded-full bg-primary-200/40" />
+                  <span className="absolute inset-2 animate-pulse rounded-full bg-primary-100/80" />
+                  <div className="relative flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-600 to-primary-800 shadow-lg shadow-primary-500/25">
+                    <Sparkles className="h-6 w-6 text-white" />
+                  </div>
+                </div>
+                <div className="mx-auto max-w-md space-y-2.5">
                   {ANALYSIS_STEPS.map((step, idx) => (
                     <div
                       key={step}
-                      className={`rounded-lg px-4 py-2 text-sm ${
+                      className={`flex items-center gap-3 rounded-xl px-4 py-3 text-sm transition-all duration-500 ${
                         idx <= loadingStep
-                          ? "bg-primary-50 text-primary-800"
+                          ? "bg-primary-50 text-primary-900 ring-1 ring-primary-100"
                           : "text-neutral-400"
                       }`}
                     >
-                      {idx <= loadingStep ? "✓" : "○"} {step}
+                      <span
+                        className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold transition-colors duration-500 ${
+                          idx <= loadingStep
+                            ? "bg-primary-600 text-white"
+                            : "bg-neutral-100 text-neutral-400"
+                        }`}
+                      >
+                        {idx <= loadingStep ? "✓" : ""}
+                      </span>
+                      {step}
                     </div>
                   ))}
                 </div>
@@ -1234,12 +1637,22 @@ export default function AIAnalysisModal({
               />
             )}
 
-            {result && !loading && !selectedSupplier && (
+            {result && !loading && !selectedSupplier && viewMode === "recommendation" && recommendedRow && (
+              <RecommendationResultsScreen
+                result={result}
+                ranked={ranked}
+                recommendedRow={recommendedRow}
+                quoteAmount={quoteAmount}
+                chosenSupplier={chosenSupplier}
+                onSelectSupplier={setSelectedSupplier}
+                onViewComparison={openComparisonView}
+              />
+            )}
+
+            {result && !loading && !selectedSupplier && viewMode === "comparison" && (
               <>
-                {fallbackNotice && <FallbackNoticeBanner message={fallbackNotice} />}
                 {activeTab === "overview" && (
                   <div className="space-y-6">
-                    {/* Re-analysis comparison when supplier already locked */}
                     {chosenSupplier && (
                       <ReAnalysisComparisonBanner
                         previousSupplier={chosenSupplier}
@@ -1345,6 +1758,55 @@ export default function AIAnalysisModal({
               </>
             )}
           </div>
+
+          {result &&
+            !loading &&
+            !selectedSupplier &&
+            viewMode === "recommendation" &&
+            recommendedRow && (
+              <div className="shrink-0 border-t border-neutral-200 bg-neutral-50/95 px-6 py-4">
+                <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <button
+                    type="button"
+                    onClick={openComparisonView}
+                    disabled={creatingPO}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-neutral-300 bg-white px-5 py-3 text-sm font-semibold text-neutral-700 shadow-sm transition hover:border-primary-300 hover:bg-neutral-50 hover:text-primary-800 disabled:opacity-60"
+                  >
+                    <GitCompare className="h-4 w-4" />
+                    View Detailed Comparison
+                  </button>
+
+                  {poAlreadyExists || chosenSupplier ? (
+                    <div className="inline-flex items-center justify-center gap-2 rounded-xl border border-success-200 bg-success-50 px-6 py-3 text-sm font-semibold text-success-700">
+                      <CheckCircle2 className="h-4 w-4" />
+                      {ctaDoneMessage ??
+                        (chosenSupplier
+                          ? `${chosenSupplier} has been selected for this RFQ.`
+                          : "A purchase order has already been created for this RFQ.")}
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handlePrimaryAction}
+                      disabled={creatingPO}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary-700 px-8 py-3.5 text-sm font-bold text-white shadow-lg shadow-primary-500/20 transition hover:bg-primary-800 disabled:opacity-70"
+                    >
+                      {creatingPO ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          {primaryLoadingLabel}
+                        </>
+                      ) : (
+                        <>
+                          <ShoppingCart className="h-4 w-4" />
+                          {primaryActionLabel}
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
         </div>
       </div>
 

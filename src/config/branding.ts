@@ -1,5 +1,5 @@
 /** Product branding — single source of truth for UI copy and exports. */
-export const APP_NAME = "Netlink Procurement";
+export const APP_NAME = "BidSphere";
 export const APP_SIDEBAR_TITLE = "NETLINK";
 export const APP_SIDEBAR_TAGLINE = "PROCUREMENT";
 export const APP_TAGLINE = "Procurement";

@@ -7,7 +7,7 @@
  */
 export const ANALYSIS_STEPS = [
   "Comparing prices",
-  "Evaluating delivery",
-  "Checking supplier history",
-  "Calculating confidence score",
+  "Evaluating delivery timelines",
+  "Reviewing supplier performance",
+  "Calculating recommendation score",
 ] as const;
