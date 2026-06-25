@@ -376,16 +376,71 @@ const PROCUREMENT_WORKFLOW_STAGES: WorkflowStage[] = [
   { name: "ai_analysis", label: "AI Analysis", enabled: true, order: 3 },
   { name: "legal_review", label: "Legal Review", enabled: true, order: 4 },
   { name: "finance_review", label: "Finance Review", enabled: true, order: 5 },
-  { name: "po_creation", label: "PO Creation", enabled: true, order: 6 },
-  { name: "grn", label: "Goods Receipt", enabled: true, order: 7 },
-  { name: "invoice", label: "Invoice", enabled: true, order: 8 },
-  { name: "payment", label: "Payment", enabled: true, order: 9 },
+  { name: "po_created", label: "Purchase Order Created", enabled: true, order: 6 },
+  { name: "supplier_confirmation", label: "Supplier Confirmation", enabled: true, order: 7 },
+  { name: "in_transit", label: "In Transit", enabled: true, order: 8 },
+  { name: "grn_received", label: "GRN Received", enabled: true, order: 9 },
+  { name: "invoice_generated", label: "Invoice Generated", enabled: true, order: 10 },
+  {
+    name: "supplier_payment_confirmation",
+    label: "Supplier Payment Confirmation",
+    enabled: true,
+    order: 11,
+  },
+  { name: "payment_completed", label: "Payment Completed", enabled: true, order: 12 },
 ];
+
+const LEGACY_STAGE_NAME_MAP: Record<string, string> = {
+  po_creation: "po_created",
+  grn: "grn_received",
+  invoice: "invoice_generated",
+  payment: "payment_completed",
+};
+
+function normalizeWorkflowStages(stored: WorkflowStage[]): WorkflowStage[] {
+  const hasLegacyNames = stored.some(
+    (s) =>
+      s.name === "po_creation" ||
+      s.name === "grn" ||
+      s.name === "invoice" ||
+      s.name === "payment"
+  );
+  const isOutdated = stored.length !== PROCUREMENT_WORKFLOW_STAGES.length || hasLegacyNames;
+
+  if (isOutdated) {
+    const enabledByName = new Map<string, boolean>();
+    for (const stage of stored) {
+      const canonical = LEGACY_STAGE_NAME_MAP[stage.name] ?? stage.name;
+      enabledByName.set(canonical, stage.enabled);
+    }
+    return PROCUREMENT_WORKFLOW_STAGES.map((stage) => ({
+      ...stage,
+      enabled: enabledByName.get(stage.name) ?? stage.enabled,
+    }));
+  }
+
+  const storedByName = new Map(stored.map((s) => [s.name, s]));
+  return PROCUREMENT_WORKFLOW_STAGES.map((defaults) => {
+    const existing = storedByName.get(defaults.name);
+    if (!existing) return defaults;
+    return {
+      ...defaults,
+      enabled: existing.enabled,
+      order: existing.order,
+    };
+  })
+    .sort((a, b) => a.order - b.order)
+    .map((stage, index) => ({ ...stage, order: index + 1 }));
+}
 
 export function getWorkflowStages(): WorkflowStage[] {
   const stored = localStorage.getItem("bidsphere_workflow_config");
   if (stored) {
-    try { return JSON.parse(stored) as WorkflowStage[]; } catch { /* fallthrough */ }
+    try {
+      return normalizeWorkflowStages(JSON.parse(stored) as WorkflowStage[]);
+    } catch {
+      /* fallthrough */
+    }
   }
   return PROCUREMENT_WORKFLOW_STAGES;
 }

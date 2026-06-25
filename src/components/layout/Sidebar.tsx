@@ -73,12 +73,12 @@ export default function Sidebar({
 
   return (
     <aside
-      className={`flex flex-shrink-0 flex-col bg-sidebar text-sidebar-text transition-[width] duration-300 ease-in-out ${widthClass} ${
-        fixed ? "fixed left-0 top-0 z-40 h-screen" : "h-full"
+      className={`flex flex-shrink-0 flex-col overflow-hidden bg-sidebar text-sidebar-text transition-[width] duration-300 ease-in-out ${widthClass} ${
+        fixed ? "fixed left-0 top-0 z-40 h-[100dvh] min-h-screen" : "h-full min-h-0"
       } ${className}`}
     >
       <div
-        className={`flex items-center border-b border-white/5 py-4 ${
+        className={`flex flex-shrink-0 items-center border-b border-white/5 py-4 ${
           collapsed ? "justify-center px-2" : "gap-3 px-4"
         }`}
       >
@@ -95,7 +95,7 @@ export default function Sidebar({
         )}
       </div>
 
-      <nav className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-2 py-3 md:px-3">
+      <nav className="scrollbar-hidden min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain scroll-smooth px-2 py-3 md:px-3">
         {navGroups.map((group) => (
           <div key={group.label}>
             {group.label && !collapsed ? (
@@ -119,7 +119,7 @@ export default function Sidebar({
         ))}
       </nav>
 
-      <div ref={menuRef} className="relative mt-auto flex-shrink-0 border-t border-white/5 px-2 py-4 md:px-3">
+      <div ref={menuRef} className="relative flex-shrink-0 border-t border-white/5 px-2 py-4 md:px-3">
         {/* Dropdown menu — positioned above the card */}
         {menuOpen && !collapsed && (
           <div className="absolute bottom-full left-2 right-2 mb-1.5 rounded-lg border border-white/10 bg-[#1e293b] py-1 shadow-xl md:left-3 md:right-3">
