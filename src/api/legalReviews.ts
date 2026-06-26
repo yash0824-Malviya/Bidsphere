@@ -4,22 +4,20 @@
  * Data source: ERPNext is the SINGLE SOURCE OF TRUTH.
  *
  * All review data is read from ERPNext custom fields on the RFQ DocType.
- * localStorage is used only as a write-through cache by the approval
- * workflow — it is NEVER read for the listing. This ensures every browser
- * window, incognito session, and device sees identical data.
+ * localStorage may cache per-RFQ state for the detail page only.
+ * Listing and Review History NEVER read from localStorage — only ERPNext.
  */
 
 import { apiGet, buildResourceUrl } from "./erpnext";
 import { getPurchaseOrderByRFQ } from "./purchasing";
-import { updateRFQ } from "./sourcing";
 import {
   getApprovalState,
   saveApprovalState,
+  syncApprovalStateToErpNext,
   resubmitLegalReview as resubmitLegalReviewWorkflow,
 } from "./rfqApprovalWorkflow";
 import { getRFQSchema } from "./rfqSchema";
 import type {
-  RFQ,
   RFQApprovalState,
   LegalReviewStatus,
   FinanceReviewStatus,
@@ -61,63 +59,10 @@ export async function getLegalReviews(
 
   // ── Step 2: Build review items from ERPNext custom fields ─────────────
   for (const [rfqName, erpRfq] of erpMap) {
-    let state = tryRestoreFromApprovalData(erpRfq);
-
-    if (!state) {
-      const hasErpWorkflowData =
-        erpRfq.custom_legal_status ||
-        erpRfq.custom_selected_supplier ||
-        erpRfq.custom_workflow_step;
-
-      if (hasErpWorkflowData) {
-        const mappedLegal = mapErpLegalStatus(erpRfq.custom_legal_status ?? "");
-        const mappedFinance = mapErpFinanceStatus(erpRfq.custom_finance_status ?? "");
-
-        state = {
-          rfq: erpRfq.name,
-          rfq_title: parseRfqTitle(erpRfq.message_for_supplier),
-          company: erpRfq.company,
-          selected_supplier: erpRfq.custom_selected_supplier ?? "",
-          selected_supplier_total: erpRfq.custom_selected_supplier_total ?? 0,
-          workflow_step: (erpRfq.custom_workflow_step as RFQApprovalState["workflow_step"]) ??
-            (mappedLegal === "Approved" ? "Pending Finance Review" : "Pending Legal Review"),
-          legal_status: mappedLegal,
-          finance_status: mappedFinance,
-          submitted_by: erpRfq.custom_submitted_by ?? erpRfq.owner ?? "",
-          submitted_at: erpRfq.custom_submitted_at ?? erpRfq.creation ?? new Date().toISOString(),
-          legal_reviewer: erpRfq.custom_legal_reviewer,
-          legal_review_date: erpRfq.custom_legal_review_date,
-          finance_reviewer: erpRfq.custom_finance_reviewer,
-          finance_review_date: erpRfq.custom_finance_review_date,
-          legal_comments: [],
-          finance_comments: [],
-          terms_approved: !!erpRfq.custom_terms_approved,
-          warranty_approved: !!erpRfq.custom_warranty_approved,
-          insurance_approved: !!erpRfq.custom_insurance_approved,
-        };
-      }
-    }
-
-    // If ERPNext had no workflow data, check localStorage for un-synced state
-    // and push it up to ERPNext so future loads find it.
-    if (!state) {
-      const localState = readLocalApprovalState(rfqName);
-      if (localState && localState.legal_status) {
-        // Enrich with ERPNext company if missing
-        if (!localState.company && erpRfq.company) {
-          localState.company = erpRfq.company;
-        }
-        state = localState;
-        // Sync this un-synced state to ERPNext (fire-and-forget)
-        saveApprovalState(state);
-        // eslint-disable-next-line no-console
-        console.log(LOG_TAG, `Migrated localStorage state to ERPNext: ${rfqName}`);
-      }
-    }
-
+    const state = buildStateFromErpRfq(erpRfq);
     if (!state) continue;
 
-    // Hydrate localStorage cache for detail pages
+    // Cache for detail page only — listing never reads localStorage
     try {
       localStorage.setItem(`rfq_approval_${state.rfq}`, JSON.stringify(state));
     } catch { /* ignore quota errors */ }
@@ -129,28 +74,8 @@ export async function getLegalReviews(
     seen.add(rfqName);
   }
 
-  // ── Step 3: Pick up any localStorage-only records not in ERPNext ───────
-  // (e.g. RFQ was deleted from ERPNext but approval state remains local)
-  const localOnlyItems = scanLocalApprovalStates(seen);
-  for (const localState of localOnlyItems) {
-    if (!localState.legal_status) continue;
-
-    const item = toReviewItem(localState);
-    if (filter !== "All" && item.legal_status !== filter) continue;
-
-    items.push(item);
-    // Attempt to sync to ERPNext
-    saveApprovalState(localState);
-  }
-
-  if (localOnlyItems.length > 0) {
-    // eslint-disable-next-line no-console
-    console.log(LOG_TAG, `Found ${localOnlyItems.length} localStorage-only records (syncing to ERPNext)`);
-  }
-
   // eslint-disable-next-line no-console
-  console.log(LOG_TAG, `Loaded Reviews: ${items.length} (filter="${filter}", ` +
-    `ERPNext: ${seen.size}, localStorage-only: ${localOnlyItems.length})`);
+  console.log(LOG_TAG, `Loaded Reviews: ${items.length} (filter="${filter}", ERPNext: ${seen.size})`);
 
   items.sort(
     (a, b) => (b.submission_date ?? "").localeCompare(a.submission_date ?? "")
@@ -163,38 +88,74 @@ export async function getLegalReviews(
   return items;
 }
 
-/* ────────────────────────────────────────────────────────────────────────────
- *  Internal: localStorage helpers (read-only, used for migration)
- * ──────────────────────────────────────────────────────────────────────────── */
+function buildStateFromErpRfq(erpRfq: ErpRFQRow): RFQApprovalState | null {
+  const fromJson = tryRestoreFromApprovalData(erpRfq);
+  if (fromJson) return fromJson;
 
-function readLocalApprovalState(rfqName: string): RFQApprovalState | null {
-  try {
-    const raw = localStorage.getItem(`rfq_approval_${rfqName}`);
-    return raw ? (JSON.parse(raw) as RFQApprovalState) : null;
-  } catch {
-    return null;
-  }
+  const hasErpWorkflowData =
+    erpRfq.custom_legal_status ||
+    erpRfq.custom_selected_supplier ||
+    erpRfq.custom_workflow_step ||
+    erpRfq.custom_legal_reviewer ||
+    erpRfq.custom_legal_review_date ||
+    erpRfq.custom_legal_comments;
+
+  if (!hasErpWorkflowData) return null;
+
+  const mappedLegal = mapErpLegalStatus(erpRfq.custom_legal_status ?? "");
+  const mappedFinance = mapErpFinanceStatus(erpRfq.custom_finance_status ?? "");
+  const legalComments = parseErpLegalComments(
+    erpRfq.custom_legal_comments,
+    erpRfq.custom_legal_reviewer,
+    erpRfq.custom_legal_review_date,
+    mappedLegal
+  );
+
+  return {
+    rfq: erpRfq.name,
+    rfq_title: parseRfqTitle(erpRfq.message_for_supplier),
+    company: erpRfq.company,
+    selected_supplier: erpRfq.custom_selected_supplier ?? "",
+    selected_supplier_total: erpRfq.custom_selected_supplier_total ?? 0,
+    workflow_step:
+      (erpRfq.custom_workflow_step as RFQApprovalState["workflow_step"]) ??
+      (mappedLegal === "Approved"
+        ? "Pending Finance Review"
+        : mappedLegal === "Rejected"
+          ? "Legal Rejected"
+          : "Pending Legal Review"),
+    legal_status: mappedLegal,
+    finance_status: mappedFinance,
+    submitted_by: erpRfq.custom_submitted_by ?? erpRfq.owner ?? "",
+    submitted_at: erpRfq.custom_submitted_at ?? erpRfq.creation ?? new Date().toISOString(),
+    legal_reviewer: erpRfq.custom_legal_reviewer,
+    legal_review_date: erpRfq.custom_legal_review_date,
+    finance_reviewer: erpRfq.custom_finance_reviewer,
+    finance_review_date: erpRfq.custom_finance_review_date,
+    legal_comments: legalComments,
+    finance_comments: [],
+    terms_approved: !!erpRfq.custom_terms_approved,
+    warranty_approved: !!erpRfq.custom_warranty_approved,
+    insurance_approved: !!erpRfq.custom_insurance_approved,
+  };
 }
 
-function scanLocalApprovalStates(
-  exclude: Set<string>
-): RFQApprovalState[] {
-  const results: RFQApprovalState[] = [];
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (!key?.startsWith("rfq_approval_")) continue;
-      const raw = localStorage.getItem(key);
-      if (!raw) continue;
-      try {
-        const state = JSON.parse(raw) as RFQApprovalState;
-        if (state?.rfq && !exclude.has(state.rfq)) {
-          results.push(state);
-        }
-      } catch { /* skip corrupt entries */ }
-    }
-  } catch { /* ignore */ }
-  return results;
+function parseErpLegalComments(
+  remarks: string | undefined,
+  reviewer: string | undefined,
+  reviewedOn: string | undefined,
+  action: LegalReviewStatus
+): LegalComment[] {
+  const text = remarks?.trim();
+  if (!text) return [];
+  return [
+    {
+      comment: text,
+      comment_by: reviewer ?? "",
+      comment_date: reviewedOn ?? "",
+      action,
+    },
+  ];
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -217,6 +178,7 @@ export interface ErpRFQRow {
   custom_submitted_at?: string;
   custom_legal_reviewer?: string;
   custom_legal_review_date?: string;
+  custom_legal_comments?: string;
   custom_finance_reviewer?: string;
   custom_finance_review_date?: string;
   custom_approval_data?: string;
@@ -236,6 +198,7 @@ const WORKFLOW_CUSTOM_FIELDS = [
   "custom_submitted_at",
   "custom_legal_reviewer",
   "custom_legal_review_date",
+  "custom_legal_comments",
   "custom_finance_reviewer",
   "custom_finance_review_date",
   "custom_approval_data",
@@ -448,54 +411,47 @@ export async function updateReviewStatus(
 ): Promise<void> {
   const now = new Date().toISOString();
 
-  const schema = await getRFQSchema();
-  const erpUpdates: Record<string, string> = {};
-
-  if (schema.legalStatusFieldName) {
-    erpUpdates[schema.legalStatusFieldName] =
-      status === "Pending Legal Review" ? "Pending" : status;
+  let state = getApprovalState(rfqName);
+  if (!state) {
+    state = {
+      rfq: rfqName,
+      selected_supplier: "",
+      selected_supplier_total: 0,
+      workflow_step: "Pending Legal Review",
+      legal_status: "Pending Legal Review",
+      finance_status: "Pending Finance Review",
+      submitted_at: now,
+      submitted_by: reviewedBy,
+      legal_comments: [],
+      finance_comments: [],
+    };
   }
 
-  if (status === "Approved" && schema.financeStatusFieldName) {
-    erpUpdates[schema.financeStatusFieldName] = "Pending";
+  state.legal_status = status;
+  state.legal_reviewer = reviewedBy;
+  state.legal_review_date = now;
+
+  if (status === "Approved") {
+    state.workflow_step = "Pending Finance Review";
+    state.finance_status = "Pending Finance Review";
+  } else if (status === "Rejected") {
+    state.workflow_step = "Legal Rejected";
   }
 
-  if (Object.keys(erpUpdates).length > 0) {
-    try {
-      await updateRFQ(rfqName, erpUpdates as unknown as Partial<RFQ>);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn(LOG_TAG, "ERPNext update failed, localStorage only:", err);
-    }
+  if (comment?.trim()) {
+    state.legal_comments = [
+      ...(state.legal_comments ?? []),
+      {
+        comment: comment.trim(),
+        comment_by: reviewedBy,
+        comment_date: now,
+        action: status,
+      },
+    ];
   }
 
-  const state = getApprovalState(rfqName);
-  if (state) {
-    state.legal_status = status;
-    state.legal_reviewer = reviewedBy;
-    state.legal_review_date = now;
-
-    if (status === "Approved") {
-      state.workflow_step = "Pending Finance Review";
-      state.finance_status = "Pending Finance Review";
-    } else if (status === "Rejected") {
-      state.workflow_step = "Legal Rejected";
-    }
-
-    if (comment?.trim()) {
-      state.legal_comments = [
-        ...(state.legal_comments ?? []),
-        {
-          comment: comment.trim(),
-          comment_by: reviewedBy,
-          comment_date: now,
-          action: status,
-        },
-      ];
-    }
-
-    saveApprovalState(state);
-  }
+  await syncApprovalStateToErpNext(state);
+  saveApprovalState(state, { skipErpSync: true });
 }
 
 export function addComment(

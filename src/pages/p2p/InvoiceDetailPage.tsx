@@ -18,6 +18,7 @@ import {
   InvoiceCurrencyMismatchError,
   submitPurchaseInvoice,
 } from "../../api/accounts";
+import { invalidateFinanceDashboardMetrics } from "../../api/financeWorkflow";
 import ReadOnlyViewBadge from "../../components/document/ReadOnlyViewBadge";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
@@ -53,6 +54,7 @@ export default function InvoiceDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["purchase-invoice", name] });
       queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
       queryClient.invalidateQueries({ queryKey: ["payable-invoices"] });
+      invalidateFinanceDashboardMetrics(queryClient);
     },
     onError: (err: Error) => {
       if (err instanceof InvoiceCurrencyMismatchError) {

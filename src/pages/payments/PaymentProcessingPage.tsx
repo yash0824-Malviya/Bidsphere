@@ -13,12 +13,16 @@ import PaymentAttachments, {
   type PaymentAttachmentKind,
 } from "../../components/payments/PaymentAttachments";
 import PaymentSummary from "../../components/payments/PaymentSummary";
+import PaymentSuccessModal, {
+  type PaymentSuccessDetails,
+} from "../../components/payments/PaymentSuccessModal";
 import { ErpNextDatePicker } from "../../components/ui";
 import {
   getInvoicesForPO,
   getModesOfPayment,
   getPurchaseInvoice,
 } from "../../api/accounts";
+import { invalidateFinanceDashboardMetrics } from "../../api/financeWorkflow";
 import {
   getNextPaymentReference,
   processInvoicePayment,
@@ -37,7 +41,7 @@ import {
   validatePaymentMethodDetails,
   type PaymentMethodDetails,
 } from "../../utils/usPaymentMethods";
-import { formatCurrency, todayIso } from "../../utils/format";
+import { todayIso } from "../../utils/format";
 
 const DEFAULT_METHOD = "ACH Transfer";
 
@@ -66,6 +70,8 @@ export default function PaymentProcessingPage() {
   const [filesByKind, setFilesByKind] = useState<
     Partial<Record<PaymentAttachmentKind, File>>
   >({});
+  const [successDetails, setSuccessDetails] =
+    useState<PaymentSuccessDetails | null>(null);
 
   // Revoke any object URLs on unmount.
   useEffect(
@@ -175,9 +181,6 @@ export default function PaymentProcessingPage() {
       });
     },
     onSuccess: (result) => {
-      // ERPNext is now the source of truth (PI → Paid, PO → Fully Billed).
-      // Mirror the outcome onto the local voucher workflow so the invoice
-      // timeline + status reflect it, persisting the live ERPNext refs.
       releasePayment(voucherId, {
         payment_id: result.paymentEntry,
         confirmed_at: new Date(`${postingDate}T00:00:00`).toISOString(),
@@ -189,12 +192,17 @@ export default function PaymentProcessingPage() {
       queryClient.invalidateQueries({ queryKey: ["payment-entries"] });
       queryClient.invalidateQueries({ queryKey: ["payable-invoices"] });
       queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
-      toast.success(
-        `Payment ${result.paymentEntry} submitted (${formatCurrency(
-          result.amountPaid
-        )}). Invoice ${result.purchaseInvoice} settled.`
-      );
-      navigate(invoiceBackLink, { replace: true });
+      invalidateFinanceDashboardMetrics(queryClient);
+      toast.success("Payment processed successfully.");
+      setSuccessDetails({
+        paymentEntryId: result.paymentEntry,
+        paymentReference: paymentReference.trim(),
+        invoiceNumber: result.purchaseInvoice,
+        supplier: summary.supplier,
+        amountPaid: result.amountPaid,
+        paymentDate: postingDate,
+        paymentMethod: paymentMethod,
+      });
     },
     onError: (err) => {
       toast.error(
@@ -414,14 +422,16 @@ export default function PaymentProcessingPage() {
               type="button"
               onClick={handleSubmit}
               disabled={busy}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:bg-primary-600 disabled:opacity-60"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-              Submit Payment
+              {busy ? "Processing Payment..." : "Submit Payment"}
             </button>
             <Link
               to={invoiceBackLink}
-              className="w-full rounded-lg border border-neutral-300 bg-white px-4 py-2.5 text-center text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+              className={`w-full rounded-lg border border-neutral-300 bg-white px-4 py-2.5 text-center text-sm font-medium text-neutral-700 hover:bg-neutral-50 ${
+                busy ? "pointer-events-none opacity-60" : ""
+              }`}
             >
               Cancel
             </Link>
@@ -435,6 +445,19 @@ export default function PaymentProcessingPage() {
           )}
         </div>
       </div>
+
+      <PaymentSuccessModal
+        open={!!successDetails}
+        details={successDetails}
+        onViewReceipt={() => {
+          if (!successDetails) return;
+          navigate(
+            `/p2p/payments/${encodeURIComponent(successDetails.paymentEntryId)}`
+          );
+        }}
+        onGoToPayments={() => navigate("/p2p/payments")}
+        onBackToDashboard={() => navigate("/dashboard")}
+      />
     </div>
   );
 }

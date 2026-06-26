@@ -18,6 +18,7 @@ import {
   getPurchaseOrder,
   getPurchaseOrders,
 } from "../../api/purchasing";
+import { invalidateFinanceDashboardMetrics } from "../../api/financeWorkflow";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
 import { Skeleton } from "../../components/Skeleton";
@@ -328,6 +329,8 @@ export default function NewGRNPage() {
       queryClient.invalidateQueries({ queryKey: ["incoming-purchase-orders"] });
       queryClient.invalidateQueries({ queryKey: ["po-grns", poName] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["grns-awaiting-invoice"] });
+      invalidateFinanceDashboardMetrics(queryClient);
       navigate("/p2p/grn");
     },
     onError: (err: unknown) => {

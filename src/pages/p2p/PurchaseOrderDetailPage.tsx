@@ -38,9 +38,14 @@ import {
   type PODeliveryState,
   getDeliveryState,
   ensureDeliveryState,
+  syncDeliveryStateFromERPNext,
 } from "../../api/poDeliveryWorkflow";
 import POStatusTimeline from "../../components/p2p/POStatusTimeline";
-import { buildProcurementWorkflowSteps } from "../../utils/procurementStatusWorkflow";
+import {
+  buildPOWorkflowSteps,
+  derivePOWorkflowSnapshot,
+} from "../../utils/procurementStatusWorkflow";
+import { getAllVouchers } from "../../api/vouchers";
 import {
   formatCurrency,
   formatDate,
@@ -130,29 +135,71 @@ export default function PurchaseOrderDetailPage() {
   const isDraft = (po.docstatus ?? 0) === 0;
   const isSubmitted = (po.docstatus ?? 0) === 1;
 
-  const deliveryState: PODeliveryState | null = (() => {
-    if (!po.name) return null;
-    return isSubmitted ? ensureDeliveryState(po.name) : getDeliveryState(po.name);
-  })();
-
   const grns = grnsQuery.data ?? [];
   const submittedGRNs = grns.filter((g) => g.docstatus === 1);
-  const hasSubmittedGRN = submittedGRNs.length > 0;
-  const receivedPct = po.per_received ?? 0;
-  const isFullyReceived = receivedPct >= 100;
   const allInvoices = invoicesQuery.data ?? [];
   const activeInvoices = allInvoices.filter((inv) => inv.docstatus !== 2);
   const primaryInvoice =
     activeInvoices.find((inv) => inv.docstatus === 1) ?? activeInvoices[0];
+  const poVouchers = getAllVouchers().filter((v) => v.po_reference === po.name);
+  const hasSubmittedInvoiceFromPi = activeInvoices.some((inv) => inv.docstatus === 1);
+  const hasSubmittedInvoiceFromVoucher = poVouchers.some(
+    (v) =>
+      !!v.invoice ||
+      ["invoice_raised", "under_review", "invoice_approved", "payment_confirmed", "payment_received"].includes(
+        v.status
+      )
+  );
+  const hasSubmittedInvoice = hasSubmittedInvoiceFromPi || hasSubmittedInvoiceFromVoucher;
+
+  const syncedDeliveryState: PODeliveryState | null = (() => {
+    if (!po.name) return null;
+    const base = isSubmitted ? ensureDeliveryState(po.name) : getDeliveryState(po.name);
+    if (!isSubmitted || !base) return base;
+    return (
+      syncDeliveryStateFromERPNext(po.name, {
+        poSubmitted: isSubmitted,
+        perReceived: po.per_received ?? 0,
+        perBilled: po.per_billed ?? 0,
+        submittedGrnCount: submittedGRNs.length,
+        hasSubmittedInvoice,
+        invoiceOutstanding: primaryInvoice?.outstanding_amount,
+        invoiceGrandTotal: primaryInvoice?.grand_total,
+      }) ?? base
+    );
+  })();
+
+  const workflowDocs = {
+    poSubmitted: isSubmitted,
+    poErpStatus: po.status,
+    perReceived: po.per_received ?? 0,
+    perBilled: po.per_billed ?? 0,
+    deliveryState: syncedDeliveryState,
+    submittedGrnCount: submittedGRNs.length,
+    hasSubmittedInvoice,
+    invoiceOutstanding: primaryInvoice?.outstanding_amount,
+    invoiceGrandTotal: primaryInvoice?.grand_total,
+    vouchers: poVouchers,
+  };
+
+  const workflowSnapshot = derivePOWorkflowSnapshot(po.name, workflowDocs);
+  const procurementSteps = buildPOWorkflowSteps(po.name, workflowDocs);
+
+  const {
+    displayStatus,
+    receivedPct,
+    billedPct,
+    workflowComplete,
+  } = workflowSnapshot;
+  const hasSubmittedGRN = submittedGRNs.length > 0;
+  const isFullyReceived = receivedPct >= 100;
   const hasInvoice = !!primaryInvoice;
-  const billedPct = po.per_billed ?? 0;
-  const allInvoicesPaid = hasInvoice && (primaryInvoice.outstanding_amount ?? 1) === 0;
+  const allInvoicesPaid = workflowSnapshot.workflowComplete;
+
   const itemCount = (po.items ?? []).length;
   const grandTotal = po.grand_total ?? 0;
   const netTotal = po.net_total ?? po.total ?? grandTotal;
   const taxTotal = po.total_taxes_and_charges ?? (grandTotal - netTotal);
-
-  const workflowInvoice = primaryInvoice;
 
   const openInvoiceDetail = () => {
     if (!primaryInvoice?.name) return;
@@ -161,24 +208,12 @@ export default function PurchaseOrderDetailPage() {
     );
   };
 
-  const hasSubmittedInvoice = activeInvoices.some((inv) => inv.docstatus === 1);
-
-  const procurementSteps = buildProcurementWorkflowSteps({
-    poSubmitted: isSubmitted,
-    deliveryState,
-    hasSubmittedGRN,
-    hasSubmittedInvoice,
-    invoiceOutstanding: workflowInvoice?.outstanding_amount,
-    invoiceGrandTotal: workflowInvoice?.grand_total,
-    paymentCompleted: allInvoicesPaid,
-  });
-
   const auditEntries = [
     { label: "Purchase Order Created", ts: po.creation, done: true },
     { label: isSubmitted ? "PO Submitted" : "Awaiting Submission", ts: isSubmitted ? po.modified : null, done: isSubmitted },
     ...submittedGRNs.map((g) => ({ label: `Goods Received — ${g.name}`, ts: g.modified ?? g.posting_date ?? null, done: true as const })),
     ...activeInvoices.map((inv) => ({ label: `Invoice — ${inv.name} (${inv.status ?? "Draft"})`, ts: inv.modified ?? null, done: true as const })),
-    ...(allInvoicesPaid ? [{ label: "Payment Complete", ts: primaryInvoice?.modified ?? null, done: true as const }] : []),
+    ...(workflowComplete ? [{ label: "Payment Complete", ts: primaryInvoice?.modified ?? null, done: true as const }] : []),
   ];
 
   return (
@@ -201,7 +236,7 @@ export default function PurchaseOrderDetailPage() {
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="text-sm font-bold text-neutral-900 tabular-nums">{po.name}</h1>
-              <CompactStatus status={po.status ?? "Draft"} />
+              <CompactStatus status={displayStatus} />
             </div>
             <p className="text-xs text-neutral-500 truncate">
               {po.supplier_name ?? po.supplier} &middot; {po.company ?? "—"} &middot; {po.currency ?? "USD"}
@@ -268,7 +303,7 @@ export default function PurchaseOrderDetailPage() {
             </div>
             <div className="grid grid-cols-2 gap-x-6 gap-y-1 px-3 py-2 text-xs lg:grid-cols-4">
               <InfoField label="PO Number" value={po.name} mono />
-              <InfoField label="Status" badge={po.status ?? "Draft"} />
+              <InfoField label="Status" badge={displayStatus} />
               <InfoField label="Supplier" value={po.supplier_name ?? po.supplier ?? "—"} />
               <InfoField label="Company" value={po.company ?? "—"} />
               <InfoField label="PO Date" value={formatDate(po.transaction_date)} />
@@ -359,43 +394,43 @@ export default function PurchaseOrderDetailPage() {
           </SideCard>
 
           {/* Supplier Delivery Information */}
-          {deliveryState && (
+          {syncedDeliveryState && (
             <SideCard title="Supplier Delivery">
               <div className="divide-y divide-neutral-100">
                 <DeliveryDetailRow
                   label="Delivery Status"
                   value={
-                    <DeliveryStatusBadge status={deliveryState.status} />
+                    <DeliveryStatusBadge status={String(workflowSnapshot.deliveryStatus)} />
                   }
                 />
                 <DeliveryDetailRow
                   label="Acceptance Date"
                   value={formatDisplayDateTime(
-                    deliveryState.supplier_acceptance_date
+                    syncedDeliveryState.supplier_acceptance_date
                   )}
                 />
                 <DeliveryDetailRow
                   label="Expected Delivery"
                   value={formatDisplayDate(
-                    deliveryState.expected_delivery_date
+                    syncedDeliveryState.expected_delivery_date
                   )}
                 />
                 <DeliveryDetailRow
                   label="Vehicle Number"
-                  value={deliveryState.vehicle_number || "—"}
+                  value={syncedDeliveryState.vehicle_number || "—"}
                 />
                 <DeliveryDetailRow
                   label="Tracking Number"
-                  value={deliveryState.tracking_number || "—"}
+                  value={syncedDeliveryState.tracking_number || "—"}
                 />
               </div>
-              {deliveryState.rejection_reason && (
+              {syncedDeliveryState.rejection_reason && (
                 <div className="mt-3 rounded-md border border-danger-200 bg-danger-50 px-2.5 py-2">
                   <p className="text-[10px] font-semibold uppercase tracking-wide text-danger-700">
                     Rejection Reason
                   </p>
                   <p className="mt-0.5 text-xs leading-relaxed text-danger-800">
-                    {deliveryState.rejection_reason}
+                    {syncedDeliveryState.rejection_reason}
                   </p>
                 </div>
               )}
@@ -429,7 +464,7 @@ export default function PurchaseOrderDetailPage() {
             <RelatedDoc
               icon={DollarSign}
               label="Payment"
-              value={allInvoicesPaid ? "Paid" : hasInvoice ? "Pending" : "—"}
+              value={allInvoicesPaid || workflowComplete ? "Paid" : hasInvoice ? "Pending" : "—"}
             />
           </SideCard>
 
@@ -626,11 +661,21 @@ function AuditTab({ entries }: { entries: Array<{ label: string; ts: string | nu
 
 function CompactStatus({ status }: { status: string }) {
   const lower = status.toLowerCase();
-  const isComplete = lower === "completed" || lower === "closed";
-  const isDraftLike = lower === "draft" || lower === "to receive and bill" || lower === "to bill";
+  const isComplete =
+    lower === "completed" || lower === "closed" || lower === "paid";
+  const isDraftLike =
+    lower === "draft" ||
+    lower === "to receive and bill" ||
+    lower === "to bill" ||
+    lower === "pending acceptance";
+  const isTransit = lower.includes("transit");
+  const isPartial = lower.includes("partially");
   let cls = "bg-neutral-100 text-neutral-600";
   if (isComplete) cls = "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200";
+  else if (isTransit) cls = "bg-primary-50 text-primary-700 ring-1 ring-primary-200";
+  else if (isPartial) cls = "bg-teal-50 text-teal-700 ring-1 ring-teal-200";
   else if (isDraftLike) cls = "bg-amber-50 text-amber-700 ring-1 ring-amber-200";
+  else if (lower === "to pay") cls = "bg-violet-50 text-violet-700 ring-1 ring-violet-200";
   return (
     <span className={`inline-flex items-center rounded px-1.5 py-px text-[10px] font-semibold leading-tight ${cls}`}>
       {status}

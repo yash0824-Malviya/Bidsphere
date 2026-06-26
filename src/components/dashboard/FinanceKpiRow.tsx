@@ -87,7 +87,7 @@ function FinanceKpiRow({ kpis, loading }: Props) {
     {
       label: "Total Financial Exposure",
       value: formatCurrency(kpis.totalFinancialExposure),
-      hint: "Pending RFQs + payables + unbilled GRNs",
+      hint: "Open POs + payables + unbilled GRNs + approved commitments",
       icon: CheckCircle2,
       to: "/budget",
       accent: "text-violet-600 bg-violet-50",

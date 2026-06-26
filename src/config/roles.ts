@@ -459,6 +459,14 @@ export function canManageVouchers(role: AppRole | undefined): boolean {
   return role === "finance" || role === "admin";
 }
 
+/** `/p2p/purchase-orders/:poId` — not list, create, new, or convert routes. */
+function isPurchaseOrderDetailPath(pathname: string): boolean {
+  if (!pathname.startsWith("/p2p/purchase-orders/")) return false;
+  const segment = pathname.slice("/p2p/purchase-orders/".length).split("/")[0];
+  if (!segment) return false;
+  return segment !== "create" && segment !== "new" && segment !== "convert";
+}
+
 /** Whether `pathname` is allowed for the given role. */
 export function canAccessPath(role: AppRole, pathname: string): boolean {
   if (role === "admin") return true;
@@ -495,6 +503,18 @@ export function canAccessPath(role: AppRole, pathname: string): boolean {
   // Payment Processing page lives at /payments/process/:id (outside /p2p/),
   // but should be accessible to any role that can manage payments.
   if (path.startsWith("/payments/")) return canManageVouchers(role);
+
+  // Linked PO drill-down from GRN / receipt workflows: roles with GRN or PO
+  // module access may open a specific PO detail page (read-only for Warehouse).
+  if (isPurchaseOrderDetailPath(path)) {
+    const config = ROLE_NAV_CONFIG[role] ?? ROLE_NAV_CONFIG.procurement;
+    if (
+      config.p2pChildren.includes("purchase-orders") ||
+      config.p2pChildren.includes("grn")
+    ) {
+      return true;
+    }
+  }
 
   return getAccessPrefixesForRole(role).some(
     (prefix) => path === prefix || path.startsWith(`${prefix}/`)

@@ -23,6 +23,7 @@ import {
   submitPaymentEntry,
   updatePaymentEntry,
 } from "../../api/accounts";
+import { invalidateFinanceDashboardMetrics } from "../../api/financeWorkflow";
 import PaymentAttachments, {
   type PaymentAttachment,
 } from "../../components/payments/PaymentAttachments";
@@ -170,6 +171,7 @@ export default function PaymentDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["payment-entries"] });
       queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
       queryClient.invalidateQueries({ queryKey: ["payable-invoices"] });
+      invalidateFinanceDashboardMetrics(queryClient);
       for (const ref of entry.references ?? []) {
         if (
           ref.reference_doctype === "Purchase Invoice" &&

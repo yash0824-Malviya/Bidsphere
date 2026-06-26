@@ -8,7 +8,12 @@ import {
   withSilent,
 } from "./erpnext";
 import type { Filter } from "./erpnext";
-import type { AppNotification, Voucher } from "../types/voucher";
+import type { Voucher } from "../types/voucher";
+import type { EnterpriseNotification } from "../types/notification";
+import {
+  getAllNotifications,
+  mergeSyncedNotifications,
+} from "./notifications";
 
 /**
  * Shared persistence for the voucher / invoice / payment workflow.
@@ -39,7 +44,6 @@ import type { AppNotification, Voucher } from "../types/voucher";
 
 const STORE_TITLE = "NETLINK_VOUCHER_STORE";
 const VOUCHERS_KEY = "netlink_vouchers";
-const NOTIF_KEY = "netlink_notifications";
 
 let cachedNoteName: string | null = null;
 let syncDisabled = false;
@@ -48,7 +52,7 @@ let inFlightPush: Promise<void> | null = null;
 
 interface StorePayload {
   vouchers: Voucher[];
-  notifications: AppNotification[];
+  notifications: EnterpriseNotification[];
   updated_at: string;
 }
 
@@ -74,18 +78,16 @@ function decodePayload(content: string): StorePayload | null {
   }
 }
 
-function readLocal(): { vouchers: Voucher[]; notifications: AppNotification[] } {
+function readLocal(): { vouchers: Voucher[]; notifications: EnterpriseNotification[] } {
   let vouchers: Voucher[] = [];
-  let notifications: AppNotification[] = [];
+  let notifications: EnterpriseNotification[] = [];
   try {
     vouchers = JSON.parse(localStorage.getItem(VOUCHERS_KEY) ?? "[]") as Voucher[];
   } catch {
     vouchers = [];
   }
   try {
-    notifications = JSON.parse(
-      localStorage.getItem(NOTIF_KEY) ?? "[]"
-    ) as AppNotification[];
+    notifications = getAllNotifications();
   } catch {
     notifications = [];
   }
@@ -110,23 +112,6 @@ function mergeVouchers(remote: Voucher[], local: Voucher[]): Voucher[] {
     }
   }
   return [...map.values()];
-}
-
-function mergeNotifications(
-  remote: AppNotification[],
-  local: AppNotification[]
-): AppNotification[] {
-  const map = new Map<string, AppNotification>();
-  for (const n of [...remote, ...local]) {
-    if (!n?.id) continue;
-    const existing = map.get(n.id);
-    // A notification once read stays read on either side.
-    if (!existing) map.set(n.id, n);
-    else if (n.read) map.set(n.id, { ...existing, read: true });
-  }
-  return [...map.values()]
-    .sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))
-    .slice(0, 100);
 }
 
 function silentList(filters: Filter[], fields: string[]): AxiosRequestConfig {
@@ -172,17 +157,16 @@ export async function pullVoucherStore(): Promise<boolean> {
       remote.vouchers ?? [],
       local.vouchers ?? []
     );
-    const mergedNotifs = mergeNotifications(
-      remote.notifications ?? [],
-      local.notifications ?? []
-    );
+    const notifsChanged = mergeSyncedNotifications(remote.notifications ?? []);
 
     const afterV = JSON.stringify(mergedVouchers);
-    const afterN = JSON.stringify(mergedNotifs);
     localStorage.setItem(VOUCHERS_KEY, afterV);
-    localStorage.setItem(NOTIF_KEY, afterN);
 
-    return beforeV !== afterV || beforeN !== afterN;
+    return (
+      beforeV !== afterV ||
+      beforeN !== JSON.stringify(getAllNotifications()) ||
+      notifsChanged
+    );
   } catch (err) {
     handleSyncError(err);
     return false;

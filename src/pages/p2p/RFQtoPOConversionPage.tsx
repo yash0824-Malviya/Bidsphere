@@ -22,7 +22,8 @@ import {
 
 import { getRFQ, getSupplierQuotations } from "../../api/sourcing";
 import { getInvoicesForPO } from "../../api/accounts";
-import { getDeliveryState } from "../../api/poDeliveryWorkflow";
+import { getAllVouchers } from "../../api/vouchers";
+import { syncDeliveryStateFromERPNext, getDeliveryState } from "../../api/poDeliveryWorkflow";
 import {
   createPurchaseOrderFromRFQ,
   getGRNsForPO,
@@ -152,22 +153,39 @@ export default function RFQtoPOConversionPage() {
     enabled: !!poName,
   });
 
-  const deliveryState = poName ? getDeliveryState(poName) : null;
+  const deliveryStateRaw = poName ? getDeliveryState(poName) : null;
   const submittedGRNs = (grnsQuery.data ?? []).filter((g) => g.docstatus === 1);
   const activeInvoices = (invoicesQuery.data ?? []).filter((inv) => inv.docstatus !== 2);
   const workflowInvoice =
     activeInvoices.find((inv) => inv.docstatus === 1) ?? activeInvoices[0];
-  const allInvoicesPaid =
-    !!workflowInvoice && (workflowInvoice.outstanding_amount ?? 1) === 0;
+  const hasSubmittedInvoice = activeInvoices.some((inv) => inv.docstatus === 1);
+  const linkedPo = linkedPO;
+  const deliveryState =
+    poName && linkedPo && poIsSubmitted
+      ? syncDeliveryStateFromERPNext(poName, {
+          poSubmitted: poIsSubmitted,
+          perReceived: submittedGRNs.length > 0 ? 100 : 0,
+          perBilled: hasSubmittedInvoice ? 100 : 0,
+          submittedGrnCount: submittedGRNs.length,
+          hasSubmittedInvoice,
+          invoiceOutstanding: workflowInvoice?.outstanding_amount,
+          invoiceGrandTotal: workflowInvoice?.grand_total,
+        }) ?? deliveryStateRaw
+      : deliveryStateRaw;
 
   const procurementSteps = buildProcurementWorkflowSteps({
     poSubmitted: poIsSubmitted,
+    poErpStatus: linkedPo?.status,
+    perReceived: submittedGRNs.length > 0 ? 100 : 0,
+    perBilled: hasSubmittedInvoice ? 100 : 0,
     deliveryState,
-    hasSubmittedGRN: submittedGRNs.length > 0,
-    hasSubmittedInvoice: activeInvoices.some((inv) => inv.docstatus === 1),
+    submittedGrnCount: submittedGRNs.length,
+    hasSubmittedInvoice,
     invoiceOutstanding: workflowInvoice?.outstanding_amount,
     invoiceGrandTotal: workflowInvoice?.grand_total,
-    paymentCompleted: allInvoicesPaid,
+    vouchers: poName
+      ? getAllVouchers().filter((v) => v.po_reference === poName)
+      : [],
   });
 
   /* ── Create Draft PO ── */

@@ -2,42 +2,27 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
-  AlertTriangle,
   Bell,
   CheckCheck,
   Clock,
   ExternalLink,
-  FileText,
-  Mail,
-  PackageCheck,
-  PackagePlus,
-  Receipt,
-  Truck,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
-import { getNotifications } from "../api/notifications";
-
+import {
+  syncFinanceGrnQueue,
+  syncGrnCompletedAlerts,
+  syncOverduePayables,
+  syncWarehouseAlerts,
+} from "../api/notifications";
 import { apiGet } from "../api/erpnext";
 import type { Filter } from "../api/erpnext";
 import { getGRNsAwaitingInvoice } from "../api/financeWorkflow";
-import { getNotificationsForRole } from "../api/vouchers";
 import { useVoucherSyncStore } from "../store/voucherSyncStore";
 import { getIncomingPurchaseOrders, getPurchaseReceipts } from "../api/purchasing";
 import { useAuthStore } from "../store/authStore";
 import { buildUpcomingDeliveries } from "../utils/upcomingDeliveries";
 import { formatCurrency, todayIso } from "../utils/format";
-
-type NotificationTone = "warning" | "danger" | "info" | "success";
-
-interface Notification {
-  id: string;
-  tone: NotificationTone;
-  icon: LucideIcon;
-  title: string;
-  description: string;
-  to: string;
-  date?: string;
-}
+import { useRoleNotifications } from "../hooks/useRoleNotifications";
+import type { EnterpriseNotification, NotificationModule } from "../types/notification";
 
 interface InvoiceRow {
   name: string;
@@ -48,56 +33,37 @@ interface InvoiceRow {
   currency?: string;
 }
 
-const READ_KEY = "inteva-notifications-read";
-
-function loadRead(): Set<string> {
-  if (typeof window === "undefined") return new Set();
-  try {
-    const raw = sessionStorage.getItem(READ_KEY);
-    return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
-  } catch {
-    return new Set();
-  }
-}
-
-function saveRead(set: Set<string>) {
-  try {
-    sessionStorage.setItem(READ_KEY, JSON.stringify(Array.from(set)));
-  } catch {
-    /* ignore */
-  }
-}
-
-const TONE_STYLES: Record<NotificationTone, string> = {
-  warning: "bg-amber-50 text-amber-600",
-  danger: "bg-danger-50 text-danger-600",
-  info: "bg-primary-50 text-primary",
-  success: "bg-success-50 text-success-600",
+const MODULE_TONE: Partial<Record<NotificationModule, string>> = {
+  System: "bg-neutral-100 text-neutral-600",
+  Audit: "bg-violet-50 text-violet-700",
+  "Outstanding Payables": "bg-danger-50 text-danger-600",
+  "PO Ready for GRN": "bg-amber-50 text-amber-600",
+  GRN: "bg-success-50 text-success-600",
+  Voucher: "bg-primary-50 text-primary",
+  Payment: "bg-success-50 text-success-600",
+  "Legal Review": "bg-amber-50 text-amber-700",
+  RFQ: "bg-blue-50 text-blue-700",
 };
 
+function toneForModule(module: NotificationModule): string {
+  return MODULE_TONE[module] ?? "bg-primary-50 text-primary";
+}
+
 /**
- * Header bell that surfaces overdue purchase invoice alerts.
- * Badge shows the count of unread items (sessionStorage-backed).
+ * Header bell — shows only notifications visible to the logged-in user's role.
  */
 export default function NotificationsBell() {
   const navigate = useNavigate();
   const role = useAuthStore((s) => s.user?.role);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
-  const [readIds, setReadIds] = useState<Set<string>>(() => loadRead());
-  // Re-render when the shared voucher store syncs so workflow alerts refresh.
-  useVoucherSyncStore((s) => s.version);
+  const voucherVersion = useVoucherSyncStore((s) => s.version);
+  const { notifications, unreadCount, markRead, markAllRead, refresh } =
+    useRoleNotifications();
 
-  // Warehouse sees inbound-receiving alerts.
-  const showWarehouse = role === "warehouse" || role === "admin";
-  // Overdue ERPNext purchase-invoice alerts are admin-only now that the
-  // Finance workflow is driven by Vouchers.
-  const showInvoices = role === "admin";
-  // Finance (and Admin) see GRNs awaiting a voucher.
-  const showFinanceQueue = role === "finance" || role === "admin";
-  // Voucher workflow notifications (created/sent/raised/paid/settled).
-  const showVouchers =
-    role === "finance" || role === "procurement" || role === "admin";
+  const showWarehouse = role === "warehouse";
+  const showFinance = role === "finance";
+  const today = todayIso();
 
   useEffect(() => {
     function onDoc(e: MouseEvent) {
@@ -112,50 +78,12 @@ export default function NotificationsBell() {
     return () => document.removeEventListener("mousedown", onDoc);
   }, []);
 
-  const today = todayIso();
-
-  const { data: overdueInvoices = [] } = useQuery<InvoiceRow[]>({
-    queryKey: ["notifications-overdue-invoices", today],
-    enabled: showInvoices,
-    staleTime: 5 * 60_000,
-    retry: 0,
-    queryFn: () => {
-      const filters: Filter[] = [
-        ["status", "=", "Overdue"],
-        ["docstatus", "=", 1],
-      ];
-      return apiGet<InvoiceRow[]>("/api/resource/Purchase Invoice", {
-        params: {
-          filters: JSON.stringify(filters),
-          fields: JSON.stringify([
-            "name",
-            "supplier",
-            "due_date",
-            "outstanding_amount",
-            "grand_total",
-            "currency",
-          ]),
-          limit_page_length: 20,
-          order_by: "due_date asc",
-        },
-      });
-    },
-  });
-
   const { data: incomingPOs = [] } = useQuery({
     queryKey: ["notifications-incoming-pos", today],
     enabled: showWarehouse,
     staleTime: 5 * 60_000,
     retry: 0,
     queryFn: getIncomingPurchaseOrders,
-  });
-
-  const { data: awaitingInvoices = [] } = useQuery({
-    queryKey: ["notifications-awaiting-invoice", today],
-    enabled: showFinanceQueue,
-    staleTime: 5 * 60_000,
-    retry: 0,
-    queryFn: () => getGRNsAwaitingInvoice(10),
   });
 
   const { data: completedGrns = [] } = useQuery({
@@ -182,163 +110,124 @@ export default function NotificationsBell() {
       }),
   });
 
-  const notifications: Notification[] = [];
+  const { data: awaitingInvoices = [] } = useQuery({
+    queryKey: ["notifications-awaiting-invoice", today],
+    enabled: showFinance,
+    staleTime: 5 * 60_000,
+    retry: 0,
+    queryFn: () => getGRNsAwaitingInvoice(10),
+  });
 
-  if (showWarehouse) {
+  const { data: overdueInvoices = [] } = useQuery<InvoiceRow[]>({
+    queryKey: ["notifications-overdue-invoices", today],
+    enabled: showFinance,
+    staleTime: 5 * 60_000,
+    retry: 0,
+    queryFn: () => {
+      const filters: Filter[] = [
+        ["status", "=", "Overdue"],
+        ["docstatus", "=", 1],
+      ];
+      return apiGet<InvoiceRow[]>("/api/resource/Purchase Invoice", {
+        params: {
+          filters: JSON.stringify(filters),
+          fields: JSON.stringify([
+            "name",
+            "supplier",
+            "due_date",
+            "outstanding_amount",
+            "grand_total",
+            "currency",
+          ]),
+          limit_page_length: 20,
+          order_by: "due_date asc",
+        },
+      });
+    },
+  });
+
+  useEffect(() => {
+    if (!showWarehouse) return;
+    const alerts = [];
     for (const d of buildUpcomingDeliveries(incomingPOs)) {
       const supplier = d.supplier_name ?? d.supplier ?? "Supplier";
-      const poPath = `/p2p/grn/new?po=${encodeURIComponent(d.name)}`;
       if (d.urgency === "overdue") {
-        const n = Math.abs(d.daysRemaining ?? 0);
-        notifications.push({
-          id: `po-overdue-${d.name}`,
-          tone: "danger",
-          icon: AlertTriangle,
-          title: `Overdue receipt: ${d.name}`,
-          description: `${supplier} • ${n} day${n === 1 ? "" : "s"} overdue`,
-          to: poPath,
-          date: d.schedule_date,
+        alerts.push({
+          poName: d.name,
+          supplier,
+          urgency: "overdue" as const,
+          scheduleDate: d.schedule_date,
         });
       } else if (d.urgency === "due-today") {
-        notifications.push({
-          id: `po-today-${d.name}`,
-          tone: "warning",
-          icon: Truck,
-          title: `Delivery due today: ${d.name}`,
-          description: `${supplier} • receive goods now`,
-          to: poPath,
-          date: d.schedule_date,
+        alerts.push({
+          poName: d.name,
+          supplier,
+          urgency: "due-today" as const,
+          scheduleDate: d.schedule_date,
         });
       } else if (d.urgency === "due-tomorrow") {
-        notifications.push({
-          id: `po-tomorrow-${d.name}`,
-          tone: "info",
-          icon: Truck,
-          title: `Delivery due tomorrow: ${d.name}`,
-          description: `${supplier} • prepare to receive`,
-          to: poPath,
-          date: d.schedule_date,
+        alerts.push({
+          poName: d.name,
+          supplier,
+          urgency: "due-tomorrow" as const,
+          scheduleDate: d.schedule_date,
         });
       } else if ((d.per_received ?? 0) === 0) {
-        notifications.push({
-          id: `po-awaiting-${d.name}`,
-          tone: "info",
-          icon: PackagePlus,
-          title: `New PO awaiting receipt: ${d.name}`,
-          description: `${supplier} • ${formatCurrency(d.grand_total)}`,
-          to: poPath,
-          date: d.schedule_date,
+        alerts.push({
+          poName: d.name,
+          supplier: `${supplier} • ${formatCurrency(d.grand_total)}`,
+          urgency: "awaiting" as const,
+          scheduleDate: d.schedule_date,
         });
       }
     }
-
-    for (const g of completedGrns) {
-      notifications.push({
-        id: `grn-done-${g.name}`,
-        tone: "success",
-        icon: PackageCheck,
-        title: `GRN completed: ${g.name}`,
-        description: `${g.supplier_name ?? g.supplier ?? "Goods received"}`,
-        to: `/p2p/grn/${encodeURIComponent(g.name)}`,
-        date: g.posting_date,
-      });
+    if (alerts.length) syncWarehouseAlerts(alerts);
+    if (completedGrns.length) {
+      syncGrnCompletedAlerts(
+        completedGrns.map((g) => ({
+          name: g.name,
+          supplier: g.supplier_name ?? g.supplier ?? "Goods received",
+          postingDate: g.posting_date,
+        }))
+      );
     }
-  }
+    refresh();
+  }, [showWarehouse, incomingPOs, completedGrns, voucherVersion, refresh]);
 
-  if (showFinanceQueue) {
-    for (const g of awaitingInvoices) {
-      notifications.push({
-        id: `awaiting-voucher-${g.name}`,
-        tone: "info",
-        icon: FileText,
-        title: "GRN Awaiting Voucher",
-        description: `${g.supplier_name ?? g.supplier ?? "Supplier"} • ${formatCurrency(
-          g.grand_total
-        )} • GRN ${g.name}`,
-        to: `/p2p/grn/${encodeURIComponent(g.name)}`,
-        date: g.posting_date,
-      });
+  useEffect(() => {
+    if (!showFinance) return;
+    if (awaitingInvoices.length) {
+      syncFinanceGrnQueue(
+        awaitingInvoices.map((g) => ({
+          grnName: g.name,
+          supplier: g.supplier_name ?? g.supplier ?? "Supplier",
+          postingDate: g.posting_date,
+        }))
+      );
     }
-  }
-
-  if (showVouchers) {
-    for (const vn of getNotificationsForRole(role ?? "")) {
-      notifications.push({
-        id: `vch-notif-${vn.id}`,
-        tone: vn.read ? "info" : "success",
-        icon: Receipt,
-        title: `Voucher ${vn.voucher_id}`,
-        description: vn.message,
-        to: `/p2p/vouchers/${encodeURIComponent(vn.voucher_id)}`,
-        date: vn.timestamp,
-      });
+    if (overdueInvoices.length) {
+      syncOverduePayables(
+        overdueInvoices.map((inv) => ({
+          invoiceName: inv.name,
+          supplier: inv.supplier,
+          amount:
+            inv.outstanding_amount && inv.outstanding_amount > 0
+              ? inv.outstanding_amount
+              : inv.grand_total ?? 0,
+          dueDate: inv.due_date,
+        }))
+      );
     }
-  }
+    refresh();
+  }, [showFinance, awaitingInvoices, overdueInvoices, voucherVersion, refresh]);
 
-  if (showInvoices) {
-    for (const inv of overdueInvoices) {
-      const amount =
-        inv.outstanding_amount && inv.outstanding_amount > 0
-          ? inv.outstanding_amount
-          : inv.grand_total ?? 0;
-      notifications.push({
-        id: `invoice-${inv.name}`,
-        tone: "danger",
-        icon: Receipt,
-        title: `Overdue: ${inv.name}`,
-        description: `${inv.supplier} • ${formatCurrency(amount)} outstanding`,
-        to: `/p2p/invoices/${encodeURIComponent(inv.name)}`,
-        date: inv.due_date,
-      });
-    }
-  }
-
-  const WORKFLOW_TONE_MAP: Record<string, NotificationTone> = {
-    rfq_created: "info",
-    quotation_submitted: "info",
-    legal_review_required: "warning",
-    finance_review_required: "warning",
-    po_created: "success",
-    payment_released: "success",
-  };
-  for (const wn of getNotifications().filter((n) => !n.read).slice(0, 8)) {
-    notifications.push({
-      id: `wf-${wn.id}`,
-      tone: WORKFLOW_TONE_MAP[wn.type] ?? "info",
-      icon: Mail,
-      title: wn.title,
-      description: wn.message,
-      to: wn.to ?? "/notifications",
-      date: wn.timestamp,
-    });
-  }
-
-  const unread = notifications.filter((n) => !readIds.has(n.id));
-  const unreadCount = unread.length;
-
-  function markRead(id: string) {
-    setReadIds((prev) => {
-      const next = new Set(prev);
-      next.add(id);
-      saveRead(next);
-      return next;
-    });
-  }
-
-  function markAllRead() {
-    const all = new Set([
-      ...readIds,
-      ...notifications.map((n) => n.id),
-    ]);
-    setReadIds(all);
-    saveRead(all);
-  }
-
-  function handleClick(n: Notification) {
+  function handleClick(n: EnterpriseNotification) {
     markRead(n.id);
     setOpen(false);
-    navigate(n.to);
+    if (n.route_path) navigate(n.route_path);
   }
+
+  const preview = notifications.slice(0, 12);
 
   return (
     <div ref={wrapperRef} className="relative">
@@ -382,57 +271,52 @@ export default function NotificationsBell() {
             )}
           </div>
 
-          {notifications.length === 0 ? (
+          {preview.length === 0 ? (
             <div className="flex flex-col items-center gap-2 px-6 py-10 text-center text-sm text-neutral-500">
               <Clock className="h-6 w-6 text-neutral-400" />
               <p>No alerts right now.</p>
-              <p className="text-xs text-neutral-400">
-                {showWarehouse
-                  ? "All deliveries are on schedule."
-                  : "All invoices are on time."}
-              </p>
             </div>
           ) : (
             <ul className="divide-y divide-neutral-100">
-              {notifications.map((n) => {
-                const isRead = readIds.has(n.id);
-                return (
-                  <li key={n.id}>
-                    <button
-                      type="button"
-                      onClick={() => handleClick(n)}
-                      className={`flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-neutral-50 ${
-                        isRead ? "opacity-70" : ""
-                      }`}
+              {preview.map((n) => (
+                <li key={n.id}>
+                  <button
+                    type="button"
+                    onClick={() => handleClick(n)}
+                    className={`flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-neutral-50 ${
+                      n.read_status ? "opacity-70" : ""
+                    }`}
+                  >
+                    <div
+                      className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg ${toneForModule(n.module)}`}
                     >
-                      <div
-                        className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg ${TONE_STYLES[n.tone]}`}
-                      >
-                        <n.icon className="h-4 w-4" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-baseline justify-between gap-2">
-                          <p
-                            className={`truncate text-sm ${
-                              isRead
-                                ? "text-neutral-700"
-                                : "font-semibold text-neutral-900"
-                            }`}
-                          >
-                            {n.title}
-                          </p>
-                          {!isRead && (
-                            <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary-500" />
-                          )}
-                        </div>
-                        <p className="mt-0.5 line-clamp-2 text-xs text-neutral-500">
-                          {n.description}
+                      <Bell className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <p
+                          className={`truncate text-sm ${
+                            n.read_status
+                              ? "text-neutral-700"
+                              : "font-semibold text-neutral-900"
+                          }`}
+                        >
+                          {n.title}
                         </p>
+                        {!n.read_status && (
+                          <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-primary-500" />
+                        )}
                       </div>
-                    </button>
-                  </li>
-                );
-              })}
+                      <p className="mt-0.5 line-clamp-2 text-xs text-neutral-500">
+                        {n.description}
+                      </p>
+                      <p className="mt-0.5 text-[10px] text-neutral-400">
+                        {n.module}
+                      </p>
+                    </div>
+                  </button>
+                </li>
+              ))}
             </ul>
           )}
 

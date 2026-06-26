@@ -88,7 +88,16 @@ export function paymentDisplayStatus(p: PaymentEntry): PaymentDisplayStatus {
 }
 
 export function primaryPOFromReceipt(receipt: PurchaseReceipt): string | undefined {
-  return receipt.items?.find((i) => i.purchase_order)?.purchase_order;
+  for (const item of receipt.items ?? []) {
+    const po = item.purchase_order?.trim();
+    if (po) return po;
+  }
+  return undefined;
+}
+
+/** Build the in-app Purchase Order detail URL for a linked PO id. */
+export function purchaseOrderDetailPath(poId: string): string {
+  return `/p2p/purchase-orders/${encodeURIComponent(poId.trim())}`;
 }
 
 export function primaryWarehouseFromReceipt(

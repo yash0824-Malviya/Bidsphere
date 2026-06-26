@@ -11,8 +11,8 @@ import { useAuthStore } from "../store/authStore";
 import { useVoucherSyncStore } from "../store/voucherSyncStore";
 import { canManageVouchers } from "../config/roles";
 import { scheduleVoucherPush } from "./voucherSync";
+import { notifyVoucherEvent } from "./notifications";
 import type {
-  AppNotification,
   InvoiceRecord,
   InvoiceStatus,
   PaymentConfirmation,
@@ -23,8 +23,18 @@ import type {
   VoucherStatus,
 } from "../types/voucher";
 
+function voucherNotify(
+  voucher: Pick<Voucher, "id" | "supplier">,
+  forRole: VoucherActorRole,
+  message: string
+): void {
+  notifyVoucherEvent(forRole, message, voucher.id, {
+    supplier_id: voucher.supplier,
+  });
+  notifyVoucherStoreChanged();
+}
+
 const VOUCHERS_KEY = "netlink_vouchers";
-const NOTIF_KEY = "netlink_notifications";
 const MIGRATION_KEY = "voucher_store_v2_purged";
 
 /**
@@ -255,7 +265,6 @@ export function saveVoucher(voucher: Voucher): void {
  */
 export function clearAllVouchers(): void {
   localStorage.removeItem(VOUCHERS_KEY);
-  localStorage.removeItem(NOTIF_KEY);
   notifyVoucherStoreChanged();
 }
 
@@ -278,7 +287,6 @@ export function runVoucherStoreMigration(): boolean {
       `[Vouchers] Migration: purging ${existing.length} stale voucher(s) from localStorage`
     );
     localStorage.removeItem(VOUCHERS_KEY);
-    localStorage.removeItem(NOTIF_KEY);
   }
   localStorage.setItem(MIGRATION_KEY, new Date().toISOString());
   return existing.length > 0;
@@ -529,7 +537,7 @@ export function createVoucher(data: Partial<Voucher>): Voucher {
     ],
   };
   saveVoucher(voucher);
-  addNotification("finance", `Voucher ${voucher.id} created`, voucher.id);
+  voucherNotify(voucher, "finance", `Voucher ${voucher.id} created`);
   return voucher;
 }
 
@@ -547,12 +555,12 @@ export function sendVoucherToSupplier(id: string): Voucher | null {
     actor_role: "finance",
   });
   saveVoucher(v);
-  addNotification(
+  voucherNotify(
+    v,
     "supplier",
-    `You have received Voucher ${id} from Netlink. Please review and raise an invoice.`,
-    id
+    `You have received Voucher ${id} from Netlink. Please review and raise an invoice.`
   );
-  addNotification("procurement", `Voucher ${id} sent to ${v.supplier_name}`, id);
+  voucherNotify(v, "procurement", `Voucher ${id} sent to ${v.supplier_name}`);
   return v;
 }
 
@@ -602,17 +610,17 @@ export function supplierRaiseInvoice(
     actor_role: "supplier",
   });
   saveVoucher(v);
-  addNotification(
+  voucherNotify(
+    v,
     "finance",
     `Supplier submitted an invoice for Voucher ${voucherId}. Total: $${invoice.total.toFixed(
       2
-    )}`,
-    voucherId
+    )}`
   );
-  addNotification(
+  voucherNotify(
+    v,
     "procurement",
-    `Invoice received from ${v.supplier_name} for Voucher ${voucherId}`,
-    voucherId
+    `Invoice received from ${v.supplier_name} for Voucher ${voucherId}`
   );
   return v;
 }
@@ -636,16 +644,12 @@ export function approveInvoice(voucherId: string): Voucher | null {
     actor_role: "finance",
   });
   saveVoucher(v);
-  addNotification(
+  voucherNotify(
+    v,
     "supplier",
-    `Your invoice ${v.invoice.invoice_number} for Voucher ${voucherId} was approved. Payment will follow.`,
-    voucherId
+    `Your invoice ${v.invoice.invoice_number} for Voucher ${voucherId} was approved. Payment will follow.`
   );
-  addNotification(
-    "procurement",
-    `Invoice approved for Voucher ${voucherId}`,
-    voucherId
-  );
+  voucherNotify(v, "procurement", `Invoice approved for Voucher ${voucherId}`);
   return v;
 }
 
@@ -672,16 +676,12 @@ export function rejectInvoice(
     note: reason,
   });
   saveVoucher(v);
-  addNotification(
+  voucherNotify(
+    v,
     "supplier",
-    `Your invoice ${v.invoice.invoice_number} for Voucher ${voucherId} was rejected: ${reason}. Please review and re-submit.`,
-    voucherId
+    `Your invoice ${v.invoice.invoice_number} for Voucher ${voucherId} was rejected: ${reason}. Please review and re-submit.`
   );
-  addNotification(
-    "procurement",
-    `Invoice rejected for Voucher ${voucherId}`,
-    voucherId
-  );
+  voucherNotify(v, "procurement", `Invoice rejected for Voucher ${voucherId}`);
   return v;
 }
 
@@ -717,18 +717,14 @@ export function confirmPayment(
     } · Amount: $${payment.amount.toFixed(2)} · Status: Paid`,
   });
   saveVoucher(v);
-  addNotification(
+  voucherNotify(
+    v,
     "supplier",
     `Payment of $${payment.amount.toFixed(
       2
-    )} has been released for Voucher ${voucherId}. Ref: ${payment.reference_number}`,
-    voucherId
+    )} has been released for Voucher ${voucherId}. Ref: ${payment.reference_number}`
   );
-  addNotification(
-    "procurement",
-    `Payment released for Voucher ${voucherId}`,
-    voucherId
-  );
+  voucherNotify(v, "procurement", `Payment released for Voucher ${voucherId}`);
   return v;
 }
 
@@ -749,71 +745,11 @@ export function supplierConfirmPaymentReceived(
     actor_role: "supplier",
   });
   saveVoucher(v);
-  addNotification(
+  voucherNotify(
+    v,
     "finance",
-    `Supplier confirmed payment receipt for Voucher ${voucherId}`,
-    voucherId
+    `Supplier confirmed payment receipt for Voucher ${voucherId}`
   );
-  addNotification(
-    "procurement",
-    `Voucher ${voucherId} fully settled`,
-    voucherId
-  );
+  voucherNotify(v, "procurement", `Voucher ${voucherId} fully settled`);
   return v;
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Notifications                                                             */
-/* -------------------------------------------------------------------------- */
-
-export function getNotifications(): AppNotification[] {
-  try {
-    const data = localStorage.getItem(NOTIF_KEY);
-    return data ? (JSON.parse(data) as AppNotification[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-export function addNotification(
-  forRole: VoucherActorRole,
-  message: string,
-  voucherId: string
-): void {
-  const all = getNotifications();
-  all.unshift({
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    for: forRole,
-    message,
-    voucher_id: voucherId,
-    read: false,
-    timestamp: new Date().toISOString(),
-  });
-  localStorage.setItem(NOTIF_KEY, JSON.stringify(all.slice(0, 100)));
-  notifyVoucherStoreChanged();
-}
-
-export function getNotificationsForRole(role: string): AppNotification[] {
-  return getNotifications().filter(
-    (n) => n.for === role || n.for === "admin" || role === "admin"
-  );
-}
-
-export function markNotificationRead(id: string): void {
-  const all = getNotifications();
-  const n = all.find((x) => x.id === id);
-  if (n) {
-    n.read = true;
-    localStorage.setItem(NOTIF_KEY, JSON.stringify(all));
-    notifyVoucherStoreChanged();
-  }
-}
-
-export function markAllNotificationsRead(role: string): void {
-  const all = getNotifications();
-  for (const n of all) {
-    if (n.for === role || n.for === "admin" || role === "admin") n.read = true;
-  }
-  localStorage.setItem(NOTIF_KEY, JSON.stringify(all));
-  notifyVoucherStoreChanged();
 }

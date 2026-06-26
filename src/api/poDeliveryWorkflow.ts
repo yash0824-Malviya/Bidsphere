@@ -10,8 +10,8 @@
  *   Accepted → In Transit → Partially Received → Completed
  */
 
-const STORAGE_PREFIX = "po_delivery_";
-const NOTIFICATION_KEY = "po_delivery_notifications";
+import { createNotification } from "./notifications";
+import type { NotificationTargetRole } from "../types/notification";
 
 /* -------------------------------------------------------------------------- */
 /*  Types                                                                      */
@@ -58,18 +58,7 @@ export interface RejectPOPayload {
   rejection_reason: string;
 }
 
-export interface PODeliveryNotification {
-  id: string;
-  po_name: string;
-  type: "po_created" | "supplier_accepted" | "supplier_rejected" | "delivery_updated";
-  message: string;
-  timestamp: string;
-  read: boolean;
-  for_role: "supplier" | "procurement" | "warehouse";
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Local persistence                                                          */
+const STORAGE_PREFIX = "po_delivery_";
 /* -------------------------------------------------------------------------- */
 
 function storageKey(poName: string): string {
@@ -111,53 +100,59 @@ function getAllDeliveryStates(): PODeliveryState[] {
 /*  Notifications                                                              */
 /* -------------------------------------------------------------------------- */
 
-function getNotifications(): PODeliveryNotification[] {
-  try {
-    const raw = localStorage.getItem(NOTIFICATION_KEY);
-    return raw ? (JSON.parse(raw) as PODeliveryNotification[]) : [];
-  } catch {
-    return [];
-  }
+function poRoute(role: NotificationTargetRole, poName: string): string {
+  const enc = encodeURIComponent(poName);
+  if (role === "supplier") return `/supplier/purchase-orders/${enc}`;
+  if (role === "warehouse") return `/p2p/grn/new?po=${enc}`;
+  return `/p2p/purchase-orders/${enc}`;
 }
 
-function saveNotifications(list: PODeliveryNotification[]): void {
-  try {
-    localStorage.setItem(NOTIFICATION_KEY, JSON.stringify(list));
-  } catch { /* ignore */ }
-}
+function addDeliveryNotification(input: {
+  po_name: string;
+  type: "po_created" | "supplier_accepted" | "supplier_rejected" | "delivery_updated";
+  message: string;
+  for_role: NotificationTargetRole;
+  supplier_id?: string;
+}): void {
+  const module =
+    input.for_role === "warehouse"
+      ? "PO Ready for GRN"
+      : "Purchase Order";
+  const title =
+    input.type === "po_created"
+      ? `Purchase Order ${input.po_name}`
+      : input.type === "supplier_accepted"
+        ? `PO accepted: ${input.po_name}`
+        : input.type === "supplier_rejected"
+          ? `PO rejected: ${input.po_name}`
+          : `Delivery update: ${input.po_name}`;
 
-function addNotification(
-  n: Omit<PODeliveryNotification, "id" | "timestamp" | "read">
-): void {
-  const all = getNotifications();
-  all.unshift({
-    ...n,
-    id: `notif_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    timestamp: new Date().toISOString(),
-    read: false,
+  createNotification({
+    title,
+    description: input.message,
+    module,
+    event_type: `po_delivery_${input.type}`,
+    target_role: input.for_role,
+    supplier_id: input.supplier_id?.trim().toLowerCase(),
+    document_type: "Purchase Order",
+    document_name: input.po_name,
+    route_path: poRoute(input.for_role, input.po_name),
   });
-  saveNotifications(all.slice(0, 100));
 }
 
-export function getDeliveryNotifications(
-  forRole?: string
-): PODeliveryNotification[] {
-  const all = getNotifications();
-  if (!forRole) return all;
-  return all.filter((n) => n.for_role === forRole);
+/** @deprecated Delivery alerts are stored in the enterprise notification feed. */
+export function getDeliveryNotifications(): never[] {
+  return [];
 }
 
-export function markNotificationRead(id: string): void {
-  const all = getNotifications();
-  const n = all.find((x) => x.id === id);
-  if (n) {
-    n.read = true;
-    saveNotifications(all);
-  }
+/** @deprecated Use enterprise notification APIs instead. */
+export function markNotificationRead(_id: string): void {
+  /* no-op — legacy PO delivery inbox removed */
 }
 
-export function getUnreadNotificationCount(forRole?: string): number {
-  return getDeliveryNotifications(forRole).filter((n) => !n.read).length;
+/** @deprecated Use enterprise notification APIs instead. */
+export function getUnreadNotificationCount(_forRole?: string): number {
+  return 0;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -185,11 +180,12 @@ export function ensureDeliveryState(
   };
   saveDeliveryState(state);
 
-  addNotification({
+  addDeliveryNotification({
     po_name: poName,
     type: "po_created",
     message: `Purchase Order ${poName} has been issued and is awaiting your acceptance.`,
     for_role: "supplier",
+    supplier_id: _supplierName,
   });
 
   return state;
@@ -223,14 +219,14 @@ export function acceptPO(
   // eslint-disable-next-line no-console
   console.log("[PO Delivery] Accepted:", { poName, payload, supplierName });
 
-  addNotification({
+  addDeliveryNotification({
     po_name: poName,
     type: "supplier_accepted",
     message: `${supplierName ?? "Supplier"} has accepted PO ${poName}. Expected delivery: ${payload.expected_delivery_date}.`,
     for_role: "procurement",
   });
 
-  addNotification({
+  addDeliveryNotification({
     po_name: poName,
     type: "delivery_updated",
     message: `Delivery scheduled for PO ${poName}. Expected: ${payload.expected_delivery_date}.`,
@@ -265,7 +261,7 @@ export function rejectPO(
   // eslint-disable-next-line no-console
   console.log("[PO Delivery] Rejected:", { poName, payload, supplierName });
 
-  addNotification({
+  addDeliveryNotification({
     po_name: poName,
     type: "supplier_rejected",
     message: `${supplierName ?? "Supplier"} has rejected PO ${poName}. Reason: ${payload.rejection_reason}`,
@@ -298,7 +294,7 @@ export function updateDeliveryDetails(
   state.updated_by = supplierName;
   saveDeliveryState(state);
 
-  addNotification({
+  addDeliveryNotification({
     po_name: poName,
     type: "delivery_updated",
     message: `Delivery details updated for PO ${poName} by ${supplierName ?? "supplier"}.`,
@@ -326,13 +322,13 @@ export function markInTransit(
   state.updated_by = supplierName;
   saveDeliveryState(state);
 
-  addNotification({
+  addDeliveryNotification({
     po_name: poName,
     type: "delivery_updated",
     message: `PO ${poName} shipment is now in transit.`,
     for_role: "warehouse",
   });
-  addNotification({
+  addDeliveryNotification({
     po_name: poName,
     type: "delivery_updated",
     message: `PO ${poName} shipment is now in transit.`,
@@ -406,6 +402,57 @@ export function getDeliveryStatusCounts(): Record<PODeliveryStatus, number> {
     if (s.status in counts) counts[s.status]++;
   }
   return counts;
+}
+
+/**
+ * Advance local delivery status when ERPNext documents progress beyond the
+ * supplier-portal milestone (e.g. GRN submitted while status still "In Transit").
+ */
+export function syncDeliveryStateFromERPNext(
+  poName: string,
+  metrics: {
+    poSubmitted: boolean;
+    perReceived: number;
+    perBilled: number;
+    submittedGrnCount: number;
+    hasSubmittedInvoice: boolean;
+    invoiceOutstanding?: number;
+    invoiceGrandTotal?: number;
+  }
+): PODeliveryState | null {
+  const state = getDeliveryState(poName);
+  if (!state || state.status === "Rejected" || !metrics.poSubmitted) {
+    return state;
+  }
+
+  const fullyReceived = metrics.perReceived >= 100;
+  const hasGrn = metrics.submittedGrnCount > 0;
+  const paymentDone =
+    metrics.hasSubmittedInvoice &&
+    (metrics.invoiceGrandTotal ?? 0) > 0 &&
+    (metrics.invoiceOutstanding ?? 1) === 0;
+
+  let next: PODeliveryStatus = state.status;
+
+  if (hasGrn && metrics.hasSubmittedInvoice && fullyReceived && paymentDone) {
+    next = "Completed";
+  } else if (hasGrn && state.status === "In Transit") {
+    // Goods received — cannot remain "In Transit".
+    next = "Partially Received";
+  } else if (hasGrn && (metrics.perReceived > 0 || fullyReceived)) {
+    next = "Partially Received";
+  }
+
+  if (next === state.status) return state;
+
+  const updated: PODeliveryState = {
+    ...state,
+    status: next,
+    updated_at: new Date().toISOString(),
+    updated_by: "ERPNext sync",
+  };
+  saveDeliveryState(updated);
+  return updated;
 }
 
 /**

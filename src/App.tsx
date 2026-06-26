@@ -253,7 +253,7 @@ function VoucherStoreSync() {
         bump();
         void queryClient.invalidateQueries({
           predicate: (q) =>
-            /invoice|voucher|payment|dashboard/i.test(
+            /invoice|voucher|payment|dashboard|finance-dashboard/i.test(
               String(q.queryKey[0] ?? "")
             ),
         });

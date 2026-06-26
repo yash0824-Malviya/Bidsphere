@@ -20,7 +20,6 @@ import {
 } from "lucide-react";
 
 import { getLegalReviews, batchRFQToPOMap } from "../../api/legalReviews";
-import type { LegalReviewListParams } from "../../api/legalReviews";
 import type { LegalReviewItem, LegalReviewStatus } from "../../types/erpnext";
 
 import EmptyState from "../../components/EmptyState";
@@ -65,25 +64,13 @@ export default function LegalReviewsPage() {
   const navigate = useNavigate();
   const [statusFilter, setStatusFilter] = useState<FilterStatus>("All");
 
-  const listParams: LegalReviewListParams = useMemo(
-    () => ({ status: statusFilter === "Completed" ? "All" : statusFilter }),
-    [statusFilter]
-  );
-
   const {
-    data: reviews = [],
+    data: allWorkItems = [],
     isLoading,
     isFetching,
     refetch,
     error: reviewsError,
   } = useQuery<LegalReviewItem[]>({
-    queryKey: ["legal-reviews", listParams.status],
-    queryFn: () => getLegalReviews(listParams),
-    refetchOnWindowFocus: true,
-    staleTime: 10_000,
-  });
-
-  const { data: allWorkItems = [] } = useQuery<LegalReviewItem[]>({
     queryKey: ["legal-reviews", "All"],
     queryFn: () => getLegalReviews({ status: "All" }),
     refetchOnWindowFocus: true,
@@ -102,29 +89,25 @@ export default function LegalReviewsPage() {
     staleTime: 30_000,
   });
 
-  const enrichedReviews = useMemo(() => {
-    let list = reviews.map((r) => {
+  const enrichedAll = useMemo(() => {
+    return allWorkItems.map((r) => {
       const poName = rfqPoMap.get(r.rfq_name);
       return poName ? { ...r, po_name: poName } : r;
     });
-    if (statusFilter === "Completed") {
-      list = list.filter((r) => rfqPoMap.has(r.rfq_name));
-    }
-    return list;
-  }, [reviews, rfqPoMap, statusFilter]);
+  }, [allWorkItems, rfqPoMap]);
 
-  /* ── Split into pending (FIFO) and history ── */
-  const { pendingQueue, rejectedList, historyList } = useMemo(() => {
+  /* ── Pending queue + completed history (always from full dataset) ── */
+  const { pendingQueue, historyList } = useMemo(() => {
     const pending: LegalReviewItem[] = [];
-    const rejected: LegalReviewItem[] = [];
     const history: LegalReviewItem[] = [];
 
-    for (const r of enrichedReviews) {
+    for (const r of enrichedAll) {
       if (r.legal_status === "Pending Legal Review") {
         pending.push(r);
-      } else if (r.legal_status === "Rejected") {
-        rejected.push(r);
-      } else {
+      } else if (
+        r.legal_status === "Approved" ||
+        r.legal_status === "Rejected"
+      ) {
         history.push(r);
       }
     }
@@ -132,27 +115,35 @@ export default function LegalReviewsPage() {
     pending.sort((a, b) =>
       (a.submission_date ?? "").localeCompare(b.submission_date ?? "")
     );
-    rejected.sort((a, b) =>
-      (b.legal_review_date ?? b.submission_date ?? "").localeCompare(
-        a.legal_review_date ?? a.submission_date ?? ""
-      )
-    );
     history.sort((a, b) =>
       (b.legal_review_date ?? b.submission_date ?? "").localeCompare(
         a.legal_review_date ?? a.submission_date ?? ""
       )
     );
 
-    return { pendingQueue: pending, rejectedList: rejected, historyList: history };
-  }, [enrichedReviews]);
+    return { pendingQueue: pending, historyList: history };
+  }, [enrichedAll]);
+
+  const filteredHistory = useMemo(() => {
+    if (statusFilter === "Approved") {
+      return historyList.filter((r) => r.legal_status === "Approved");
+    }
+    if (statusFilter === "Rejected") {
+      return historyList.filter((r) => r.legal_status === "Rejected");
+    }
+    if (statusFilter === "Completed") {
+      return historyList.filter((r) => rfqPoMap.has(r.rfq_name));
+    }
+    return historyList;
+  }, [historyList, statusFilter, rfqPoMap]);
 
   const kpis = useMemo(() => {
     return {
-      pending: allWorkItems.filter((r) => r.legal_status === "Pending Legal Review").length,
-      approved: allWorkItems.filter((r) => r.legal_status === "Approved").length,
-      rejected: allWorkItems.filter((r) => r.legal_status === "Rejected").length,
+      pending: pendingQueue.length,
+      approved: historyList.filter((r) => r.legal_status === "Approved").length,
+      rejected: historyList.filter((r) => r.legal_status === "Rejected").length,
     };
-  }, [allWorkItems]);
+  }, [pendingQueue, historyList]);
 
   const openReview = useCallback(
     (rfqId: string | undefined) => {
@@ -164,11 +155,10 @@ export default function LegalReviewsPage() {
 
   const showPending =
     statusFilter === "All" || statusFilter === "Pending Legal Review";
-  const showRejected =
-    statusFilter === "All" || statusFilter === "Rejected";
   const showHistory =
     statusFilter === "All" ||
     statusFilter === "Approved" ||
+    statusFilter === "Rejected" ||
     statusFilter === "Completed";
 
   return (
@@ -189,11 +179,32 @@ export default function LegalReviewsPage() {
         }
       />
 
-      {/* KPI strip */}
+      {/* KPI strip — click to filter */}
       <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <KpiCard icon={Clock} label="Pending" value={kpis.pending} tone="warning" />
-        <KpiCard icon={CheckCircle2} label="Approved" value={kpis.approved} tone="success" />
-        <KpiCard icon={XCircle} label="Rejected" value={kpis.rejected} tone="danger" />
+        <KpiCard
+          icon={Clock}
+          label="Pending"
+          value={kpis.pending}
+          tone="warning"
+          active={statusFilter === "Pending Legal Review"}
+          onClick={() => setStatusFilter("Pending Legal Review")}
+        />
+        <KpiCard
+          icon={CheckCircle2}
+          label="Approved"
+          value={kpis.approved}
+          tone="success"
+          active={statusFilter === "Approved"}
+          onClick={() => setStatusFilter("Approved")}
+        />
+        <KpiCard
+          icon={XCircle}
+          label="Rejected"
+          value={kpis.rejected}
+          tone="danger"
+          active={statusFilter === "Rejected"}
+          onClick={() => setStatusFilter("Rejected")}
+        />
       </div>
 
       {/* Filter pills */}
@@ -240,16 +251,6 @@ export default function LegalReviewsPage() {
             <RefreshCw className="h-3.5 w-3.5" /> Retry
           </button>
         </div>
-      ) : enrichedReviews.length === 0 ? (
-        <EmptyState
-          icon={Shield}
-          title={
-            statusFilter === "All"
-              ? "No legal review records found"
-              : `No reviews matching "${statusFilter === "Completed" ? "Completed (PO Created)" : statusFilter}"`
-          }
-          description="Try changing the filter or check back later."
-        />
       ) : (
         <div className="space-y-8">
           {/* ═══ Pending Reviews (FIFO Queue) ═══ */}
@@ -277,53 +278,6 @@ export default function LegalReviewsPage() {
             </section>
           )}
 
-          {showRejected && rejectedList.length > 0 && (
-            <section>
-              <SectionHeader
-                icon={XCircle}
-                title="Rejected RFQs"
-                subtitle="Legal Rejected — view, edit, or resubmit"
-                count={rejectedList.length}
-                tone="neutral"
-              />
-              <div className="mt-3 space-y-3">
-                {rejectedList.map((r) => (
-                  <ReviewCard
-                    key={r.rfq_name}
-                    review={r}
-                    onOpen={openReview}
-                    navigate={navigate}
-                    rejected
-                  />
-                ))}
-              </div>
-            </section>
-          )}
-
-          {/* ═══ Review History ═══ */}
-          {showHistory && historyList.length > 0 && (
-            <section>
-              <SectionHeader
-                icon={FolderOpen}
-                title="Review History"
-                subtitle="Approved, rejected, and completed"
-                count={historyList.length}
-                tone="neutral"
-              />
-              <div className="mt-3 space-y-3">
-                {historyList.map((r) => (
-                  <ReviewCard
-                    key={r.rfq_name}
-                    review={r}
-                    onOpen={openReview}
-                    navigate={navigate}
-                  />
-                ))}
-              </div>
-            </section>
-          )}
-
-          {/* Show pending empty state when history-only filter is active */}
           {showPending && pendingQueue.length === 0 && statusFilter === "Pending Legal Review" && (
             <EmptyState
               icon={CheckCircle2}
@@ -332,11 +286,44 @@ export default function LegalReviewsPage() {
             />
           )}
 
-          {showRejected && rejectedList.length === 0 && statusFilter === "Rejected" && (
+          {/* ═══ Review History (Approved + Rejected) ═══ */}
+          {showHistory && filteredHistory.length > 0 && (
+            <section>
+              <SectionHeader
+                icon={FolderOpen}
+                title="Review History"
+                subtitle="Newest reviewed first — approved and rejected RFQs"
+                count={filteredHistory.length}
+                tone="neutral"
+              />
+              <div className="mt-3 space-y-3">
+                {filteredHistory.map((r) => (
+                  <HistoryReviewCard
+                    key={r.rfq_name}
+                    review={r}
+                    onOpen={openReview}
+                    navigate={navigate}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
+          {showHistory && filteredHistory.length === 0 && (
             <EmptyState
-              icon={XCircle}
-              title="No rejected RFQs"
-              description="Rejected RFQs appear here with options to view, edit, and resubmit."
+              icon={FolderOpen}
+              title={
+                statusFilter === "Approved"
+                  ? "No approved legal reviews yet"
+                  : statusFilter === "Rejected"
+                    ? "No rejected legal reviews yet"
+                    : "No completed legal reviews yet."
+              }
+              description={
+                statusFilter === "All"
+                  ? "Completed reviews appear here permanently after approval or rejection."
+                  : "Try changing the filter or check back later."
+              }
             />
           )}
         </div>
@@ -621,16 +608,142 @@ function POChip({
   );
 }
 
+function getReviewRemarks(review: LegalReviewItem): string {
+  const comments = review.legal_comments ?? [];
+  if (comments.length === 0) return "—";
+  const sorted = [...comments].sort((a, b) =>
+    (b.comment_date ?? "").localeCompare(a.comment_date ?? "")
+  );
+  const actionMatch = sorted.find(
+    (c) => c.action === review.legal_status || c.action === "Rejected" || c.action === "Approved"
+  );
+  return (actionMatch ?? sorted[0])?.comment?.trim() || "—";
+}
+
+function HistoryReviewCard({
+  review,
+  onOpen,
+  navigate,
+}: {
+  review: LegalReviewItem;
+  onOpen: (rfqId: string | undefined) => void;
+  navigate: (path: string) => void;
+}) {
+  const remarks = getReviewRemarks(review);
+
+  return (
+    <div className="group rounded-xl border border-neutral-200 bg-white shadow-sm transition hover:border-primary-200 hover:shadow-md">
+      <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:gap-6 sm:py-5 sm:px-5">
+        <div className="min-w-0 flex-1 space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onOpen(review.rfq_name)}
+              className="truncate text-sm font-bold text-primary-700 hover:underline bg-transparent border-none p-0 cursor-pointer text-left"
+              title={review.rfq_name}
+            >
+              {review.rfq_name}
+            </button>
+            <ReviewStatusBadge status={review.legal_status} />
+          </div>
+
+          <div className="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
+            <HistoryField label="Supplier" value={review.supplier ?? "—"} />
+            <HistoryField
+              label="PO Number"
+              value={review.po_name ?? "—"}
+              link={
+                review.po_name
+                  ? `/p2p/purchase-orders/${encodeURIComponent(review.po_name)}`
+                  : undefined
+              }
+              navigate={navigate}
+            />
+            <HistoryField
+              label="Reviewed By"
+              value={review.legal_reviewer ?? "—"}
+            />
+            <HistoryField
+              label="Reviewed On"
+              value={
+                review.legal_review_date
+                  ? formatDate(review.legal_review_date)
+                  : "—"
+              }
+            />
+            <HistoryField label="Review Status" value={review.legal_status} />
+          </div>
+
+          <div className="rounded-lg bg-neutral-50 px-3 py-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400">
+              Remarks
+            </p>
+            <p className="mt-0.5 text-xs leading-relaxed text-neutral-700">
+              {remarks}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-start sm:pt-1">
+          <button
+            type="button"
+            onClick={() => onOpen(review.rfq_name)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary-50 px-4 py-2 text-xs font-semibold text-primary-700 transition hover:bg-primary-100 cursor-pointer border-none"
+          >
+            View Details
+            <ArrowRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HistoryField({
+  label,
+  value,
+  link,
+  navigate,
+}: {
+  label: string;
+  value: string;
+  link?: string;
+  navigate?: (path: string) => void;
+}) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400">
+        {label}
+      </p>
+      {link && navigate ? (
+        <button
+          type="button"
+          onClick={() => navigate(link)}
+          className="mt-0.5 truncate text-xs font-semibold text-primary-700 hover:underline bg-transparent border-none p-0 cursor-pointer text-left max-w-full"
+        >
+          {value}
+        </button>
+      ) : (
+        <p className="mt-0.5 truncate text-xs font-medium text-neutral-800">{value}</p>
+      )}
+    </div>
+  );
+}
+
 function KpiCard({
   icon: Icon,
   label,
   value,
   tone,
+  active,
+  onClick,
 }: {
   icon: typeof Clock;
   label: string;
   value: number;
   tone: "neutral" | "warning" | "success" | "danger" | "primary";
+  active?: boolean;
+  onClick?: () => void;
 }) {
   const iconTones = {
     neutral: "bg-neutral-100 text-neutral-500",
@@ -640,7 +753,15 @@ function KpiCard({
     primary: "bg-primary-50 text-primary-600",
   };
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-4 py-3.5 shadow-sm">
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex w-full items-center gap-3 rounded-xl border bg-white px-4 py-3.5 text-left shadow-sm transition hover:shadow-md cursor-pointer ${
+        active
+          ? "border-primary ring-2 ring-primary/20"
+          : "border-neutral-200 hover:border-neutral-300"
+      }`}
+    >
       <div
         className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg ${iconTones[tone]}`}
       >
@@ -652,6 +773,6 @@ function KpiCard({
           {label}
         </p>
       </div>
-    </div>
+    </button>
   );
 }

@@ -1,6 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { getFinanceDashboardMetrics } from "../../api/financeWorkflow";
+import {
+  FINANCE_DASHBOARD_METRICS_KEY,
+  getFinanceDashboardMetrics,
+} from "../../api/financeWorkflow";
+import { useVoucherSyncStore } from "../../store/voucherSyncStore";
 import {
   getDashboardConfig,
   getExecutiveDashboardLayout,
@@ -23,10 +27,13 @@ export default function FinanceDashboard({ greetingName }: Props) {
   const config = getDashboardConfig("finance");
   const layout = getExecutiveDashboardLayout("finance");
 
+  const syncVersion = useVoucherSyncStore((s) => s.version);
+
   const metricsQuery = useQuery({
-    queryKey: ["finance-dashboard-metrics"],
+    queryKey: [FINANCE_DASHBOARD_METRICS_KEY, syncVersion],
     queryFn: getFinanceDashboardMetrics,
-    staleTime: 60_000,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
     retry: false,
   });
 

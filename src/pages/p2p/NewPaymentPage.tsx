@@ -15,6 +15,7 @@ import {
   getPurchaseInvoice,
   submitPaymentEntry,
 } from "../../api/accounts";
+import { invalidateFinanceDashboardMetrics } from "../../api/financeWorkflow";
 import { COMPANY } from "../../api/erpnext";
 import ErrorBoundary from "../../components/ErrorBoundary";
 import PaymentAttachments, {
@@ -26,6 +27,9 @@ import {
 } from "../../utils/paymentAttachmentUtils";
 import PaymentMethodFields from "../../components/payments/PaymentMethodFields";
 import PaymentSummaryPanel from "../../components/payments/PaymentSummaryPanel";
+import PaymentSuccessModal, {
+  type PaymentSuccessDetails,
+} from "../../components/payments/PaymentSuccessModal";
 import PageHeader from "../../components/PageHeader";
 import { ErpNextDatePicker } from "../../components/ui";
 import type { PaymentEntry, PurchaseInvoice } from "../../types/erpnext";
@@ -65,6 +69,8 @@ function NewPaymentPageInner() {
   const [receivedAmount, setReceivedAmount] = useState(0);
   const [attachments, setAttachments] = useState<PaymentAttachment[]>([]);
   const [referenceLocked, setReferenceLocked] = useState(true);
+  const [successDetails, setSuccessDetails] =
+    useState<PaymentSuccessDetails | null>(null);
 
   const { data: invoices = [], isLoading: invoicesLoading } =
     useQuery<PurchaseInvoice[]>({
@@ -342,11 +348,25 @@ function NewPaymentPageInner() {
       return submitPaymentEntry(draft.name);
     },
     onSuccess: (entry) => {
-      toast.success(`Payment ${entry.name} submitted successfully.`);
+      toast.success("Payment processed successfully.");
       queryClient.invalidateQueries({ queryKey: ["payment-entries"] });
       queryClient.invalidateQueries({ queryKey: ["payable-invoices"] });
       queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
-      navigate("/p2p/payments");
+      invalidateFinanceDashboardMetrics(queryClient);
+      setSuccessDetails({
+        paymentEntryId: entry.name,
+        paymentReference:
+          entry.reference_no?.trim() || paymentReference.trim() || entry.name,
+        invoiceNumber: invoiceName || selected?.name || "—",
+        supplier:
+          entry.party_name ??
+          selected?.supplier_name ??
+          selected?.supplier ??
+          "—",
+        amountPaid: entry.paid_amount ?? receivedAmount,
+        paymentDate: entry.posting_date ?? postingDate,
+        paymentMethod: entry.mode_of_payment ?? paymentMethod,
+      });
     },
     onError: (err) => {
       const msg =
@@ -564,24 +584,39 @@ function NewPaymentPageInner() {
               type="button"
               onClick={handleSubmit}
               disabled={createMutation.isPending}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:bg-primary-600 disabled:opacity-60"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {createMutation.isPending && (
                 <Loader2 className="h-4 w-4 animate-spin" />
               )}
-              Submit Payment
+              {createMutation.isPending
+                ? "Processing Payment..."
+                : "Submit Payment"}
             </button>
             <button
               type="button"
               onClick={() => navigate("/p2p/payments")}
               disabled={createMutation.isPending}
-              className="w-full rounded-lg border border-neutral-300 bg-white px-4 py-2.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+              className="w-full rounded-lg border border-neutral-300 bg-white px-4 py-2.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-60"
             >
               Cancel
             </button>
           </div>
         </div>
       </div>
+
+      <PaymentSuccessModal
+        open={!!successDetails}
+        details={successDetails}
+        onViewReceipt={() => {
+          if (!successDetails) return;
+          navigate(
+            `/p2p/payments/${encodeURIComponent(successDetails.paymentEntryId)}`
+          );
+        }}
+        onGoToPayments={() => navigate("/p2p/payments")}
+        onBackToDashboard={() => navigate("/dashboard")}
+      />
     </div>
   );
 }

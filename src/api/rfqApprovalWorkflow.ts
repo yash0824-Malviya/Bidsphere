@@ -69,14 +69,35 @@ export function getApprovalState(rfqName: string): RFQApprovalState | null {
   }
 }
 
-export function saveApprovalState(state: RFQApprovalState): void {
+export function saveApprovalState(
+  state: RFQApprovalState,
+  options?: { skipErpSync?: boolean }
+): void {
   try {
     localStorage.setItem(storageKey(state.rfq), JSON.stringify(state));
   } catch {
     /* ignore storage errors */
   }
-  // Fire-and-forget sync to ERPNext for persistence across browsers
-  syncStateToErpNext(state).catch(() => {});
+  if (!options?.skipErpSync) {
+    // Fire-and-forget sync to ERPNext for persistence across browsers
+    syncStateToErpNext(state).catch(() => {});
+  }
+}
+
+/** Persist full approval state to ERPNext (awaitable — used on approve/reject). */
+export async function syncApprovalStateToErpNext(
+  state: RFQApprovalState
+): Promise<void> {
+  await syncStateToErpNext(state);
+}
+
+function latestLegalRemark(state: RFQApprovalState): string {
+  const comments = state.legal_comments ?? [];
+  if (comments.length === 0) return "";
+  const sorted = [...comments].sort((a, b) =>
+    (b.comment_date ?? "").localeCompare(a.comment_date ?? "")
+  );
+  return sorted[0]?.comment?.trim() ?? "";
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -193,6 +214,9 @@ async function syncStateToErpNext(state: RFQApprovalState): Promise<void> {
     updates.custom_legal_reviewer = state.legal_reviewer ?? "";
   if (fieldSet.has("custom_legal_review_date"))
     updates.custom_legal_review_date = state.legal_review_date ?? "";
+  if (fieldSet.has("custom_legal_comments")) {
+    updates.custom_legal_comments = latestLegalRemark(state);
+  }
   if (fieldSet.has("custom_finance_reviewer"))
     updates.custom_finance_reviewer = state.finance_reviewer ?? "";
   if (fieldSet.has("custom_finance_review_date"))

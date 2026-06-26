@@ -38,7 +38,7 @@ import {
   saveApprovalState,
 } from "../../api/rfqApprovalWorkflow";
 import { updateReviewStatus, addComment } from "../../api/legalReviews";
-import { addNotification } from "../../api/notifications";
+import { triggerLegalDocumentsRequested } from "../../api/notifications";
 import { getFileObjectUrl } from "../../api/legalDocsStorage";
 import { useAuthStore } from "../../store/authStore";
 import { formatCurrency, formatDate } from "../../utils/format";
@@ -1288,14 +1288,7 @@ export default function LegalReviewDetailPage() {
                     toast.error('No Supplier Quotation selected');
                     return;
                   }
-                  addNotification({
-                    type: "system",
-                    title: "Legal Documents Requested",
-                    message: `Netlink Legal team has requested compliance documents (Terms, Warranty, Insurance) for Supplier Quotation ${selectedSQName}. Please upload them.`,
-                    documentId: selectedSQName,
-                    documentType: "Supplier Quotation",
-                    recipientRole: "supplier"
-                  });
+                  triggerLegalDocumentsRequested(selectedSQName);
                   toast.success('Document request sent to supplier');
                 }}
                 style={{
