@@ -7,7 +7,7 @@ import {
   resubmitFinanceReview,
   updateLegalDocumentFlags,
   LegalReviewError,
-} from "./legalReviewCore";
+} from "./legalReviewCore.js";
 
 /**
  * POST /api/legal-review/create

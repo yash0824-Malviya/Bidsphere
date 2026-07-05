@@ -22,7 +22,7 @@
  *      so even a race between two concurrent requests cannot create two
  *      records for the same RFQ — MySQL rejects the second INSERT outright.
  */
-import { formatERPNextDatetime } from "../src/utils/erpNextDate";
+import { formatERPNextDatetime } from "../src/utils/erpNextDate.js";
 
 const DOCTYPE = "Legal Document Review";
 
