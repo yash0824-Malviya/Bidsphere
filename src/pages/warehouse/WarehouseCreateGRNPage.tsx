@@ -510,13 +510,11 @@ export default function WarehouseCreateGRNPage() {
    * PO-date rule too. We only send an explicit `posting_date` when the user
    * deliberately backdates, pinned to `00:00:00` and floored at the PO date.
    */
-  function resolvePostingFields(): Pick<
-    PurchaseReceipt,
-    "posting_date" | "posting_time" | "set_posting_time"
+  function resolvePostingFields(): Partial<
+    Pick<PurchaseReceipt, "posting_date" | "posting_time" | "set_posting_time">
   > {
-    let fields: Pick<
-      PurchaseReceipt,
-      "posting_date" | "posting_time" | "set_posting_time"
+    let fields: Partial<
+      Pick<PurchaseReceipt, "posting_date" | "posting_time" | "set_posting_time">
     > = {};
 
     if (postingDateTouched && postingDate) {

@@ -16,7 +16,7 @@ export default function WarehouseReportsPage() {
 
   const issuedQuery = useQuery({
     queryKey: ["warehouse", "issued"],
-    queryFn: getIssuedMaterials,
+    queryFn: () => getIssuedMaterials(),
     retry: false,
   });
 

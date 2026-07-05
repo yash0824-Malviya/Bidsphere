@@ -122,7 +122,7 @@ export default function WarehouseDashboardPage() {
   });
   const issuedQuery = useQuery({
     queryKey: ["warehouse", "issued"],
-    queryFn: getIssuedMaterials,
+    queryFn: () => getIssuedMaterials(),
     enabled: canLoad,
     retry: false,
     refetchOnWindowFocus: true,
@@ -202,7 +202,7 @@ export default function WarehouseDashboardPage() {
       const shortageLines = fulfillment.items.filter((i) => i.procurement > 0);
       const shortageQty = fulfillment.totals.procurement;
       if (shortageLines.length === 0 || shortageQty <= 0) continue;
-      const rec = mr as Record<string, unknown>;
+      const rec = mr as unknown as Record<string, unknown>;
       rows.push({
         name: mr.name,
         department:

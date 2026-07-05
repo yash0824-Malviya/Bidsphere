@@ -26,7 +26,6 @@ const CATEGORY_META: Array<{ name: string; color: string }> = [
   { name: "Services", color: "#8b5cf6" },
   { name: "Others", color: "#94a3b8" },
 ];
-const COLOR_BY_CATEGORY = new Map(CATEGORY_META.map((c) => [c.name, c.color]));
 
 /** Map a live ERPNext Item Group onto one of the fixed reporting buckets. */
 function bucketForItemGroup(itemGroup?: string): string {
