@@ -197,17 +197,29 @@ export const DASHBOARD_BY_ROLE: Record<AppRole, RoleDashboardConfig> = {
     roleLabel: ROLE_LABELS.finance,
     statusLabel: "Finance",
   },
+  finance_executive: {
+    title: "Finance Executive Dashboard",
+    subtitle: "Create and submit budgets for approval",
+    roleLabel: ROLE_LABELS.finance_executive,
+    statusLabel: "Budget",
+  },
   warehouse: {
-    title: "Warehouse Manager Dashboard",
-    subtitle: "Track inventory, GRNs and stock movements",
+    title: "Warehouse Module",
+    subtitle: "This module is currently under redevelopment",
     roleLabel: ROLE_LABELS.warehouse,
-    statusLabel: "Operations",
+    statusLabel: "Redevelopment",
   },
   legal: {
     title: "Legal Reviewer Dashboard",
     subtitle: "Review and approve RFQs pending legal clearance",
     roleLabel: ROLE_LABELS.legal,
     statusLabel: "Legal",
+  },
+  department: {
+    title: "Department User Dashboard",
+    subtitle: "Create and track your material requests",
+    roleLabel: ROLE_LABELS.department,
+    statusLabel: "Department User",
   },
 };
 
@@ -220,7 +232,7 @@ export const SUPPLIER_DASHBOARD_CONFIG: RoleDashboardConfig = {
 };
 
 const EXECUTIVE_LAYOUT_BY_ROLE: Record<
-  Exclude<AppRole, "warehouse" | "legal">,
+  Exclude<AppRole, "warehouse" | "legal" | "department">,
   ExecutiveDashboardLayout
 > = {
   admin: {
@@ -256,6 +268,20 @@ const EXECUTIVE_LAYOUT_BY_ROLE: Record<
     showSavings: false,
     showAlerts: true,
   },
+  finance_executive: {
+    kpiKeys: ["pendingApprovals", "totalPayments"] as ExecutiveKpiKey[],
+    quickActions: [
+      { id: "create-budget", label: "Create Budget", to: "/budget/create", icon: Wallet },
+      { id: "my-budgets", label: "My Budgets", to: "/budget/my-budgets", icon: ClipboardCheck },
+    ],
+    showSpendCharts: false,
+    showActivity: false,
+    activityTitle: "Budget Activity",
+    activityTypes: [],
+    showTopSuppliers: false,
+    showSavings: false,
+    showAlerts: false,
+  },
 };
 
 export function getDashboardConfig(role: AppRole): RoleDashboardConfig {
@@ -263,14 +289,14 @@ export function getDashboardConfig(role: AppRole): RoleDashboardConfig {
 }
 
 export function getExecutiveDashboardLayout(
-  role: Exclude<AppRole, "warehouse" | "legal">
+  role: Exclude<AppRole, "warehouse" | "legal" | "department">
 ): ExecutiveDashboardLayout {
   return EXECUTIVE_LAYOUT_BY_ROLE[role] ?? EXECUTIVE_LAYOUT_BY_ROLE.admin;
 }
 
 export function filterActivityByRole(
   items: ActivityFeedItem[],
-  role: Exclude<AppRole, "warehouse" | "legal">
+  role: Exclude<AppRole, "warehouse" | "legal" | "department">
 ): ActivityFeedItem[] {
   const { activityTypes } = getExecutiveDashboardLayout(role);
   if (activityTypes === "all") return items;

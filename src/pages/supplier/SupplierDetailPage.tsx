@@ -20,6 +20,7 @@ import { apiGet } from "../../api/erpnext";
 import { getPurchaseInvoices } from "../../api/accounts";
 import { getPurchaseOrders } from "../../api/purchasing";
 import { getSupplier } from "../../api/supplier";
+import { getFullFileUrl } from "../../api/legalDocsStorage";
 import EditSupplierModal from "../../components/EditSupplierModal";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
@@ -764,7 +765,7 @@ function DocumentsTab({
             </div>
             {f.file_url && (
               <a
-                href={f.file_url}
+                href={getFullFileUrl(f.file_url)}
                 target="_blank"
                 rel="noreferrer"
                 className="text-xs font-medium text-primary-600 hover:text-primary-700"

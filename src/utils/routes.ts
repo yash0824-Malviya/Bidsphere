@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { APP_NAME } from "../config/branding";
+import type { AppRole } from "../config/roles";
 
 import { FEATURE_FLAGS } from "../config/featureFlags";
 
@@ -68,7 +69,7 @@ export const NAV_GROUPS: NavGroup[] = [
           { label: "All RFQs", to: "/sourcing/rfq" },
           { label: "New RFQ", to: "/sourcing/rfq/new" },
           { label: "RFQ Template Library", to: "/sourcing/rfq-templates" },
-          { label: "Legal Reviews", to: "/sourcing/legal-reviews" },
+          { label: "Legal Reviews", to: "/legal/reviews" },
         ],
       },
       {
@@ -99,6 +100,13 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/p2p": "P2P Core",
   "/p2p/requisitions": "Material Requests",
   "/p2p/requisitions/new": "New Material Request",
+  "/material-requests": "Material Requests",
+  "/material-requests/list": "My Material Requests",
+  "/material-requests/new": "New Material Request",
+  "/material-requests/warehouse": "Warehouse Review",
+  "/material-requests/issued": "Issued Materials",
+  "/material-requests/procurement": "Forwarded Material Requests",
+  "/sourcing/supplier-quotations": "Supplier Quotations",
   "/p2p/purchase-orders": "Purchase Orders",
   "/p2p/purchase-orders/create": "New PO",
   "/p2p/purchase-orders/convert": "Create Purchase Order",
@@ -128,6 +136,17 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/budget/pending-reviews": "RFQ Financial Review",
   "/contracts": "Contracts",
   "/inventory": "Inventory",
+  "/warehouse/dashboard": "Warehouse Dashboard",
+  "/warehouse/material-requests/pending": "Pending Material Requests",
+  "/warehouse/material-requests/review": "Review Material Request",
+  "/warehouse/material-requests/issued": "Material Issued",
+  "/warehouse/material-requests/forwarded": "Forwarded Material Requests",
+  "/warehouse/inventory/stock": "Stock Overview",
+  "/warehouse/inventory/stock-overview": "Stock Overview",
+  "/warehouse/inventory/create-grn": "Create GRN",
+  "/warehouse/grn-list": "GRN List",
+  "/warehouse/inventory/items": "Item Master",
+  "/warehouse/reports": "Warehouse Reports",
   "/admin": "Admin",
   "/admin/users": "User Management",
   "/admin/roles": "Role Management",
@@ -184,8 +203,11 @@ export function getPageTitle(pathname: string): string {
 }
 
 /** Landing page — no breadcrumb trail in the global header. */
-export function isDashboardRoute(pathname: string): boolean {
-  return pathname === "/dashboard" || pathname === "/";
+export function isDashboardRoute(pathname: string, role?: AppRole): boolean {
+  if (pathname === "/dashboard" || pathname === "/") return true;
+  if (role === "finance_executive" && pathname === "/budget") return true;
+  if ((role === "finance" || role === "admin") && pathname === "/budget") return true;
+  return false;
 }
 
 function toTitleCase(seg: string): string {

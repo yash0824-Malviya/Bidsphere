@@ -45,6 +45,12 @@ const password = process.env.ROLE_USER_PASSWORD ?? "Netlink@2026";
 
 const USERS = [
   {
+    email: "department@netlink.com",
+    first_name: "Department",
+    last_name: "User",
+    roles: ["Department User"],
+  },
+  {
     email: "procurement@netlink.com",
     first_name: "Procurement",
     last_name: "Manager",
@@ -53,8 +59,14 @@ const USERS = [
   {
     email: "finance@netlink.com",
     first_name: "Finance",
-    last_name: "User",
-    roles: ["Accounts Manager", "Accounts User"],
+    last_name: "Manager",
+    roles: ["Finance Manager", "Accounts Manager"],
+  },
+  {
+    email: "finance.executive@netlink.com",
+    first_name: "Finance",
+    last_name: "Executive",
+    roles: ["Finance Executive"],
   },
   {
     email: "warehouse@netlink.com",

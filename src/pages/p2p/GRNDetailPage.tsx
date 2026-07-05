@@ -83,15 +83,20 @@ export default function GRNDetailPage() {
     : undefined;
 
   const syncVersion = useVoucherSyncStore((s) => s.version);
+  const { data: allVouchers = [] } = useQuery({
+    queryKey: ["vouchers-all", syncVersion],
+    queryFn: () => getAllVouchers(),
+    staleTime: 30_000,
+  });
   const voucher = useMemo(
-    () => getAllVouchers().find((v) => v.grn_reference === name) ?? null,
-    [name, syncVersion]
+    () => allVouchers.find((v) => v.grn_reference === name) ?? null,
+    [allVouchers, name]
   );
   const hasVoucher = !!voucher;
 
   const [creatingVoucher, setCreatingVoucher] = useState(false);
 
-  function handleCreateVoucher() {
+  async function handleCreateVoucher() {
     if (!grn) return;
 
     if (!canCreateVoucher) {
@@ -114,7 +119,7 @@ export default function GRNDetailPage() {
         amount: it.amount ?? it.rate * it.qty,
         uom: it.uom ?? "Nos",
       }));
-      const created = createVoucher({
+      const created = await createVoucher({
         po_reference: linkedPOForQuery ?? "",
         grn_reference: name,
         supplier: grn.supplier,

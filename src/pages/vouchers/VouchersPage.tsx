@@ -47,8 +47,18 @@ export default function VouchersPage() {
   // bumps the version, so created vouchers / awaiting rows never go stale.
   const syncVersion = useVoucherSyncStore((s) => s.version);
 
-  // Created vouchers (localStorage-backed).
-  const vouchers = useMemo(() => getAllVouchers(), [syncVersion]);
+  // Created vouchers (ERPNext-backed).
+  const { data: vouchers = [] } = useQuery({
+    queryKey: ["vouchers-all", syncVersion],
+    queryFn: () => getAllVouchers(),
+    staleTime: 30_000,
+  });
+
+  const { data: voucheredGRNs = new Set<string>() } = useQuery({
+    queryKey: ["vouchered-grn-refs", syncVersion],
+    queryFn: () => getVoucheredGRNRefs(),
+    staleTime: 30_000,
+  });
 
   // Same queue the Finance dashboard reads — keeps both views consistent.
   const {
@@ -62,11 +72,6 @@ export default function VouchersPage() {
   });
 
   // Exclude GRNs that already have a voucher so nothing shows twice.
-  const voucheredGRNs = useMemo(
-    () => getVoucheredGRNRefs(),
-    [vouchers, syncVersion]
-  );
-
   const awaiting = useMemo(
     () => awaitingGRNs.filter((g) => !voucheredGRNs.has(g.name)),
     [awaitingGRNs, voucheredGRNs]

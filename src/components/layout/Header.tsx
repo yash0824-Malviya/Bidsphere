@@ -2,6 +2,7 @@ import { ChevronRight, Home, Menu, Search, X } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 
 import { useLayout } from "../../contexts/LayoutContext";
+import { useAuthStore } from "../../store/authStore";
 import {
   getBreadcrumbs,
   getPageTitle,
@@ -12,9 +13,10 @@ import NotificationsBell from "../NotificationsBell";
 
 export default function Header() {
   const { pathname } = useLocation();
+  const role = useAuthStore((s) => s.user?.role);
   const title = getPageTitle(pathname);
   const breadcrumbs = getBreadcrumbs(pathname);
-  const onDashboard = isDashboardRoute(pathname);
+  const onDashboard = isDashboardRoute(pathname, role);
   const {
     toggleMobileNav,
     sidebarMode,

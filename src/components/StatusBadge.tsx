@@ -19,7 +19,7 @@ const STATUS_STYLES: Record<string, string> = {
   Overdue: "bg-danger-100 text-danger-500",
   Submitted: "bg-primary-100 text-primary-700",
   Approved: "bg-success-100 text-success-500",
-  Rejected: "bg-danger-100 text-danger-500",
+  Rejected: "bg-red-100 text-red-700",
   Pending: "bg-warning-100 text-warning-500",
   "Pending Acceptance": "bg-warning-100 text-warning-600",
   "Pending Supplier Acceptance": "bg-warning-100 text-warning-600",
@@ -35,6 +35,13 @@ const STATUS_STYLES: Record<string, string> = {
   Active: "bg-success-100 text-success-500",
   Inactive: "bg-neutral-100 text-neutral-500",
   "Below Reorder": "bg-danger-100 text-danger-500",
+  "Under Warehouse Review": "bg-amber-100 text-amber-700",
+  "Stock Available": "bg-teal-100 text-teal-700",
+  "Material Issued": "bg-emerald-100 text-emerald-700",
+  "Procurement Required": "bg-blue-100 text-blue-700",
+  // Legacy label — retained so pre-migration records still render sensibly.
+  "Forwarded to Procurement": "bg-blue-100 text-blue-700",
+  "RFQ Created": "bg-indigo-100 text-indigo-700",
 };
 
 const TONE_CLASSES: Record<StatusTone, string> = {
@@ -78,6 +85,12 @@ const STATUS_TONES: Record<string, StatusTone> = {
   "Debit Note Issued": "neutral",
   "Internal Transfer": "info",
   Ordered: "info",
+  "Under Warehouse Review": "warning",
+  "Stock Available": "info",
+  "Material Issued": "success",
+  "Procurement Required": "info",
+  "Forwarded to Procurement": "info",
+  "RFQ Created": "info",
 };
 
 interface Props {
@@ -87,10 +100,8 @@ interface Props {
 
 export default memo(function StatusBadge({ status, tone }: Props) {
   const label = status?.trim() || "—";
-  const resolvedTone: StatusTone =
-    tone ?? STATUS_TONES[label] ?? "neutral";
-  const classes =
-    STATUS_STYLES[label] ?? TONE_CLASSES[resolvedTone];
+  const resolvedTone: StatusTone = tone ?? STATUS_TONES[label] ?? "neutral";
+  const classes = STATUS_STYLES[label] ?? TONE_CLASSES[resolvedTone];
 
   return (
     <span

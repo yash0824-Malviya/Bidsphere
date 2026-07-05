@@ -4,6 +4,7 @@ import customParseFormat from "dayjs/plugin/customParseFormat";
 dayjs.extend(customParseFormat);
 
 export const ERP_NEXT_DATE_FORMAT = "YYYY-MM-DD";
+export const ERP_NEXT_DATETIME_FORMAT = "YYYY-MM-DD HH:mm:ss";
 export const US_DISPLAY_DATE_FORMAT = "MM/DD/YYYY";
 export const UK_DISPLAY_DATE_FORMAT = "DD/MM/YYYY";
 export const ERP_NEXT_ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -93,6 +94,26 @@ export function formatERPNextDate(
 
   if (!parsed?.isValid()) return null;
   return parsed.format(ERP_NEXT_DATE_FORMAT);
+}
+
+/**
+ * Format any supported date/datetime input as `YYYY-MM-DD HH:mm:ss` — the
+ * only format MySQL/MariaDB accepts for a Frappe `Datetime` column.
+ *
+ * `Date.prototype.toISOString()` (`2026-07-02T08:24:34.921Z`) looks valid
+ * but MySQL rejects the `T` separator, milliseconds, and `Z` suffix with a
+ * hard `OperationalError` (1292) that bypasses Frappe's normal validation —
+ * silently failing every insert/update that carries a raw ISO datetime
+ * string in a Datetime field. Always run values through this helper before
+ * writing to a Datetime field.
+ */
+export function formatERPNextDatetime(
+  value: string | Date | null | undefined
+): string | null {
+  if (value == null || value === "") return null;
+  const parsed = dayjs(value);
+  if (!parsed.isValid()) return null;
+  return parsed.format(ERP_NEXT_DATETIME_FORMAT);
 }
 
 /** Format ISO / API date for US display (MM/DD/YYYY). */

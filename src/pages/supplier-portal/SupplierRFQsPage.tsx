@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { FileText, Inbox } from "lucide-react";
+import { AlertTriangle, FileText, Inbox } from "lucide-react";
 
 import {
   getSupplierQuotations,
@@ -24,6 +24,8 @@ type RfqDisplayStatus = {
 
 /**
  * Collapse the supplier's RFQ state into a single status badge:
+ *  - Not Yet Published (neutral) — still a Procurement-side Draft; the
+ *    supplier can see the invitation exists but cannot open/quote on it yet.
  *  - Quotation Submitted (blue) — the supplier has already quoted.
  *  - RFQ Closed (green)        — the RFQ is closed/cancelled.
  *  - Expired (gray)            — the RFQ window has lapsed.
@@ -31,10 +33,14 @@ type RfqDisplayStatus = {
  */
 function deriveRfqStatus(
   rfqStatus: string | undefined,
-  alreadyQuoted: boolean
+  alreadyQuoted: boolean,
+  isPublished: boolean
 ): RfqDisplayStatus {
   if (alreadyQuoted) {
     return { label: "Quotation Submitted", tone: "info" };
+  }
+  if (!isPublished) {
+    return { label: "Not Yet Published", tone: "neutral" };
   }
   const status = (rfqStatus ?? "").toLowerCase();
   if (status === "expired") {
@@ -100,7 +106,10 @@ export default function SupplierRFQsPage() {
 
   const openCount = useMemo(() => {
     return (rfqsQuery.data ?? []).filter(
-      (r) => r.status !== "Cancelled" && !quotedRfqNames.has(r.name)
+      (r) =>
+        r.status !== "Cancelled" &&
+        r.docstatus === 1 &&
+        !quotedRfqNames.has(r.name)
     ).length;
   }, [rfqsQuery.data, quotedRfqNames]);
 
@@ -138,6 +147,21 @@ export default function SupplierRFQsPage() {
 
         {isLoading ? (
           <TableSkeleton rows={5} columns={3} />
+        ) : rfqsQuery.isError ? (
+          <EmptyState
+            icon={AlertTriangle}
+            title="Couldn't load your RFQs"
+            description="We hit an error reaching ERPNext. This is NOT the same as having no RFQs — please retry."
+            action={
+              <button
+                type="button"
+                onClick={() => rfqsQuery.refetch()}
+                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+              >
+                Retry
+              </button>
+            }
+          />
         ) : rows.length === 0 ? (
           <EmptyState
             icon={Inbox}
@@ -157,16 +181,23 @@ export default function SupplierRFQsPage() {
               <tbody className="divide-y divide-neutral-200">
                 {rows.map((rfq) => {
                   const alreadyQuoted = quotedRfqNames.has(rfq.name);
-                  const status = deriveRfqStatus(rfq.status, alreadyQuoted);
+                  const isPublished = rfq.docstatus === 1;
+                  const status = deriveRfqStatus(rfq.status, alreadyQuoted, isPublished);
                   return (
                     <tr key={rfq.name} className="hover:bg-accent-50/40">
                       <td className="px-4 py-3 font-medium text-neutral-900">
-                        <Link
-                          to={`/supplier/rfq/${encodeURIComponent(rfq.name)}`}
-                          className="text-accent-700 hover:underline"
-                        >
-                          {rfq.name}
-                        </Link>
+                        {isPublished ? (
+                          <Link
+                            to={`/supplier/rfq/${encodeURIComponent(rfq.name)}`}
+                            className="text-accent-700 hover:underline"
+                          >
+                            {rfq.name}
+                          </Link>
+                        ) : (
+                          <span className="text-neutral-500" title="Not yet published by the buyer">
+                            {rfq.name}
+                          </span>
+                        )}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-neutral-600">
                         {rfq.modified ? formatDate(rfq.modified) : "—"}

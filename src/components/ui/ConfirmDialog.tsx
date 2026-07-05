@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { AlertTriangle, X } from "lucide-react";
 
 export type ConfirmTone = "danger" | "warning" | "primary";
@@ -9,6 +9,8 @@ interface Props {
   onConfirm: () => void | Promise<void>;
   title: string;
   description?: string;
+  /** Optional JSX rendered below the description (e.g. an item summary table). */
+  children?: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   tone?: ConfirmTone;
@@ -41,6 +43,7 @@ export default function ConfirmDialog({
   onConfirm,
   title,
   description,
+  children,
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
   tone = "danger",
@@ -99,6 +102,7 @@ export default function ConfirmDialog({
             {description && (
               <p className="mt-1 text-sm text-neutral-600">{description}</p>
             )}
+            {children && <div className="mt-3">{children}</div>}
           </div>
         </div>
 

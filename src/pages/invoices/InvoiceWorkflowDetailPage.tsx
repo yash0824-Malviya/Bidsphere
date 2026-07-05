@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useState, type ReactNode } from "react";
+import { useLayoutEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import {
   ArrowLeft,
@@ -56,26 +57,90 @@ export default function InvoiceWorkflowDetailPage() {
     return () => layout?.unregisterPageHeader();
   }, [layout]);
 
-  const [voucher, setVoucher] = useState<Voucher | null>(() =>
-    getVoucherById(voucherId)
-  );
   const syncVersion = useVoucherSyncStore((s) => s.version);
-  useEffect(() => {
-    setVoucher(getVoucherById(voucherId));
-  }, [voucherId, syncVersion]);
+  const { data: voucher, isLoading, isError, error, refetch } = useQuery({
+    queryKey: ["voucher", voucherId, syncVersion],
+    queryFn: async () => {
+      console.info(`[Invoice Detail] ERP query: GET Voucher/${voucherId}`);
+      const result = await getVoucherById(voucherId);
+      console.info(
+        `[Invoice Detail] ERP response: Voucher ${
+          result ? `"${result.id}" found` : "not found"
+        }${result ? `, invoice ${result.invoice ? `"${result.invoice.invoice_number}"` : "not yet raised"}` : ""}.`
+      );
+      return result;
+    },
+    enabled: !!voucherId,
+  });
 
   const [showReject, setShowReject] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [showFullTimeline, setShowFullTimeline] = useState(false);
 
-  if (!voucher || !voucher.invoice) {
+  if (isLoading) {
+    return (
+      <div>
+        <BackLink />
+        <EmptyState
+          icon={Receipt}
+          title="Loading invoice…"
+          description=""
+        />
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div>
+        <BackLink />
+        <EmptyState
+          icon={Receipt}
+          title="Could not load this invoice"
+          description={
+            error instanceof Error
+              ? error.message
+              : "ERPNext returned an error while loading this Voucher. Please retry."
+          }
+        />
+        <button
+          type="button"
+          onClick={() => refetch()}
+          className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (!voucher) {
+    console.info(
+      `[Invoice Detail] Lookup failed: no Voucher named "${voucherId}" exists in ERPNext.`
+    );
     return (
       <div>
         <BackLink />
         <EmptyState
           icon={Receipt}
           title="Invoice not found"
-          description="No supplier invoice has been raised for this record."
+          description={`No record exists for "${voucherId}" in ERPNext.`}
+        />
+      </div>
+    );
+  }
+
+  if (!voucher.invoice) {
+    console.info(
+      `[Invoice Detail] Voucher "${voucher.id}" was found but has no invoice_json yet — reporting as not-submitted, not "not found".`
+    );
+    return (
+      <div>
+        <BackLink />
+        <EmptyState
+          icon={Receipt}
+          title="No invoice has been submitted"
+          description="This voucher has been verified against ERPNext — the supplier has not raised an invoice for it yet."
         />
       </div>
     );
@@ -90,22 +155,22 @@ export default function InvoiceWorkflowDetailPage() {
   const expectedRelease = deriveExpectedRelease(voucher, payStatus);
   const hasMoreActivity = voucher.history.length > ACTIVITY_PREVIEW_LIMIT;
 
-  function handleApprove() {
-    const updated = approveInvoice(voucher!.id);
+  async function handleApprove() {
+    const updated = await approveInvoice(voucher!.id);
     if (updated) {
-      setVoucher({ ...updated });
+      await refetch();
       toast.success("Invoice approved.");
     }
   }
 
-  function handleReject() {
+  async function handleReject() {
     if (!rejectReason.trim()) {
       toast.error("Please add a reason for rejection.");
       return;
     }
-    const updated = rejectInvoice(voucher!.id, rejectReason.trim());
+    const updated = await rejectInvoice(voucher!.id, rejectReason.trim());
     if (updated) {
-      setVoucher({ ...updated });
+      await refetch();
       setShowReject(false);
       setRejectReason("");
       toast.success("Invoice rejected. Supplier has been notified.");

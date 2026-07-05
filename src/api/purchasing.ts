@@ -31,6 +31,7 @@ import type {
   MaterialRequestItem,
   PurchaseOrder,
   PurchaseReceipt,
+  PurchaseReceiptStatus,
   RequestForQuotation,
 } from "../types/erpnext";
 import {
@@ -46,9 +47,22 @@ import type { IncomingPORow } from "../utils/upcomingDeliveries";
 import { canCreateGRN } from "../config/roles";
 import { assertSuppliersActive, resolveSupplierERPNextId } from "./supplier";
 import { useAuthStore } from "../store/authStore";
-import { getApprovalState, isApprovedForPO } from "./rfqApprovalWorkflow";
+import { getLegalDocsByFinanceStatus, getLegalDocsByRfq } from "./legalDocs";
 import { getSupplierQuotations, lookupDefaultWarehouse } from "./sourcing";
 import { COMPANY } from "./erpnext";
+import { queryClient } from "../queryClient";
+
+/**
+ * Refresh spend-driven dashboards after a Purchase Order is created so the
+ * Category Spend Breakdown and KPI cards reflect the new committed spend without
+ * a manual reload. Fire-and-forget — a failed invalidation must not break PO
+ * creation.
+ */
+function invalidateSpendDashboards(): void {
+  void queryClient.invalidateQueries({ queryKey: ["dashboard-category-spend"] });
+  void queryClient.invalidateQueries({ queryKey: ["dashboard-analytics"] });
+  void queryClient.invalidateQueries({ queryKey: ["dashboard-counts"] });
+}
 
 /**
  * App-level GRN ownership guard. GRN (Purchase Receipt) creation and submission
@@ -251,10 +265,21 @@ export async function updateMaterialRequest(
 export async function submitMaterialRequest(
   name: string
 ): Promise<MaterialRequest> {
-  return apiPost<MaterialRequest>("/api/method/frappe.client.submit", {
-    doctype: MR_DOCTYPE,
-    docname: name,
-  });
+  const endpoint = buildResourceUrl(MR_DOCTYPE, name);
+  const fresh = await apiGet<MaterialRequest>(endpoint);
+  const modified =
+    (fresh as { modified?: string }).modified ??
+    (fresh as { data?: { modified?: string } }).data?.modified;
+
+  const payload: Record<string, unknown> = { docstatus: 1 };
+  if (modified) payload.modified = modified;
+
+  if (import.meta.env.DEV) {
+    // eslint-disable-next-line no-console
+    console.log("[Material Request] submit:", { name, modified, payload });
+  }
+
+  return apiPut<MaterialRequest>(endpoint, payload);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -403,7 +428,14 @@ export async function getPurchaseOrderNamesWithReceipt(): Promise<Set<string>> {
         fields: ["purchase_order"],
         filters: [
           ["parenttype", "=", "Purchase Receipt"],
-          ["docstatus", "<", 2],
+          // Only DRAFT (unsubmitted) receipts — a PO with an in-progress
+          // GRN draft shouldn't be picked again from "Incoming Deliveries"
+          // until that draft is submitted/discarded. A SUBMITTED receipt
+          // must NOT exclude the PO here: POs are routinely received across
+          // multiple GRNs (partial/staggered shipments), and `per_received`
+          // (checked by the caller) is the authoritative signal for whether
+          // anything is left to receive.
+          ["docstatus", "=", 0],
           ["purchase_order", "!=", ""],
         ],
         limit_page_length: 2000,
@@ -448,9 +480,9 @@ export async function getIncomingPurchaseOrders(): Promise<IncomingPORow[]> {
       ),
       getPurchaseOrderNamesWithReceipt(),
     ]);
-    // Exclude anything already fully received OR that already has a GRN
-    // (draft or submitted) so a PO never shows in both Upcoming Deliveries and
-    // the GRN list at the same time.
+    // Exclude anything already fully received (per_received is ERPNext's own
+    // running total across ALL submitted receipts, so it correctly reflects
+    // partial receiving) or that has an in-progress DRAFT GRN already open.
     return rows.filter(
       (r) => (r.per_received ?? 0) < 100 && !receiptedPOs.has(r.name)
     );
@@ -621,6 +653,7 @@ export async function createPurchaseOrder(
       method: API_METHOD,
     });
 
+    invalidateSpendDashboards();
     return created;
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
@@ -668,7 +701,8 @@ export interface CreatePOFromRFQResult {
  *
  * 1. Disables any active Server Scripts on Purchase Order (pre-flight).
  * 2. Loads the approved RFQ from ERPNext.
- * 3. Reads the selected supplier from the approval workflow (localStorage).
+ * 3. Reads the selected supplier from the Legal Document Review record
+ *    (ERPNext — the single source of truth for Legal + Finance approval).
  * 4. Fetches the winning Supplier Quotation for rates.
  * 5. Builds the PO payload with proper dates, warehouse, and SQ link.
  * 6. Creates a Draft PO via `frappe.client.save` (no Server Script dependency).
@@ -683,17 +717,19 @@ export async function createPurchaseOrderFromRFQ(
   // eslint-disable-next-line no-console
   console.log("[createPOFromRFQ] RFQ ID:", rfqId);
 
-  // 1. Load approval state & validate
-  const approvalState = getApprovalState(rfqId);
-  if (!isApprovedForPO(approvalState)) {
+  // 1. Load the Legal Document Review (ERPNext) and validate both approvals
+  const legalDoc = await getLegalDocsByRfq(rfqId);
+  const isReadyForPO =
+    legalDoc?.review_status === "Approved" && legalDoc?.finance_status === "Approved";
+  if (!isReadyForPO) {
     throw new Error(
       "This RFQ has not completed both Legal and Finance approvals. " +
-      `Legal: ${approvalState?.legal_status ?? "N/A"}, ` +
-      `Finance: ${approvalState?.finance_status ?? "N/A"}`
+      `Legal: ${legalDoc?.review_status ?? "N/A"}, ` +
+      `Finance: ${legalDoc?.finance_status ?? "N/A"}`
     );
   }
 
-  const selectedSupplier = approvalState!.selected_supplier;
+  const selectedSupplier = legalDoc!.supplier;
   if (!selectedSupplier) {
     throw new Error("No supplier has been selected for this RFQ.");
   }
@@ -1083,6 +1119,58 @@ export async function getPurchaseOrderByRFQ(
 }
 
 /** Throws when a Purchase Order already exists for the RFQ. */
+/** RFQ that has cleared both Legal and Finance review but has no PO yet. */
+export interface ApprovedRFQRow {
+  rfq: string;
+  supplier: string;
+  approved_value: number;
+  approval_date: string;
+  submitted_by: string;
+}
+
+/**
+ * RFQs that have fully cleared Legal + Finance review (ERPNext `Legal
+ * Document Review`: `review_status = "Approved"` AND
+ * `finance_status = "Approved"`) and do not yet have a Purchase Order.
+ *
+ * This is the single ERPNext-backed definition of "Ready for PO" shared by
+ * the New PO Queue page and the Admin/Procurement dashboard KPI — neither
+ * may derive this count from a client-side cache.
+ */
+export async function getApprovedRFQsAwaitingPO(): Promise<ApprovedRFQRow[]> {
+  const financeApproved = await getLegalDocsByFinanceStatus({ status: "Approved" });
+  const readyRows = financeApproved.filter(
+    (doc) => doc.review_status === "Approved" && doc.rfq_name
+  );
+
+  const withPoCheck = await Promise.all(
+    readyRows.map(async (doc) => {
+      let hasPO = false;
+      try {
+        const pos = await getPOsForRFQ(doc.rfq_name!);
+        hasPO = pos.length > 0;
+      } catch {
+        hasPO = false;
+      }
+      return { doc, hasPO };
+    })
+  );
+
+  const items: ApprovedRFQRow[] = withPoCheck
+    .filter(({ hasPO }) => !hasPO)
+    .map(({ doc }) => ({
+      rfq: doc.rfq_name!,
+      supplier: doc.supplier || "—",
+      approved_value: doc.grand_total ?? 0,
+      approval_date:
+        doc.finance_approved_on ?? doc.approved_on ?? doc.submission_date ?? "",
+      submitted_by: doc.procurement_manager ?? "—",
+    }));
+
+  items.sort((a, b) => (b.approval_date ?? "").localeCompare(a.approval_date ?? ""));
+  return items;
+}
+
 export async function assertNoPOForRFQ(rfqName: string): Promise<void> {
   const existing = await getPOsForRFQ(rfqName);
   if (existing.length > 0) {
@@ -1182,6 +1270,214 @@ export async function getPurchaseReceipts(
       limit_page_length: 50,
       ...filters,
     })
+  );
+}
+
+/**
+ * A fully-resolved Goods Receipt row for the warehouse GRN List page:
+ * header fields plus per-receipt aggregates (Purchase Order, warehouse,
+ * total items, accepted/rejected quantities) derived from its child items.
+ */
+export interface GrnListRow {
+  name: string;
+  supplier?: string;
+  supplier_name?: string;
+  status?: PurchaseReceiptStatus;
+  posting_date?: string;
+  creation?: string;
+  owner?: string;
+  total_qty?: number;
+  grand_total?: number;
+  currency?: string;
+  docstatus?: number;
+  purchase_order?: string;
+  /** Resolved display warehouse: single warehouse name or "Multiple Warehouses". */
+  warehouse?: string;
+  /** Header default warehouse (Purchase Receipt.set_warehouse), used as fallback. */
+  set_warehouse?: string;
+  total_items: number;
+  accepted_qty: number;
+  rejected_qty: number;
+}
+
+interface GrnAggregate {
+  purchase_order?: string;
+  /** Distinct warehouses across all Purchase Receipt Item rows for this GRN. */
+  warehouses: Set<string>;
+  total_items: number;
+  accepted_qty: number;
+  rejected_qty: number;
+}
+
+/**
+ * Aggregate Purchase Receipt Item child rows for a set of GRNs in one pass.
+ * Names are chunked to keep the `in` filter (and URL) within safe limits and
+ * fetched in parallel. Never throws — a failed chunk contributes nothing.
+ */
+async function fetchGrnItemAggregates(
+  names: string[]
+): Promise<Map<string, GrnAggregate>> {
+  const map = new Map<string, GrnAggregate>();
+  if (names.length === 0) return map;
+
+  const CHUNK = 50;
+  const chunks: string[][] = [];
+  for (let i = 0; i < names.length; i += CHUNK) {
+    chunks.push(names.slice(i, i + CHUNK));
+  }
+
+  type PrItemRow = {
+    parent?: string;
+    purchase_order?: string;
+    warehouse?: string;
+    qty?: number;
+    rejected_qty?: number;
+  };
+
+  const results = await Promise.all(
+    chunks.map((chunk) =>
+      apiGet<PrItemRow[]>(buildResourceUrl("Purchase Receipt Item"), {
+        ...buildListConfig({
+          fields: ["parent", "purchase_order", "warehouse", "qty", "rejected_qty"],
+          filters: [["parent", "in", chunk]],
+          limit_page_length: 5000,
+        }),
+        ...withSilent(),
+      }).catch(() => [] as PrItemRow[])
+    )
+  );
+
+  for (const rows of results) {
+    for (const row of rows ?? []) {
+      if (!row.parent) continue;
+      const agg =
+        map.get(row.parent) ??
+        {
+          total_items: 0,
+          accepted_qty: 0,
+          rejected_qty: 0,
+          warehouses: new Set<string>(),
+        };
+      agg.total_items += 1;
+      agg.accepted_qty += row.qty ?? 0;
+      agg.rejected_qty += row.rejected_qty ?? 0;
+      if (!agg.purchase_order && row.purchase_order) {
+        agg.purchase_order = row.purchase_order;
+      }
+      if (row.warehouse) agg.warehouses.add(row.warehouse);
+      map.set(row.parent, agg);
+    }
+  }
+
+  return map;
+}
+
+/**
+ * Fetch all Goods Receipt Notes (Purchase Receipts) for the warehouse GRN List,
+ * enriched with per-receipt aggregates from their child items. Live ERPNext
+ * data only — no demo/static rows. Degrades to an empty list on failure.
+ */
+export async function getGrnList(params?: {
+  filters?: Filter[];
+  limit?: number;
+}): Promise<GrnListRow[]> {
+  const headers = await apiGet<Array<Partial<GrnListRow>>>(
+    buildResourceUrl(PRECEIPT_DOCTYPE),
+    {
+      ...buildListConfig({
+        fields: [
+          "name",
+          "supplier",
+          "supplier_name",
+          "status",
+          "posting_date",
+          "creation",
+          "owner",
+          "total_qty",
+          "grand_total",
+          "currency",
+          "docstatus",
+          "set_warehouse",
+        ],
+        filters: params?.filters,
+        order_by: "creation desc",
+        limit_page_length: params?.limit ?? 500,
+      }),
+      ...withSilent(),
+    }
+  ).catch(() => [] as Array<Partial<GrnListRow>>);
+
+  const list = headers ?? [];
+  const names = list
+    .map((h) => h.name)
+    .filter((n): n is string => !!n);
+  const aggregates = await fetchGrnItemAggregates(names);
+
+  return list.map((h) => {
+    const agg =
+      aggregates.get(h.name ?? "") ??
+      {
+        total_items: 0,
+        accepted_qty: 0,
+        rejected_qty: 0,
+        warehouses: new Set<string>(),
+      };
+
+    // Resolve the warehouse for display: a single warehouse name when all
+    // items share one, "Multiple Warehouses" when they differ, otherwise fall
+    // back to the header default warehouse (set_warehouse). Never blank when
+    // any warehouse data exists.
+    const distinctWarehouses = Array.from(agg.warehouses);
+    const warehouse =
+      distinctWarehouses.length > 1
+        ? "Multiple Warehouses"
+        : distinctWarehouses.length === 1
+          ? distinctWarehouses[0]
+          : h.set_warehouse || undefined;
+
+    return {
+      name: h.name ?? "",
+      supplier: h.supplier,
+      supplier_name: h.supplier_name,
+      status: h.status,
+      posting_date: h.posting_date,
+      creation: h.creation,
+      owner: h.owner,
+      total_qty: h.total_qty,
+      grand_total: h.grand_total,
+      currency: h.currency,
+      docstatus: h.docstatus,
+      purchase_order: agg.purchase_order,
+      warehouse,
+      set_warehouse: h.set_warehouse,
+      total_items: agg.total_items,
+      accepted_qty: agg.accepted_qty,
+      rejected_qty: agg.rejected_qty,
+    };
+  });
+}
+
+/**
+ * Cancel a submitted Purchase Receipt (docstatus 1 → 2). ERPNext enforces the
+ * real permission/stock-ledger rules; if it rejects the cancel, the caller
+ * surfaces a friendly message. The current `modified` timestamp is included to
+ * avoid a document-timestamp mismatch.
+ */
+export async function cancelPurchaseReceipt(
+  name: string
+): Promise<PurchaseReceipt> {
+  assertCanManageGRN();
+  const fresh = await apiGet<PurchaseReceipt>(
+    buildResourceUrl(PRECEIPT_DOCTYPE, name)
+  );
+  const modified = (fresh as { modified?: string }).modified;
+  const payload: Record<string, unknown> = { docstatus: 2 };
+  if (modified) payload.modified = modified;
+
+  return apiPut<PurchaseReceipt>(
+    buildResourceUrl(PRECEIPT_DOCTYPE, name),
+    payload,
+    { ...withSilent() }
   );
 }
 

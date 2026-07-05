@@ -1,11 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import { ArrowLeft, AlertTriangle, CheckCircle2, ShieldCheck } from "lucide-react";
-import { getLegalDocs, saveLegalDocs } from "../../api/legalDocs";
-import { storeFileBlob } from "../../api/legalDocsStorage";
+import { getLegalDocs, updateLegalDocs } from "../../api/legalDocs";
+import { uploadFileToERPNext } from "../../api/legalDocsStorage";
 import type { LegalDocumentSet } from "../../api/legalDocs";
 import SupplierPortalLayout from "./SupplierPortalLayout";
+
+type DocField = "terms" | "warranty" | "insurance";
 
 export default function SupplierLegalUploadPage() {
   const { sqName } = useParams<{ sqName: string }>();
@@ -13,22 +15,39 @@ export default function SupplierLegalUploadPage() {
   const supplierSession = JSON.parse(sessionStorage.getItem("supplier_session") || "{}");
   const supplierName = supplierSession.supplierName || "";
 
-  const [docs, setDocs] = useState<LegalDocumentSet>(() => {
-    return (
-      getLegalDocs(sqName!) || {
-        sq_name: sqName!,
-        supplier: supplierName,
-        review_status: "pending" as const,
-      }
-    );
-  });
-
+  const [docs, setDocs] = useState<LegalDocumentSet | null>(null);
+  const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState<string | null>(null);
 
-  const handleUpload = async (
-    field: "terms_pdf" | "warranty_pdf" | "insurance_pdf",
-    file: File
-  ) => {
+  useEffect(() => {
+    const load = async () => {
+      if (!sqName) {
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
+      try {
+        // Legal Document Review is only ever created by the backend when a
+        // Procurement Manager selects this quotation as the RFQ's winner —
+        // never speculatively from this page. If none exists yet, that
+        // means this quotation hasn't been selected (or won't be), so we
+        // show an empty state instead of fabricating a premature record.
+        const record = await getLegalDocs(sqName);
+        setDocs(record);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to load documents");
+      } finally {
+        setLoading(false);
+      }
+    };
+    void load();
+  }, [sqName, supplierName]);
+
+  const handleUpload = async (field: DocField, file: File) => {
+    if (!sqName || !docs?.name) {
+      toast.error("Document record not ready");
+      return;
+    }
     const MAX_SIZE_MB = 15;
     if (file.size > MAX_SIZE_MB * 1024 * 1024) {
       toast.error(`File too large. Max size is ${MAX_SIZE_MB}MB`);
@@ -37,38 +56,58 @@ export default function SupplierLegalUploadPage() {
 
     setUploading(field);
     try {
-      const permanentKey = `${sqName}_${field}_pdf`;
-      await storeFileBlob(permanentKey, file);
-
-      const updated: LegalDocumentSet = {
-        ...docs,
-        [`${field}_key`]: permanentKey,
-        [`${field}_name`]: file.name,
-        submitted_by_supplier_at: new Date().toISOString(),
-      };
+      const fileUrl = await uploadFileToERPNext(file, "Supplier Quotation", sqName);
+      const updated = await updateLegalDocs(docs.name, {
+        [`${field}_file_url`]: fileUrl,
+        [`${field}_file_name`]: file.name,
+      } as Partial<LegalDocumentSet>);
       setDocs(updated);
-      saveLegalDocs(updated);
-      toast.success(`${file.name} uploaded successfully`);
-    } catch (err: any) {
-      toast.error("Could not store file: " + err.message);
+      toast.success(`${file.name} uploaded to server`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error("Upload failed: " + msg);
     } finally {
       setUploading(null);
     }
   };
 
-  const handleNoteChange = (
+  const handleNoteChange = async (
     field: "terms_note" | "warranty_note" | "insurance_note",
     value: string
   ) => {
-    const updated: LegalDocumentSet = {
-      ...docs,
-      [field]: value,
-    };
-    setDocs(updated);
-    saveLegalDocs(updated);
+    if (!docs?.name) return;
+    try {
+      const updated = await updateLegalDocs(docs.name, { [field]: value });
+      setDocs(updated);
+    } catch {
+      toast.error("Could not save note");
+    }
   };
 
-  const allDocsUploaded = !!(docs.terms_pdf_key && docs.warranty_pdf_key && docs.insurance_pdf_key);
+  const allDocsUploaded = !!(
+    docs?.terms_file_url &&
+    docs?.warranty_file_url &&
+    docs?.insurance_file_url
+  );
+
+  if (loading) {
+    return (
+      <SupplierPortalLayout supplierName={supplierName}>
+        <p className="py-12 text-center text-sm text-neutral-500">Loading documents…</p>
+      </SupplierPortalLayout>
+    );
+  }
+
+  if (!docs) {
+    return (
+      <SupplierPortalLayout supplierName={supplierName}>
+        <p className="py-12 text-center text-sm text-neutral-500">
+          Legal document review isn&apos;t available for this quotation yet. It becomes available once
+          Procurement selects it as the winning quotation for the RFQ.
+        </p>
+      </SupplierPortalLayout>
+    );
+  }
 
   return (
     <SupplierPortalLayout supplierName={supplierName}>
@@ -98,18 +137,20 @@ export default function SupplierLegalUploadPage() {
             📋 Legal &amp; Compliance Documents
           </h3>
           <p style={{ fontSize: "12px", color: "#6b7280", marginBottom: "14px" }}>
-            Upload PDF documents (max 10 MB each). These will be reviewed by Netlink's legal team.
+            Upload PDF documents (max 15 MB each). These will be reviewed by Netlink&apos;s legal team.
           </p>
 
-          {[
-            { key: "terms", label: "Terms & Conditions", icon: "📄" },
-            { key: "warranty", label: "Warranty Document", icon: "🛡️" },
-            { key: "insurance", label: "Insurance Certificate", icon: "🏥" },
-          ].map(({ key, label, icon }) => {
-            const keyField = `${key}_pdf_key` as keyof LegalDocumentSet;
-            const nameKey = `${key}_pdf_name` as keyof LegalDocumentSet;
+          {(
+            [
+              { key: "terms" as const, label: "Terms & Conditions", icon: "📄" },
+              { key: "warranty" as const, label: "Warranty Document", icon: "🛡️" },
+              { key: "insurance" as const, label: "Insurance Certificate", icon: "🏥" },
+            ] as const
+          ).map(({ key, label, icon }) => {
+            const fileUrl = docs[`${key}_file_url` as keyof LegalDocumentSet];
+            const fileName = docs[`${key}_file_name` as keyof LegalDocumentSet] as string | undefined;
             const noteKey = `${key}_note` as keyof LegalDocumentSet;
-            const uploaded = !!docs[keyField];
+            const uploaded = !!fileUrl;
 
             return (
               <div
@@ -138,27 +179,27 @@ export default function SupplierLegalUploadPage() {
                       fontWeight: 600,
                     }}
                   >
-                    {uploading === `${key}_pdf` ? "⏳ Uploading..." : uploaded ? "🔄 Replace" : "📤 Upload PDF"}
+                    {uploading === key ? "⏳ Uploading..." : uploaded ? "🔄 Replace" : "📤 Upload PDF"}
                     <input
                       type="file"
                       accept=".pdf"
                       hidden
                       onChange={(e) => {
                         const file = e.target.files?.[0];
-                        if (file) handleUpload(`${key}_pdf` as any, file);
+                        if (file) void handleUpload(key, file);
                       }}
                     />
                   </label>
                 </div>
-                {docs[nameKey] && (
+                {fileName && (
                   <div style={{ fontSize: "11px", color: "#6b7280", marginBottom: "6px" }}>
-                    📎 {docs[nameKey] as string}
+                    📎 {fileName}
                   </div>
                 )}
                 <textarea
                   placeholder={`Notes about ${label.toLowerCase()}...`}
-                  value={(docs[noteKey] as string) || ""}
-                  onChange={(e) => handleNoteChange(`${key}_note` as any, e.target.value)}
+                  defaultValue={(docs[noteKey] as string) || ""}
+                  onBlur={(e) => void handleNoteChange(`${key}_note`, e.target.value)}
                   rows={2}
                   style={{
                     width: "100%",

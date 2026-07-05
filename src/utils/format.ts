@@ -42,6 +42,48 @@ export function formatCurrencyCompact(amount: number): string {
   return formatCurrency(amount);
 };
 
+/** Full currency in a specific ERPNext currency code (defaults to USD). */
+export function formatCurrencyIn(
+  amount: number | string | undefined | null,
+  currency = DEFAULT_CURRENCY
+): string {
+  if (amount === null || amount === undefined || amount === "") return "—";
+  const n = typeof amount === "number" ? amount : Number(amount);
+  if (Number.isNaN(n)) return "—";
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: currency || DEFAULT_CURRENCY,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(n);
+  } catch {
+    return formatCurrency(n);
+  }
+}
+
+/** Compact currency in a specific ERPNext currency code (defaults to USD). */
+export function formatCurrencyCompactIn(
+  amount: number,
+  currency = DEFAULT_CURRENCY
+): string {
+  if (Number.isNaN(amount)) return "—";
+  const abs = Math.abs(amount);
+  if (abs >= 1_000) {
+    try {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: currency || DEFAULT_CURRENCY,
+        notation: "compact",
+        maximumFractionDigits: abs >= 1_000_000 ? 1 : abs >= 100_000 ? 1 : 0,
+      }).format(amount);
+    } catch {
+      /* fall through */
+    }
+  }
+  return formatCurrencyIn(amount, currency);
+}
+
 /** Format an ISO / ERPNext date for US display (MM/DD/YYYY). */
 export function formatDate(
   value: string | Date | undefined | null,

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import {
   AlertTriangle,
@@ -21,7 +21,6 @@ import {
   MessageSquare,
   PieChart,
   Scale,
-  Send,
   ShieldCheck,
   TrendingUp,
   User,
@@ -30,12 +29,14 @@ import {
 } from "lucide-react";
 
 import { getRFQ, getSupplierQuotations } from "../../api/sourcing";
+import { getLegalDocsByRfq, type LegalDocumentSet } from "../../api/legalDocs";
 import {
-  getApprovalState,
-} from "../../api/rfqApprovalWorkflow";
-import { updateFinanceReviewStatus, addFinanceComment } from "../../api/financeReviews";
-import { getBudgetKpis, BUDGET_EXCEEDED_WARNING } from "../../api/budget";
-import type { BudgetKpis } from "../../api/budget";
+  FINANCE_DASHBOARD_METRICS_KEY,
+} from "../../api/financeWorkflow";
+import { updateFinanceReviewStatus } from "../../api/financeReviews";
+import { getRfqBudgetCheckByCostCenter, BUDGET_EXCEEDED_WARNING } from "../../api/budget";
+import { getLatestAnalysisSnapshot } from "../../api/supplierScoringResults";
+import type { RfqCostCenterBudgetCheck, BudgetForecastStatus } from "../../api/budget";
 import { useAuthStore } from "../../store/authStore";
 import { formatCurrency, formatDate } from "../../utils/format";
 import { Skeleton } from "../../components/Skeleton";
@@ -44,7 +45,85 @@ import type {
   SupplierQuotation,
   AIRecommendation,
   FinanceReviewStatus,
+  LegalReviewStatus,
+  FinanceComment,
 } from "../../types/erpnext";
+
+/**
+ * Lightweight adapter shape built from the ERPNext `Legal Document Review`
+ * record (the single source of truth for both Legal and Finance verdicts).
+ * Keeps the rest of this page's JSX unchanged — only the data source moved
+ * from RFQ custom fields / localStorage to the Legal Document Review DocType.
+ */
+interface FinanceWorkspaceState {
+  legalDocName: string;
+  selected_supplier?: string;
+  selected_supplier_total: number;
+  submitted_by?: string;
+  submitted_at?: string;
+  legal_status: LegalReviewStatus;
+  legal_reviewer?: string;
+  legal_review_date?: string;
+  legal_comments: FinanceComment[];
+  finance_status: FinanceReviewStatus;
+  finance_reviewer?: string;
+  finance_review_date?: string;
+  finance_comments: FinanceComment[];
+  workflow_step: string;
+}
+
+function mapLegalStatus(status: LegalDocumentSet["review_status"]): LegalReviewStatus {
+  if (status === "Approved") return "Approved";
+  if (status === "Rejected") return "Rejected";
+  return "Pending Legal Review";
+}
+
+function mapFinanceStatus(status?: LegalDocumentSet["finance_status"]): FinanceReviewStatus {
+  if (status === "Approved") return "Budget Approved";
+  if (status === "Rejected") return "Rejected";
+  return "Pending Finance Review";
+}
+
+function toWorkspaceState(doc: LegalDocumentSet): FinanceWorkspaceState {
+  const legalStatus = mapLegalStatus(doc.review_status);
+  const financeStatus = mapFinanceStatus(doc.finance_status);
+  return {
+    legalDocName: doc.name ?? "",
+    selected_supplier: doc.supplier,
+    selected_supplier_total: doc.grand_total ?? 0,
+    submitted_by: doc.procurement_manager,
+    submitted_at: doc.submission_date,
+    legal_status: legalStatus,
+    legal_reviewer: doc.approved_by,
+    legal_review_date: doc.approved_on,
+    legal_comments: doc.legal_comments
+      ? [{ comment: doc.legal_comments, comment_by: doc.approved_by ?? "", comment_date: doc.approved_on ?? "" }]
+      : [],
+    finance_status: financeStatus,
+    finance_reviewer: doc.finance_approved_by,
+    finance_review_date: doc.finance_approved_on,
+    finance_comments: doc.finance_comments
+      ? [
+          {
+            comment: doc.finance_comments,
+            comment_by: doc.finance_approved_by ?? "",
+            comment_date: doc.finance_approved_on ?? "",
+            action: financeStatus,
+          },
+        ]
+      : [],
+    workflow_step:
+      financeStatus === "Budget Approved"
+        ? "Approved for PO"
+        : financeStatus === "Rejected"
+          ? "Finance Rejected"
+          : legalStatus === "Approved"
+            ? "Pending Finance Review"
+            : legalStatus === "Rejected"
+              ? "Legal Rejected"
+              : "Pending Legal Review",
+  };
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                    */
@@ -77,6 +156,7 @@ const CHECKLIST_ITEMS = [
 export default function FinanceReviewDetailPage() {
   const { rfqId } = useParams<{ rfqId: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const decodedId = rfqId ? decodeURIComponent(rfqId) : "";
 
@@ -104,21 +184,45 @@ export default function FinanceReviewDetailPage() {
     enabled: !!decodedId && !!rfqQuery.data,
   });
 
-  const budgetQuery = useQuery<BudgetKpis>({
-    queryKey: ["budget-kpis"],
-    queryFn: getBudgetKpis,
-  });
-
   const rfq = rfqQuery.data;
   const quotations = sqQuery.data ?? [];
   const rfqItems = rfq?.items ?? [];
 
-  const approvalState = useMemo(() => {
-    if (!decodedId) return null;
-    return getApprovalState(decodedId);
-  }, [decodedId, rfq]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* ── Legal Document Review — the single ERPNext source of truth for both
+   * the Legal verdict and the Finance verdict on this RFQ. ── */
+  const legalDocQuery = useQuery({
+    queryKey: ["legal-document-review", "by-rfq", decodedId],
+    queryFn: () => getLegalDocsByRfq(decodedId),
+    enabled: !!decodedId,
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+  });
 
-  const aiAnalysis = useMemo(() => readSavedAnalysis(decodedId), [decodedId]);
+  const legalDoc = legalDocQuery.data ?? null;
+  const approvalState = useMemo<FinanceWorkspaceState | null>(
+    () => (legalDoc ? toWorkspaceState(legalDoc) : null),
+    [legalDoc]
+  );
+  const legalApprovedForFinance = approvalState?.legal_status === "Approved";
+
+  const [aiAnalysis, setAiAnalysis] = useState<AIRecommendation | null>(() =>
+    readSavedAnalysis(decodedId)
+  );
+  useEffect(() => {
+    const cached = readSavedAnalysis(decodedId);
+    setAiAnalysis(cached);
+    // Cross-device fallback — see LegalReviewDetailPage for rationale.
+    if (!cached && decodedId) {
+      getLatestAnalysisSnapshot<{ analysis?: AIRecommendation }>(decodedId)
+        .then((snapshot) => {
+          if (snapshot?.analysis) setAiAnalysis(snapshot.analysis);
+        })
+        .catch(() => {
+          /* best-effort */
+        });
+    }
+  }, [decodedId]);
 
   const selectedSupplier = approvalState?.selected_supplier;
   const selectedQuote = useMemo(
@@ -130,6 +234,15 @@ export default function FinanceReviewDetailPage() {
       ),
     [quotations, selectedSupplier]
   );
+
+  const rfqValueForBudget =
+    selectedQuote?.grand_total ?? approvalState?.selected_supplier_total ?? 0;
+
+  const budgetCheckQuery = useQuery({
+    queryKey: ["rfq-budget-check-by-cost-center", decodedId, rfqValueForBudget],
+    queryFn: () => getRfqBudgetCheckByCostCenter(rfq!, rfqValueForBudget),
+    enabled: !!rfq && rfqValueForBudget > 0,
+  });
 
   /* ── Checklist ── */
   const [checklist, setChecklist] = useState<Record<string, boolean>>({});
@@ -170,12 +283,9 @@ export default function FinanceReviewDetailPage() {
     }
   }, [currentFinanceStatus]);
 
-  /* ── Comments ── */
-  const [newComment, setNewComment] = useState("");
-  const [addingComment, setAddingComment] = useState(false);
-
   const canSubmit = (action: string) => {
     if (submitted) return false;
+    if (!legalApprovedForFinance) return false;
     if (!checklistComplete) return false;
     if (!actionReason.trim()) return false;
     if (action === "reject" && actionReason.trim().length < 10) return false;
@@ -199,49 +309,35 @@ export default function FinanceReviewDetailPage() {
         .join("\n\n");
 
       try {
-        if (action === "approve") {
-          const { checkBudgetForRFQ } = await import("../../api/budget");
-          const check = await checkBudgetForRFQ(
-            selectedQuote?.grand_total ?? approvalState?.selected_supplier_total ?? 0
-          );
-          if (!check.withinBudget) {
-            toast(check.warning ?? BUDGET_EXCEEDED_WARNING, {
-              icon: "⚠️",
-              duration: 8000,
-            });
-          }
+        if (action === "approve" && budgetCheckQuery.data?.found && !budgetCheckQuery.data.withinBudget) {
+          toast(BUDGET_EXCEEDED_WARNING, {
+            icon: "⚠️",
+            duration: 8000,
+          });
         }
-        await updateFinanceReviewStatus(decodedId, status, user?.email ?? "", fullComment);
+        await updateFinanceReviewStatus(
+          decodedId,
+          status,
+          user?.email ?? "",
+          fullComment,
+          action === "reject" ? actionReason.trim() : undefined
+        );
+        await legalDocQuery.refetch();
+        // Keep the Finance dashboard/list/history in sync with this decision.
+        void queryClient.invalidateQueries({ queryKey: ["finance-reviews-all"] });
+        void queryClient.invalidateQueries({ queryKey: ["finance-review-history"] });
+        void queryClient.invalidateQueries({ queryKey: [FINANCE_DASHBOARD_METRICS_KEY] });
         const labels = { approve: "budget approved", reject: "rejected" };
         toast.success(`RFQ ${decodedId} ${labels[action]}`);
         setSubmitted(true);
-      } catch {
-        toast.error("Failed to update review status");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Failed to update review status");
       } finally {
         setSubmitting(null);
       }
     },
-    [decodedId, user?.email, reviewNotes, actionReason, selectedQuote, approvalState]
+    [decodedId, user?.email, reviewNotes, actionReason, budgetCheckQuery.data, legalDocQuery, queryClient]
   );
-
-  const handleAddComment = useCallback(async () => {
-    if (!newComment.trim()) return;
-    setAddingComment(true);
-    try {
-      addFinanceComment(decodedId, {
-        comment: newComment.trim(),
-        comment_by: user?.email ?? "",
-        comment_date: new Date().toISOString(),
-        action: "Comment",
-      });
-      toast.success("Comment added");
-      setNewComment("");
-    } catch {
-      toast.error("Failed to add comment");
-    } finally {
-      setAddingComment(false);
-    }
-  }, [decodedId, newComment, user?.email]);
 
   /* ── Loading / error states ── */
   if (rfqQuery.isLoading) {
@@ -279,11 +375,11 @@ export default function FinanceReviewDetailPage() {
 
   const comments = approvalState?.finance_comments ?? [];
   const rfqValue = selectedQuote?.grand_total ?? approvalState?.selected_supplier_total ?? 0;
-  const budgetKpis = budgetQuery.data;
+  const budgetCheck = budgetCheckQuery.data;
   const budgetExceeded =
-    !!budgetKpis &&
-    budgetKpis.totalBudget > 0 &&
-    rfqValue > budgetKpis.remainingBudget &&
+    !!budgetCheck?.found &&
+    !budgetCheck.withinBudget &&
+    legalApprovedForFinance &&
     currentFinanceStatus === "Pending Finance Review";
 
   return (
@@ -316,6 +412,19 @@ export default function FinanceReviewDetailPage() {
         </div>
       </div>
 
+      {!legalApprovedForFinance && (
+        <div className="mb-5 flex items-start gap-3 rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3">
+          <Gavel className="mt-0.5 h-5 w-5 flex-shrink-0 text-neutral-400" />
+          <div>
+            <p className="text-sm font-bold text-neutral-800">Awaiting Legal Approval</p>
+            <p className="mt-0.5 text-xs text-neutral-600">
+              This RFQ has not yet been approved by Legal Review. Finance decisions are only
+              available once Legal Review approves the selected supplier's quotation.
+            </p>
+          </div>
+        </div>
+      )}
+
       {budgetExceeded && (
         <div className="mb-5 flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
           <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
@@ -323,7 +432,7 @@ export default function FinanceReviewDetailPage() {
             <p className="text-sm font-bold text-amber-900">{BUDGET_EXCEEDED_WARNING}</p>
             <p className="mt-0.5 text-xs text-amber-800">
               RFQ value {formatCurrency(rfqValue)} exceeds remaining budget{" "}
-              {formatCurrency(budgetKpis!.remainingBudget)}. Finance must review and
+              {formatCurrency(budgetCheck?.remainingBudget ?? 0)}. Finance must review and
               approve before PO creation.
             </p>
           </div>
@@ -539,19 +648,28 @@ export default function FinanceReviewDetailPage() {
           expanded={expandedSections.budget}
           onToggle={toggleSection}
         >
-          {budgetQuery.isLoading ? (
+          {budgetCheckQuery.isLoading ? (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <Skeleton className="h-24 rounded-lg" />
               <Skeleton className="h-24 rounded-lg" />
               <Skeleton className="h-24 rounded-lg" />
             </div>
-          ) : budgetQuery.data && budgetQuery.data.totalBudget > 0 ? (
-            <BudgetAnalysisCards kpis={budgetQuery.data} rfqValue={rfqValue} />
+          ) : budgetCheckQuery.data?.found ? (
+            <BudgetAnalysisCards check={budgetCheckQuery.data} />
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <BudgetCard icon={DollarSign} label="RFQ Value" value={formatCurrency(rfqValue)} tone="neutral" />
-              <BudgetCard icon={Wallet} label="Budget Available" value="Budget data unavailable" tone="success" />
-              <BudgetCard icon={TrendingUp} label="Spend Forecast Impact" value="Budget data unavailable" tone="warning" />
+            <div className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <InfoField label="Department" value={budgetCheckQuery.data?.department ?? "—"} />
+                <InfoField label="Cost Center" value={budgetCheckQuery.data?.costCenter ?? "—"} />
+                <BudgetCard icon={DollarSign} label="RFQ Value" value={formatCurrency(rfqValue)} tone="neutral" />
+              </div>
+              <div className="flex items-start gap-3 rounded-lg border border-warning-200 bg-warning-50 px-4 py-3.5 text-sm text-warning-800">
+                <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                <span className="font-medium">
+                  {budgetCheckQuery.data?.noBudgetMessage ??
+                    "No active ERPNext Budget found for this Cost Center."}
+                </span>
+              </div>
             </div>
           )}
         </CollapsibleSection>
@@ -734,34 +852,6 @@ export default function FinanceReviewDetailPage() {
               ))}
             </div>
           )}
-
-          {/* Add comment */}
-          <div className="mt-4 border-t border-neutral-100 pt-4">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
-              Add Comment
-            </p>
-            <div className="flex gap-2">
-              <textarea
-                value={newComment}
-                onChange={(e) => setNewComment(e.target.value)}
-                placeholder="Add a comment or note…"
-                rows={2}
-                className="flex-1 resize-none rounded-lg border border-neutral-300 px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-              />
-              <button
-                type="button"
-                onClick={handleAddComment}
-                disabled={!newComment.trim() || addingComment}
-                className="flex h-10 w-10 flex-shrink-0 items-center justify-center self-end rounded-lg bg-primary text-white shadow-sm transition hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {addingComment ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Send className="h-4 w-4" />
-                )}
-              </button>
-            </div>
-          </div>
         </CollapsibleSection>
 
         {/* ═══════════════ Section: Finance Actions ═══════════════ */}
@@ -803,6 +893,7 @@ export default function FinanceReviewDetailPage() {
                   Submission Requirements
                 </p>
                 <div className="space-y-1.5">
+                  <RequirementRow met={legalApprovedForFinance} label="Legal Review approved" />
                   <RequirementRow met={checklistComplete} label="All checklist items completed" />
                   <RequirementRow met={!!actionReason.trim()} label="Decision reason provided" />
                 </div>
@@ -899,85 +990,57 @@ function BudgetCard({
   );
 }
 
-function BudgetAnalysisCards({ kpis, rfqValue }: { kpis: BudgetKpis; rfqValue: number }) {
-  const forecastUtilization =
-    kpis.totalBudget > 0
-      ? ((kpis.consumedBudget + rfqValue) / kpis.totalBudget) * 100
-      : 0;
-  const forecastPct = Math.round(forecastUtilization * 10) / 10;
-  const exceedsBudget = rfqValue > kpis.remainingBudget;
-
-  const impact: { label: string; color: string; bg: string; border: string } =
-    forecastPct > 90
-      ? { label: "High Impact", color: "text-danger-700", bg: "bg-danger-50/30", border: "border-danger-200" }
-      : forecastPct >= 70
-      ? { label: "Medium Impact", color: "text-warning-700", bg: "bg-warning-50/30", border: "border-warning-200" }
-      : { label: "Low Impact", color: "text-success-700", bg: "bg-success-50/30", border: "border-success-200" };
+function BudgetAnalysisCards({ check }: { check: RfqCostCenterBudgetCheck }) {
+  const statusTone: Record<BudgetForecastStatus, string> = {
+    Green: "text-success-700 bg-success-50 border-success-200",
+    Yellow: "text-amber-700 bg-amber-50 border-amber-200",
+    Red: "text-danger-700 bg-danger-50 border-danger-200",
+  };
+  const statusLabel: Record<BudgetForecastStatus, string> = {
+    Green: "Within Budget",
+    Yellow: "Near Limit",
+    Red: "Exceeded",
+  };
+  const forecastStatus = check.forecastStatus ?? "Green";
 
   return (
     <>
+      <div className="mb-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <InfoField label="Department" value={check.department ?? "—"} />
+        <InfoField label="Cost Center" value={check.costCenter ?? "—"} />
+        <InfoField label="Budget Account" value={check.budgetAccount ?? "—"} />
+      </div>
+
       <div className="mb-4 grid gap-3 sm:grid-cols-3">
-        <BudgetCard icon={DollarSign} label="Total Budget" value={formatCurrency(kpis.totalBudget)} tone="neutral" />
-        <BudgetCard icon={TrendingUp} label="Consumed Budget" value={formatCurrency(kpis.consumedBudget)} tone="warning" subtitle={`RFQ ${formatCurrency(kpis.approvedRfqValue)} + PO ${formatCurrency(kpis.approvedPoValue)}`} />
-        <BudgetCard icon={Wallet} label="Remaining Budget" value={formatCurrency(kpis.remainingBudget)} tone="success" />
+        <BudgetCard icon={DollarSign} label="Allocated Budget" value={formatCurrency(check.allocatedBudget ?? 0)} tone="neutral" subtitle={check.budgetName} />
+        <BudgetCard icon={TrendingUp} label="Actual Spend" value={formatCurrency(check.actualSpend ?? 0)} tone="warning" />
+        <BudgetCard icon={Wallet} label="Budget Available" value={formatCurrency(check.availableBudget ?? 0)} tone="success" subtitle="= Remaining Budget" />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <BudgetCard icon={DollarSign} label="RFQ Value" value={formatCurrency(rfqValue)} tone="neutral" />
+        <BudgetCard icon={PieChart} label="Budget Utilization" value={`${check.budgetUtilizationPct ?? 0}%`} tone="neutral" subtitle="Before this RFQ" />
+        <BudgetCard icon={DollarSign} label="RFQ Value" value={formatCurrency(check.rfqValue)} tone="neutral" />
         <BudgetCard
-          icon={Wallet}
-          label="Budget Available"
-          value={formatCurrency(kpis.remainingBudget)}
-          tone={exceedsBudget ? "warning" : "success"}
-          subtitle={`of ${formatCurrency(kpis.totalBudget)} total budget`}
+          icon={TrendingUp}
+          label="Spend Forecast"
+          value={`${check.spendForecastPct ?? 0}%`}
+          tone={forecastStatus === "Green" ? "success" : "warning"}
+          subtitle="(Current Spend + RFQ) / Budget"
         />
-        <BudgetCard
-          icon={PieChart}
-          label="Budget Utilization"
-          value={`${kpis.utilizationPct}%`}
-          tone={kpis.utilizationPct >= 90 ? "warning" : "neutral"}
-          subtitle={`${formatCurrency(kpis.consumedBudget)} consumed`}
-        />
-        <div className={`rounded-lg border p-4 ${impact.border} ${impact.bg}`}>
-          <div className="flex items-center gap-2 mb-1">
-            <TrendingUp className="h-4 w-4 text-neutral-400" />
-            <p className="text-xs font-semibold uppercase tracking-wider text-neutral-400">Spend Forecast Impact</p>
-          </div>
-          <p className={`text-xl font-bold tabular-nums ${impact.color}`}>
-            {forecastPct}%
-          </p>
-          <p className={`mt-1 text-[11px] font-semibold ${impact.color}`}>
-            {impact.label}
-          </p>
+        <div className={`rounded-lg border p-4 ${statusTone[forecastStatus]}`}>
+          <p className="text-xs font-semibold uppercase tracking-wider opacity-80">Forecast Status</p>
+          <p className="mt-1 text-lg font-bold">{statusLabel[forecastStatus]}</p>
         </div>
       </div>
 
-      {/* Utilization bar */}
-      <div className="mt-4 rounded-lg border border-neutral-200 bg-white p-4">
-        <div className="mb-2 flex items-center justify-between text-xs">
-          <span className="font-semibold text-neutral-700">Current Utilization</span>
-          <span className="font-bold text-neutral-900">{kpis.utilizationPct}%</span>
-        </div>
-        <div className="h-3 w-full overflow-hidden rounded-full bg-neutral-100">
-          <div
-            className={`h-full rounded-full transition-all ${
-              kpis.utilizationPct >= 90 ? "bg-red-500" : kpis.utilizationPct >= 70 ? "bg-amber-500" : "bg-emerald-500"
-            }`}
-            style={{ width: `${Math.min(kpis.utilizationPct, 100)}%` }}
-          />
-        </div>
-        <div className="mt-3 flex items-center justify-between text-xs">
-          <span className="font-semibold text-neutral-700">Forecast After This RFQ</span>
-          <span className={`font-bold ${impact.color}`}>{forecastPct}%</span>
-        </div>
-        <div className="mt-1 h-3 w-full overflow-hidden rounded-full bg-neutral-100">
-          <div
-            className={`h-full rounded-full transition-all ${
-              forecastPct > 90 ? "bg-red-500" : forecastPct >= 70 ? "bg-amber-500" : "bg-emerald-500"
-            }`}
-            style={{ width: `${Math.min(forecastPct, 100)}%` }}
-          />
-        </div>
+      <div className="mt-4">
+        <BudgetCard
+          icon={Wallet}
+          label="Forecast Impact"
+          value={formatCurrency(check.forecastImpact ?? 0)}
+          tone={(check.forecastImpact ?? 0) >= 0 ? "success" : "warning"}
+          subtitle="Remaining budget after this RFQ is committed"
+        />
       </div>
     </>
   );

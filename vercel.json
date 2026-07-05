@@ -5,6 +5,14 @@
 
   "rewrites": [
     {
+      "source": "/api/legal-review/(.*)",
+      "destination": "/api/legal-review?action=$1"
+    },
+    {
+      "source": "/api/file-proxy",
+      "destination": "/api/file-proxy"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api/proxy?path=$1"
     },

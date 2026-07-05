@@ -1,9 +1,15 @@
 import {
+  Bell,
   Boxes,
+  ClipboardCheck,
+  ClipboardList,
   FileSearch,
   LayoutDashboard,
+  PackageCheck,
+  PackagePlus,
   Shield,
   ShoppingCart,
+  Truck,
   Users,
   Wallet,
 } from "lucide-react";
@@ -11,16 +17,26 @@ import type { LucideIcon } from "lucide-react";
 
 import type { NavChild, NavGroup, NavItem } from "../utils/routes";
 import { NAV_GROUPS } from "../utils/routes";
+import { canAccessMaterialRequestPath } from "./materialRequestPermissions";
 
 /** Application roles — mapped from ERPNext login email or ERPNext roles. */
-export type AppRole = "admin" | "procurement" | "finance" | "warehouse" | "legal";
+export type AppRole =
+  | "admin"
+  | "procurement"
+  | "finance"
+  | "finance_executive"
+  | "warehouse"
+  | "legal"
+  | "department";
 
 export const ROLE_LABELS: Record<AppRole, string> = {
   admin: "Administrator",
   procurement: "Procurement Manager",
   finance: "Finance Manager",
+  finance_executive: "Finance Executive",
   warehouse: "Warehouse Manager",
   legal: "Legal Reviewer",
+  department: "Department User",
 };
 
 /** Default landing route after login per role. */
@@ -28,8 +44,14 @@ export const ROLE_HOME: Record<AppRole, string> = {
   admin: "/admin",
   procurement: "/dashboard",
   finance: "/dashboard",
-  warehouse: "/dashboard",
-  legal: "/sourcing/legal-reviews",
+  finance_executive: "/budget",
+  warehouse: "/warehouse/dashboard",
+  // The Legal Reviewer dashboard (KPI counts + pending queue) lives at
+  // /dashboard and reads the "Legal Document Review" DocType — the single
+  // source of truth. It must NOT land on the legacy /sourcing/legal-reviews
+  // page, which reads RFQ workflow custom fields instead.
+  legal: "/dashboard",
+  department: "/dashboard",
 };
 
 /** Known role users (email → role). Comparison is case-insensitive. */
@@ -37,8 +59,10 @@ export const ROLE_USER_EMAILS: Record<string, AppRole> = {
   "admin@netlink.com": "admin",
   "procurement@netlink.com": "procurement",
   "finance@netlink.com": "finance",
+  "finance.executive@netlink.com": "finance_executive",
   "warehouse@netlink.com": "warehouse",
   "legal@netlink.com": "legal",
+  "department@netlink.com": "department",
 };
 
 /**
@@ -52,12 +76,14 @@ export const ERPNEXT_ROLE_MAP: Record<string, AppRole> = {
   "Purchase Manager": "procurement",
   "Purchase User": "procurement",
   "Finance Manager": "finance",
+  "Finance Executive": "finance_executive",
   "Accounts Manager": "finance",
-  "Accounts User": "finance",
+  "Accounts User": "finance_executive",
   "Stock Manager": "warehouse",
   "Stock User": "warehouse",
   "Warehouse Manager": "warehouse",
   "Legal Reviewer": "legal",
+  "Department User": "department",
 };
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -74,6 +100,7 @@ type NavModuleId =
   | "dashboard"
   | "sourcing"
   | "p2p"
+  | "material_requests"
   | "suppliers"
   | "inventory"
   | "budget"
@@ -124,24 +151,35 @@ const SOURCING_CHILDREN_FULL: NavChild[] = [
   { label: "Legal Reviews", to: "/sourcing/legal-reviews" },
 ];
 
-/** Procurement Managers see RFQ management but NOT Legal Reviews. */
+/** Procurement — full RFx workspace plus supplier quotations (no Legal Reviews). */
 const PROCUREMENT_SOURCING_CHILDREN: NavChild[] = [
   { label: "All RFQs", to: "/sourcing/rfq" },
   { label: "New RFQ", to: "/sourcing/rfq/new" },
   { label: "RFQ Template Library", to: "/sourcing/rfq-templates" },
+  { label: "Supplier Quotations", to: "/sourcing/supplier-quotations" },
 ];
 
-/** Legal Reviewers only see Legal Reviews — no RFQ creation or templates. */
+/**
+ * Legal Reviewers only see Legal Reviews — no RFQ creation or templates.
+ * Points at the "Legal Document Review" DocType–backed list (single source
+ * of truth), NOT the legacy /sourcing/legal-reviews RFQ-workflow page.
+ */
 const LEGAL_SOURCING_CHILDREN: NavChild[] = [
-  { label: "Legal Reviews", to: "/sourcing/legal-reviews" },
+  { label: "Legal Reviews", to: "/legal/reviews" },
 ];
 
 const BUDGET_CHILDREN_FINANCE: NavChild[] = [
   { label: "Budget Dashboard", to: "/budget" },
-  { label: "RFQ Financial Review", to: "/budget/pending-reviews" },
-  { label: "Budget Plans", to: "/budget/plans" },
+  { label: "Budget Approval", to: "/budget/approvals" },
   { label: "Budget Monitoring", to: "/budget/monitoring" },
-  { label: "Budget Approvals", to: "/budget/approvals" },
+  { label: "Budget History", to: "/budget/history" },
+];
+
+const BUDGET_CHILDREN_EXECUTIVE: NavChild[] = [
+  { label: "Dashboard", to: "/budget" },
+  { label: "Create Budget", to: "/budget/create" },
+  { label: "My Budgets", to: "/budget/my-budgets" },
+  { label: "Budget Requests", to: "/budget/requests" },
 ];
 
 const BUDGET_CHILDREN_READONLY: NavChild[] = [
@@ -158,11 +196,27 @@ const MODULE_ICONS: Record<NavModuleId, LucideIcon> = {
   dashboard: LayoutDashboard,
   sourcing: FileSearch,
   p2p: ShoppingCart,
+  material_requests: ClipboardList,
   suppliers: Users,
   inventory: Boxes,
   budget: Wallet,
   "admin-audit": Shield,
 };
+
+/** Department User — My Requests only (create via dashboard). */
+const DEPARTMENT_MR_CHILDREN: NavChild[] = [
+  { label: "My Requests", to: "/material-requests/list" },
+];
+
+const WAREHOUSE_MR_CHILDREN: NavChild[] = [
+  { label: "Warehouse Review", to: "/material-requests/warehouse" },
+  { label: "Issued Materials", to: "/material-requests/issued" },
+];
+
+/** Procurement — forwarded MRs only (no create). */
+const PROCUREMENT_MR_CHILDREN: NavChild[] = [
+  { label: "Forwarded Material Requests", to: "/material-requests/procurement" },
+];
 
 interface RoleNavConfig {
   /** Ordered top-level modules shown in the sidebar. */
@@ -177,29 +231,36 @@ const ROLE_NAV_CONFIG: Record<AppRole, RoleNavConfig> = {
     modules: ["admin-audit"],
     p2pChildren: [],
   },
-  // Procurement Manager — sourcing → PO → GRN → Voucher workflow. Invoices are
-  // visible read-only so Procurement can monitor supplier billing.
+  // Procurement Manager — sourcing → PO → GRN → voucher → invoice workflow,
+  // plus suppliers, budget (read-only), and forwarded material requests.
   procurement: {
-    modules: ["dashboard", "sourcing", "p2p", "suppliers", "budget"],
-    p2pChildren: ["purchase-orders", "new-po", "vouchers", "invoices"],
+    modules: ["dashboard", "sourcing", "p2p", "material_requests", "suppliers", "budget"],
+    p2pChildren: ["purchase-orders", "new-po", "grn", "vouchers", "invoices"],
   },
-  // Warehouse Manager — receiving + inventory. Vouchers are visible read-only
-  // so Warehouse can track payment progress for goods they received; all
-  // create/manage actions are blocked (Finance-owned).
+  // Warehouse Manager — module under redevelopment; dashboard placeholder only.
   warehouse: {
-    modules: ["dashboard", "p2p", "inventory"],
-    p2pChildren: ["grn", "vouchers"],
+    modules: ["dashboard"],
+    p2pChildren: [],
   },
-  // Finance Manager — payables + budget. GRN access is needed so Finance can
-  // open a goods receipt from the "Invoices Awaiting Creation" queue and
-  // create the supplier invoice.
+  // Finance Manager — payables + budget approval. GRN access is needed so
+  // Finance can open a goods receipt from the "Invoices Awaiting Creation"
+  // queue and create the supplier invoice.
   finance: {
     modules: ["dashboard", "p2p", "budget"],
     p2pChildren: ["vouchers", "invoices", "payments", "grn"],
   },
+  // Finance Executive — budget module only; home dashboard lives at /budget.
+  finance_executive: {
+    modules: ["budget"],
+    p2pChildren: [],
+  },
   // Legal Reviewer — sourcing only (Legal Reviews page).
   legal: {
     modules: ["dashboard", "sourcing"],
+    p2pChildren: [],
+  },
+  department: {
+    modules: ["dashboard", "material_requests"],
     p2pChildren: [],
   },
 };
@@ -252,7 +313,15 @@ export function resolveRoleFromUser(user: {
  * Admin > Legal > Finance > Warehouse > Procurement (priority order).
  */
 export function resolveFromErpNextRoles(erpRoles: string[]): AppRole | null {
-  const priorityOrder: AppRole[] = ["admin", "legal", "finance", "warehouse", "procurement"];
+  const priorityOrder: AppRole[] = [
+    "admin",
+    "legal",
+    "finance",
+    "finance_executive",
+    "warehouse",
+    "procurement",
+    "department",
+  ];
   const resolved = new Set<AppRole>();
 
   for (const erpRole of erpRoles) {
@@ -310,11 +379,11 @@ function buildNavItem(id: NavModuleId, role: AppRole): NavItem {
         role === "legal"
           ? LEGAL_SOURCING_CHILDREN
           : role === "procurement"
-          ? PROCUREMENT_SOURCING_CHILDREN
-          : SOURCING_CHILDREN_FULL;
+            ? PROCUREMENT_SOURCING_CHILDREN
+            : SOURCING_CHILDREN_FULL;
       return {
         label: role === "legal" ? "Legal" : "Sourcing (RFx)",
-        to: role === "legal" ? "/sourcing/legal-reviews" : "/sourcing/rfq",
+        to: role === "legal" ? "/legal/reviews" : "/sourcing/rfq",
         icon: MODULE_ICONS.sourcing,
         children: sourcingChildren,
       };
@@ -326,6 +395,26 @@ function buildNavItem(id: NavModuleId, role: AppRole): NavItem {
         icon: MODULE_ICONS.p2p,
         children: buildP2PChildren(role),
       };
+    case "material_requests": {
+      const children =
+        role === "warehouse"
+          ? WAREHOUSE_MR_CHILDREN
+          : role === "procurement"
+            ? PROCUREMENT_MR_CHILDREN
+            : DEPARTMENT_MR_CHILDREN;
+      const defaultTo =
+        role === "warehouse"
+          ? "/material-requests/warehouse"
+          : role === "procurement"
+            ? "/material-requests/procurement"
+            : "/material-requests/list";
+      return {
+        label: "Material Requests",
+        to: defaultTo,
+        icon: MODULE_ICONS.material_requests,
+        children,
+      };
+    }
     case "suppliers":
       return {
         label: "Suppliers",
@@ -344,9 +433,12 @@ function buildNavItem(id: NavModuleId, role: AppRole): NavItem {
         label: "Budget",
         to: "/budget",
         icon: MODULE_ICONS.budget,
-        children: role === "finance" || role === "admin"
-          ? BUDGET_CHILDREN_FINANCE
-          : BUDGET_CHILDREN_READONLY,
+        children:
+          role === "finance_executive"
+            ? BUDGET_CHILDREN_EXECUTIVE
+            : role === "finance" || role === "admin"
+              ? BUDGET_CHILDREN_FINANCE
+              : BUDGET_CHILDREN_READONLY,
       };
     case "admin-audit":
       return {
@@ -375,12 +467,134 @@ function buildNavItem(id: NavModuleId, role: AppRole): NavItem {
 
 /** Sidebar navigation generated dynamically from the signed-in role. */
 export function getNavGroupsForRole(role: AppRole): NavGroup[] {
-  const config = ROLE_NAV_CONFIG[role] ?? ROLE_NAV_CONFIG.procurement;
-
-  const mainItems = config.modules.map((id) => buildNavItem(id, role));
-
-  // The Support group (Help) is shared by every role.
   const supportGroup = NAV_GROUPS.find((g) => g.label === "Support");
+
+  if (role === "warehouse") {
+    return [
+      {
+        label: "Warehouse",
+        items: [
+          {
+            label: "Dashboard",
+            to: "/warehouse/dashboard",
+            icon: LayoutDashboard,
+          },
+          // Goods Receipt — a primary daily task, promoted to top-level access.
+          {
+            label: "Goods Receipt",
+            to: "/warehouse/inventory/create-grn",
+            icon: PackagePlus,
+            children: [
+              { label: "Receive Goods", to: "/warehouse/inventory/create-grn" },
+              { label: "GRN List", to: "/warehouse/grn-list" },
+            ],
+          },
+          // Material Requests — the warehouse ONLY decides stock availability here.
+          {
+            label: "Material Requests",
+            to: "/warehouse/material-requests/pending",
+            icon: ClipboardList,
+            children: [
+              { label: "Pending Review", to: "/warehouse/material-requests/pending" },
+            ],
+          },
+          // Issue Items — a separate module for physically issuing available stock.
+          {
+            label: "Issue Items",
+            to: "/warehouse/issue-items",
+            icon: PackageCheck,
+            children: [
+              { label: "Ready to Issue", to: "/warehouse/issue-items" },
+              { label: "Issued History", to: "/warehouse/material-requests/issued" },
+            ],
+          },
+          {
+            label: "Procurement Required",
+            to: "/warehouse/material-requests/forwarded",
+            icon: Truck,
+          },
+          {
+            label: "Inventory",
+            to: "/warehouse/inventory/stock",
+            icon: Boxes,
+            children: [
+              { label: "Stock Overview", to: "/warehouse/inventory/stock" },
+              { label: "Item Master", to: "/warehouse/inventory/items" },
+            ],
+          },
+        ],
+      },
+      ...(supportGroup ? [supportGroup] : []),
+    ];
+  }
+
+  // Department User — a focused portal: request items and track fulfillment.
+  if (role === "department") {
+    return [
+      {
+        label: "",
+        items: [
+          { label: "Dashboard", to: "/dashboard", icon: LayoutDashboard },
+          {
+            label: "My Requests",
+            to: "/material-requests/list",
+            icon: ClipboardList,
+            children: [
+              { label: "New Request", to: "/material-requests/new" },
+              { label: "Request History", to: "/material-requests/list" },
+              { label: "Track Request", to: "/material-requests/list?f=procurement" },
+            ],
+          },
+          {
+            label: "Issued Items",
+            to: "/material-requests/list?f=received",
+            icon: PackageCheck,
+            children: [
+              { label: "Received Items", to: "/material-requests/list?f=received" },
+            ],
+          },
+          { label: "Notifications", to: "/notifications", icon: Bell },
+        ],
+      },
+      ...(supportGroup ? [supportGroup] : []),
+    ];
+  }
+
+  // Finance Manager — Dashboard and the RFQ Financial Review are primary,
+  // top-level operational items (RFQ Financial Review sits directly below the
+  // Dashboard, out of any Budget submenu). Budget approval/monitoring/history
+  // live under the Budget group; payables under P2P Core.
+  if (role === "finance") {
+    return [
+      {
+        label: "",
+        items: [
+          { label: "Dashboard", to: "/dashboard", icon: LayoutDashboard },
+          {
+            label: "RFQ Financial Review",
+            to: "/budget/pending-reviews",
+            icon: ClipboardCheck,
+          },
+          {
+            label: "Budget",
+            to: "/budget",
+            icon: Wallet,
+            children: BUDGET_CHILDREN_FINANCE,
+          },
+          {
+            label: "P2P Core",
+            to: "/p2p",
+            icon: ShoppingCart,
+            children: buildP2PChildren("finance"),
+          },
+        ],
+      },
+      ...(supportGroup ? [supportGroup] : []),
+    ];
+  }
+
+  const config = ROLE_NAV_CONFIG[role] ?? ROLE_NAV_CONFIG.procurement;
+  const mainItems = config.modules.map((id) => buildNavItem(id, role));
 
   return [
     { label: "", items: mainItems },
@@ -402,7 +616,12 @@ function getAccessPrefixesForRole(role: AppRole): string[] {
         break;
       case "sourcing":
         prefixes.add("/sourcing");
-        prefixes.add("/legal");
+        // NOTE: `/legal` is intentionally NOT granted here. Legal Document
+        // Review pages are Legal's domain — the `legal` role has its own
+        // dedicated early-return block above with the correct allowlist.
+        // Adding `/legal` to every role with the shared "sourcing" module
+        // (e.g. procurement) would let Procurement open Legal review pages
+        // by direct URL, which they should never be able to do.
         break;
       case "suppliers":
         prefixes.add("/suppliers");
@@ -410,9 +629,16 @@ function getAccessPrefixesForRole(role: AppRole): string[] {
       case "inventory":
         prefixes.add("/inventory");
         break;
+      case "material_requests":
+        prefixes.add("/material-requests");
+        break;
       case "budget":
         prefixes.add("/budget");
-        prefixes.add("/finance");
+        // `/finance/*` (Finance Review approve/reject workspace) is
+        // Finance-only. Procurement also carries the "budget" module for
+        // read-only Budget Dashboard/Monitoring access, but must NOT be
+        // able to open Finance Review detail pages by direct URL.
+        if (role === "finance") prefixes.add("/finance");
         break;
       case "admin-audit":
         prefixes.add("/admin");
@@ -473,15 +699,95 @@ export function canAccessPath(role: AppRole, pathname: string): boolean {
 
   const path = pathname.split("?")[0];
 
+  // Warehouse — full access to warehouse sub-routes
+  if (role === "warehouse") {
+    const allowed = [
+      "/dashboard",
+      "/warehouse",
+      "/warehouse/dashboard",
+      "/warehouse/material-requests/pending",
+      "/warehouse/material-requests/review",
+      "/warehouse/material-requests/issued",
+      "/warehouse/material-requests/forwarded",
+      "/warehouse/issue-items",
+      "/warehouse/inventory/stock",
+      "/warehouse/inventory/stock-overview",
+      "/warehouse/inventory/items",
+      "/warehouse/inventory/create-grn",
+      "/warehouse/grn-list",
+      "/warehouse/reports",
+      "/p2p/grn",
+      "/p2p/purchase-orders",
+    ];
+    if (allowed.some((p) => path === p || path.startsWith(`${p}/`))) return true;
+    if (path.startsWith("/support") || path.startsWith("/notifications")) return true;
+    return false;
+  }
+
+  // Department User — dashboard + own material requests only.
+  if (role === "department") {
+    if (
+      path.startsWith("/support") ||
+      path.startsWith("/notifications") ||
+      path === "/dashboard"
+    ) {
+      return true;
+    }
+    if (path.startsWith("/material-requests")) {
+      return canAccessMaterialRequestPath(role, path);
+    }
+    return false;
+  }
+
   // ── Legal Reviewer: restricted sourcing access ──────────────────────
   // Legal can view /sourcing/legal-reviews and individual RFQ detail
   // pages (read-only), but NOT create RFQs, manage templates, or view
   // the RFQ list.
+  // Finance Executive — budget module only (no finance manager pages).
+  if (role === "finance_executive") {
+    if (path === "/dashboard" || path.startsWith("/support") || path.startsWith("/notifications")) {
+      return true;
+    }
+    const allowed = [
+      "/budget",
+      "/budget/create",
+      "/budget/my-budgets",
+      "/budget/requests",
+    ];
+    if (allowed.some((p) => path === p || path.startsWith(`${p}/`))) return true;
+    // Detail view for own budgets
+    if (path.startsWith("/budget/detail/")) return true;
+    return false;
+  }
+
+  // Finance Manager may approve/monitor budgets but not create them.
+  if (role === "finance" && path === "/budget/create") return false;
+
+  // Procurement carries the "budget" module for read-only visibility only
+  // (Budget Dashboard + Monitoring) — it must not reach budget creation,
+  // approvals, or pending-review workflows, which are Finance-only.
+  if (role === "procurement" && path.startsWith("/budget")) {
+    const readOnly = ["/budget", "/budget/monitoring"];
+    return readOnly.some((p) => path === p || path.startsWith(`${p}/`));
+  }
+
   if (role === "legal") {
-    if (path === "/dashboard" || path.startsWith("/support")) return true;
+    if (
+      path === "/dashboard" ||
+      path.startsWith("/support") ||
+      path.startsWith("/notifications")
+    )
+      return true;
+    // Legacy RFQ-workflow page — kept reachable for old bookmarks/links but
+    // no longer the primary nav target (see LEGAL_SOURCING_CHILDREN).
     if (path === "/sourcing/legal-reviews") return true;
-    // Legal Review detail workspace
-    if (path.startsWith("/legal/reviews/")) return true;
+    // Legal Document Review list (canonical — reads the DocType, not RFQ).
+    if (path === "/legal/reviews" || path.startsWith("/legal/reviews/")) return true;
+    // Legal Document Review detail workspace, keyed by Supplier Quotation
+    // name (singular "/legal/review/:sqName" — NOT the same as the plural
+    // list route above). Missing this previously made every review row
+    // click redirect Legal Reviewers away from the page they just opened.
+    if (path.startsWith("/legal/review/")) return true;
     // Allow viewing individual RFQ detail pages (read-only)
     if (path.startsWith("/sourcing/rfq/") && path !== "/sourcing/rfq/new") return true;
     return false;
@@ -514,6 +820,16 @@ export function canAccessPath(role: AppRole, pathname: string): boolean {
     ) {
       return true;
     }
+  }
+
+  // Material Request routes — role-scoped; procurement sees forwarded queue only.
+  if (path.startsWith("/material-requests")) {
+    return canAccessMaterialRequestPath(role, path);
+  }
+
+  // Procurement may create RFQs (including from forwarded MRs).
+  if (role === "procurement" && path === "/sourcing/rfq/new") {
+    return true;
   }
 
   return getAccessPrefixesForRole(role).some(

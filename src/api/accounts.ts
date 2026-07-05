@@ -20,6 +20,7 @@ import {
   todayERPNextDate,
 } from "../utils/erpNextDate";
 import { getSupplier } from "./supplier";
+import { queryClient } from "../queryClient";
 import type { PaymentEntry, PurchaseInvoice } from "../types/erpnext";
 import {
   FALLBACK_PAYMENT_MODES,
@@ -292,10 +293,35 @@ export async function createPurchaseInvoice(
   const payload = buildPurchaseInvoicePayload({ ...data });
   // eslint-disable-next-line no-console
   console.log("Final API Payload", payload);
-  return apiPost<PurchaseInvoice>(
+  const created = await apiPost<PurchaseInvoice>(
     buildResourceUrl(PURCHASE_INVOICE_DOCTYPE),
     payload
   );
+  // Keep spend-driven dashboards (Category Spend Breakdown, KPIs) live.
+  void queryClient.invalidateQueries({ queryKey: ["dashboard-category-spend"] });
+  void queryClient.invalidateQueries({ queryKey: ["dashboard-analytics"] });
+  void queryClient.invalidateQueries({ queryKey: ["dashboard-counts"] });
+  return created;
+}
+
+/**
+ * Refresh every budget-driven query so consumed / available / utilization and
+ * the Budget Transaction History reflect a just-submitted Purchase Invoice or
+ * Payment Entry immediately (no manual reload).
+ */
+export function invalidateBudgetQueries(): void {
+  void queryClient.invalidateQueries({
+    predicate: (query) => {
+      const key = query.queryKey?.[0];
+      return (
+        typeof key === "string" &&
+        (key.startsWith("budget") ||
+          key === "finance-manager-budget-dashboard" ||
+          key === "executive-all-budgets" ||
+          key === "my-budgets")
+      );
+    },
+  });
 }
 
 /** Return the `account_currency` of a GL Account. */
@@ -796,10 +822,13 @@ export async function submitPurchaseInvoice(
   if (modified) body.modified = modified;
 
   try {
-    return await apiPut<PurchaseInvoice>(
+    const submitted = await apiPut<PurchaseInvoice>(
       buildResourceUrl(PURCHASE_INVOICE_DOCTYPE, name),
       body
     );
+    // Submitted invoice → Consumed Budget increases. Refresh budget views.
+    invalidateBudgetQueries();
+    return submitted;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes("InvalidAccountCurrency")) {
@@ -1020,9 +1049,12 @@ export async function submitPaymentEntry(name: string): Promise<PaymentEntry> {
     (fresh as { data?: { modified?: string } }).data?.modified;
   const body: Record<string, unknown> = { docstatus: 1 };
   if (modified) body.modified = modified;
-  return apiPut<PaymentEntry>(
+  const submitted = await apiPut<PaymentEntry>(
     buildResourceUrl(PAYMENT_ENTRY_DOCTYPE, name),
     body
   );
+  // Submitted payment → appears in Budget Transaction History. Refresh views.
+  invalidateBudgetQueries();
+  return submitted;
 }
 

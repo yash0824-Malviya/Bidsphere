@@ -1,13 +1,16 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PackagePlus, Plus } from "lucide-react";
+import toast from "react-hot-toast";
 
 import {
   getIncomingPurchaseOrders,
   getPurchaseReceipt,
   getPurchaseReceipts,
+  submitPurchaseReceipt,
 } from "../../api/purchasing";
+import { invalidateFinanceDashboardMetrics } from "../../api/financeWorkflow";
 import type { Filter } from "../../api/erpnext";
 import type {
   PurchaseReceipt,
@@ -47,6 +50,7 @@ const STATUS_OPTIONS: Array<"" | PurchaseReceiptStatus> = [
 
 export default function GRNPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const role = useAuthStore((s) => s.user?.role);
   const canCreate = canCreateGRN(role);
   const [status, setStatus] = useState<"" | PurchaseReceiptStatus>("");
@@ -223,8 +227,34 @@ export default function GRNPage() {
                         <td className="text-neutral-600">
                           {formatDate(g.posting_date)}
                         </td>
-                        <td>
-                          <StatusBadge status={g.status ?? "Draft"} />
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-2">
+                            <StatusBadge status={g.status ?? "Draft"} />
+                            {g.status === "Draft" && canCreate && (
+                              <button
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (window.confirm(`Are you sure you want to submit GRN ${g.name}?`)) {
+                                    const loadToast = toast.loading(`Submitting GRN ${g.name}...`);
+                                    try {
+                                      await submitPurchaseReceipt(g.name);
+                                      toast.success(`GRN ${g.name} submitted successfully`, { id: loadToast });
+                                      void queryClient.invalidateQueries({ queryKey: ["purchase-receipts"] });
+                                      void queryClient.invalidateQueries({ queryKey: ["purchase-receipt", g.name] });
+                                      void queryClient.invalidateQueries({ queryKey: ["grns-awaiting-invoice"] });
+                                      void queryClient.invalidateQueries({ queryKey: ["incoming-purchase-orders"] });
+                                      invalidateFinanceDashboardMetrics(queryClient);
+                                    } catch (err) {
+                                      toast.error(err instanceof Error ? err.message : "Failed to submit GRN", { id: loadToast });
+                                    }
+                                  }
+                                }}
+                                className="rounded bg-primary-600 px-2 py-0.5 text-xs font-semibold text-white hover:bg-primary-700 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                              >
+                                Submit
+                              </button>
+                            )}
+                          </div>
                         </td>
                         <td className="text-right tabular-nums text-neutral-600">
                           {g.total_qty != null

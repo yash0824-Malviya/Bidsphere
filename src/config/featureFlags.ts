@@ -24,5 +24,7 @@ export const FEATURE_FLAGS = {
    * page components, and backend APIs remain fully functional when
    * this flag is false — the module is only hidden from navigation.
    */
-  showMaterialRequests: false,
+  showMaterialRequests: true,
+  /** BidSphere MR workflow module (warehouse review → issue / RFQ). */
+  showMaterialRequestWorkflow: true,
 } as const;

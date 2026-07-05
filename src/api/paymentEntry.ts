@@ -11,10 +11,12 @@ import { apiPost, COMPANY } from "./erpnext";
 import { APP_NAME } from "../config/branding";
 import {
   createInvoiceFromPO,
+  createInvoiceFromReceipt,
   createPaymentEntry,
   getCompanyCurrency,
   getDefaultPaymentFromAccount,
   getExchangeRate,
+  getInvoicesForGRN,
   getInvoicesForPO,
   getPaymentEntries,
   getPurchaseInvoice,
@@ -22,6 +24,8 @@ import {
   submitPurchaseInvoice,
   updatePaymentEntry,
 } from "./accounts";
+import { getPurchaseOrder, getPurchaseReceipt } from "./purchasing";
+import type { PurchaseInvoice } from "../types/erpnext";
 import { DEFAULT_CURRENCY } from "../utils/format";
 import { generateId } from "../utils/id";
 import type { PaymentAttachmentKind } from "../types/paymentAttachment";
@@ -115,6 +119,13 @@ export interface PaymentFileInput {
 export interface ProcessInvoicePaymentInput {
   /** Submitted ERPNext Purchase Order the invoice/payment derives from. */
   poReference: string;
+  /**
+   * Submitted ERPNext Purchase Receipt (GRN) linked to the voucher, when
+   * available. The voucher workflow is GRN-centric, so billing must be
+   * derived from the GRN's received quantities — not the PO — whenever one
+   * exists (see `processInvoicePayment` for why).
+   */
+  grnReference?: string;
   /** Exact ERPNext Mode of Payment name (e.g. "ACH Transfer"). */
   paymentMethod: string;
   /** Backend-derived payment reference. */
@@ -138,10 +149,110 @@ export interface ProcessInvoicePaymentResult {
 }
 
 /**
+ * Resolve the live Purchase Invoice to pay against, creating one if none
+ * exists yet.
+ *
+ * The voucher workflow is GRN-centric (a Voucher is raised per Goods
+ * Receipt Note, carrying `grn_reference` + `po_reference`), so billing MUST
+ * be derived from the GRN via `make_purchase_invoice` on the Purchase
+ * Receipt whenever a GRN is linked — not from the PO. Billing from the PO
+ * directly returns an EMPTY `items` table whenever the PO has already been
+ * (fully or partially) invoiced through a different receipt/flow, which
+ * then fails Purchase Invoice submission with
+ * `MandatoryError: Purchase Invoice - Items`. Falling back to the PO is
+ * only safe when no GRN is linked at all.
+ */
+async function resolveOrCreatePurchaseInvoice(
+  poReference: string,
+  grnReference?: string
+): Promise<string> {
+  if (grnReference) {
+    const existingForGrn = (await getInvoicesForGRN(grnReference)).filter(
+      (i) => i.docstatus !== 2
+    );
+    const live =
+      existingForGrn.find(
+        (i) => i.docstatus === 1 && (i.outstanding_amount ?? 0) > 0
+      ) ?? existingForGrn.find((i) => i.docstatus === 0);
+    if (live) return live.name;
+
+    const fullyPaid = existingForGrn.find(
+      (i) => i.docstatus === 1 && (i.outstanding_amount ?? 0) <= 0
+    );
+    if (fullyPaid) {
+      throw new Error(
+        `Goods Receipt Note "${grnReference}" has already been fully invoiced and paid ` +
+          `(${fullyPaid.name}). No further payment is due for this voucher.`
+      );
+    }
+
+    const grn = await getPurchaseReceipt(grnReference);
+    if ((grn.per_billed ?? 0) >= 100) {
+      throw new Error(
+        `Goods Receipt Note "${grnReference}" is already 100% billed but no matching ` +
+          `Purchase Invoice record was found. This voucher cannot be invoiced — ` +
+          `contact an administrator to reconcile the GRN billing status.`
+      );
+    }
+
+    const created = await createInvoiceFromReceipt(grnReference);
+    assertInvoiceHasItems(created, `Goods Receipt Note "${grnReference}"`);
+    return created.name;
+  }
+
+  // No GRN linked — fall back to billing directly from the PO.
+  const existingForPo = (await getInvoicesForPO(poReference)).filter(
+    (i) => i.docstatus !== 2
+  );
+  const live =
+    existingForPo.find(
+      (i) => i.docstatus === 1 && (i.outstanding_amount ?? 0) > 0
+    ) ?? existingForPo.find((i) => i.docstatus === 0);
+  if (live) return live.name;
+
+  const fullyPaid = existingForPo.find(
+    (i) => i.docstatus === 1 && (i.outstanding_amount ?? 0) <= 0
+  );
+  if (fullyPaid) {
+    throw new Error(
+      `Purchase Order "${poReference}" has already been fully invoiced and paid ` +
+        `(${fullyPaid.name}). No further payment is due for this voucher — please ` +
+        `verify the linked PO/GRN reference before retrying.`
+    );
+  }
+
+  const po = await getPurchaseOrder(poReference);
+  if ((po.per_billed ?? 0) >= 100) {
+    throw new Error(
+      `Purchase Order "${poReference}" is already 100% billed but no matching ` +
+        `Purchase Invoice record was found. This voucher cannot be invoiced — ` +
+        `contact an administrator to reconcile the Purchase Order billing status.`
+    );
+  }
+
+  const created = await createInvoiceFromPO(poReference);
+  assertInvoiceHasItems(created, `Purchase Order "${poReference}"`);
+  return created.name;
+}
+
+/** Never let a header-only draft (no billable line items) reach submission. */
+function assertInvoiceHasItems(
+  invoice: Pick<PurchaseInvoice, "items">,
+  sourceLabel: string
+): void {
+  if (!invoice.items || invoice.items.length === 0) {
+    throw new Error(
+      `ERPNext returned a Purchase Invoice draft with no billable items for ${sourceLabel}. ` +
+        `Payment cannot proceed — verify there is an unbilled balance in ERPNext.`
+    );
+  }
+}
+
+/**
  * Release a supplier payment end-to-end against LIVE ERPNext:
  *
- *   1. Reuse an existing live Purchase Invoice for the PO, or create one via
- *      `make_purchase_invoice` (correct items/taxes/credit_to).
+ *   1. Reuse an existing live Purchase Invoice for the GRN/PO, or create one
+ *      via `make_purchase_invoice` (correct items/taxes/credit_to).
  *   2. Submit the Purchase Invoice (docstatus 0 → 1).
  *   3. Create a Payment Entry draft reconciled against the invoice.
  *   4. Upload + link any attachments to that Payment Entry (best-effort).
@@ -155,6 +266,7 @@ export async function processInvoicePayment(
 ): Promise<ProcessInvoicePaymentResult> {
   const {
     poReference,
+    grnReference,
     paymentMethod,
     paymentReference,
     methodDetails,
@@ -169,18 +281,7 @@ export async function processInvoicePayment(
     );
   }
 
-  // 1. Find a live (non-cancelled) Purchase Invoice for the PO, or create one.
-  const existing = (await getInvoicesForPO(poReference)).filter(
-    (i) => i.docstatus !== 2
-  );
-  let piName =
-    existing.find((i) => i.docstatus === 1 && (i.outstanding_amount ?? 0) > 0)
-      ?.name ?? existing.find((i) => i.docstatus === 0)?.name;
-
-  if (!piName) {
-    const created = await createInvoiceFromPO(poReference);
-    piName = created.name;
-  }
+  const piName = await resolveOrCreatePurchaseInvoice(poReference, grnReference);
 
   // 2. Ensure submitted.
   let pi = await getPurchaseInvoice(piName);

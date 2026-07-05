@@ -1,5 +1,5 @@
-import { useMemo } from "react";
 import { Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, FileText, Receipt } from "lucide-react";
 
 import {
@@ -21,23 +21,27 @@ export default function SupplierInvoiceListPage() {
   const { supplierName, isReady } = useSupplierSession();
   const syncVersion = useVoucherSyncStore((s) => s.version);
 
-  const invoices = useMemo(
-    () => (supplierName ? getInvoicesForSupplier(supplierName) : []),
-    [supplierName, syncVersion]
-  );
+  const { data: invoices = [] } = useQuery({
+    queryKey: ["supplier-invoices", supplierName, syncVersion],
+    queryFn: () => getInvoicesForSupplier(supplierName),
+    enabled: !!supplierName,
+    staleTime: 30_000,
+  });
 
-  const pendingVouchers = useMemo(
-    () =>
-      supplierName
-        ? getVouchersForSupplier(supplierName).filter(
-            (v) =>
-              v.status === "sent" ||
-              v.status === "viewed" ||
-              v.status === "invoice_rejected"
-          )
-        : [],
-    [supplierName, syncVersion]
-  );
+  const { data: pendingVouchers = [] } = useQuery({
+    queryKey: ["supplier-pending-vouchers", supplierName, syncVersion],
+    queryFn: async () => {
+      const vouchers = await getVouchersForSupplier(supplierName);
+      return vouchers.filter(
+        (v) =>
+          v.status === "sent" ||
+          v.status === "viewed" ||
+          v.status === "invoice_rejected"
+      );
+    },
+    enabled: !!supplierName,
+    staleTime: 30_000,
+  });
 
   if (!isReady) {
     return (
@@ -142,7 +146,7 @@ export default function SupplierInvoiceListPage() {
                             : `INV-${inv.invoice_number}.pdf`
                         }
                         build={async () => {
-                          const v = getVoucherById(inv.voucher_id);
+                          const v = await getVoucherById(inv.voucher_id);
                           if (!v) throw new Error("Voucher not found");
                           return buildVoucherInvoicePdf(v);
                         }}

@@ -1,13 +1,15 @@
 import { lazy, Suspense } from "react";
 import { Loader2 } from "lucide-react";
+import { Navigate } from "react-router-dom";
 
 import { useAuthStore } from "../../store/authStore";
 import AdminDashboard from "../../components/dashboard/AdminDashboard";
+import DepartmentUserDashboard from "../../components/dashboard/DepartmentUserDashboard";
 import type { AppRole } from "../../config/roles";
 
 const FinanceDashboard = lazy(() => import("../../components/dashboard/FinanceDashboard"));
 const LegalDashboard = lazy(() => import("../../components/dashboard/LegalDashboard"));
-const WarehouseDashboard = lazy(() => import("../../components/dashboard/WarehouseDashboard"));
+const ProcurementDashboard = lazy(() => import("../../components/dashboard/ProcurementDashboard"));
 
 function DashFallback() {
   return (
@@ -24,9 +26,21 @@ export default function DashboardPage() {
     user?.full_name?.split(" ")[0] ?? user?.email?.split("@")[0] ?? "there";
 
   if (role === "warehouse") {
+    return <Navigate to="/warehouse/dashboard" replace />;
+  }
+
+  if (role === "finance_executive") {
+    return <Navigate to="/budget" replace />;
+  }
+
+  if (role === "department") {
+    return <DepartmentUserDashboard greetingName={greetingName} />;
+  }
+
+  if (role === "procurement") {
     return (
       <Suspense fallback={<DashFallback />}>
-        <WarehouseDashboard greetingName={greetingName} />
+        <ProcurementDashboard greetingName={greetingName} />
       </Suspense>
     );
   }

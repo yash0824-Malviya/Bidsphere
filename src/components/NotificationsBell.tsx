@@ -16,13 +16,13 @@ import {
 import { apiGet } from "../api/erpnext";
 import type { Filter } from "../api/erpnext";
 import { getGRNsAwaitingInvoice } from "../api/financeWorkflow";
-import { useVoucherSyncStore } from "../store/voucherSyncStore";
 import { getIncomingPurchaseOrders, getPurchaseReceipts } from "../api/purchasing";
 import { useAuthStore } from "../store/authStore";
 import { buildUpcomingDeliveries } from "../utils/upcomingDeliveries";
 import { formatCurrency, todayIso } from "../utils/format";
 import { useRoleNotifications } from "../hooks/useRoleNotifications";
 import type { EnterpriseNotification, NotificationModule } from "../types/notification";
+import type { IncomingPORow } from "../utils/upcomingDeliveries";
 
 interface InvoiceRow {
   name: string;
@@ -49,6 +49,22 @@ function toneForModule(module: NotificationModule): string {
   return MODULE_TONE[module] ?? "bg-primary-50 text-primary";
 }
 
+/** Stable fallbacks — never use `= []` inline or useEffect deps get a new ref every render. */
+const EMPTY_INCOMING_POS: IncomingPORow[] = [];
+const EMPTY_COMPLETED_GRNS: Array<{
+  name: string;
+  supplier?: string;
+  supplier_name?: string;
+  posting_date?: string;
+}> = [];
+const EMPTY_AWAITING_GRNS: Array<{
+  name: string;
+  supplier?: string;
+  supplier_name?: string;
+  posting_date?: string;
+}> = [];
+const EMPTY_OVERDUE_INVOICES: InvoiceRow[] = [];
+
 /**
  * Header bell — shows only notifications visible to the logged-in user's role.
  */
@@ -57,7 +73,6 @@ export default function NotificationsBell() {
   const role = useAuthStore((s) => s.user?.role);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
-  const voucherVersion = useVoucherSyncStore((s) => s.version);
   const { notifications, unreadCount, markRead, markAllRead, refresh } =
     useRoleNotifications();
 
@@ -78,15 +93,16 @@ export default function NotificationsBell() {
     return () => document.removeEventListener("mousedown", onDoc);
   }, []);
 
-  const { data: incomingPOs = [] } = useQuery({
+  const { data: incomingPOsData, isSuccess: incomingPOsReady } = useQuery({
     queryKey: ["notifications-incoming-pos", today],
     enabled: showWarehouse,
     staleTime: 5 * 60_000,
     retry: 0,
     queryFn: getIncomingPurchaseOrders,
   });
+  const incomingPOs = incomingPOsData ?? EMPTY_INCOMING_POS;
 
-  const { data: completedGrns = [] } = useQuery({
+  const { data: completedGrnsData, isSuccess: completedGrnsReady } = useQuery({
     queryKey: ["notifications-completed-grns", today],
     enabled: showWarehouse,
     staleTime: 5 * 60_000,
@@ -109,16 +125,20 @@ export default function NotificationsBell() {
         limit_page_length: 5,
       }),
   });
+  const completedGrns = completedGrnsData ?? EMPTY_COMPLETED_GRNS;
 
-  const { data: awaitingInvoices = [] } = useQuery({
+  const { data: awaitingInvoicesData, isSuccess: awaitingInvoicesReady } =
+    useQuery({
     queryKey: ["notifications-awaiting-invoice", today],
     enabled: showFinance,
     staleTime: 5 * 60_000,
     retry: 0,
     queryFn: () => getGRNsAwaitingInvoice(10),
   });
+  const awaitingInvoices = awaitingInvoicesData ?? EMPTY_AWAITING_GRNS;
 
-  const { data: overdueInvoices = [] } = useQuery<InvoiceRow[]>({
+  const { data: overdueInvoicesData, isSuccess: overdueInvoicesReady } =
+    useQuery<InvoiceRow[]>({
     queryKey: ["notifications-overdue-invoices", today],
     enabled: showFinance,
     staleTime: 5 * 60_000,
@@ -145,9 +165,12 @@ export default function NotificationsBell() {
       });
     },
   });
+  const overdueInvoices = overdueInvoicesData ?? EMPTY_OVERDUE_INVOICES;
 
   useEffect(() => {
     if (!showWarehouse) return;
+    if (!incomingPOsReady && !completedGrnsReady) return;
+
     const alerts = [];
     for (const d of buildUpcomingDeliveries(incomingPOs)) {
       const supplier = d.supplier_name ?? d.supplier ?? "Supplier";
@@ -191,11 +214,21 @@ export default function NotificationsBell() {
         }))
       );
     }
-    refresh();
-  }, [showWarehouse, incomingPOs, completedGrns, voucherVersion, refresh]);
+    if (alerts.length || completedGrns.length) {
+      refresh();
+    }
+  }, [
+    showWarehouse,
+    incomingPOsReady,
+    completedGrnsReady,
+    incomingPOsData,
+    completedGrnsData,
+    refresh,
+  ]);
 
   useEffect(() => {
     if (!showFinance) return;
+    if (!awaitingInvoicesReady && !overdueInvoicesReady) return;
     if (awaitingInvoices.length) {
       syncFinanceGrnQueue(
         awaitingInvoices.map((g) => ({
@@ -218,8 +251,19 @@ export default function NotificationsBell() {
         }))
       );
     }
-    refresh();
-  }, [showFinance, awaitingInvoices, overdueInvoices, voucherVersion, refresh]);
+    if (awaitingInvoices.length || overdueInvoices.length) {
+      refresh();
+    }
+  }, [
+    showFinance,
+    awaitingInvoicesReady,
+    overdueInvoicesReady,
+    awaitingInvoicesData,
+    overdueInvoicesData,
+    refresh,
+    awaitingInvoices.length,
+    overdueInvoices.length,
+  ]);
 
   function handleClick(n: EnterpriseNotification) {
     markRead(n.id);

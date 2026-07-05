@@ -37,23 +37,27 @@ export default function SupplierPaymentListPage() {
   const syncVersion = useVoucherSyncStore((s) => s.version);
 
   // ── Voucher-workflow payments (single source of truth) ────────────────────
-  const workflowRows = useMemo<PaymentRow[]>(() => {
-    if (!supplierName) return [];
-    return getPaymentsForSupplier(supplierName).map((p) => ({
-      id: p.payment_id,
-      voucher: p.voucher_id,
-      invoice: p.invoice_number,
-      po: p.po_reference,
-      date: p.paid_date,
-      method: p.method,
-      reference: p.reference_number,
-      amount: p.amount,
-      status: p.status,
-      to: `/supplier/vouchers/${encodeURIComponent(p.voucher_id)}`,
-      workflow: true,
-    }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supplierName, syncVersion]);
+  const { data: workflowRows = [] } = useQuery<PaymentRow[]>({
+    queryKey: ["supplier-workflow-payments", supplierName, syncVersion],
+    queryFn: async () => {
+      const payments = await getPaymentsForSupplier(supplierName);
+      return payments.map((p) => ({
+        id: p.payment_id,
+        voucher: p.voucher_id,
+        invoice: p.invoice_number,
+        po: p.po_reference,
+        date: p.paid_date,
+        method: p.method,
+        reference: p.reference_number,
+        amount: p.amount,
+        status: p.status,
+        to: `/supplier/vouchers/${encodeURIComponent(p.voucher_id)}`,
+        workflow: true,
+      }));
+    },
+    enabled: !!supplierName,
+    staleTime: 30_000,
+  });
 
   // ── Historical ERPNext payment entries (preserved) ────────────────────────
   const paymentsQuery = useQuery({
@@ -190,7 +194,7 @@ export default function SupplierPaymentListPage() {
                               : `PAY-${payment.id}.pdf`
                           }
                           build={async () => {
-                            const v = getVoucherById(payment.voucher!);
+                            const v = await getVoucherById(payment.voucher!);
                             if (!v) throw new Error("Voucher not found");
                             return buildVoucherPaymentPdf(v);
                           }}

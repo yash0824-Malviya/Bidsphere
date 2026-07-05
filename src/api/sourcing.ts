@@ -48,7 +48,7 @@ const ITEM_DOCTYPE = "Item";
 
 const _ssCheckedDoctypes = new Set<string>();
 
-async function disableServerScriptsFor(doctype: string): Promise<void> {
+export async function disableServerScriptsFor(doctype: string): Promise<void> {
   if (_ssCheckedDoctypes.has(doctype)) return;
 
   // eslint-disable-next-line no-console
@@ -448,6 +448,13 @@ export async function updateRFQ(
   name: string,
   data: Partial<RFQ>
 ): Promise<RFQ> {
+  // Pre-flight: ensure no Server Scripts (e.g. DocType Event hooks on
+  // "Request for Quotation") block this update. Any active-but-disabled
+  // (site-wide) Server Script hooked to on_update_after_submit throws
+  // ServerScriptNotEnabled and fails the ENTIRE save — this guard prevents
+  // that from silently blocking workflow-field syncs (legal/finance status,
+  // selected supplier, etc.) going forward.
+  await disableServerScriptsFor(RFQ_DOCTYPE);
   return apiPut<RFQ>(buildResourceUrl(RFQ_DOCTYPE, name), data);
 }
 
@@ -643,20 +650,28 @@ async function createSupplierQuotationInternal(
 
   if (data.legal_documents) {
     const ld = data.legal_documents;
-    // Actual ERPNext custom field names (verified from Custom Field API)
-    payload.custom_terms_pdf = ld.terms_conditions_pdf ?? "";
+    // Actual ERPNext custom field names — verified directly via
+    // `Custom Field` metadata query (dt = "Supplier Quotation"). The
+    // previous field names here (custom_terms_pdf / custom_warranty_pdf /
+    // custom_insurance_pdf) do NOT exist on the doctype, so ERPNext's REST
+    // API silently dropped them (no error, no persisted value) on every
+    // save — this was the root cause of Legal Document Review being
+    // created with empty PDF fields. `custom_terms__condition` (double
+    // underscore) and `custom_warenty_certificate` (upstream typo
+    // "warenty") must match exactly.
+    payload.custom_terms__condition = ld.terms_conditions_pdf ?? "";
     payload.custom_terms_note = ld.terms_conditions_note ?? "";
-    payload.custom_warranty_pdf = ld.warranty_certificate_pdf ?? "";
+    payload.custom_warenty_certificate = ld.warranty_certificate_pdf ?? "";
     payload.custom_warranty_note = ld.warranty_certificate_note ?? "";
-    payload.custom_insurance_pdf = ld.insurance_certificate_pdf ?? "";
+    payload.custom_insurance_certificate = ld.insurance_certificate_pdf ?? "";
     payload.custom_insurance_note = ld.insurance_certificate_note ?? "";
     // eslint-disable-next-line no-console
     console.log("[SQ] Legal documents in POST payload:", {
-      custom_terms_pdf: payload.custom_terms_pdf,
+      custom_terms__condition: payload.custom_terms__condition,
       custom_terms_note: payload.custom_terms_note || "(empty)",
-      custom_warranty_pdf: payload.custom_warranty_pdf,
+      custom_warenty_certificate: payload.custom_warenty_certificate,
       custom_warranty_note: payload.custom_warranty_note || "(empty)",
-      custom_insurance_pdf: payload.custom_insurance_pdf,
+      custom_insurance_certificate: payload.custom_insurance_certificate,
       custom_insurance_note: payload.custom_insurance_note || "(empty)",
     });
   }
@@ -688,11 +703,11 @@ async function createSupplierQuotationInternal(
     if (docName && data.legal_documents) {
       const ld = data.legal_documents;
       const legalPutPayload: Record<string, string> = {
-        custom_terms_pdf: ld.terms_conditions_pdf ?? "",
+        custom_terms__condition: ld.terms_conditions_pdf ?? "",
         custom_terms_note: ld.terms_conditions_note ?? "",
-        custom_warranty_pdf: ld.warranty_certificate_pdf ?? "",
+        custom_warenty_certificate: ld.warranty_certificate_pdf ?? "",
         custom_warranty_note: ld.warranty_certificate_note ?? "",
-        custom_insurance_pdf: ld.insurance_certificate_pdf ?? "",
+        custom_insurance_certificate: ld.insurance_certificate_pdf ?? "",
         custom_insurance_note: ld.insurance_certificate_note ?? "",
       };
 
@@ -989,11 +1004,14 @@ export async function getSupplierQuotations(
     // eslint-disable-next-line no-console
     console.log("[SQ Query] Raw summaries returned:", summaries);
   } catch (err) {
-    // Even the child-table filter can fail on locked-down installs —
-    // surface an empty list rather than crashing the detail page.
+    // A real fetch failure (network/permission/500) is NOT the same as "no
+    // quotations yet" — silently returning [] here previously made RFQ
+    // Detail / Legal / Finance pages show "0 responses" indistinguishably
+    // from a genuine outage, which could let a reviewer approve/select a
+    // winner while blind to quotes that actually exist. Propagate instead.
     // eslint-disable-next-line no-console
-    console.warn("[SQ Query] List fetch failed:", err instanceof Error ? err.message : err);
-    return [];
+    console.error("[SQ Query] List fetch failed:", err instanceof Error ? err.message : err);
+    throw err;
   }
 
   // The list endpoint omits child tables, so hydrate items per quotation.
@@ -1158,7 +1176,17 @@ export async function checkQuotationStatus(
       }
     );
     return (quotes ?? []).length > 0 ? "Submitted" : "Pending";
-  } catch {
+  } catch (err) {
+    // Non-fatal by design: the caller (SupplierRFQPage) always falls back
+    // to the RFQ row's authoritative `quote_status` field on failure, so a
+    // transient error here must never block the supplier from viewing the
+    // page. Still log loudly — a silent "Pending" default previously made
+    // real outages indistinguishable from "not yet submitted".
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[checkQuotationStatus] ERPNext check failed — falling back to Pending:",
+      err instanceof Error ? err.message : err
+    );
     return "Pending";
   }
 }
@@ -1224,6 +1252,7 @@ export interface ItemSearchResult {
   description?: string;
   uom: string;
   item_group?: string;
+  disabled?: 0 | 1;
 }
 
 export interface ItemGroupOption {
@@ -1235,7 +1264,6 @@ export interface ItemGroupOption {
 export interface GetItemsOptions {
   search?: string;
   itemGroup?: string;
-  warehouse?: string;
   limit?: number;
 }
 
@@ -1246,6 +1274,7 @@ interface RawItem {
   description?: string;
   stock_uom?: string;
   item_group?: string;
+  disabled?: 0 | 1;
 }
 
 function normalizeGetItemsArgs(
@@ -1275,8 +1304,8 @@ export async function getItemGroups(): Promise<ItemGroupOption[]> {
 }
 
 /**
- * Item list with normalized output. Supports optional `itemGroup` and future
- * `warehouse` filters. When `search` is set, matches `item_name` (like).
+ * Item list with normalized output. Supports optional `itemGroup` filters.
+ * When `search` is set, matches `item_name` (like).
  */
 export async function getItems(
   searchOrOptions: string | GetItemsOptions = "",
@@ -1294,10 +1323,6 @@ export async function getItems(
   if (opts.itemGroup) {
     filters.push(["item_group", "=", opts.itemGroup]);
   }
-  // Reserved for future warehouse-based filtering.
-  if (opts.warehouse) {
-    filters.push(["default_warehouse", "=", opts.warehouse]);
-  }
 
   const raw = await apiGet<MaybeEnveloped<RawItem[]>>(
     buildResourceUrl(ITEM_DOCTYPE),
@@ -1310,6 +1335,7 @@ export async function getItems(
           "stock_uom",
           "description",
           "item_group",
+          "disabled",
         ]),
         filters: JSON.stringify(filters),
         limit_page_length: opts.limit ?? 20,
@@ -1328,6 +1354,7 @@ export async function getItems(
       description: item.description,
       uom: item.stock_uom || "Nos",
       item_group: item.item_group,
+      disabled: item.disabled,
     };
   });
 }

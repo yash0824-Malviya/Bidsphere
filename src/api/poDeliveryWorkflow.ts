@@ -102,8 +102,8 @@ function getAllDeliveryStates(): PODeliveryState[] {
 
 function poRoute(role: NotificationTargetRole, poName: string): string {
   const enc = encodeURIComponent(poName);
-  if (role === "supplier") return `/supplier/purchase-orders/${enc}`;
-  if (role === "warehouse") return `/p2p/grn/new?po=${enc}`;
+  if (role === "supplier") return `/supplier/po/${enc}`;
+  if (role === "warehouse") return `/warehouse/inventory/create-grn?po=${enc}`;
   return `/p2p/purchase-orders/${enc}`;
 }
 

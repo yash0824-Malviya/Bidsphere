@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import {
   AlertTriangle,
@@ -18,9 +18,7 @@ import {
   Info,
   Layers,
   Loader2,
-  MessageSquare,
   Scale,
-  Send,
   ShieldCheck,
   User,
   XCircle,
@@ -29,27 +27,26 @@ import {
 import { getRFQ, getSupplierQuotations, fetchRawSQ } from "../../api/sourcing";
 import {
   getLegalDocs,
-  updateLegalDocFlag,
+  updateLegalDocs,
   submitLegalReview,
 } from "../../api/legalDocs";
-import type { LegalDocumentSet, LegalDocFlagField } from "../../api/legalDocs";
-import {
-  getApprovalState,
-  saveApprovalState,
-} from "../../api/rfqApprovalWorkflow";
-import { updateReviewStatus, addComment } from "../../api/legalReviews";
+import type { LegalDocumentItemSummary, LegalDocumentSet } from "../../api/legalDocs";
 import { triggerLegalDocumentsRequested } from "../../api/notifications";
-import { getFileObjectUrl } from "../../api/legalDocsStorage";
+import { getFullFileUrl } from "../../api/legalDocsStorage";
+import { getLatestAnalysisSnapshot } from "../../api/supplierScoringResults";
 import { useAuthStore } from "../../store/authStore";
 import { formatCurrency, formatDate } from "../../utils/format";
 import { Skeleton } from "../../components/Skeleton";
-import type {
-  RFQ,
-  SupplierQuotation,
-  RFQApprovalState,
-  AIRecommendation,
-  LegalReviewStatus,
-} from "../../types/erpnext";
+import type { RFQ, SupplierQuotation, AIRecommendation } from "../../types/erpnext";
+
+/**
+ * Local decision-status type matching the ERPNext "Legal Document Review"
+ * DocType's `review_status` field EXACTLY. This is intentionally distinct
+ * from `LegalReviewStatus` (types/erpnext.ts), which belongs to the legacy
+ * RFQ-workflow system — this page is now driven ONLY by the DocType, which
+ * is the single source of truth for the review verdict.
+ */
+type DocReviewStatus = "Pending" | "Approved" | "Rejected";
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                    */
@@ -89,12 +86,6 @@ function readSavedAnalysis(rfqName: string): AIRecommendation | null {
   }
 }
 
-const DOC_REVIEW_ITEMS = [
-  { id: "terms", label: "Terms & Conditions Review", docKey: "terms_pdf", noteKey: "terms_note", description: "Verify all contractual terms are acceptable and within company policy" },
-  { id: "warranty", label: "Warranty Review", docKey: "warranty_pdf", noteKey: "warranty_note", description: "Validate warranty terms, duration, and coverage" },
-  { id: "insurance", label: "Insurance Review", docKey: "insurance_pdf", noteKey: "insurance_note", description: "Verify supplier insurance certificates and coverage adequacy" },
-];
-
 /* -------------------------------------------------------------------------- */
 /*  Main component                                                             */
 /* -------------------------------------------------------------------------- */
@@ -102,19 +93,15 @@ const DOC_REVIEW_ITEMS = [
 export default function LegalReviewDetailPage() {
   const { rfqId, sqName } = useParams<{ rfqId?: string; sqName?: string }>();
   const user = useAuthStore((s) => s.user);
+  const queryClient = useQueryClient();
 
-  const docsFromSq = useMemo(() => {
-    if (sqName) {
-      return getLegalDocs(sqName);
-    }
-    return null;
-  }, [sqName]);
+  const [legalDocs, setLegalDocs] = useState<LegalDocumentSet | null>(null);
+  const [loadingDocs, setLoadingDocs] = useState(true);
 
   const decodedId = useMemo(() => {
     if (rfqId) return decodeURIComponent(rfqId);
-    if (docsFromSq?.rfq_name) return docsFromSq.rfq_name;
-    return "";
-  }, [rfqId, docsFromSq]);
+    return legalDocs?.rfq_name ?? "";
+  }, [rfqId, legalDocs?.rfq_name]);
 
   // eslint-disable-next-line no-console
   console.log("[LegalReviewDetail] Route loaded", {
@@ -168,63 +155,110 @@ export default function LegalReviewDetailPage() {
   const rfqItems = rfq?.items ?? [];
   const rfqSuppliers = rfq?.suppliers ?? [];
 
-  const approvalState = useMemo(() => {
-    if (!decodedId) return null;
-    const existing = getApprovalState(decodedId);
-    if (existing) {
-      // eslint-disable-next-line no-console
-      console.log("[LegalReviewDetail] Approval state found:", existing.workflow_step);
-      return existing;
-    }
-
-    if (!rfq) return null;
-
-    const firstSupplier =
-      rfqSuppliers[0]?.supplier ??
-      quotations[0]?.supplier ??
-      "";
-    const bestQuote = quotations.length > 0
-      ? quotations.reduce((best, q) =>
-          (q.grand_total ?? 0) > (best.grand_total ?? 0) ? q : best
-        )
-      : null;
-
-    // eslint-disable-next-line no-console
-    console.log("[LegalReviewDetail] No approval state — creating from RFQ:", decodedId, "supplier:", firstSupplier);
-    const tempState: RFQApprovalState = {
-      rfq: decodedId,
-      rfq_title: parsed.title,
-      company: rfq.company ?? "",
-      selected_supplier: firstSupplier,
-      selected_supplier_total: bestQuote?.grand_total ?? 0,
-      workflow_step: "Pending Legal Review",
-      legal_status: "Pending Legal Review",
-      finance_status: "Pending Finance Review",
-      submitted_at: rfq.creation ?? new Date().toISOString(),
-      submitted_by: rfq.owner ?? "",
-      legal_comments: [],
-      finance_comments: [],
-    };
-    saveApprovalState(tempState);
-    return tempState;
-  }, [decodedId, rfq, rfqSuppliers, quotations]);
-
+  // Selected supplier is derived ENTIRELY from ERPNext data — the Legal
+  // Document Review DocType's `supplier` field once it exists (it always
+  // does once a review has been created), falling back to the live RFQ/
+  // Supplier Quotation queries while the record is still loading. No
+  // localStorage or synthesised client-side state is involved.
   const selectedSupplier = useMemo(() => {
-    if (sqName && docsFromSq?.supplier) return docsFromSq.supplier;
-    return approvalState?.selected_supplier;
-  }, [sqName, docsFromSq, approvalState]);
+    if (legalDocs?.supplier) return legalDocs.supplier;
+    return rfqSuppliers[0]?.supplier ?? quotations[0]?.supplier ?? "";
+  }, [legalDocs?.supplier, rfqSuppliers, quotations]);
 
-  const aiAnalysis = useMemo(() => readSavedAnalysis(decodedId), [decodedId]);
+  const [aiAnalysis, setAiAnalysis] = useState<AIRecommendation | null>(() =>
+    readSavedAnalysis(decodedId)
+  );
+  useEffect(() => {
+    const cached = readSavedAnalysis(decodedId);
+    setAiAnalysis(cached);
+    // Cross-device fallback: Procurement may have run the analysis on a
+    // different browser/device than the one Legal is reviewing from.
+    // ERPNext's Supplier Scoring Result snapshot is the source of truth.
+    if (!cached && decodedId) {
+      getLatestAnalysisSnapshot<{ analysis?: AIRecommendation }>(decodedId)
+        .then((snapshot) => {
+          if (snapshot?.analysis) setAiAnalysis(snapshot.analysis);
+        })
+        .catch(() => {
+          /* best-effort */
+        });
+    }
+  }, [decodedId]);
 
   /* ── Selected Supplier Quotation — fetch ONLY the one SQ for the selected supplier ── */
 
   // Step 1: Determine the selected SQ name from the quotations list
   const selectedSQName = useMemo(() => {
     if (sqName) return sqName;
+    if (legalDocs?.sq_name) return legalDocs.sq_name;
     if (!selectedSupplier || quotations.length === 0) return null;
     const match = quotations.find((q) => q.supplier === selectedSupplier);
     return match?.name ?? null;
-  }, [sqName, selectedSupplier, quotations]);
+  }, [sqName, legalDocs?.sq_name, selectedSupplier, quotations]);
+
+  useEffect(() => {
+    const load = async () => {
+      const lookupSq = sqName ?? selectedSQName;
+      if (!lookupSq) {
+        if (!sqName) {
+          setLegalDocs(null);
+          setLoadingDocs(false);
+        }
+        return;
+      }
+      setLoadingDocs(true);
+      const docs = await getLegalDocs(lookupSq);
+      // eslint-disable-next-line no-console
+      console.log("[LegalReview] Loaded from ERPNext:", docs);
+      setLegalDocs(docs);
+      setLoadingDocs(false);
+    };
+    void load();
+  }, [sqName, selectedSQName]);
+
+  const handleViewPdf = useCallback(
+    async (field: "terms" | "warranty" | "insurance") => {
+      const url = legalDocs?.[`${field}_file_url`];
+      if (!url) {
+        toast.error("PDF not available");
+        return;
+      }
+      window.open(getFullFileUrl(url), "_blank", "noopener,noreferrer");
+
+      if (legalDocs?.name) {
+        try {
+          const updated = await updateLegalDocs(legalDocs.name, {
+            [`${field}_viewed`]: 1,
+          } as Partial<LegalDocumentSet>);
+          setLegalDocs(updated);
+        } catch {
+          toast.error("Could not mark document as viewed");
+        }
+      }
+    },
+    [legalDocs]
+  );
+
+  const handleApproveToggle = useCallback(
+    async (field: "terms" | "warranty" | "insurance", checked: boolean) => {
+      if (!legalDocs?.name) return;
+      try {
+        const updated = await updateLegalDocs(legalDocs.name, {
+          [`${field}_approved`]: checked ? 1 : 0,
+        } as Partial<LegalDocumentSet>);
+        setLegalDocs(updated);
+      } catch {
+        toast.error("Could not update approval status");
+      }
+    },
+    [legalDocs]
+  );
+
+  const allApproved = !!(
+    legalDocs?.terms_approved &&
+    legalDocs?.warranty_approved &&
+    legalDocs?.insurance_approved
+  );
 
   // Step 2: Fetch ONLY that single SQ as a raw object (not from list)
   const selectedSQQuery = useQuery<Record<string, unknown>>({
@@ -264,126 +298,19 @@ export default function LegalReviewDetailPage() {
     console.groupEnd();
   }, [rawSQ, selectedSQName]);
 
-  const [legalDocs, setLegalDocs] = useState<LegalDocumentSet | null>(null);
-  const [pdfUrls, setPdfUrls] = useState<Record<string, string>>({});
-  const [pdfLoadError, setPdfLoadError] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log('[LegalReview] Component mounted/updated')
-    // eslint-disable-next-line no-console
-    console.log('[LegalReview] sqName param/prop:', selectedSQName)
-    // eslint-disable-next-line no-console
-    console.log('[LegalReview] typeof sqName:', typeof selectedSQName)
-
-    if (selectedSQName) {
-      const directKey = `legal_docs_${selectedSQName}`
-      // eslint-disable-next-line no-console
-      console.log('[LegalReview] Looking for localStorage key:', directKey)
-      // eslint-disable-next-line no-console
-      console.log('[LegalReview] Raw value found:', localStorage.getItem(directKey))
-
-      const docs = getLegalDocs(selectedSQName);
-      // eslint-disable-next-line no-console
-      console.log('[LegalReview] getLegalDocs() returned:', docs)
-      // eslint-disable-next-line no-console
-      console.log('[LegalReview] Full index:', localStorage.getItem('legal_docs_index'))
-      // eslint-disable-next-line no-console
-      console.log('[LegalReview] Full legalDocs object:', JSON.stringify(docs, null, 2))
-
-      setLegalDocs(docs);
-    } else {
-      // eslint-disable-next-line no-console
-      console.warn('[LegalReview] sqName is empty/undefined — cannot look up documents')
-      setLegalDocs(null);
-    }
-  }, [selectedSQName]);
-
-  useEffect(() => {
-    if (!legalDocs) return;
-
-    const loadAllPdfs = async () => {
-      const fields = ['terms_pdf', 'warranty_pdf', 'insurance_pdf'];
-      const urls: Record<string, string> = {};
-      const errors: Record<string, boolean> = {};
-
-      for (const field of fields) {
-        const key = (legalDocs as any)[`${field}_key`];
-        // eslint-disable-next-line no-console
-        console.log(`[PDF Load] ${field} — key:`, key);
-        if (key) {
-          try {
-            const url = await getFileObjectUrl(key);
-            // eslint-disable-next-line no-console
-            console.log(`[PDF Load] ${field} — resolved URL:`, url ? 'SUCCESS' : 'NULL (blob not found in IndexedDB)');
-            if (url) {
-              urls[field] = url;
-            } else {
-              errors[field] = true;
-            }
-          } catch (err) {
-            // eslint-disable-next-line no-console
-            console.error(`[PDF Load] ${field} — error:`, err);
-            errors[field] = true;
-          }
-        }
-      }
-      setPdfUrls(urls);
-      setPdfLoadError(errors);
-    };
-
-    loadAllPdfs();
-
-    // Cleanup object URLs when component unmounts to avoid memory leaks
-    return () => {
-      Object.values(pdfUrls).forEach(url => URL.revokeObjectURL(url));
-    };
-  }, [legalDocs]);
-
-  const handleViewPdf = useCallback((
-    field: 'terms_pdf' | 'warranty_pdf' | 'insurance_pdf',
-    erpnextUrl?: string
-  ) => {
-    const url = pdfUrls[field] || erpnextUrl;
-    if (!url) {
-      toast.error('PDF not available');
-      return;
-    }
-    window.open(url, '_blank', 'noopener,noreferrer');
-
-    if (!selectedSQName) return;
-    const shortField = field.replace('_pdf', '');
-    const viewedField = `${shortField}_viewed` as LegalDocFlagField;
-    const updated = updateLegalDocFlag(selectedSQName, viewedField, true);
-    if (updated) setLegalDocs(updated);
-  }, [pdfUrls, selectedSQName]);
-
-  const handleApproveToggle = useCallback((
-    field: 'terms' | 'warranty' | 'insurance',
-    checked: boolean
-  ) => {
-    if (!selectedSQName) return;
-    const approvedField = `${field}_approved` as LegalDocFlagField;
-    const updated = updateLegalDocFlag(selectedSQName, approvedField, checked);
-    if (updated) {
-      setLegalDocs(updated);
-      if (approvalState) {
-        approvalState[`${field}_approved` as 'terms_approved' | 'warranty_approved' | 'insurance_approved'] = checked;
-        saveApprovalState(approvalState);
-      }
-    }
-  }, [selectedSQName, approvalState]);
-
-  const allApproved = !!(
-    legalDocs?.terms_approved &&
-    legalDocs?.warranty_approved &&
-    legalDocs?.insurance_approved
-  );
-
   const checklistComplete = allApproved;
 
-  /* ── Notes ── */
-  const [reviewNotes, setReviewNotes] = useState("");
+  const itemSummary: LegalDocumentItemSummary[] = useMemo(() => {
+    if (!legalDocs?.item_summary) return [];
+    try {
+      const parsed = JSON.parse(legalDocs.item_summary);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }, [legalDocs?.item_summary]);
+
+  /* ── Decision comments (mandatory; written to ERPNext on submit) ── */
   const [actionReason, setActionReason] = useState("");
 
   /* ── Expanded sections ── */
@@ -401,39 +328,12 @@ export default function LegalReviewDetailPage() {
     setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }));
   }, []);
 
-  /* ── Submission state ── */
-  const [submitted, setSubmitted] = useState(false);
+  /* ── Submission state — derived entirely from the ERPNext DocType.
+   * `review_status` IS the single source of truth: "Pending" means the
+   * decision hasn't been made yet; anything else means it's final. ── */
+  const submitted = legalDocs?.review_status !== undefined && legalDocs.review_status !== "Pending";
 
-  useEffect(() => {
-    if (approvalState?.legal_status === "Pending Legal Review") {
-      setSubmitted(false);
-    } else if (approvalState?.legal_status) {
-      setSubmitted(true);
-    }
-  }, [approvalState?.legal_status]);
-
-  /* ── Comments ── */
-  const [newComment, setNewComment] = useState("");
-  const [addingComment, setAddingComment] = useState(false);
-
-  const handleAddComment = useCallback(async () => {
-    if (!newComment.trim()) return;
-    setAddingComment(true);
-    try {
-      addComment(decodedId, {
-        comment: newComment.trim(),
-        comment_by: user?.email ?? "",
-        comment_date: new Date().toISOString(),
-        action: "Comment",
-      });
-      toast.success("Comment added");
-      setNewComment("");
-    } catch {
-      toast.error("Failed to add comment");
-    } finally {
-      setAddingComment(false);
-    }
-  }, [decodedId, newComment, user?.email]);
+  const [submitting, setSubmitting] = useState(false);
 
   const approvedCount = useMemo(() => {
     return [
@@ -508,7 +408,7 @@ export default function LegalReviewDetailPage() {
     rfqName: rfq.name,
     items: rfqItems.length,
     suppliers: rfqSuppliers.length,
-    approvalState: approvalState?.workflow_step ?? "none",
+    reviewStatus: legalDocs?.review_status ?? "none",
     hasAI: !!aiAnalysis,
   });
 
@@ -519,8 +419,7 @@ export default function LegalReviewDetailPage() {
     (s) => s.name === selectedSupplier
   );
 
-  const currentLegalStatus = approvalState?.legal_status ?? "Pending Legal Review";
-  const comments = approvalState?.legal_comments ?? [];
+  const currentLegalStatus: DocReviewStatus = legalDocs?.review_status ?? "Pending";
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -553,18 +452,17 @@ export default function LegalReviewDetailPage() {
         </div>
       </div>
 
-      {/* ── Reviewer / Timestamp Banner ── */}
-      {approvalState?.legal_reviewer && submitted && (
+      {/* ── Reviewer / Timestamp Banner — sourced directly from the ERPNext
+          "Legal Document Review" record (approved_by / approved_on). ── */}
+      {legalDocs?.approved_by && submitted && (
         <div className="mb-5 flex items-center gap-3 rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3">
           <User className="h-4 w-4 text-neutral-400" />
           <div className="text-sm text-neutral-600">
             Reviewed by{" "}
             <span className="font-semibold text-neutral-900">
-              {approvalState.legal_reviewer}
+              {legalDocs.approved_by}
             </span>
-            {approvalState.legal_review_date && (
-              <> on {formatDate(approvalState.legal_review_date)}</>
-            )}
+            {legalDocs.approved_on && <> on {formatDate(legalDocs.approved_on)}</>}
           </div>
         </div>
       )}
@@ -665,20 +563,45 @@ export default function LegalReviewDetailPage() {
                   value={
                     selectedQuote?.grand_total != null
                       ? formatCurrency(selectedQuote.grand_total)
-                      : approvalState?.selected_supplier_total != null
-                      ? formatCurrency(approvalState.selected_supplier_total)
+                      : legalDocs?.grand_total != null
+                      ? formatCurrency(legalDocs.grand_total)
                       : "—"
                   }
                   highlight
                 />
                 <InfoField
                   label="Submitted By"
-                  value={approvalState?.submitted_by ?? "—"}
+                  value={legalDocs?.procurement_manager ?? rfq?.owner ?? "—"}
                 />
+                <InfoField label="Company" value={legalDocs?.company} />
+                <InfoField
+                  label="Procurement Manager"
+                  value={legalDocs?.procurement_manager}
+                />
+                <InfoField
+                  label="Submission Date"
+                  value={legalDocs?.submission_date ? formatDate(legalDocs.submission_date) : undefined}
+                />
+                <InfoField
+                  label="Quote Valid Till"
+                  value={legalDocs?.valid_till ? formatDate(legalDocs.valid_till) : undefined}
+                />
+                <InfoField label="Payment Terms" value={legalDocs?.payment_terms} />
               </div>
 
+              {legalDocs?.supplier_notes && (
+                <div className="rounded-lg border border-neutral-100 bg-neutral-50 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-neutral-400 mb-1">
+                    Supplier Notes
+                  </p>
+                  <p className="text-sm leading-relaxed text-neutral-700 whitespace-pre-wrap">
+                    {legalDocs.supplier_notes}
+                  </p>
+                </div>
+              )}
+
               {/* Supplier quotation items */}
-              {selectedQuote && (selectedQuote.items ?? []).length > 0 && (
+              {selectedQuote && (selectedQuote.items ?? []).length > 0 ? (
                 <div>
                   <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
                     Quoted Line Items
@@ -716,7 +639,54 @@ export default function LegalReviewDetailPage() {
                     </table>
                   </div>
                 </div>
-              )}
+              ) : itemSummary.length > 0 ? (
+                <div>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
+                    Quoted Line Items
+                  </p>
+                  <div className="overflow-x-auto rounded-lg border border-neutral-200">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-neutral-100 bg-neutral-50/50">
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-neutral-500">Item</th>
+                          <th className="px-3 py-2 text-right text-xs font-semibold text-neutral-500">Qty</th>
+                          <th className="px-3 py-2 text-left text-xs font-semibold text-neutral-500">UOM</th>
+                          <th className="px-3 py-2 text-right text-xs font-semibold text-neutral-500">Rate</th>
+                          <th className="px-3 py-2 text-right text-xs font-semibold text-neutral-500">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {itemSummary.map((item, idx) => (
+                          <tr key={idx} className="border-b border-neutral-50 last:border-0">
+                            <td className="px-3 py-2 font-medium text-neutral-900">
+                              {item.item_code}
+                              {item.item_name && item.item_name !== item.item_code && (
+                                <span className="ml-1 text-xs text-neutral-500">({item.item_name})</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-right tabular-nums">{item.qty}</td>
+                            <td className="px-3 py-2 text-neutral-600">{item.uom ?? "—"}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(item.rate)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums font-semibold">
+                              {formatCurrency(item.amount ?? item.qty * item.rate)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t border-neutral-200 bg-neutral-50/50">
+                          <td colSpan={4} className="px-3 py-2 text-right text-xs font-bold uppercase text-neutral-500">
+                            Grand Total
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums font-bold text-neutral-900">
+                            {formatCurrency(legalDocs?.grand_total ?? 0)}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              ) : null}
 
               {/* Other suppliers invited */}
               {rfqSuppliers.length > 1 && (
@@ -869,11 +839,15 @@ export default function LegalReviewDetailPage() {
             </span>
           }
         >
-          {!legalDocs ? (
+          {!loadingDocs && !legalDocs ? (
             <div style={{ padding: '40px', textAlign: 'center', color: '#9ca3af' }}>
               <div style={{ fontSize: '40px' }}>📭</div>
               <p className="font-semibold text-neutral-600 mt-2">No documents submitted yet for this Supplier Quotation.</p>
-              <p style={{ fontSize: '12px', marginTop: '4px' }}>The supplier hasn't completed their quotation with legal attachments.</p>
+              <p style={{ fontSize: '12px', marginTop: '4px' }}>The supplier hasn&apos;t completed their quotation with legal attachments.</p>
+            </div>
+          ) : loadingDocs ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-neutral-400" />
             </div>
           ) : (
             <div className="space-y-3">
@@ -888,23 +862,20 @@ export default function LegalReviewDetailPage() {
               </div>
 
               {[
-                { field: 'terms_pdf' as const, shortField: 'terms' as const, label: 'Terms & Conditions', icon: '📄' },
-                { field: 'warranty_pdf' as const, shortField: 'warranty' as const, label: 'Warranty Document', icon: '🛡️' },
-                { field: 'insurance_pdf' as const, shortField: 'insurance' as const, label: 'Insurance Certificate', icon: '🏥' }
-              ].map(({ field, shortField, label, icon }) => {
-                const erpnextUrl = rawSQ?.[`custom_${shortField}_pdf`] as string | undefined;
-                const pdfName = legalDocs?.[`${field}_name` as keyof LegalDocumentSet] as string | undefined
-                  || (erpnextUrl ? erpnextUrl.split('/').pop() : undefined);
-                const note = legalDocs?.[`${shortField}_note` as keyof LegalDocumentSet] as string | undefined
-                  || (rawSQ?.[`custom_${shortField}_note`] as string | undefined);
-                const url = pdfUrls[field] || erpnextUrl;
-                const hasPdf = !!(legalDocs?.[`${field}_key` as keyof LegalDocumentSet] || erpnextUrl);
+                { shortField: 'terms' as const, label: 'Terms & Conditions', icon: '📄' },
+                { shortField: 'warranty' as const, label: 'Warranty Document', icon: '🛡️' },
+                { shortField: 'insurance' as const, label: 'Insurance Certificate', icon: '🏥' }
+              ].map(({ shortField, label, icon }) => {
+                const fileUrl = legalDocs?.[`${shortField}_file_url`];
+                const pdfName = legalDocs?.[`${shortField}_file_name` as keyof LegalDocumentSet] as string | undefined
+                  || (fileUrl ? fileUrl.split('/').pop() : undefined);
+                const note = legalDocs?.[`${shortField}_note` as keyof LegalDocumentSet] as string | undefined;
+                const hasPdf = !!fileUrl;
                 const isViewed = !!legalDocs?.[`${shortField}_viewed` as keyof LegalDocumentSet];
                 const isApproved = !!legalDocs?.[`${shortField}_approved` as keyof LegalDocumentSet];
-                const loadFailed = pdfLoadError[field] && !erpnextUrl;
 
                 return (
-                  <div key={field} style={{
+                  <div key={shortField} style={{
                     border: `1px solid ${isApproved ? '#86efac' : isViewed ? '#bfdbfe' : '#e5e7eb'}`,
                     borderRadius: '10px', padding: '16px', marginBottom: '12px',
                     background: isApproved ? '#f0fdf4' : 'white'
@@ -931,7 +902,7 @@ export default function LegalReviewDetailPage() {
                         <>
                           <button
                             type="button"
-                            onClick={() => handleViewPdf(field, erpnextUrl)}
+                            onClick={() => void handleViewPdf(shortField)}
                             style={{
                               padding: '6px 16px', background: '#2D6A4F', color: 'white',
                               border: 'none', borderRadius: '6px', cursor: 'pointer',
@@ -939,10 +910,12 @@ export default function LegalReviewDetailPage() {
                               display: 'flex', alignItems: 'center', gap: '6px'
                             }}
                           >👁 View PDF</button>
-                          {url && (
+                          {fileUrl && (
                             <a
-                              href={url}
+                              href={getFullFileUrl(fileUrl)}
                               download={pdfName}
+                              target="_blank"
+                              rel="noopener noreferrer"
                               style={{
                                 padding: '6px 16px', background: 'white', color: '#2D6A4F',
                                 border: '1px solid #2D6A4F', borderRadius: '6px',
@@ -950,14 +923,6 @@ export default function LegalReviewDetailPage() {
                                 display: 'flex', alignItems: 'center', gap: '6px'
                               }}
                             >⬇ Download PDF</a>
-                          )}
-                          {!url && loadFailed && (
-                            <span style={{ fontSize: '12px', color: '#dc2626', fontWeight: 500, alignSelf: 'center' }}>
-                              ⚠️ File data not found in browser storage
-                            </span>
-                          )}
-                          {!url && !loadFailed && hasPdf && (
-                            <span style={{ fontSize: '12px', color: '#9ca3af', alignSelf: 'center' }}>Loading PDF…</span>
                           )}
                         </>
                       ) : (
@@ -1009,178 +974,73 @@ export default function LegalReviewDetailPage() {
           )}
         </CollapsibleSection>
 
-        {/* ═══════════════ Section: Review Notes ═══════════════ */}
+        {/* ═══════════════ Section: Decision Comments ═══════════════
+            This single field is what gets written to ERPNext's
+            `legal_comments` (Approve or Reject) and `rejection_reason`
+            (Reject only) the moment a decision is submitted below. */}
         <CollapsibleSection
           id="notes"
-          icon={MessageSquare}
-          title="Review Notes & Reasoning"
+          icon={Gavel}
+          title="Decision Comments"
           expanded={expandedSections.notes}
           onToggle={toggleSection}
         >
-          <div className="space-y-4">
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-neutral-500">
-                Review Notes <span className="text-neutral-400">(optional)</span>
-              </label>
-              <textarea
-                value={reviewNotes}
-                onChange={(e) => setReviewNotes(e.target.value)}
-                placeholder="General observations, concerns, or notes about this RFQ…"
-                rows={3}
-                disabled={submitted}
-                className="w-full resize-none rounded-lg border border-neutral-300 px-3 py-2.5 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-neutral-100 disabled:text-neutral-500"
-              />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-neutral-500">
-                Decision Reason <span className="text-danger-500">*</span>
-              </label>
-              <textarea
-                value={actionReason}
-                onChange={(e) => setActionReason(e.target.value)}
-                placeholder="Provide the reason for your approval, rejection, or change request. This is mandatory before submitting a decision."
-                rows={4}
-                disabled={submitted}
-                className="w-full resize-none rounded-lg border border-neutral-300 px-3 py-2.5 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-neutral-100 disabled:text-neutral-500"
-              />
-              {!submitted && !actionReason.trim() && (
-                <p className="mt-1 text-xs text-neutral-400">
-                  You must provide a reason before any action can be taken.
-                </p>
-              )}
-            </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-neutral-500">
+              Comments <span className="text-danger-500">*</span>
+            </label>
+            <textarea
+              value={actionReason}
+              onChange={(e) => setActionReason(e.target.value)}
+              placeholder="Provide the reason for your approval or rejection. This is mandatory before submitting a decision and is saved permanently on the Legal Document Review record in ERPNext."
+              rows={4}
+              disabled={submitted}
+              className="w-full resize-none rounded-lg border border-neutral-300 px-3 py-2.5 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-neutral-100 disabled:text-neutral-500"
+            />
+            {!submitted && !actionReason.trim() && (
+              <p className="mt-1 text-xs text-neutral-400">
+                You must provide a reason before any action can be taken.
+              </p>
+            )}
           </div>
         </CollapsibleSection>
 
-        {/* ═══════════════ Section: Comments / Timeline ═══════════════ */}
+        {/* ═══════════════ Section: Review Timeline ═══════════════
+            Every fact shown here is read live from ERPNext — the "Legal
+            Document Review" record (submission_date / procurement_manager /
+            review_status / approved_by / approved_on) and the RFQ's own
+            custom_finance_* fields. Nothing is read from localStorage. */}
         <CollapsibleSection
           id="timeline"
           icon={Clock}
-          title="Review Timeline & Comments"
+          title="Review Timeline"
           expanded={expandedSections.timeline}
           onToggle={toggleSection}
-          badge={
-            comments.length > 0 ? (
-              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
-                {comments.length}
-              </span>
-            ) : undefined
-          }
         >
-          {/* Workflow timeline */}
-          <div className="mb-4 space-y-3">
+          <div className="space-y-3">
             <TimelineStep
               icon={Layers}
-              label="RFQ Submitted for Review"
-              date={approvalState?.submitted_at}
-              by={approvalState?.submitted_by}
+              label="RFQ Submitted for Legal Review"
+              date={legalDocs?.submission_date}
+              by={legalDocs?.procurement_manager ?? rfq?.owner}
               active
             />
             <TimelineStep
               icon={Scale}
               label="Legal Review"
-              date={approvalState?.legal_review_date}
-              by={approvalState?.legal_reviewer}
+              date={legalDocs?.approved_on}
+              by={legalDocs?.approved_by}
               status={currentLegalStatus}
-              active={currentLegalStatus !== "Pending Legal Review"}
+              active={currentLegalStatus !== "Pending"}
             />
             <TimelineStep
               icon={DollarSign}
               label="Finance Review"
-              date={approvalState?.finance_review_date}
-              by={approvalState?.finance_reviewer}
+              date={(rfq as unknown as Record<string, unknown> | undefined)?.custom_finance_review_date as string | undefined}
+              by={(rfq as unknown as Record<string, unknown> | undefined)?.custom_finance_reviewer as string | undefined}
               active={currentLegalStatus === "Approved"}
               dimmed={currentLegalStatus !== "Approved"}
             />
-          </div>
-
-          {/* Document Approval Audit */}
-          {(approvalState?.terms_approved || approvalState?.warranty_approved || approvalState?.insurance_approved) && (
-            <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
-                Document Approvals
-              </p>
-              <div className="space-y-1.5">
-                {DOC_REVIEW_ITEMS.map((item) => {
-                  const key = `${item.id}_approved` as "terms_approved" | "warranty_approved" | "insurance_approved";
-                  const approved = !!approvalState?.[key];
-                  return (
-                    <div key={item.id} className="flex items-center gap-2 text-xs">
-                      {approved ? (
-                        <CheckCircle2 className="h-3.5 w-3.5 text-success-600" />
-                      ) : (
-                        <XCircle className="h-3.5 w-3.5 text-neutral-300" />
-                      )}
-                      <span className={approved ? "font-medium text-success-700" : "text-neutral-400"}>
-                        {item.label}
-                      </span>
-                    </div>
-                  );
-                })}
-                {approvalState?.legal_reviewer && (
-                  <p className="mt-1.5 text-[10px] text-neutral-400">
-                    Reviewed by {approvalState.legal_reviewer}
-                    {approvalState.legal_review_date && ` on ${formatDate(approvalState.legal_review_date)}`}
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Comments */}
-          {comments.length > 0 && (
-            <div className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wider text-neutral-400">
-                Comments
-              </p>
-              {comments.map((c, idx) => (
-                <div key={idx} className="rounded-xl border border-neutral-200 bg-white p-3.5 shadow-sm">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
-                        {(c.comment_by?.[0] ?? "?").toUpperCase()}
-                      </div>
-                      <div>
-                        <p className="text-xs font-semibold text-neutral-900">{c.comment_by}</p>
-                        <p className="text-[10px] text-neutral-400">{c.comment_date ? formatDate(c.comment_date) : ""}</p>
-                      </div>
-                    </div>
-                    {c.action && c.action !== "Comment" && (
-                      <ActionBadge action={c.action} />
-                    )}
-                  </div>
-                  <p className="mt-2 text-sm leading-relaxed text-neutral-700">{c.comment}</p>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Add comment */}
-          <div className="mt-4 border-t border-neutral-100 pt-4">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
-              Add Comment
-            </p>
-            <div className="flex gap-2">
-              <textarea
-                value={newComment}
-                onChange={(e) => setNewComment(e.target.value)}
-                placeholder="Add a comment or note…"
-                rows={2}
-                className="flex-1 resize-none rounded-lg border border-neutral-300 px-3 py-2 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-              />
-              <button
-                type="button"
-                onClick={handleAddComment}
-                disabled={!newComment.trim() || addingComment}
-                className="flex h-10 w-10 flex-shrink-0 items-center justify-center self-end rounded-lg bg-primary text-white shadow-sm transition hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {addingComment ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Send className="h-4 w-4" />
-                )}
-              </button>
-            </div>
           </div>
         </CollapsibleSection>
 
@@ -1194,35 +1054,38 @@ export default function LegalReviewDetailPage() {
         >
           <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
             <button
-              disabled={!allApproved || submitted}
+              disabled={!allApproved || submitted || submitting || !actionReason.trim()}
               onClick={async () => {
-                if (!selectedSQName) {
-                  toast.error('No Supplier Quotation selected')
+                if (!legalDocs?.name) {
+                  toast.error('No Legal Document Review record found')
                   return
                 }
-                const updated = submitLegalReview(
-                  selectedSQName,
-                  'approved',
-                  user?.email ?? 'System',
-                  'All documents viewed and approved'
-                )
-                setLegalDocs(updated)
-                
-                // Sync with ERPNext & approval workflow
+                if (!actionReason.trim()) {
+                  toast.error('Provide a decision reason before approving.')
+                  return
+                }
+                setSubmitting(true);
                 try {
-                  if (approvalState) {
-                    approvalState.terms_approved = true;
-                    approvalState.warranty_approved = true;
-                    approvalState.insurance_approved = true;
-                    approvalState.legal_reviewer = user?.email ?? "";
-                    approvalState.legal_review_date = new Date().toISOString();
-                    saveApprovalState(approvalState);
-                  }
-                  await updateReviewStatus(decodedId, 'Approved', user?.email ?? "", 'All documents viewed and approved');
-                  setSubmitted(true);
+                  // The ERPNext "Legal Document Review" document is the ONLY
+                  // place this decision is written — review_status,
+                  // approved_by, approved_on, and legal_comments all land on
+                  // the same document, server-side, via the backend gateway.
+                  const updated = await submitLegalReview(
+                    legalDocs.name,
+                    'Approved',
+                    user?.email ?? 'System',
+                    actionReason.trim()
+                  )
+                  setLegalDocs(updated);
+                  // Sync any other Legal views open in this session (Dashboard,
+                  // Pending/History list) — cross-device sync needs no code at
+                  // all here since every page fetches fresh from ERPNext.
+                  await queryClient.invalidateQueries({ queryKey: ["legal-document-reviews"] });
                   toast.success('Legal review approved ✅')
-                } catch {
-                  toast.error('Failed to update ERPNext review status')
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : 'Failed to update legal review')
+                } finally {
+                  setSubmitting(false);
                 }
               }}
               style={{
@@ -1230,43 +1093,44 @@ export default function LegalReviewDetailPage() {
                 background: allApproved && !submitted ? '#2D6A4F' : '#d1d5db',
                 color: 'white',
                 border: 'none', borderRadius: '8px',
-                cursor: allApproved && !submitted ? 'pointer' : 'not-allowed',
+                cursor: allApproved && !submitted && !submitting ? 'pointer' : 'not-allowed',
                 fontSize: '14px', fontWeight: 700,
                 opacity: allApproved && !submitted ? 1 : 0.8
               }}
             >
-              {allApproved
+              {submitting
+                ? 'Submitting…'
+                : allApproved
                 ? '✅ Approve Review'
                 : `Approve Review (${approvedCount}/3 documents approved)`}
             </button>
             <button
-              disabled={submitted}
+              disabled={submitted || submitting || !actionReason.trim()}
               onClick={async () => {
-                if (!selectedSQName) {
-                  toast.error('No Supplier Quotation selected')
+                if (!legalDocs?.name) {
+                  toast.error('No Legal Document Review record found')
                   return
                 }
-                const note = prompt('Reason for rejection:')
-                if (note) {
-                  const updated = submitLegalReview(selectedSQName, 'rejected', user?.email ?? 'System', note)
-                  setLegalDocs(updated)
-                  
-                  // Sync with ERPNext & approval workflow
-                  try {
-                    if (approvalState) {
-                      approvalState.terms_approved = !!legalDocs?.terms_approved;
-                      approvalState.warranty_approved = !!legalDocs?.warranty_approved;
-                      approvalState.insurance_approved = !!legalDocs?.insurance_approved;
-                      approvalState.legal_reviewer = user?.email ?? "";
-                      approvalState.legal_review_date = new Date().toISOString();
-                      saveApprovalState(approvalState);
-                    }
-                    await updateReviewStatus(decodedId, 'Rejected', user?.email ?? "", note);
-                    setSubmitted(true);
-                    toast.error('Legal review rejected')
-                  } catch {
-                    toast.error('Failed to update ERPNext review status')
-                  }
+                if (!actionReason.trim()) {
+                  toast.error('Provide a rejection reason before rejecting.')
+                  return
+                }
+                setSubmitting(true);
+                try {
+                  const updated = await submitLegalReview(
+                    legalDocs.name,
+                    'Rejected',
+                    user?.email ?? 'System',
+                    actionReason.trim(),
+                    actionReason.trim()
+                  )
+                  setLegalDocs(updated);
+                  await queryClient.invalidateQueries({ queryKey: ["legal-document-reviews"] });
+                  toast.error('Legal review rejected')
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : 'Failed to update legal review')
+                } finally {
+                  setSubmitting(false);
                 }
               }}
               style={{
@@ -1275,13 +1139,13 @@ export default function LegalReviewDetailPage() {
                 color: submitted ? '#9ca3af' : '#dc2626',
                 border: `1px solid ${submitted ? '#e5e7eb' : '#fca5a5'}`,
                 borderRadius: '8px',
-                cursor: submitted ? 'not-allowed' : 'pointer',
+                cursor: submitted || submitting ? 'not-allowed' : 'pointer',
                 fontSize: '14px', fontWeight: 600,
                 opacity: submitted ? 0.6 : 1
               }}
             >❌ Reject</button>
 
-            {(!legalDocs || (legalDocs.review_status === 'pending' && !legalDocs.terms_pdf_key && !legalDocs.warranty_pdf_key && !legalDocs.insurance_pdf_key)) && !submitted && (
+            {(!loadingDocs && !legalDocs || (legalDocs?.review_status === 'Pending' && !legalDocs.terms_file_url && !legalDocs.warranty_file_url && !legalDocs.insurance_file_url)) && !submitted && (
               <button
                 onClick={() => {
                   if (!selectedSQName) {
@@ -1302,16 +1166,21 @@ export default function LegalReviewDetailPage() {
             )}
           </div>
 
-          {legalDocs?.review_status !== 'pending' && (
+          {legalDocs?.review_status !== 'Pending' && (
             <div style={{
               marginTop: '16px', padding: '12px 16px',
-              background: legalDocs?.review_status === 'approved' ? '#f0fdf4' : '#fff5f5',
-              border: `1px solid ${legalDocs?.review_status === 'approved' ? '#86efac' : '#fca5a5'}`,
+              background: legalDocs?.review_status === 'Approved' ? '#f0fdf4' : '#fff5f5',
+              border: `1px solid ${legalDocs?.review_status === 'Approved' ? '#86efac' : '#fca5a5'}`,
               borderRadius: '8px', fontSize: '13px'
             }}>
-              <strong>{legalDocs?.review_status === 'approved' ? '✅ Approved' : '❌ Rejected'}</strong> 
-              {' '}by {legalDocs?.reviewed_by} on {legalDocs?.reviewed_at ? new Date(legalDocs.reviewed_at).toLocaleString('en-US') : ''}
-              {legalDocs?.review_note && <div style={{ marginTop: '4px', color: '#6b7280' }}>{legalDocs.review_note}</div>}
+              <strong>{legalDocs?.review_status === 'Approved' ? '✅ Approved' : '❌ Rejected'}</strong>
+              {' '}by {legalDocs?.approved_by} on {legalDocs?.approved_on ? new Date(legalDocs.approved_on).toLocaleString('en-US') : ''}
+              {legalDocs?.legal_comments && <div style={{ marginTop: '4px', color: '#6b7280' }}>{legalDocs.legal_comments}</div>}
+              {legalDocs?.review_status === 'Rejected' && legalDocs?.rejection_reason && (
+                <div style={{ marginTop: '4px', color: '#dc2626', fontWeight: 600 }}>
+                  Rejection reason: {legalDocs.rejection_reason}
+                </div>
+              )}
             </div>
           )}
         </CollapsibleSection>
@@ -1406,9 +1275,9 @@ function ScoreCard({
   );
 }
 
-function LegalStatusBadge({ status }: { status: LegalReviewStatus }) {
-  const config: Record<LegalReviewStatus, { icon: typeof Clock; className: string; label: string }> = {
-    "Pending Legal Review": { icon: Clock, className: "bg-warning-100 text-warning-700 ring-warning-200", label: "Pending Review" },
+function LegalStatusBadge({ status }: { status: DocReviewStatus }) {
+  const config: Record<DocReviewStatus, { icon: typeof Clock; className: string; label: string }> = {
+    Pending: { icon: Clock, className: "bg-warning-100 text-warning-700 ring-warning-200", label: "Pending Review" },
     Approved: { icon: CheckCircle2, className: "bg-success-100 text-success-700 ring-success-200", label: "Approved" },
     Rejected: { icon: XCircle, className: "bg-danger-100 text-danger-700 ring-danger-200", label: "Legal Rejected" },
   };
@@ -1422,14 +1291,12 @@ function LegalStatusBadge({ status }: { status: LegalReviewStatus }) {
   );
 }
 
-function ActionBadge({ action }: { action: LegalReviewStatus | "Comment" | "Resubmit" }) {
+function ActionBadge({ action }: { action: DocReviewStatus }) {
   const cls =
     action === "Approved"
       ? "bg-success-100 text-success-700"
       : action === "Rejected"
       ? "bg-danger-100 text-danger-700"
-      : action === "Resubmit"
-      ? "bg-primary-100 text-primary-700"
       : "bg-neutral-100 text-neutral-600";
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold ${cls}`}>
@@ -1451,7 +1318,7 @@ function TimelineStep({
   label: string;
   date?: string;
   by?: string;
-  status?: LegalReviewStatus;
+  status?: DocReviewStatus;
   active?: boolean;
   dimmed?: boolean;
 }) {
@@ -1470,7 +1337,7 @@ function TimelineStep({
           <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-neutral-500">
             {by && <span>{by}</span>}
             {date && <span>{formatDate(date)}</span>}
-            {status && status !== "Pending Legal Review" && (
+            {status && status !== "Pending" && (
               <ActionBadge action={status} />
             )}
           </div>

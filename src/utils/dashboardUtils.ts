@@ -10,6 +10,7 @@ import type {
   DashboardFetchResult,
   DashboardInvoiceLite,
   DashboardPaymentLite,
+  DashboardPoItemLite,
   DashboardPoLite,
   DashboardRfqLite,
 } from "../api/dashboard";
@@ -123,9 +124,6 @@ export const DEFAULT_PROCUREMENT_CATEGORIES = [
   "Services",
 ] as const;
 
-/** Weight distribution when inferring category spend from totals. */
-const CATEGORY_WEIGHTS = [0.35, 0.25, 0.18, 0.12, 0.1];
-
 export { CATEGORY_COLORS };
 
 /* ── Aggregations ─────────────────────────────────────────────────────── */
@@ -189,25 +187,10 @@ function normalizeProcurementCategory(itemGroup: string): string {
   return "Components";
 }
 
-function distributeSpendAcrossCategories(
-  totalSpend: number,
-  estimated: boolean
-): CategorySpendPoint[] {
-  return DEFAULT_PROCUREMENT_CATEGORIES.map((category, i) => {
-    const spend = totalSpend * CATEGORY_WEIGHTS[i];
-    return {
-      category,
-      spend,
-      pct: CATEGORY_WEIGHTS[i] * 100,
-      estimated,
-    };
-  });
-}
-
 export function resolveCategorySpend(
   items: DashboardFetchResult["invoiceItems"],
   invoices: DashboardInvoiceLite[],
-  pos: DashboardPoLite[]
+  _pos: DashboardPoLite[]
 ): CategorySpendPoint[] {
   const totals = new Map<string, number>();
   for (const row of items) {
@@ -235,14 +218,18 @@ export function resolveCategorySpend(
     (s, i) => s + (i.grand_total ?? 0),
     0
   );
-  const openPoTotal = pos
-    .filter((p) =>
-      ["To Receive and Bill", "To Receive", "To Bill"].includes(p.status ?? "")
-    )
-    .reduce((s, p) => s + (p.grand_total ?? 0), 0);
-  const combinedTotal = invoiceTotal + openPoTotal * 0.35;
+  if (invoiceTotal <= 0) {
+    return [];
+  }
 
-  return distributeSpendAcrossCategories(combinedTotal, combinedTotal === 0);
+  return [
+    {
+      category: "Uncategorized",
+      spend: invoiceTotal,
+      pct: 100,
+      estimated: true,
+    },
+  ];
 }
 
 /** @deprecated Use resolveCategorySpend for never-empty category analytics. */
@@ -250,6 +237,39 @@ export function computeSpendByCategory(
   items: DashboardFetchResult["invoiceItems"]
 ): CategorySpendPoint[] {
   return resolveCategorySpend(items, [], []);
+}
+
+/**
+ * Category Spend Breakdown from live Purchase Order lines grouped by their real
+ * ERPNext Item Group (PO → Purchase Order Item → Item → Item Group).
+ *
+ * - Sums committed spend per Item Group (base_amount preferred over amount).
+ * - Lines whose Item has no group are bucketed as "Unknown Category".
+ * - Returns [] when there is no PO spend, so the widget can show
+ *   "No spend data available." instead of a fake 100% slice.
+ */
+export function computeCategorySpendByItemGroup(
+  poItems: DashboardPoItemLite[]
+): CategorySpendPoint[] {
+  const totals = new Map<string, number>();
+  for (const row of poItems) {
+    const amount = row.base_amount ?? row.amount ?? 0;
+    if (!amount) continue;
+    const category = row.item_group?.trim() || "Unknown Category";
+    totals.set(category, (totals.get(category) ?? 0) + amount);
+  }
+
+  const grand = Array.from(totals.values()).reduce((s, v) => s + v, 0);
+  if (grand <= 0) return [];
+
+  return Array.from(totals.entries())
+    .map(([category, spend]) => ({
+      category,
+      spend,
+      pct: (spend / grand) * 100,
+      estimated: false,
+    }))
+    .sort((a, b) => b.spend - a.spend);
 }
 
 export function computeExecutiveKpis(
@@ -307,21 +327,11 @@ export function computeExecutiveKpis(
   const avgCycleDays = estimateAvgCycleDays(poSamples);
 
   const spendUnderManagement = ytdSpend + openPoValue;
-  const savingsAchieved = Math.round(ytdSpend * 0.038);
+  const savingsAchieved = 0;
   const openPos = data.counts.activePos;
   const pendingInvoices = data.counts.unpaidInvoices;
   const pendingApprovals = computePendingApprovals(data.counts);
-  const contractCoveragePct = Math.min(
-    100,
-    Math.max(
-      45,
-      Math.round(
-        68 +
-          Math.min(data.counts.activeSuppliers, 20) * 1.2 -
-          data.counts.openRfqs * 0.8
-      )
-    )
-  );
+  const contractCoveragePct = 0;
 
   // Supplier performance — on-time delivery ratio across tracked POs.
   const todayKey = format(new Date(), "yyyy-MM-dd");
@@ -338,7 +348,7 @@ export function computeExecutiveKpis(
   ).length;
   const supplierPerformancePct = trackedPos.length
     ? Math.round(((trackedPos.length - delayedPos) / trackedPos.length) * 100)
-    : 96;
+    : 0;
 
   return {
     ytdSpend,
@@ -632,12 +642,7 @@ export function ensureTopSuppliersBySpend(
       .slice(0, limit);
   }
 
-  return DEFAULT_PROCUREMENT_CATEGORIES.slice(0, limit).map((label) => ({
-    supplier: `Awaiting ${label} supplier`,
-    spend: 0,
-    invoiceCount: 0,
-    pct: 100 / limit,
-  }));
+  return [];
 }
 
 export function computeSupplierConcentration(
@@ -934,9 +939,6 @@ export function computeRfqPipeline(
 
   if (Object.values(buckets).every((c) => c === 0) && openRfqsCount > 0) {
     buckets.Open = openRfqsCount;
-    buckets["Quotation Received"] = Math.max(1, Math.floor(openRfqsCount * 0.6));
-    buckets.Evaluation = Math.max(0, Math.floor(openRfqsCount * 0.3));
-    buckets.Awarded = Math.max(0, Math.floor(openRfqsCount * 0.15));
   }
 
   return [
@@ -949,35 +951,9 @@ export function computeRfqPipeline(
 }
 
 export function computeSavingsOpportunities(
-  ytdSpend: number
+  _ytdSpend: number
 ): SavingsOpportunity[] {
-  const base = Math.max(ytdSpend, 25_000);
-  return [
-    {
-      id: "negotiation",
-      label: "Negotiation Savings",
-      value: base * 0.042,
-      trend: 2.1,
-    },
-    {
-      id: "consolidation",
-      label: "Supplier Consolidation",
-      value: base * 0.018,
-      trend: -0.8,
-    },
-    {
-      id: "early-payment",
-      label: "Early Payment Discount",
-      value: base * 0.012,
-      trend: 1.6,
-    },
-    {
-      id: "contract-compliance",
-      label: "Contract Compliance Savings",
-      value: base * 0.028,
-      trend: 1.4,
-    },
-  ];
+  return [];
 }
 
 export function computeProcurementHealthScore(
@@ -1156,10 +1132,7 @@ export function buildAlertsAndRisks(
 ): AlertRiskItem[] {
   const singleSourceRisk = supplierInsights.filter((s) => s.riskScore >= 55).length;
   const pending = computePendingApprovals(counts);
-  const expiringContracts = Math.max(
-    0,
-    Math.min(counts.openRfqs, Math.ceil(counts.openRfqs * 0.35))
-  );
+  const expiringContracts = 0;
 
   return [
     {

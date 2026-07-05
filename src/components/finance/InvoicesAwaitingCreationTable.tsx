@@ -30,14 +30,17 @@ export default function InvoicesAwaitingCreationTable({ limit }: Props) {
   // Exclude GRNs that already have a voucher — ERPNext's "To Bill" status does
   // not clear when a (localStorage) voucher is created, so we filter here.
   const syncVersion = useVoucherSyncStore((s) => s.version);
-  const available = useMemo(
-    () => excludeVoucheredGRNs(data),
-    [data, syncVersion]
-  );
+  const { data: available = [], isLoading: excluding } = useQuery({
+    queryKey: ["grns-awaiting-excluded", syncVersion, data.length],
+    queryFn: () => excludeVoucheredGRNs(data),
+    enabled: !isLoading,
+    staleTime: 30_000,
+  });
   const rows = useMemo(
     () => (limit ? available.slice(0, limit) : available),
     [available, limit]
   );
+  const tableLoading = isLoading || excluding;
 
   return (
     <section className="card overflow-hidden">
@@ -62,7 +65,7 @@ export default function InvoicesAwaitingCreationTable({ limit }: Props) {
         )}
       </div>
 
-      {isLoading ? (
+      {tableLoading ? (
         <div className="space-y-2 p-5">
           <Skeleton className="h-4 w-2/3" />
           <Skeleton className="h-4 w-1/2" />

@@ -76,6 +76,7 @@ export const ROLE_ALLOWED_MODULES: Record<
     "Legal Review",
     "Finance Approval",
     "Purchase Order",
+    "Budget",
   ]),
   legal: new Set(["Legal Review", "Supplier Documents", "Compliance"]),
   finance: new Set([
@@ -85,7 +86,9 @@ export const ROLE_ALLOWED_MODULES: Record<
     "Budget",
     "Outstanding Payables",
   ]),
+  finance_executive: new Set(["Budget"]),
   warehouse: new Set(["PO Ready for GRN", "GRN", "Inventory"]),
+  department: new Set(["Purchase Order"]),
 };
 
 export const SUPPLIER_ALLOWED_MODULES = new Set<NotificationModule>([

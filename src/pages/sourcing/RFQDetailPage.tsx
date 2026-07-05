@@ -16,6 +16,7 @@ import {
   Building2,
   Check,
   CheckCircle2,
+  ChevronRight,
   Clock,
   FileText,
   Gavel,
@@ -53,13 +54,22 @@ import type { AIRecommendation, RFQApprovalState } from "../../types/erpnext";
 import { getScoringConfig } from "../../api/supplierScoring";
 import { getSupplierPerformance } from "../../api/supplierPerformance";
 import { scoreSuppliers } from "../../api/supplierScoringEngine";
-import { saveScoringResult } from "../../api/supplierScoringResults";
+import {
+  getLatestAnalysisSnapshot,
+  saveScoringResult,
+} from "../../api/supplierScoringResults";
 import {
   getApprovalState,
   submitForReview,
   canCreatePOFromWorkflow,
   markPOCreated,
 } from "../../api/rfqApprovalWorkflow";
+import {
+  ensureLegalDocumentReviewForSelection,
+  getLegalDocsByRfq,
+} from "../../api/legalDocs";
+import { getApprovalStateFromErp } from "../../api/legalReviews";
+import type { LegalDocumentItemSummary, LegalDocumentSet } from "../../api/legalDocs";
 import { ANALYSIS_STEPS } from "../../components/aiAnalysisSteps";
 import AIAnalysisModal, {
   type SupplierSelectionPayload,
@@ -75,9 +85,8 @@ import { useAuthStore } from "../../store/authStore";
 import { canManageRFQs } from "../../config/roles";
 import type { RFQ, RFQSupplier, SupplierQuotation } from "../../types/erpnext";
 import { formatCurrency, formatDate } from "../../utils/format";
-import { readRFQCreationMeta } from "../../api/rfqCreationMeta";
-import RFQCreationSummaryCard from "../../components/sourcing/RFQCreationSummaryCard";
 import RejectedReviewActions from "../../components/sourcing/RejectedReviewActions";
+import CheckBudgetModal from "../../components/sourcing/CheckBudgetModal";
 import {
   formatERPNextDate,
   formatUsDisplayDate,
@@ -342,6 +351,7 @@ export default function RFQDetailPage() {
   );
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [summaryModalOpen, setSummaryModalOpen] = useState(false);
+  const [checkBudgetOpen, setCheckBudgetOpen] = useState(false);
   const [aiResult, setAiResult] = useState<AIRecommendation | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiLoadingStep, setAiLoadingStep] = useState(0);
@@ -353,8 +363,34 @@ export default function RFQDetailPage() {
   );
 
   useEffect(() => {
-    setApprovalState(getApprovalState(rfqName));
+    const cached = getApprovalState(rfqName);
+    setApprovalState(cached);
+    // Cross-device fallback: if this browser has never cached this RFQ's
+    // workflow state (e.g. a different device/browser than the one that
+    // submitted for review), fetch it from ERPNext directly — the
+    // localStorage cache must never be the only place this data exists.
+    if (!cached && rfqName) {
+      getApprovalStateFromErp(rfqName)
+        .then((erpState) => {
+          if (erpState) setApprovalState(erpState);
+        })
+        .catch(() => {
+          /* best-effort — page still functions via ERPNext queries below */
+        });
+    }
   }, [rfqName]);
+
+  // The Legal Document Review record is the REAL source of truth for
+  // review decisions (see api/legalReviewCore.ts) — the legacy
+  // `approvalState` custom-field workflow above is never written to by the
+  // actual Legal/Finance review pages, so it can never reflect a real
+  // rejection. The "Rejected" banners below must read from here instead.
+  const legalDocQuery = useQuery<LegalDocumentSet | null>({
+    queryKey: ["legal-doc-review", rfqName],
+    queryFn: () => getLegalDocsByRfq(rfqName),
+    enabled: !!rfqName,
+  });
+  const legalDoc = legalDocQuery.data;
 
   const rfqQuery = useQuery<RFQ>({
     queryKey: ["rfq", rfqName],
@@ -372,11 +408,6 @@ export default function RFQDetailPage() {
   const parsedMessage = useMemo(
     () => parseRfqMessage(rfq?.message_for_supplier),
     [rfq?.message_for_supplier]
-  );
-
-  const creationMeta = useMemo(
-    () => (rfqName ? readRFQCreationMeta(rfqName) : null),
-    [rfqName]
   );
 
   /* ─────────────── PO completion state ─────────────── */
@@ -417,6 +448,17 @@ export default function RFQDetailPage() {
   const poExists = isRealPurchaseOrder;
   const isCompleted = isRealPurchaseOrder;
 
+  // Procurement is FINALIZED once any backend signal says the decision is done:
+  // a real Purchase Order exists, the RFQ status is "Completed", or the approval
+  // workflow reached "PO Created". When finalized, every procurement-decision
+  // action (analysis, supplier selection, quote comparison, PO creation) is
+  // hidden and the page becomes a read-only historical record. Driven entirely
+  // by backend state — never hardcoded UI values.
+  const procurementFinalized =
+    poExists ||
+    (rfq?.status ?? "").trim().toLowerCase() === "completed" ||
+    approvalState?.workflow_step === "PO Created";
+
   const completionPO = linkedPO ?? null;
   const completionSummary = {
     supplier: completionPO?.supplier_name ?? completionPO?.supplier ?? "—",
@@ -441,7 +483,7 @@ export default function RFQDetailPage() {
   const documentStateLabel = rfq?.docstatus === 1 ? "Submitted" : "Draft";
   const showSubmitRFQ =
     !isReadOnly &&
-    !poExists &&
+    !procurementFinalized &&
     isDraftDocument &&
     rfq?.status !== "Submitted" &&
     rfq?.status !== "Cancelled";
@@ -561,7 +603,21 @@ export default function RFQDetailPage() {
 
   // Re-hydrate the persisted analysis whenever the RFQ changes.
   useEffect(() => {
-    setSavedAnalysis(readSavedAnalysis(rfqName));
+    const cached = readSavedAnalysis(rfqName);
+    setSavedAnalysis(cached);
+    // Cross-device fallback: this browser may never have run/cached the
+    // analysis for this RFQ (e.g. it was generated on a different device).
+    // ERPNext's `Supplier Scoring Result.analysis_snapshot` is the durable
+    // source of truth — fetch it when the local cache is empty.
+    if (!cached && rfqName) {
+      getLatestAnalysisSnapshot<SavedAnalysisRecord>(rfqName)
+        .then((snapshot) => {
+          if (snapshot && isUsableAnalysis(snapshot)) setSavedAnalysis(snapshot);
+        })
+        .catch(() => {
+          /* best-effort — analysis can always be re-run */
+        });
+    }
   }, [rfqName]);
 
   // Validate cached analysis against the actual invited suppliers once
@@ -583,7 +639,7 @@ export default function RFQDetailPage() {
     }
   }, [rfq, invitedSupplierIds]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function saveAnalysis(name: string, analysis: AIRecommendation) {
+  function saveAnalysis(name: string, analysis: AIRecommendation): SavedAnalysisRecord {
     const record: SavedAnalysisRecord = {
       rfq_name: name,
       analysed_at: new Date().toISOString(),
@@ -622,6 +678,7 @@ export default function RFQDetailPage() {
     } catch {
       /* ignore storage quota / serialization errors */
     }
+    return record;
   }
 
   function viewSavedAnalysis() {
@@ -658,6 +715,135 @@ export default function RFQDetailPage() {
 
   function findQuoteByName(name: string): SubmittedQuote | undefined {
     return quoteForSupplier(localQuotes, name);
+  }
+
+  /**
+   * Real ERPNext Supplier Quotation record (has `.name` + legal-document
+   * custom fields) for a supplier — unlike `SubmittedQuote`, which is a
+   * locally-derived display object with no ERPNext document name.
+   */
+  function findRealSQForSupplier(supplierId: string): SupplierQuotation | undefined {
+    return (quotesQuery.data ?? []).find(
+      (q) => q.supplier === supplierId || q.supplier_name === supplierId
+    );
+  }
+
+  /**
+   * Ensures a "Legal Document Review" record exists for the winning
+   * supplier the instant they're selected (RFQ workflow -> "Pending Legal
+   * Review"). Never blocks or fails the selection flow itself —
+   * `submitForReview()` has already succeeded by the time this runs, so any
+   * failure here is logged and surfaced as a non-blocking toast only.
+   */
+  async function ensureLegalReviewForWinningSupplier(
+    rfqForReview: RFQ,
+    supplierForApproval: string
+  ): Promise<void> {
+    // eslint-disable-next-line no-console
+    console.log("[LegalAudit] 1. Procurement selected supplier:", supplierForApproval);
+
+    const sq = findRealSQForSupplier(supplierForApproval);
+    // eslint-disable-next-line no-console
+    console.log("[LegalAudit] 2. Supplier Quotation lookup result:", {
+      searched_supplier_id: supplierForApproval,
+      rfq: rfqForReview.name,
+      found: !!sq,
+      supplier_quotation_id: sq?.name ?? null,
+      supplier_name: sq?.supplier_name ?? sq?.supplier ?? null,
+      status: sq?.status ?? null,
+      total_candidates_in_rfq: (quotesQuery.data ?? []).length,
+      candidate_suppliers: (quotesQuery.data ?? []).map((q) => ({
+        supplier: q.supplier,
+        supplier_name: q.supplier_name,
+      })),
+    });
+
+    if (!sq?.name) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[LegalAudit] 3. Lookup FAILED — no Supplier Quotation record matched",
+        `supplier === "${supplierForApproval}"`,
+        "OR",
+        `supplier_name === "${supplierForApproval}"`,
+        "among quotations already scoped to this RFQ (items.request_for_quotation =",
+        rfqForReview.name,
+        "). Reason: either no quotation exists for this RFQ/supplier pair, or the",
+        "supplier identifier passed in does not exactly match either field",
+        "(check for casing/whitespace/quote-character differences)."
+      );
+      toast.error(
+        "Supplier selected, but no matching Supplier Quotation was found — the Legal Document Review was NOT created. Please notify Legal.",
+        { duration: 10_000 }
+      );
+      return;
+    }
+    // eslint-disable-next-line no-console
+    console.log("[LegalAudit] 3. Lookup query matched. supplier == selected supplier is verified against quotations pre-filtered by request_for_quotation == current RFQ.");
+
+    const itemSummary: LegalDocumentItemSummary[] = (sq.items ?? []).map((it) => ({
+      item_code: it.item_code,
+      item_name: it.item_name,
+      qty: it.qty,
+      uom: it.uom,
+      rate: it.rate,
+      amount: it.amount ?? it.qty * it.rate,
+    }));
+
+    // NOTE: real ERPNext fieldnames (verified via Custom Field metadata) —
+    // `custom_terms__condition` (double underscore) and
+    // `custom_warenty_certificate` (upstream typo "warenty") are NOT typos
+    // in this code; they must match ERPNext exactly.
+    const termsFileUrl = (sq.custom_terms__condition as string | undefined) ?? "";
+    const termsNote = sq.custom_terms_note ?? "";
+    const warrantyFileUrl = (sq.custom_warenty_certificate as string | undefined) ?? "";
+    const warrantyNote = sq.custom_warranty_note ?? "";
+    const insuranceFileUrl = (sq.custom_insurance_certificate as string | undefined) ?? "";
+    const insuranceNote = sq.custom_insurance_note ?? "";
+
+    // eslint-disable-next-line no-console
+    console.log("[LegalAudit] 4. Before create — resolved inputs:", {
+      selected_supplier: supplierForApproval,
+      resolved_supplier_quotation: sq.name,
+      resolved_rfq: rfqForReview.name,
+      legal_pdfs_found: {
+        terms_pdf: termsFileUrl || "(none)",
+        warranty_pdf: warrantyFileUrl || "(none)",
+        insurance_pdf: insuranceFileUrl || "(none)",
+      },
+    });
+
+    try {
+      const created = await ensureLegalDocumentReviewForSelection({
+        sq_name: sq.name,
+        rfq_name: rfqForReview.name,
+        supplier: sq.supplier,
+        company: rfqForReview.company ?? "",
+        quotation_number: sq.name,
+        procurement_manager: user?.email ?? "",
+        submission_date: sq.transaction_date ?? new Date().toISOString(),
+        grand_total: sq.grand_total ?? sq.total ?? 0,
+        valid_till: sq.valid_till,
+        item_summary: JSON.stringify(itemSummary),
+        terms_file_url: termsFileUrl,
+        terms_note: termsNote,
+        warranty_file_url: warrantyFileUrl,
+        warranty_note: warrantyNote,
+        insurance_file_url: insuranceFileUrl,
+        insurance_note: insuranceNote,
+      });
+      // eslint-disable-next-line no-console
+      console.log(
+        "[LegalAudit] 5. Legal Review Name:",
+        (created as { name?: string })?.name ?? "(created, name not returned)"
+      );
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[LegalAudit] 5. Creation failed — complete ERP error:", err);
+      toast.error(
+        "Supplier selected, but the Legal Document Review record could not be created automatically. Please notify Legal.",
+        { duration: 10_000 }
+      );
+    }
   }
 
   const aiQuoteAmount = useMemo(() => {
@@ -894,11 +1080,11 @@ export default function RFQDetailPage() {
       }
 
       setAiResult(recommendation);
-      saveAnalysis(rfq.name, recommendation);
+      const analysisRecord = saveAnalysis(rfq.name, recommendation);
       setAiLoadingStep(ANALYSIS_STEPS.length - 1);
       setAiError(null);
 
-      saveScoringResult(rfq.name, engineResult).catch((err) => {
+      saveScoringResult(rfq.name, engineResult, analysisRecord).catch((err) => {
         // eslint-disable-next-line no-console
         console.warn("[SCORING] Failed to persist results:", err);
       });
@@ -967,6 +1153,7 @@ export default function RFQDetailPage() {
         submittedBy: user?.email ?? "procurement@netlink.com",
       });
       setApprovalState(state);
+      await ensureLegalReviewForWinningSupplier(rfq, supplierForApproval);
       toast.success("Supplier selection confirmed — sent for Legal & Finance review.");
       setAiModalOpen(false);
     } catch (err) {
@@ -1038,6 +1225,7 @@ export default function RFQDetailPage() {
       console.log("[RFQ] Selection audit saved:", audit);
 
       setApprovalState(state);
+      await ensureLegalReviewForWinningSupplier(rfq, supplierForApproval);
       toast.success(
         `${payload.supplierName} selected — sent for Legal & Finance review.`
       );
@@ -1077,9 +1265,39 @@ export default function RFQDetailPage() {
   async function handleCreatePO(supplierName: string) {
     if (!rfq || isCompleted) return;
 
-    const currentState = getApprovalState(rfqName);
-    if (currentState && !canCreatePOFromWorkflow(currentState, poExists)) {
-      toast.error("PO creation requires both Legal and Finance approval.");
+    if (poExists) {
+      toast.error("A Purchase Order already exists for this RFQ.");
+      return;
+    }
+
+    // Authoritative gate: ERPNext's Legal Document Review is the single
+    // source of truth for Legal/Finance approval — NOT the localStorage
+    // `approvalState` cache. That cache can be empty (new browser/device,
+    // or approvals recorded purely on the Legal Document Review record
+    // without ever syncing back to RFQ custom fields), which previously
+    // let this check be silently skipped (`if (currentState && ...)`) and
+    // allowed a PO to be created with NO verification at all. Always
+    // re-check the live ERPNext record before creating anything.
+    let legalDoc: LegalDocumentSet | null;
+    try {
+      legalDoc = await getLegalDocsByRfq(rfq.name);
+    } catch (err) {
+      toast.error(
+        `Could not verify Legal/Finance approval status: ${
+          err instanceof Error ? err.message : "Unknown error"
+        }`
+      );
+      return;
+    }
+    const isReadyForPO =
+      legalDoc?.review_status === "Approved" &&
+      legalDoc?.finance_status === "Approved";
+    if (!isReadyForPO) {
+      toast.error(
+        `PO creation requires both Legal and Finance approval. Legal: ${
+          legalDoc?.review_status ?? "Not submitted"
+        }, Finance: ${legalDoc?.finance_status ?? "Not submitted"}.`
+      );
       return;
     }
 
@@ -1346,8 +1564,11 @@ export default function RFQDetailPage() {
     openAIAnalysis();
   };
 
-  const legalApproved = approvalState?.legal_status === "Approved";
-  const financeApproved = approvalState?.finance_status === "Budget Approved";
+  // Sourced from the REAL Legal Document Review record — see the comment
+  // on `legalDocQuery` above for why `approvalState` can never reflect an
+  // actual review decision.
+  const legalApproved = legalDoc?.review_status === "Approved";
+  const financeApproved = legalDoc?.finance_status === "Approved";
   const fullyApproved = legalApproved && financeApproved;
 
   // If a supplier has been selected, AI analysis is necessarily complete
@@ -1388,7 +1609,7 @@ export default function RFQDetailPage() {
       meta: legalApproved
         ? "Approved"
         : hasSelectedSupplier
-          ? approvalState!.legal_status
+          ? legalDoc?.review_status ?? "Pending"
           : "Pending",
       done: legalApproved,
       active: hasSelectedSupplier && !legalApproved,
@@ -1398,7 +1619,7 @@ export default function RFQDetailPage() {
       meta: financeApproved
         ? "Budget Approved"
         : hasSelectedSupplier
-          ? approvalState!.finance_status
+          ? legalDoc?.finance_status || "Pending"
           : "Pending",
       done: financeApproved,
       active: legalApproved && !financeApproved,
@@ -1417,6 +1638,30 @@ export default function RFQDetailPage() {
 
   const currentStage = timeline.find((s) => s.active)?.label ?? (isCompleted ? "Completed" : "RFQ Created");
 
+  // ── RFQ Overview metadata (display-only, derived from the live RFQ) ──
+  const materialRequestLabel = (() => {
+    const mrs = Array.from(
+      new Set(
+        (rfq.items ?? [])
+          .map((i) => i.material_request)
+          .filter((v): v is string => !!v && v.trim().length > 0)
+      )
+    );
+    if (mrs.length === 0) return "—";
+    if (mrs.length === 1) return mrs[0];
+    return `${mrs[0]} +${mrs.length - 1} more`;
+  })();
+  const rfqExtra = rfq as {
+    department?: string;
+    custom_department?: string;
+    priority?: string;
+    custom_priority?: string;
+  };
+  const departmentLabel = rfqExtra.department || rfqExtra.custom_department || "—";
+  const priorityLabel = rfqExtra.priority || rfqExtra.custom_priority || "—";
+  const ownerLabel = rfq.owner || "—";
+  const companyLabel = rfq.company || COMPANY;
+
   return (
     <div>
       {isReadOnly && (
@@ -1427,11 +1672,13 @@ export default function RFQDetailPage() {
       )}
 
       {/* ── Approval Workflow Progress Tracker ── */}
-      {approvalState && !isReadOnly && (
+      {hasSelectedSupplier && !isReadOnly && (
         <ApprovalWorkflowTracker
-          state={approvalState}
+          legalDoc={legalDoc}
           poExists={poExists}
           fullyApproved={fullyApproved}
+          selectedSupplier={approvalState?.selected_supplier ?? ""}
+          selectedSupplierTotal={approvalState?.selected_supplier_total ?? 0}
         />
       )}
 
@@ -1440,35 +1687,67 @@ export default function RFQDetailPage() {
         rfqName={rfq.name}
         isCompleted={isCompleted}
         status={rfq.status ?? "Draft"}
+        priority={priorityLabel}
+        materialRequest={materialRequestLabel}
+        department={departmentLabel}
+        company={companyLabel}
+        owner={ownerLabel}
+        createdDate={formatDate(rfq.transaction_date)}
+        validTill={validTillDisplay}
+        timeline={timeline}
         actions={
           showSubmitRFQ ? (
-            <button
-              type="button"
-              onClick={() => void handleSubmitRFQ()}
-              disabled={submittingRFQ}
-              className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-accent-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {submittingRFQ ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Submitting…
-                </>
-              ) : (
-                <>
-                  <Check className="h-4 w-4" />
-                  Submit RFQ
-                </>
-              )}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCheckBudgetOpen(true)}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-primary-300 bg-white px-4 py-2 text-sm font-semibold text-primary-700 shadow-sm hover:bg-primary-50"
+              >
+                <Wallet className="h-4 w-4" />
+                Check Budget
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSubmitRFQ()}
+                disabled={submittingRFQ}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-accent-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {submittingRFQ ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Submitting…
+                  </>
+                ) : (
+                  <>
+                    <Check className="h-4 w-4" />
+                    Submit RFQ
+                  </>
+                )}
+              </button>
+            </div>
           ) : undefined
         }
       />
 
-      {creationMeta && (
-        <RFQCreationSummaryCard meta={creationMeta} className="mb-4" />
-      )}
+      <CheckBudgetModal
+        open={checkBudgetOpen}
+        onClose={() => setCheckBudgetOpen(false)}
+        onContinue={() => {
+          setCheckBudgetOpen(false);
+          void handleSubmitRFQ();
+        }}
+        rfqName={rfq.name}
+        company={rfq.company ?? null}
+        costCenter={
+          (rfq as { cost_center?: string }).cost_center ?? null
+        }
+        fiscalYear={
+          (rfq as { fiscal_year?: string }).fiscal_year ?? null
+        }
+        items={(rfq.items ?? []) as never}
+      />
 
-      {!isReadOnly && approvalState?.legal_status === "Rejected" && (
+      {!isReadOnly && legalDoc?.review_status === "Rejected" && (
         <div className="mb-4 rounded-xl border border-danger-200 bg-danger-50/60 px-4 py-3">
           <p className="mb-2 text-sm font-semibold text-danger-800">Legal Rejected</p>
           <p className="mb-3 text-xs text-danger-700">
@@ -1477,14 +1756,14 @@ export default function RFQDetailPage() {
           <RejectedReviewActions
             rfqName={rfq.name}
             reviewType="legal"
-            onResubmitted={() => setApprovalState(getApprovalState(rfq.name))}
+            onResubmitted={() => legalDocQuery.refetch()}
           />
         </div>
       )}
 
       {!isReadOnly &&
-        approvalState?.legal_status === "Approved" &&
-        approvalState.finance_status === "Rejected" && (
+        legalDoc?.review_status === "Approved" &&
+        legalDoc.finance_status === "Rejected" && (
           <div className="mb-4 rounded-xl border border-danger-200 bg-danger-50/60 px-4 py-3">
             <p className="mb-2 text-sm font-semibold text-danger-800">Finance Rejected</p>
             <p className="mb-3 text-xs text-danger-700">
@@ -1493,7 +1772,7 @@ export default function RFQDetailPage() {
             <RejectedReviewActions
               rfqName={rfq.name}
               reviewType="finance"
-              onResubmitted={() => setApprovalState(getApprovalState(rfq.name))}
+              onResubmitted={() => legalDocQuery.refetch()}
             />
           </div>
         )}
@@ -1577,6 +1856,21 @@ export default function RFQDetailPage() {
           badge={<Pill tone="brand">{supplierCount} invited</Pill>}
         >
           <div className="space-y-3">
+            {quotesQuery.isError && (
+              <div className="flex items-center justify-between gap-2 rounded-lg border border-danger-200 bg-danger-50 px-3 py-2 text-[11px] text-danger-800">
+                <span>
+                  Couldn't load quotations from ERPNext — counts below may be
+                  incomplete.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => quotesQuery.refetch()}
+                  className="font-semibold underline"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-2">
               <MiniStat value={respondedCount} label="Responded" />
               <MiniStat value={awaitingCount} label="Awaiting" />
@@ -1604,7 +1898,12 @@ export default function RFQDetailPage() {
           title="AI Procurement Copilot"
           tone="ai"
           badge={
-            hasSelectedSupplier ? (
+            procurementFinalized ? (
+              <Pill tone="success">
+                <CheckCircle2 className="h-3 w-3" />
+                Purchase Order Created
+              </Pill>
+            ) : hasSelectedSupplier ? (
               <Pill tone="success">Complete</Pill>
             ) : hasQuotations && aiReady ? (
               <Pill tone="brand">Ready</Pill>
@@ -1652,7 +1951,28 @@ export default function RFQDetailPage() {
             </div>
 
             {/* ── AI Action Buttons ── */}
-            {hasSelectedSupplier ? (
+            {procurementFinalized ? (
+              /* Finalized: read-only historical record. Every procurement-decision
+                 action is hidden; only "View Purchase Order" remains. */
+              <div className="mt-1 space-y-2.5">
+                <div className="flex items-start gap-2 rounded-lg border border-success-200 bg-success-50/70 px-3 py-2.5">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-success-600" />
+                  <p className="text-xs leading-relaxed text-success-800">
+                    Procurement analysis has been finalized and a Purchase Order
+                    has already been created.
+                  </p>
+                </div>
+                {poExists && completionPO?.name ? (
+                  <Link
+                    to={`/p2p/purchase-orders/${encodeURIComponent(completionPO.name)}`}
+                    className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white no-underline shadow-sm transition hover:brightness-110"
+                  >
+                    <FileText className="h-4 w-4" />
+                    View Purchase Order
+                  </Link>
+                ) : null}
+              </div>
+            ) : hasSelectedSupplier ? (
               <div className="mt-1 flex gap-2">
                 <button
                   type="button"
@@ -1698,17 +2018,17 @@ export default function RFQDetailPage() {
                 )}
               </button>
             )}
-            {!hasQuotations && !hasSelectedSupplier && (
+            {!procurementFinalized && !hasQuotations && !hasSelectedSupplier && (
               <p className="text-center text-[11px] text-neutral-400">
                 AI Analysis will be available after supplier quotations are submitted.
               </p>
             )}
-            {hasQuotations && !HAS_ANTHROPIC_KEY && !hasSelectedSupplier && (
+            {!procurementFinalized && hasQuotations && !HAS_ANTHROPIC_KEY && !hasSelectedSupplier && (
               <p className="text-center text-[11px] text-neutral-400">
                 AI key not configured — local quotation comparison will be used.
               </p>
             )}
-            {hasQuotations && HAS_ANTHROPIC_KEY && !aiReady && !hasSelectedSupplier && (
+            {!procurementFinalized && hasQuotations && HAS_ANTHROPIC_KEY && !aiReady && !hasSelectedSupplier && (
               <p className="text-center text-[11px] text-neutral-400">
                 Need at least 2 quotations.
               </p>
@@ -1924,12 +2244,28 @@ function RfqDetailHeader({
   rfqName,
   isCompleted,
   status,
+  priority,
+  materialRequest,
+  department,
+  company,
+  owner,
+  createdDate,
+  validTill,
+  timeline,
   actions,
 }: {
   title: string;
   rfqName: string;
   isCompleted: boolean;
   status: string;
+  priority: string;
+  materialRequest: string;
+  department: string;
+  company: string;
+  owner: string;
+  createdDate: string;
+  validTill: string;
+  timeline: { label: string; meta: string; done: boolean; active: boolean }[];
   actions?: ReactNode;
 }) {
   const layout = useOptionalLayout();
@@ -1947,43 +2283,27 @@ function RfqDetailHeader({
       <BackLink />
 
       <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
-        {/* Command-center top bar */}
-        <div className="flex flex-col gap-3 bg-sidebar px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0">
-            <p className="truncate font-mono text-base font-bold tracking-tight text-white">
-              {rfqName}
-            </p>
-            <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">
-              RFQ Command Center
-            </p>
-          </div>
-          <div className="flex flex-shrink-0 items-center gap-2">
-            <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2.5 py-0.5 text-[11px] font-semibold text-white ring-1 ring-inset ring-white/15">
-              <Sparkles className="h-3 w-3" />
-              AI Procurement
-            </span>
-            {isCompleted ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-success-500/20 px-2.5 py-0.5 text-[11px] font-semibold text-success-100 ring-1 ring-inset ring-success-500/40">
-                <CheckCircle2 className="h-3 w-3" />
-                Completed
-              </span>
-            ) : (
-              <StatusBadge status={status} />
-            )}
-          </div>
-        </div>
-
-        {/* Title + reference + actions */}
-        <div className="flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-start sm:justify-between">
+        {/* Title bar — large RFQ title, status + priority, actions */}
+        <div className="flex flex-col gap-2.5 border-b border-neutral-100 px-5 py-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-lg font-bold text-neutral-900 sm:text-xl">
-              {title}
-            </h2>
-            <div className="mt-1.5">
-              <span className="inline-flex items-center gap-1.5 rounded-md bg-neutral-50 px-2 py-0.5 font-mono text-xs font-semibold text-neutral-600 ring-1 ring-inset ring-neutral-200">
-                {rfqName}
-              </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="truncate text-xl font-bold tracking-tight text-neutral-900 sm:text-2xl">
+                {title}
+              </h1>
+              {isCompleted ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-success-50 px-2.5 py-0.5 text-[11px] font-semibold text-success-700 ring-1 ring-inset ring-success-200">
+                  <CheckCircle2 className="h-3 w-3" />
+                  Completed
+                </span>
+              ) : (
+                <StatusBadge status={status} />
+              )}
+              <PriorityPill value={priority} />
             </div>
+            <span className="mt-1.5 inline-flex items-center gap-1.5 rounded-md bg-neutral-50 px-2 py-0.5 font-mono text-xs font-semibold text-neutral-500 ring-1 ring-inset ring-neutral-200">
+              <Sparkles className="h-3 w-3 text-primary-500" />
+              {rfqName}
+            </span>
           </div>
           {actions && (
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
@@ -1991,7 +2311,119 @@ function RfqDetailHeader({
             </div>
           )}
         </div>
+
+        {/* Overview — responsive two-column metadata grid */}
+        <div className="grid grid-cols-1 gap-x-10 gap-y-1.5 px-5 py-3 sm:grid-cols-2">
+          <dl className="divide-y divide-neutral-100/70">
+            <OverviewRow label="RFQ Number" value={rfqName} mono />
+            <OverviewRow label="Material Request" value={materialRequest} mono={materialRequest !== "—"} />
+            <OverviewRow label="Department" value={department} />
+            <OverviewRow label="Company" value={company} />
+            <OverviewRow label="Procurement Owner" value={owner} />
+          </dl>
+          <dl className="divide-y divide-neutral-100/70">
+            <OverviewRow label="Created Date" value={createdDate} />
+            <OverviewRow label="Valid Till" value={validTill} />
+            <OverviewRow label="Current Status" node={<StatusBadge status={status} />} />
+            <OverviewRow label="Priority" node={<PriorityPill value={priority} />} />
+          </dl>
+        </div>
+
+        {/* Workflow timeline — clean horizontal, green/blue/gray */}
+        <div className="border-t border-neutral-100 bg-neutral-50/50 px-5 py-2.5">
+          <HeaderTimeline steps={timeline} />
+        </div>
       </div>
+    </div>
+  );
+}
+
+function OverviewRow({
+  label,
+  value,
+  node,
+  mono,
+}: {
+  label: string;
+  value?: string;
+  node?: ReactNode;
+  mono?: boolean;
+}) {
+  const muted = !node && (!value || value === "—");
+  return (
+    <div className="flex items-center justify-between gap-3 py-1.5">
+      <dt className="flex-shrink-0 text-[11px] font-medium uppercase tracking-wide text-neutral-400">
+        {label}
+      </dt>
+      <dd className="min-w-0 text-right">
+        {node ?? (
+          <span
+            className={`truncate text-sm font-semibold ${
+              muted ? "text-neutral-300" : "text-neutral-800"
+            } ${mono ? "font-mono" : ""}`}
+          >
+            {value || "—"}
+          </span>
+        )}
+      </dd>
+    </div>
+  );
+}
+
+const PRIORITY_STYLES: Record<string, string> = {
+  high: "bg-red-50 text-red-700 ring-red-200",
+  urgent: "bg-red-50 text-red-700 ring-red-200",
+  medium: "bg-amber-50 text-amber-700 ring-amber-200",
+  normal: "bg-blue-50 text-blue-700 ring-blue-200",
+  low: "bg-neutral-100 text-neutral-500 ring-neutral-200",
+};
+
+function PriorityPill({ value }: { value: string }) {
+  if (!value || value === "—") return null;
+  const tone = PRIORITY_STYLES[value.toLowerCase()] ?? "bg-neutral-100 text-neutral-600 ring-neutral-200";
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${tone}`}
+    >
+      {value}
+    </span>
+  );
+}
+
+function HeaderTimeline({
+  steps,
+}: {
+  steps: { label: string; meta: string; done: boolean; active: boolean }[];
+}) {
+  return (
+    <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+      {steps.map((step, i) => {
+        const tone = step.done
+          ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+          : step.active
+            ? "bg-blue-50 text-blue-700 ring-blue-300"
+            : "bg-neutral-100 text-neutral-400 ring-neutral-200";
+        return (
+          <div key={step.label} className="flex flex-shrink-0 items-center gap-1.5">
+            <span
+              title={step.meta}
+              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ring-inset ${tone}`}
+            >
+              {step.done ? (
+                <Check className="h-3 w-3" />
+              ) : step.active ? (
+                <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
+              ) : (
+                <span className="h-1.5 w-1.5 rounded-full bg-neutral-300" />
+              )}
+              {step.label}
+            </span>
+            {i < steps.length - 1 && (
+              <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-neutral-300" />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -2184,14 +2616,21 @@ function sumQuotation(sq: SupplierQuotation): number {
  * ========================================================================== */
 
 function ApprovalWorkflowTracker({
-  state,
+  legalDoc,
   poExists,
   fullyApproved,
+  selectedSupplier,
+  selectedSupplierTotal,
 }: {
-  state: RFQApprovalState;
+  legalDoc: LegalDocumentSet | null | undefined;
   poExists: boolean;
   fullyApproved: boolean;
+  selectedSupplier: string;
+  selectedSupplierTotal: number;
 }) {
+  const reviewStatus = legalDoc?.review_status ?? "Pending";
+  const financeStatus = legalDoc?.finance_status ?? "";
+
   const steps: {
     label: string;
     icon: typeof Check;
@@ -2208,19 +2647,16 @@ function ApprovalWorkflowTracker({
     {
       label: "Legal Review",
       icon: Gavel,
-      done: state.legal_status === "Approved",
-      active: state.legal_status === "Pending Legal Review",
-      rejected:
-        state.legal_status === "Rejected",
+      done: reviewStatus === "Approved",
+      active: reviewStatus === "Pending",
+      rejected: reviewStatus === "Rejected",
     },
     {
       label: "Finance Review",
       icon: Wallet,
-      done: state.finance_status === "Budget Approved",
-      active:
-        state.legal_status === "Approved" &&
-        state.finance_status === "Pending Finance Review",
-      rejected: state.finance_status === "Rejected",
+      done: financeStatus === "Approved",
+      active: reviewStatus === "Approved" && financeStatus === "Pending",
+      rejected: financeStatus === "Rejected",
     },
     {
       label: "Create PO",
@@ -2243,9 +2679,13 @@ function ApprovalWorkflowTracker({
   const statusLabel = (() => {
     if (poExists) return { text: "PO Created", tone: "bg-emerald-100 text-emerald-700" };
     if (fullyApproved) return { text: "Approved for PO", tone: "bg-emerald-100 text-emerald-700" };
-    if (state.workflow_step === "Legal Rejected" || state.workflow_step === "Finance Rejected")
-      return { text: state.workflow_step, tone: "bg-red-100 text-red-700" };
-    return { text: state.workflow_step, tone: "bg-primary-100 text-primary-700" };
+    if (reviewStatus === "Rejected")
+      return { text: "Legal Rejected", tone: "bg-red-100 text-red-700" };
+    if (financeStatus === "Rejected")
+      return { text: "Finance Rejected", tone: "bg-red-100 text-red-700" };
+    if (reviewStatus === "Approved")
+      return { text: "Pending Finance Review", tone: "bg-primary-100 text-primary-700" };
+    return { text: "Pending Legal Review", tone: "bg-primary-100 text-primary-700" };
   })();
 
   return (
@@ -2310,9 +2750,9 @@ function ApprovalWorkflowTracker({
       <div className="mt-3 flex items-center gap-2 rounded-lg bg-neutral-50 px-3 py-2 text-xs text-neutral-600">
         <Send className="h-3 w-3 flex-shrink-0 text-neutral-400" />
         <span>
-          Selected supplier: <strong className="text-neutral-900">{state.selected_supplier}</strong>
-          {state.selected_supplier_total > 0 && (
-            <> · {formatCurrency(state.selected_supplier_total)}</>
+          Selected supplier: <strong className="text-neutral-900">{selectedSupplier}</strong>
+          {selectedSupplierTotal > 0 && (
+            <> · {formatCurrency(selectedSupplierTotal)}</>
           )}
         </span>
       </div>

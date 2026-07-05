@@ -146,6 +146,15 @@ export interface MaterialRequest extends ErpDoc {
   company: string;
   status?: MaterialRequestStatus;
   remarks?: string;
+  /** BidSphere workflow (custom field — see setup-material-request-workflow.mjs) */
+  custom_bidsphere_status?: string;
+  custom_department?: string;
+  custom_priority?: string;
+  custom_purpose?: string;
+  custom_warehouse_remarks?: string;
+  custom_procurement_remarks?: string;
+  custom_linked_rfq?: string;
+  custom_requested_by?: string;
   /** Computed field surfaced by some Inteva customisations. */
   total?: number;
   total_qty?: number;
@@ -182,6 +191,8 @@ export interface RFQItem extends ErpDoc {
   schedule_date?: string;
   purchase_requisition?: string;
   purchase_requisition_item?: string;
+  material_request?: string;
+  material_request_item?: string;
 }
 
 /** ERPNext "Request for Quotation" doctype. */
@@ -334,12 +345,15 @@ export interface SupplierQuotation extends ErpDoc {
   total?: number;
   grand_total?: number;
   notes?: string;
-  // Legal document custom fields (actual ERPNext fieldnames)
-  custom_terms_pdf?: string;
+  // Legal document custom fields — verified actual ERPNext fieldnames via
+  // `Custom Field` metadata query (dt = "Supplier Quotation"). Note the
+  // double underscore in `custom_terms__condition` and the upstream typo
+  // "warenty" in `custom_warenty_certificate` — both must match exactly.
+  custom_terms__condition?: string;
   custom_terms_note?: string;
-  custom_warranty_pdf?: string;
+  custom_warenty_certificate?: string;
   custom_warranty_note?: string;
-  custom_insurance_pdf?: string;
+  custom_insurance_certificate?: string;
   custom_insurance_note?: string;
   // Allow dynamic key access for field name discovery
   [key: string]: unknown;
@@ -790,6 +804,9 @@ export interface SupplierScoringResult extends ErpDoc {
   delivery_weight: number;
   quality_weight: number;
   reliability_weight: number;
+  recommended_supplier?: string;
+  /** Full AI recommendation envelope, JSON-serialized — see `saveScoringResult`. */
+  analysis_snapshot?: string;
   supplier_scores: SupplierScoreRow[];
 }
 
@@ -892,22 +909,34 @@ export interface LegalReviewItem {
   insurance_approved?: boolean;
 }
 
-/**
- * Shape used by FinanceReviewsPage — a projection of RFQ fields plus
- * finance-specific approval metadata from localStorage.
- */
 export interface FinanceReviewItem {
   rfq_name: string;
   rfq_title?: string;
+  /**
+   * The Legal Document Review record backing this item — the single source
+   * of truth in ERPNext. Used to address Approve/Reject/Resubmit directly
+   * without re-resolving by RFQ name.
+   */
+  legal_document_name?: string;
   supplier?: string;
+  company?: string;
+  department?: string;
+  cost_center?: string;
+  budget_reference?: string;
   rfq_value: number;
   submission_date?: string;
+  created_date?: string;
   created_by?: string;
   legal_status: LegalReviewStatus;
+  legal_review_date?: string;
+  workflow_status?: RFQApprovalStep;
   finance_status: FinanceReviewStatus;
   finance_reviewer?: string;
+  /** Finance manager assigned to review (same as reviewer once action is taken). */
+  assigned_finance_manager?: string;
   finance_review_date?: string;
   finance_comments: FinanceComment[];
-  cost_center?: string;
+  /** Required context for a Finance Rejected decision; empty when Approved. */
+  finance_rejection_reason?: string;
 }
 

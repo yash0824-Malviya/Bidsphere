@@ -15,12 +15,14 @@ export interface AuthUserProfile {
   email: string;
   full_name: string;
   role: AppRole;
+  department?: string;
 }
 
 interface ErpNextUserProfile {
   name?: string;
   email?: string;
   full_name?: string;
+  department?: string;
   enabled?: 0 | 1;
   roles?: Array<{ role: string }>;
 }
@@ -36,13 +38,15 @@ interface ErpNextUserProfile {
  */
 export async function loginWithPassword(
   username: string,
-  password: string
+  password: string,
 ): Promise<AuthUserProfile> {
   const usr = username.trim();
   const pwd = password;
 
-  // eslint-disable-next-line no-console
-  console.log("[Auth] Login attempt for:", usr);
+  if (import.meta.env.DEV) {
+    // eslint-disable-next-line no-console
+    console.log("[Auth] Login attempt for:", usr);
+  }
 
   if (!usr || !pwd) {
     throw new Error("Please enter your username and password.");
@@ -50,11 +54,9 @@ export async function loginWithPassword(
 
   let response: AxiosResponse<LoginResponse>;
   try {
-    response = (await erpnext.post(
-      "/api/method/login",
-      { usr, pwd },
-      { _preserveResponse: true } as Parameters<typeof erpnext.post>[2]
-    )) as AxiosResponse<LoginResponse>;
+    response = (await erpnext.post("/api/method/login", { usr, pwd }, {
+      _preserveResponse: true,
+    } as Parameters<typeof erpnext.post>[2])) as AxiosResponse<LoginResponse>;
   } catch (err) {
     const axErr = err as AxiosError<LoginResponse>;
     const status = axErr.response?.status;
@@ -69,10 +71,17 @@ export async function loginWithPassword(
 
     if (status === 401) {
       const excMessage = data?.exception ?? data?.exc ?? "";
-      if (typeof excMessage === "string" && excMessage.toLowerCase().includes("disabled")) {
-        throw new Error("This account has been disabled. Contact your administrator.");
+      if (
+        typeof excMessage === "string" &&
+        excMessage.toLowerCase().includes("disabled")
+      ) {
+        throw new Error(
+          "This account has been disabled. Contact your administrator.",
+        );
       }
-      throw new Error("Invalid username or password. Please check your credentials.");
+      throw new Error(
+        "Invalid username or password. Please check your credentials.",
+      );
     }
 
     if (status === 404) {
@@ -80,32 +89,34 @@ export async function loginWithPassword(
     }
 
     if (status === 403) {
-      throw new Error("Access denied. Your account may not have permission to log in.");
+      throw new Error(
+        "Access denied. Your account may not have permission to log in.",
+      );
     }
 
     if (!status || status >= 500) {
       throw new Error(
-        "ERPNext is temporarily unavailable. Please try again in a few moments."
+        "ERPNext is temporarily unavailable. Please try again in a few moments.",
       );
     }
 
     throw new Error(
       typeof data?.message === "string"
         ? data.message
-        : "Login failed. Please try again."
+        : "Login failed. Please try again.",
     );
   }
 
   const payload = response.data;
 
-  // eslint-disable-next-line no-console
-  console.log("[Auth] ERPNext login response:", {
-    status: response.status,
-    message: payload?.message,
-    full_name: payload?.full_name,
-    hasExc: !!payload?.exc,
-    hasException: !!payload?.exception,
-  });
+  if (import.meta.env.DEV) {
+    // eslint-disable-next-line no-console
+    console.log("[Auth] ERPNext login response:", {
+      status: response.status,
+      message: payload?.message,
+      full_name: payload?.full_name,
+    });
+  }
 
   if (payload?.exc || payload?.exception) {
     const excText = payload.exception ?? payload.exc ?? "";
@@ -114,31 +125,35 @@ export async function loginWithPassword(
 
     if (typeof excText === "string") {
       if (excText.toLowerCase().includes("disabled")) {
-        throw new Error("This account has been disabled. Contact your administrator.");
+        throw new Error(
+          "This account has been disabled. Contact your administrator.",
+        );
       }
       if (excText.toLowerCase().includes("not found")) {
-        throw new Error("User not found. Please verify your username or email.");
+        throw new Error(
+          "User not found. Please verify your username or email.",
+        );
       }
     }
 
     throw new Error(
       typeof excText === "string"
         ? excText.replace(/^[^:]+:\s*/, "")
-        : "Invalid username or password."
+        : "Invalid username or password.",
     );
   }
 
   const msg = payload?.message;
-  if (
-    typeof msg === "string" &&
-    msg !== "Logged In" &&
-    msg !== "No App"
-  ) {
+  if (typeof msg === "string" && msg !== "Logged In" && msg !== "No App") {
     if (msg.toLowerCase().includes("invalid")) {
-      throw new Error("Invalid username or password. Please check your credentials.");
+      throw new Error(
+        "Invalid username or password. Please check your credentials.",
+      );
     }
     if (msg.toLowerCase().includes("disabled")) {
-      throw new Error("This account has been disabled. Contact your administrator.");
+      throw new Error(
+        "This account has been disabled. Contact your administrator.",
+      );
     }
   }
 
@@ -147,18 +162,24 @@ export async function loginWithPassword(
     (typeof msg === "object" && msg?.full_name ? msg.full_name : undefined) ||
     usr;
 
-  // eslint-disable-next-line no-console
-  console.log("[Auth] Login successful for:", usr, "fullName:", fullName);
+  if (import.meta.env.DEV) {
+    // eslint-disable-next-line no-console
+    console.log("[Auth] Login successful for:", usr, "fullName:", fullName);
+  }
 
   // Fetch user roles from ERPNext to support dynamic role resolution
   let erpnextRoles: string[] = [];
   try {
     erpnextRoles = await fetchUserRoles(usr);
-    // eslint-disable-next-line no-console
-    console.log("[Auth] ERPNext roles for", usr, ":", erpnextRoles);
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.log("[Auth] ERPNext roles for", usr, ":", erpnextRoles);
+    }
   } catch (roleErr) {
-    // eslint-disable-next-line no-console
-    console.warn("[Auth] Could not fetch ERPNext roles, using email-based resolution:", roleErr);
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn("[Auth] Could not fetch ERPNext roles:", roleErr);
+    }
   }
 
   const profile = {
@@ -170,8 +191,10 @@ export async function loginWithPassword(
 
   const role = resolveRoleFromUser(profile);
 
-  // eslint-disable-next-line no-console
-  console.log("[Auth] Resolved BidSphere role:", role, "for user:", usr);
+  if (import.meta.env.DEV) {
+    // eslint-disable-next-line no-console
+    console.log("[Auth] Resolved BidSphere role:", role, "for user:", usr);
+  }
 
   return {
     name: profile.name,
@@ -185,15 +208,43 @@ export async function loginWithPassword(
  * Fetch ERPNext roles for a user.
  * Uses the User resource endpoint to get the roles child table.
  */
+export async function fetchUserDepartment(
+  username: string,
+): Promise<string | undefined> {
+  try {
+    const user = await apiGet<ErpNextUserProfile>(
+      `/api/resource/User/${encodeURIComponent(username)}`,
+      {
+        params: {
+          fields: JSON.stringify(["name", "department"]),
+        },
+      },
+    );
+
+    return user?.department?.trim() || undefined;
+  } catch (err) {
+    if (import.meta.env.DEV) {
+      console.warn("[Auth] fetchUserDepartment failed:", err);
+    }
+    return undefined;
+  }
+}
+
 async function fetchUserRoles(username: string): Promise<string[]> {
   try {
     const user = await apiGet<ErpNextUserProfile>(
       `/api/resource/User/${encodeURIComponent(username)}`,
       {
         params: {
-          fields: JSON.stringify(["name", "email", "full_name", "enabled", "roles"]),
+          fields: JSON.stringify([
+            "name",
+            "email",
+            "full_name",
+            "enabled",
+            "roles",
+          ]),
         },
-      }
+      },
     );
 
     if (!user) return [];
@@ -213,30 +264,42 @@ async function fetchUserRoles(username: string): Promise<string[]> {
 /** End the ERPNext session (best-effort). */
 export async function logoutFromServer(): Promise<void> {
   try {
-    await erpnext.post(
-      "/api/method/logout",
-      {},
-      { _preserveResponse: true, _silent: true } as Parameters<
-        typeof erpnext.post
-      >[2]
-    );
+    await erpnext.post("/api/method/logout", {}, {
+      _preserveResponse: true,
+      _silent: true,
+    } as Parameters<typeof erpnext.post>[2]);
   } catch {
     /* ignore — local session is cleared regardless */
   }
 }
 
+/** Result of validating a persisted user against ERPNext. */
+export type ValidateUserResult = "valid" | "invalid" | "unreachable";
+
 /** Verify a persisted user still exists and is enabled in ERPNext. */
-export async function validateUserAccount(username: string): Promise<boolean> {
+export async function validateUserAccount(
+  username: string,
+  timeoutMs = 5_000,
+): Promise<ValidateUserResult> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const user = await apiGet<{ enabled?: 0 | 1 }>(
       `/api/resource/User/${encodeURIComponent(username)}`,
       {
         params: { fields: JSON.stringify(["name", "enabled"]) },
+        signal: controller.signal,
         _silent: true,
-      } as Parameters<typeof erpnext.get>[1]
+      } as Parameters<typeof erpnext.get>[1],
     );
-    return !!user && user.enabled !== 0;
-  } catch {
-    return false;
+    return user && user.enabled !== 0 ? "valid" : "invalid";
+  } catch (err) {
+    if (controller.signal.aborted) return "unreachable";
+    const status = (err as { response?: { status?: number } })?.response
+      ?.status;
+    if (status === 404 || status === 403) return "invalid";
+    return "unreachable";
+  } finally {
+    clearTimeout(timer);
   }
 }

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
-import { ArrowRight, Clock, Receipt } from "lucide-react";
+import { AlertTriangle, ArrowRight, Clock, Receipt } from "lucide-react";
 
 import { getSupplierQuotations } from "../../api/supplierPortal";
 import { apiGet, apiPut } from "../../api/erpnext";
@@ -124,6 +124,19 @@ export default function SupplierQuotationsPage() {
     SQ_COMPARATORS
   );
 
+  const { data: legalDocsBySq = new Map<string, Awaited<ReturnType<typeof getLegalDocs>>>() } =
+    useQuery({
+      queryKey: ["supplier-legal-docs", sortedRows.map((sq) => sq.name).join("|")],
+      enabled: sortedRows.length > 0,
+      queryFn: async () => {
+        const entries = await Promise.all(
+          sortedRows.map(async (sq) => [sq.name, await getLegalDocs(sq.name)] as const)
+        );
+        return new Map(entries);
+      },
+      staleTime: 60_000,
+    });
+
   if (!isReady) {
     return (
       <SupplierPortalLayout>
@@ -154,6 +167,21 @@ export default function SupplierQuotationsPage() {
 
         {isLoading ? (
           <TableSkeleton rows={5} columns={5} />
+        ) : sqsQuery.isError ? (
+          <EmptyState
+            icon={AlertTriangle}
+            title="Couldn't load your quotations"
+            description="We hit an error reaching ERPNext. This is NOT the same as having no quotations — please retry."
+            action={
+              <button
+                type="button"
+                onClick={() => sqsQuery.refetch()}
+                className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+              >
+                Retry
+              </button>
+            }
+          />
         ) : sortedRows.length === 0 ? (
           <EmptyState
             icon={Clock}
@@ -185,11 +213,11 @@ export default function SupplierQuotationsPage() {
                   const rfqLink = itemWithRfqLink?.request_for_quotation;
 
                   const detailUrl = `/supplier/quotations/${encodeURIComponent(sq.name)}`;
-                  const legalDocs = getLegalDocs(sq.name);
+                  const legalDocs = legalDocsBySq.get(sq.name);
                   const hasLegalDocs = !!(
-                    legalDocs?.terms_pdf_key &&
-                    legalDocs?.warranty_pdf_key &&
-                    legalDocs?.insurance_pdf_key
+                    legalDocs?.terms_file_url &&
+                    legalDocs?.warranty_file_url &&
+                    legalDocs?.insurance_file_url
                   );
 
                   return (

@@ -6,17 +6,10 @@ import {
   Routes,
 } from "react-router-dom";
 import { Loader2 } from "lucide-react";
-import {
-  QueryClient,
-  QueryClientProvider,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "react-hot-toast";
 
-import { isDocNotFoundError } from "./api/erpnext";
-import { pullVoucherStore, pushVoucherStore } from "./api/voucherSync";
-import { runVoucherStoreMigration } from "./api/vouchers";
-import { cleanupOversizedLegalDocs } from "./api/legalDocs";
+import { queryClient } from "./queryClient";
 import { useVoucherSyncStore } from "./store/voucherSyncStore";
 
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -32,11 +25,38 @@ import RFQListPage from "./pages/sourcing/RFQListPage";
 // Lazy — every other route is code-split into its own chunk so the initial
 // bundle no longer ships the entire app (3D login hero, charts, PDF, etc.).
 const LoginPage = lazy(() => import("./pages/auth/LoginPage"));
+const OtpVerificationPage = lazy(
+  () => import("./pages/auth/OtpVerificationPage")
+);
 
 const RequisitionsPage = lazy(() => import("./pages/p2p/RequisitionsPage"));
 const NewRequisitionPage = lazy(() => import("./pages/p2p/NewRequisitionPage"));
 const RequisitionDetailPage = lazy(
   () => import("./pages/p2p/RequisitionDetailPage")
+);
+const MaterialRequestDashboardPage = lazy(
+  () => import("./pages/material-requests/MaterialRequestDashboardPage")
+);
+const MaterialRequestsListPage = lazy(
+  () => import("./pages/material-requests/MaterialRequestsListPage")
+);
+const MaterialRequestCreatePage = lazy(
+  () => import("./pages/material-requests/MaterialRequestCreatePage")
+);
+const MaterialRequestDetailPage = lazy(
+  () => import("./pages/material-requests/MaterialRequestDetailPage")
+);
+const MaterialRequestWarehousePage = lazy(
+  () => import("./pages/material-requests/MaterialRequestWarehousePage")
+);
+const MaterialRequestProcurementPage = lazy(
+  () => import("./pages/material-requests/MaterialRequestProcurementPage")
+);
+const MaterialRequestIssuedPage = lazy(
+  () => import("./pages/material-requests/MaterialRequestIssuedPage")
+);
+const SupplierQuotationsListPage = lazy(
+  () => import("./pages/sourcing/SupplierQuotationsListPage")
 );
 const PurchaseOrdersPage = lazy(() => import("./pages/p2p/PurchaseOrdersPage"));
 const NewPOQueuePage = lazy(() => import("./pages/p2p/NewPOQueuePage"));
@@ -73,7 +93,6 @@ const SupplierDetailPage = lazy(() => import("./pages/supplier/SupplierDetailPag
 const NewRFQPage = lazy(() => import("./pages/sourcing/NewRFQPage"));
 const RFQDetailPage = lazy(() => import("./pages/sourcing/RFQDetailPage"));
 const RFQTemplatesPage = lazy(() => import("./pages/sourcing/RFQTemplatesPage"));
-const LegalReviewsPage = lazy(() => import("./pages/sourcing/LegalReviewsPage"));
 const LegalReviewDetailPage = lazy(() => import("./pages/legal/LegalReviewDetailPage"));
 const LegalReviewsListPage = lazy(() => import("./pages/legal/LegalReviewsListPage"));
 const FinanceReviewDetailPage = lazy(() => import("./pages/finance/FinanceReviewDetailPage"));
@@ -157,14 +176,57 @@ const SupplierOverviewPage = lazy(() => import("./pages/admin/SupplierOverviewPa
 const InventoryOverviewPage = lazy(() => import("./pages/admin/InventoryOverviewPage"));
 const BudgetControlPage = lazy(() => import("./pages/admin/BudgetControlPage"));
 const IntegrationsPage = lazy(() => import("./pages/admin/IntegrationsPage"));
+
+const WarehouseDashboardPage = lazy(
+  () => import("./pages/warehouse/WarehouseDashboardPage")
+);
+const WarehousePendingReviewPage = lazy(
+  () => import("./pages/warehouse/WarehousePendingReviewPage")
+);
+const WarehouseReviewDetailPage = lazy(
+  () => import("./pages/warehouse/WarehouseReviewDetailPage")
+);
+const WarehouseMaterialIssuedPage = lazy(
+  () => import("./pages/warehouse/WarehouseMaterialIssuedPage")
+);
+const WarehouseMaterialIssueDetailPage = lazy(
+  () => import("./pages/warehouse/WarehouseMaterialIssueDetailPage")
+);
+const WarehouseIssueItemsPage = lazy(
+  () => import("./pages/warehouse/WarehouseIssueItemsPage")
+);
+const WarehouseForwardedRequestsPage = lazy(
+  () => import("./pages/warehouse/WarehouseForwardedRequestsPage")
+);
+const WarehouseStockOverviewPage = lazy(
+  () => import("./pages/warehouse/WarehouseStockOverviewPage")
+);
+const WarehouseItemMasterPage = lazy(
+  () => import("./pages/warehouse/WarehouseItemMasterPage")
+);
+const WarehouseReportsPage = lazy(
+  () => import("./pages/warehouse/WarehouseReportsPage")
+);
+const WarehouseCreateGRNPage = lazy(
+  () => import("./pages/warehouse/WarehouseCreateGRNPage")
+);
+const WarehouseGRNListPage = lazy(
+  () => import("./pages/warehouse/WarehouseGRNListPage")
+);
 const HelpDeskPage = lazy(() => import("./pages/support/HelpDeskPage"));
 const BudgetDashboardPage = lazy(() => import("./pages/budget/BudgetDashboardPage"));
 const BudgetPlansPage = lazy(() => import("./pages/budget/BudgetPlansPage"));
 const BudgetMonitoringPage = lazy(() => import("./pages/budget/BudgetMonitoringPage"));
 const BudgetApprovalsPage = lazy(() => import("./pages/budget/BudgetApprovalsPage"));
 const FinanceReviewsPage = lazy(() => import("./pages/budget/FinanceReviewsPage"));
+const BudgetCreatePage = lazy(() => import("./pages/budget/BudgetCreatePage"));
+const MyBudgetsPage = lazy(() => import("./pages/budget/MyBudgetsPage"));
+const BudgetRequestsPage = lazy(() => import("./pages/budget/BudgetRequestsPage"));
+const BudgetHistoryPage = lazy(() => import("./pages/budget/BudgetHistoryPage"));
+const BudgetDetailPage = lazy(() => import("./pages/budget/BudgetDetailPage"));
 const NotificationCenterPage = lazy(() => import("./pages/notifications/NotificationCenterPage"));
 import { useAuthStore } from "./store/authStore";
+import { authLog, purgeStaleAuthStorage } from "./store/authStorage";
 import { getRFQSchema } from "./api/rfqSchema";
 
 /** Lightweight fallback shown while a lazily-loaded route chunk downloads. */
@@ -176,30 +238,48 @@ function RouteFallback() {
   );
 }
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: (failureCount, error) => {
-        if (isDocNotFoundError(error)) return false;
-        return failureCount < 1;
-      },
-      retryDelay: 2_000,
-      refetchOnWindowFocus: false,
-      staleTime: 5 * 60_000,
-      gcTime: 10 * 60_000,
-    },
-  },
-});
-
 function AuthBootstrap() {
-  const checkAuth = useAuthStore((s) => s.checkAuth);
-  const ranRef = useRef(false);
-
   useEffect(() => {
-    if (ranRef.current) return;
-    ranRef.current = true;
-    void checkAuth();
-  }, [checkAuth]);
+    let cancelled = false;
+
+    const abortRestore = (message: string) => {
+      if (cancelled) return;
+      const { isVerifying, hasHydrated } = useAuthStore.getState();
+      if (hasHydrated && !isVerifying) return;
+      cancelled = true;
+      useAuthStore.getState().clearSession();
+      useAuthStore.setState({
+        isVerifying: false,
+        hasHydrated: true,
+        sessionRestoreError: message,
+      });
+    };
+
+    const safetyTimer = window.setTimeout(
+      () => abortRestore("Unable to restore session."),
+      5_000
+    );
+
+    void (async () => {
+      try {
+        purgeStaleAuthStorage();
+        authLog("bootstrap", "rehydrate start");
+        await useAuthStore.persist.rehydrate();
+        if (cancelled) return;
+        await useAuthStore.getState().restoreSession();
+      } catch {
+        abortRestore("Unable to restore session.");
+      } finally {
+        cancelled = true;
+        window.clearTimeout(safetyTimer);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(safetyTimer);
+    };
+  }, []);
 
   return null;
 }
@@ -214,7 +294,6 @@ function RFQSchemaBootstrap() {
       // eslint-disable-next-line no-console
       console.warn("[RFQSchema] Schema fetch failed (non-fatal):", err);
     });
-    cleanupOversizedLegalDocs();
   }, []);
 
   return null;
@@ -228,45 +307,11 @@ function RFQSchemaBootstrap() {
  * rows refresh immediately.
  */
 function VoucherStoreSync() {
-  const queryClient = useQueryClient();
-  const bump = useVoucherSyncStore((s) => s.bump);
   const setHydrated = useVoucherSyncStore((s) => s.setHydrated);
 
   useEffect(() => {
-    let active = true;
-
-    // One-time migration: purge stale demo/test voucher data that may have
-    // accumulated in localStorage during development.
-    const purged = runVoucherStoreMigration();
-
-    const sync = async () => {
-      // If we just purged stale data, push the empty store to the shared
-      // ERPNext Note so every device converges on a clean state.
-      if (purged) {
-        await pushVoucherStore();
-      }
-
-      const changed = await pullVoucherStore();
-      if (!active) return;
-      setHydrated();
-      if (changed || purged) {
-        bump();
-        void queryClient.invalidateQueries({
-          predicate: (q) =>
-            /invoice|voucher|payment|dashboard|finance-dashboard/i.test(
-              String(q.queryKey[0] ?? "")
-            ),
-        });
-      }
-    };
-    void sync();
-    const onFocus = () => void sync();
-    window.addEventListener("focus", onFocus);
-    return () => {
-      active = false;
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [bump, setHydrated, queryClient]);
+    setHydrated();
+  }, [setHydrated]);
 
   return null;
 }
@@ -283,6 +328,7 @@ function App() {
         <Suspense fallback={<RouteFallback />}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/verify-otp" element={<OtpVerificationPage />} />
 
           {/*
             Public Supplier Portal — these routes sit OUTSIDE the
@@ -346,6 +392,36 @@ function App() {
               element={<RequisitionDetailPage />}
             />
 
+            {/* Material Request workflow (pre-RFQ) */}
+            <Route
+              path="/material-requests"
+              element={<MaterialRequestDashboardPage />}
+            />
+            <Route
+              path="/material-requests/list"
+              element={<MaterialRequestsListPage />}
+            />
+            <Route
+              path="/material-requests/new"
+              element={<MaterialRequestCreatePage />}
+            />
+            <Route
+              path="/material-requests/warehouse"
+              element={<MaterialRequestWarehousePage />}
+            />
+            <Route
+              path="/material-requests/procurement"
+              element={<MaterialRequestProcurementPage />}
+            />
+            <Route
+              path="/material-requests/issued"
+              element={<MaterialRequestIssuedPage />}
+            />
+            <Route
+              path="/material-requests/:name"
+              element={<MaterialRequestDetailPage />}
+            />
+
             <Route
               path="/p2p/purchase-orders"
               element={<PurchaseOrdersPage />}
@@ -402,22 +478,90 @@ function App() {
             <Route path="/sourcing/rfq" element={<RFQListPage />} />
             <Route path="/sourcing/rfq/new" element={<NewRFQPage />} />
             <Route path="/sourcing/rfq/:id" element={<RFQDetailPage />} />
+            <Route
+              path="/sourcing/supplier-quotations"
+              element={<SupplierQuotationsListPage />}
+            />
             <Route path="/sourcing/rfq-templates" element={<RFQTemplatesPage />} />
-            <Route path="/sourcing/legal-reviews" element={<LegalReviewsPage />} />
+            {/* Legacy RFQ-custom-field-backed Legal Reviews page — superseded by
+                /legal/reviews, which reads/writes the ERPNext Legal Document
+                Review DocType (the single source of truth). Redirect so no
+                page ever displays stale Legal/Finance status again. */}
+            <Route
+              path="/sourcing/legal-reviews"
+              element={<Navigate to="/legal/reviews" replace />}
+            />
             <Route path="/legal/reviews/:rfqId" element={<LegalReviewDetailPage />} />
             <Route path="/legal/reviews" element={<LegalReviewsListPage />} />
             <Route path="/legal/review/:sqName" element={<LegalReviewDetailPage />} />
 
             {/* Budget — finance & admin */}
             <Route path="/budget" element={<BudgetDashboardPage />} />
+            <Route path="/budget/create" element={<BudgetCreatePage />} />
+            <Route path="/budget/my-budgets" element={<MyBudgetsPage />} />
+            <Route path="/budget/requests" element={<BudgetRequestsPage />} />
+            <Route path="/budget/detail/:budgetId" element={<BudgetDetailPage />} />
             <Route path="/budget/plans" element={<BudgetPlansPage />} />
             <Route path="/budget/monitoring" element={<BudgetMonitoringPage />} />
             <Route path="/budget/approvals" element={<BudgetApprovalsPage />} />
+            <Route path="/budget/history" element={<BudgetHistoryPage />} />
             <Route path="/budget/pending-reviews" element={<FinanceReviewsPage />} />
             <Route path="/finance/reviews/:rfqId" element={<FinanceReviewDetailPage />} />
             <Route path="/contracts" element={<Navigate to="/dashboard" replace />} />
             <Route path="/contracts/:name" element={<Navigate to="/dashboard" replace />} />
             <Route path="/assets" element={<Navigate to="/dashboard" replace />} />
+
+            {/* Warehouse */}
+            <Route
+              path="/warehouse"
+              element={<Navigate to="/warehouse/dashboard" replace />}
+            />
+            <Route path="/warehouse/dashboard" element={<WarehouseDashboardPage />} />
+            <Route
+              path="/warehouse/material-requests/pending"
+              element={<WarehousePendingReviewPage />}
+            />
+            <Route
+              path="/warehouse/material-requests/review/:mrNumber"
+              element={<WarehouseReviewDetailPage />}
+            />
+            <Route
+              path="/warehouse/material-requests/issued"
+              element={<WarehouseMaterialIssuedPage />}
+            />
+            <Route
+              path="/warehouse/material-requests/issued/:name"
+              element={<WarehouseMaterialIssueDetailPage />}
+            />
+            <Route
+              path="/warehouse/material-requests/forwarded"
+              element={<WarehouseForwardedRequestsPage />}
+            />
+            <Route
+              path="/warehouse/issue-items"
+              element={<WarehouseIssueItemsPage />}
+            />
+            <Route
+              path="/warehouse/inventory/stock-overview"
+              element={<WarehouseStockOverviewPage />}
+            />
+            <Route
+              path="/warehouse/inventory/stock"
+              element={<WarehouseStockOverviewPage />}
+            />
+            <Route
+              path="/warehouse/inventory/create-grn"
+              element={<WarehouseCreateGRNPage />}
+            />
+            <Route
+              path="/warehouse/grn-list"
+              element={<WarehouseGRNListPage />}
+            />
+            <Route
+              path="/warehouse/inventory/items"
+              element={<WarehouseItemMasterPage />}
+            />
+            <Route path="/warehouse/reports" element={<WarehouseReportsPage />} />
 
             {/* Admin */}
             <Route path="/admin" element={<AdminDashboardPage />} />

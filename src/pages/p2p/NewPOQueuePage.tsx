@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
   CheckCircle2,
@@ -8,10 +9,14 @@ import {
   Wallet,
 } from "lucide-react";
 
-import type { RFQApprovalState } from "../../types/erpnext";
+import {
+  type ApprovedRFQRow,
+  getApprovedRFQsAwaitingPO,
+} from "../../api/purchasing";
 
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
+import { Skeleton } from "../../components/Skeleton";
 import { SortableTableHeader } from "../../components/ui";
 import { useListSort } from "../../hooks/useListSort";
 import type { SortState } from "../../components/ui";
@@ -20,49 +25,6 @@ import { formatCurrency, formatDate } from "../../utils/format";
 /* -------------------------------------------------------------------------- */
 /*  Types                                                                      */
 /* -------------------------------------------------------------------------- */
-
-interface ApprovedRFQRow {
-  rfq: string;
-  supplier: string;
-  approved_value: number;
-  approval_date: string;
-  submitted_by: string;
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Helpers                                                                     */
-/* -------------------------------------------------------------------------- */
-
-function getApprovedRFQs(): ApprovedRFQRow[] {
-  const items: ApprovedRFQRow[] = [];
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (!key?.startsWith("rfq_approval_")) continue;
-      const raw = localStorage.getItem(key);
-      if (!raw) continue;
-      try {
-        const s = JSON.parse(raw) as RFQApprovalState;
-        if (
-          s.legal_status === "Approved" &&
-          s.finance_status === "Budget Approved" &&
-          s.workflow_step !== "PO Created"
-        ) {
-          items.push({
-            rfq: s.rfq,
-            supplier: s.selected_supplier || "—",
-            approved_value: s.selected_supplier_total ?? 0,
-            approval_date: s.finance_review_date ?? s.legal_review_date ?? s.submitted_at ?? "",
-            submitted_by: s.submitted_by ?? "—",
-          });
-        }
-      } catch { /* skip malformed */ }
-    }
-  } catch { /* ignore storage errors */ }
-
-  items.sort((a, b) => (b.approval_date ?? "").localeCompare(a.approval_date ?? ""));
-  return items;
-}
 
 /* -------------------------------------------------------------------------- */
 /*  Sort config                                                                */
@@ -95,13 +57,16 @@ const COMPARATORS = {
 
 export default function NewPOQueuePage() {
   const navigate = useNavigate();
-  const [refreshKey] = useState(0);
 
-  const rows = useMemo(
-    () => getApprovedRFQs(),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [refreshKey]
-  );
+  const rowsQuery = useQuery({
+    queryKey: ["po-queue-ready-rfqs"],
+    queryFn: getApprovedRFQsAwaitingPO,
+    staleTime: 0,
+    refetchOnMount: "always",
+  });
+
+  const rows = useMemo(() => rowsQuery.data ?? [], [rowsQuery.data]);
+  const isLoading = rowsQuery.isLoading;
 
   const { sort, setSort, sortedRows } = useListSort(rows, DEFAULT_SORT, COMPARATORS);
 
@@ -126,7 +91,13 @@ export default function NewPOQueuePage() {
 
       {/* Table */}
       <div className="table-shell">
-        {sortedRows.length === 0 ? (
+        {isLoading ? (
+          <div className="space-y-2 p-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-12 rounded-lg" />
+            ))}
+          </div>
+        ) : sortedRows.length === 0 ? (
           <EmptyState
             icon={CheckCircle2}
             title="No RFQs awaiting PO creation"

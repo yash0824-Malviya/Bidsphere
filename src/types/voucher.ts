@@ -6,9 +6,11 @@
  * supplier, the supplier raises an invoice back, Finance confirms payment,
  * and the supplier confirms receipt — a full round-trip with an audit trail.
  *
- * This is a self-contained workflow layer persisted in localStorage (see
- * `src/api/vouchers.ts`); it does not touch the ERPNext Purchase Invoice
- * doctype.
+ * This workflow is persisted in ERPNext's own "Voucher" DocType (see
+ * `src/api/vouchers.ts`) — the supplier's invoice and payment confirmation
+ * live as JSON payloads on that same document (`invoice_json`,
+ * `payment_json`). It is a separate, self-contained doctype from ERPNext's
+ * native Purchase Invoice, used only for the Supplier Portal round-trip.
  */
 
 export type VoucherStatus =

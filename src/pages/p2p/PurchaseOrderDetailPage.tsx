@@ -97,6 +97,13 @@ export default function PurchaseOrderDetailPage() {
     staleTime: 0,
   });
 
+  const vouchersQuery = useQuery({
+    queryKey: ["vouchers-all", name],
+    queryFn: () => getAllVouchers(),
+    enabled: !!name,
+    staleTime: 30_000,
+  });
+
   const submitMutation = useMutation({
     mutationFn: () => submitPurchaseOrder(name),
     onSuccess: () => {
@@ -141,7 +148,9 @@ export default function PurchaseOrderDetailPage() {
   const activeInvoices = allInvoices.filter((inv) => inv.docstatus !== 2);
   const primaryInvoice =
     activeInvoices.find((inv) => inv.docstatus === 1) ?? activeInvoices[0];
-  const poVouchers = getAllVouchers().filter((v) => v.po_reference === po.name);
+  const poVouchers = (vouchersQuery.data ?? []).filter(
+    (v) => v.po_reference === po.name
+  );
   const hasSubmittedInvoiceFromPi = activeInvoices.some((inv) => inv.docstatus === 1);
   const hasSubmittedInvoiceFromVoucher = poVouchers.some(
     (v) =>
@@ -257,7 +266,7 @@ export default function PurchaseOrderDetailPage() {
             <ActionBtn
               icon={PackagePlus}
               label={hasSubmittedGRN ? "View GRN" : "Create GRN"}
-              onClick={() => navigate(hasSubmittedGRN ? `/warehouse/grn/${encodeURIComponent(submittedGRNs[0]?.name ?? "")}` : `/warehouse/grn/create?po=${encodeURIComponent(po.name)}`)}
+              onClick={() => navigate(hasSubmittedGRN ? `/p2p/grn/${encodeURIComponent(submittedGRNs[0]?.name ?? "")}` : `/warehouse/inventory/create-grn?po=${encodeURIComponent(po.name)}`)}
               variant={hasSubmittedGRN ? "ghost" : "success"}
             />
           )}
@@ -269,7 +278,7 @@ export default function PurchaseOrderDetailPage() {
                 hasInvoice
                   ? openInvoiceDetail()
                   : navigate(
-                      `/p2p/invoices/create?po=${encodeURIComponent(po.name)}`
+                      `/p2p/grn/${encodeURIComponent(submittedGRNs[0]?.name ?? "")}`
                     )
               }
               variant={hasInvoice ? "ghost" : "success"}
@@ -449,7 +458,7 @@ export default function PurchaseOrderDetailPage() {
               icon={PackagePlus}
               label="Goods Receipts"
               value={grns.length > 0 ? `${grns.length} GRN${grns.length > 1 ? "s" : ""}` : "None"}
-              to={submittedGRNs[0] ? `/warehouse/grn/${encodeURIComponent(submittedGRNs[0].name)}` : undefined}
+              to={submittedGRNs[0] ? `/p2p/grn/${encodeURIComponent(submittedGRNs[0].name)}` : undefined}
             />
             <RelatedDoc
               icon={Receipt}
@@ -574,7 +583,7 @@ function GRNTab({ grns, poName }: {
         <tbody>
           {grns.map((g) => (
             <tr key={g.name} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50/60">
-              <td className="px-3 py-1.5"><Link to={`/warehouse/grn/${encodeURIComponent(g.name)}`} className="font-medium text-primary-600 hover:underline">{g.name}</Link></td>
+              <td className="px-3 py-1.5"><Link to={`/p2p/grn/${encodeURIComponent(g.name)}`} className="font-medium text-primary-600 hover:underline">{g.name}</Link></td>
               <td className="px-3 py-1.5 text-neutral-600">{g.posting_date ? formatDate(g.posting_date) : "—"}</td>
               <td className="px-3 py-1.5"><StatusBadge status={g.status ?? (g.docstatus === 1 ? "Submitted" : "Draft")} /></td>
               <td className="px-3 py-1.5 text-right tabular-nums font-medium">{formatCurrency(g.grand_total ?? 0)}</td>

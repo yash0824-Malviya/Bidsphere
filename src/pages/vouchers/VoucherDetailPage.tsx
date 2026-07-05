@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
@@ -28,7 +28,6 @@ import {
   voucherPdfFilename,
 } from "../../utils/pdf/voucherDocPdf";
 import { useAuthStore } from "../../store/authStore";
-import type { Voucher } from "../../types/voucher";
 import { formatCurrency, formatDate } from "../../utils/format";
 
 export default function VoucherDetailPage() {
@@ -37,13 +36,51 @@ export default function VoucherDetailPage() {
   const user = useAuthStore((s) => s.user);
   const canAct = user?.role === "finance" || user?.role === "admin";
 
-  const [voucher, setVoucher] = useState<Voucher | null>(() =>
-    getVoucherById(voucherId)
-  );
   const syncVersion = useVoucherSyncStore((s) => s.version);
-  useEffect(() => {
-    setVoucher(getVoucherById(voucherId));
-  }, [voucherId, syncVersion]);
+  const {
+    data: voucher,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
+    queryKey: ["voucher", voucherId, syncVersion],
+    queryFn: () => getVoucherById(voucherId),
+    enabled: !!voucherId,
+  });
+
+  if (isLoading) {
+    return (
+      <div>
+        <BackLink />
+        <EmptyState icon={FileText} title="Loading voucher…" description="" />
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div>
+        <BackLink />
+        <EmptyState
+          icon={FileText}
+          title="Could not load this voucher"
+          description={
+            error instanceof Error
+              ? error.message
+              : "ERPNext returned an error while loading this Voucher. Please retry."
+          }
+        />
+        <button
+          type="button"
+          onClick={() => refetch()}
+          className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   if (!voucher) {
     return (
@@ -60,11 +97,15 @@ export default function VoucherDetailPage() {
 
   const hasInvoice = !!voucher.invoice;
 
-  function handleSend() {
-    const updated = sendVoucherToSupplier(voucher!.id);
-    if (updated) {
-      setVoucher({ ...updated });
-      toast.success("Voucher sent to supplier.");
+  async function handleSend() {
+    try {
+      const updated = await sendVoucherToSupplier(voucher!.id);
+      if (updated) {
+        await refetch();
+        toast.success("Voucher sent to supplier.");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to send voucher");
     }
   }
 

@@ -1,11 +1,8 @@
 import { memo } from "react";
 import {
   CartesianGrid,
-  Cell,
   Line,
   LineChart,
-  Pie,
-  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -14,17 +11,12 @@ import {
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 
 import { Skeleton } from "../Skeleton";
-import type {
-  CategorySpendPoint,
-  MonthlySpendPoint,
-} from "../../utils/dashboardUtils";
-import { CATEGORY_COLORS } from "../../utils/dashboardUtils";
+import type { MonthlySpendPoint } from "../../utils/dashboardUtils";
 import { formatCurrency } from "../../utils/format";
-import { formatCurrencyCompact } from "../../utils/paymentUtils";
+import CategorySpendBreakdown from "./CategorySpendBreakdown";
 
 interface Props {
   monthlySpend: MonthlySpendPoint[];
-  categorySpend: CategorySpendPoint[];
   loading?: boolean;
 }
 
@@ -52,7 +44,7 @@ function ChartCard({
   );
 }
 
-function AdminSpendCharts({ monthlySpend, categorySpend, loading }: Props) {
+function AdminSpendCharts({ monthlySpend, loading }: Props) {
   if (loading) {
     return (
       <div className="dashboard-grid-2">
@@ -64,11 +56,6 @@ function AdminSpendCharts({ monthlySpend, categorySpend, loading }: Props) {
 
   const lastMonth = monthlySpend[monthlySpend.length - 1];
   const momPct = lastMonth?.momChangePct;
-  const categoryPie = categorySpend.map((c) => ({
-    name: c.category,
-    value: Math.max(c.spend, c.estimated ? 1 : 0),
-    pct: c.pct,
-  }));
 
   return (
     <div className="dashboard-grid-2">
@@ -132,62 +119,7 @@ function AdminSpendCharts({ monthlySpend, categorySpend, loading }: Props) {
         </div>
       </ChartCard>
 
-      <ChartCard
-        title="Category Spend Breakdown"
-        subtitle="Procurement category distribution"
-      >
-        <div className="flex h-[220px] items-center gap-4">
-          <div className="h-full w-[48%]">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={categoryPie}
-                  dataKey="value"
-                  innerRadius="48%"
-                  outerRadius="82%"
-                  paddingAngle={2}
-                  stroke="white"
-                  strokeWidth={2}
-                >
-                  {categoryPie.map((_, idx) => (
-                    <Cell
-                      key={idx}
-                      fill={CATEGORY_COLORS[idx % CATEGORY_COLORS.length]}
-                    />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                  formatter={(v, _n, item) => {
-                    const pct = (item.payload as { pct: number }).pct ?? 0;
-                    return [
-                      `${formatCurrencyCompact(typeof v === "number" ? v : 0)} (${pct.toFixed(1)}%)`,
-                      (item.payload as { name: string }).name,
-                    ];
-                  }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          <ul className="min-w-0 flex-1 space-y-1">
-            {categoryPie.map((c, idx) => (
-              <li key={c.name} className="flex items-center gap-1.5 text-[11px]">
-                <span
-                  className="h-2 w-2 shrink-0 rounded-full"
-                  style={{
-                    backgroundColor:
-                      CATEGORY_COLORS[idx % CATEGORY_COLORS.length],
-                  }}
-                />
-                <span className="truncate text-neutral-700">{c.name}</span>
-                <span className="ml-auto font-medium tabular-nums text-neutral-900">
-                  {c.pct.toFixed(0)}%
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </ChartCard>
+      <CategorySpendBreakdown />
     </div>
   );
 }

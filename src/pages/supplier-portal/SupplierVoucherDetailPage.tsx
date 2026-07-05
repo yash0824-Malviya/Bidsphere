@@ -54,13 +54,22 @@ export default function SupplierVoucherDetailPage() {
   const syncVersion = useVoucherSyncStore((s) => s.version);
   useEffect(() => {
     if (!isReady) return;
-    const owned = getVoucherForSupplier(voucherId, supplierName);
-    if (!owned) {
-      setVoucher(null);
-      return;
-    }
-    const v = markVoucherViewed(voucherId) ?? owned;
-    setVoucher({ ...v });
+
+    let cancelled = false;
+    void (async () => {
+      const owned = await getVoucherForSupplier(voucherId, supplierName);
+      if (cancelled) return;
+      if (!owned) {
+        setVoucher(null);
+        return;
+      }
+      const v = (await markVoucherViewed(voucherId)) ?? owned;
+      if (!cancelled) setVoucher({ ...v });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [isReady, voucherId, supplierName, syncVersion]);
 
   const subtotal = voucher?.amount ?? 0;
@@ -103,10 +112,10 @@ export default function SupplierVoucherDetailPage() {
     );
   }
 
-  function handleRaiseInvoice() {
+  async function handleRaiseInvoice() {
     setSubmitting(true);
     try {
-      const updated = supplierRaiseInvoice(voucher!.id, {
+      const updated = await supplierRaiseInvoice(voucher!.id, {
         invoice_number: invoiceNumber,
         raised_at: new Date().toISOString(),
         subtotal: subtotal + charges,
@@ -126,8 +135,8 @@ export default function SupplierVoucherDetailPage() {
     }
   }
 
-  function handleConfirmReceipt() {
-    const updated = supplierConfirmPaymentReceived(voucher!.id);
+  async function handleConfirmReceipt() {
+    const updated = await supplierConfirmPaymentReceived(voucher!.id);
     if (updated) {
       setVoucher({ ...updated });
       toast.success("Payment receipt confirmed. Thank you!");

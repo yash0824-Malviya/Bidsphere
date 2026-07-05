@@ -5,17 +5,13 @@ import {
   Activity,
   CheckCircle2,
   Clock,
-  Database,
   DollarSign,
   FileText,
-  Gavel,
-  Mail,
   Server,
   Shield,
   ShoppingCart,
   Truck,
   Users,
-  Wallet,
   XCircle,
 } from "lucide-react";
 
@@ -80,10 +76,7 @@ export default function AdminDashboardPage() {
       {/* ── 2. Approval Center ──────────────────────────────────────────────── */}
       <SectionHeader title="Approval Center" />
       <div className="mb-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <ApprovalCard icon={FileText} label="RFQ Pending" count={kpis?.pendingApprovals ?? 0} iconBg="bg-blue-50" iconColor="text-blue-600" accentColor="border-blue-400" />
-        <ApprovalCard icon={Gavel} label="Legal Pending" count={0} iconBg="bg-amber-50" iconColor="text-amber-600" accentColor="border-amber-400" />
-        <ApprovalCard icon={Wallet} label="Finance Pending" count={0} iconBg="bg-emerald-50" iconColor="text-emerald-600" accentColor="border-emerald-400" />
-        <ApprovalCard icon={ShoppingCart} label="PO Pending" count={0} iconBg="bg-violet-50" iconColor="text-violet-600" accentColor="border-violet-400" />
+        <ApprovalCard icon={FileText} label="RFQ Pending" count={kpis?.pendingApprovals ?? 0} iconBg="bg-blue-50" iconColor="text-blue-600" accentColor="border-blue-400" loading={isLoading} />
       </div>
 
       <div className="grid gap-2.5 lg:grid-cols-[1fr_300px]">
@@ -137,20 +130,10 @@ export default function AdminDashboardPage() {
           <div>
             <SectionHeader title="Spend Analytics" />
             <div className="rounded-lg border border-neutral-200 bg-white shadow-sm">
-              <div className="grid grid-cols-2 divide-x divide-neutral-100">
-                <div className="px-2.5 py-2">
-                  <p className="text-[9px] font-bold uppercase tracking-wider text-neutral-400">Monthly Spend</p>
-                  <p className="mt-0.5 text-lg font-bold tabular-nums text-neutral-900 leading-tight">{formatCurrencyCompact(kpis?.totalSpend ?? 0)}</p>
-                  <p className="mt-0.5 text-[10px] text-neutral-500">Across {kpis?.totalPOs ?? 0} purchase orders</p>
-                </div>
-                <div className="px-2.5 py-2">
-                  <p className="text-[9px] font-bold uppercase tracking-wider text-neutral-400">Category Breakdown</p>
-                  <div className="mt-1.5 space-y-1">
-                    <SpendRow label="Procurement" pct={65} color="bg-blue-500" />
-                    <SpendRow label="Services" pct={20} color="bg-violet-500" />
-                    <SpendRow label="Logistics" pct={15} color="bg-amber-500" />
-                  </div>
-                </div>
+              <div className="px-2.5 py-2">
+                <p className="text-[9px] font-bold uppercase tracking-wider text-neutral-400">Total Spend (submitted POs)</p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums text-neutral-900 leading-tight">{formatCurrencyCompact(kpis?.totalSpend ?? 0)}</p>
+                <p className="mt-0.5 text-[10px] text-neutral-500">Across {kpis?.totalPOs ?? 0} purchase orders</p>
               </div>
               <div className="border-t border-neutral-200 px-2.5 py-1.5 text-center">
                 <Link to="/admin/reports" className="text-[10px] font-semibold text-primary-600 hover:text-primary-700 no-underline">
@@ -164,11 +147,11 @@ export default function AdminDashboardPage() {
         {/* ── Right column: System Health ──────────────────────────────────── */}
         <div>
           <SectionHeader title="System Health" />
-          <div className="space-y-1.5">
-            <HealthCard icon={Server} label="ERPNext" status="healthy" detail="Backend connected &middot; REST API active" />
-            <HealthCard icon={Database} label="Database" status="healthy" detail="MariaDB responding &middot; All tables OK" />
-            <HealthCard icon={Mail} label="Email Service" status="healthy" detail="SMTP configured &middot; Queue clear" />
-            <HealthCard icon={Activity} label="API Gateway" status="healthy" detail="All endpoints responsive" />
+          <div className="rounded-lg border border-neutral-200 bg-white px-3 py-6 text-center shadow-sm">
+            <Server className="mx-auto mb-2 h-6 w-6 text-neutral-300" />
+            <p className="text-xs text-neutral-500">
+              Health monitoring will appear when integrations are configured.
+            </p>
           </div>
         </div>
       </div>
@@ -219,6 +202,7 @@ function ApprovalCard({
   iconBg,
   iconColor,
   accentColor,
+  loading,
 }: {
   icon: typeof FileText;
   label: string;
@@ -226,7 +210,11 @@ function ApprovalCard({
   iconBg: string;
   iconColor: string;
   accentColor: string;
+  loading?: boolean;
 }) {
+  if (loading) {
+    return <Skeleton className="h-[52px] rounded-lg" />;
+  }
   return (
     <div className={`rounded-lg border-l-[3px] ${accentColor} border border-neutral-200 bg-white px-2.5 py-2 shadow-sm`}>
       <div className="flex items-center justify-between">
@@ -258,52 +246,4 @@ function ActivityDot({ action }: { action: string }) {
   if (lower.includes("login") || lower.includes("logout"))
     return <div className="mt-1 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-blue-50"><Users className="h-3 w-3 text-blue-600" /></div>;
   return <div className="mt-1 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-neutral-100"><Activity className="h-3 w-3 text-neutral-500" /></div>;
-}
-
-function SpendRow({ label, pct, color }: { label: string; pct: number; color: string }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="w-16 text-[10px] text-neutral-600 truncate">{label}</span>
-      <div className="flex-1 h-1.5 rounded-full bg-neutral-100">
-        <div className={`h-1.5 rounded-full ${color}`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className="text-[10px] font-semibold tabular-nums text-neutral-700">{pct}%</span>
-    </div>
-  );
-}
-
-function HealthCard({
-  icon: Icon,
-  label,
-  status,
-  detail,
-}: {
-  icon: typeof Server;
-  label: string;
-  status: "healthy" | "warning" | "error";
-  detail: string;
-}) {
-  const cfg = {
-    healthy: { bg: "bg-emerald-50", text: "text-emerald-700", dot: "bg-emerald-500", badge: "Operational" },
-    warning: { bg: "bg-amber-50", text: "text-amber-700", dot: "bg-amber-500", badge: "Degraded" },
-    error: { bg: "bg-red-50", text: "text-red-700", dot: "bg-red-500", badge: "Down" },
-  }[status];
-
-  return (
-    <div className="flex items-center gap-2.5 rounded-lg border border-neutral-200 bg-white px-2.5 py-2 shadow-sm">
-      <div className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md ${cfg.bg}`}>
-        <Icon className={`h-3.5 w-3.5 ${cfg.text}`} />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5">
-          <span className={`h-1.5 w-1.5 rounded-full ${cfg.dot}`} />
-          <p className="text-[11px] font-semibold text-neutral-900">{label}</p>
-        </div>
-        <p className="text-[10px] text-neutral-500" dangerouslySetInnerHTML={{ __html: detail }} />
-      </div>
-      <span className={`rounded px-1.5 py-px text-[9px] font-bold uppercase ${cfg.bg} ${cfg.text}`}>
-        {cfg.badge}
-      </span>
-    </div>
-  );
 }

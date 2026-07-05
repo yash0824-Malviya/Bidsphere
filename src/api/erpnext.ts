@@ -6,6 +6,8 @@ import type {
 } from "axios";
 import toast from "react-hot-toast";
 
+import { handleSessionExpired } from "../store/sessionExpiry";
+
 export const ENV_DEFAULTS = {
   company: (import.meta.env.VITE_COMPANY as string | undefined) ?? "",
 };
@@ -15,11 +17,6 @@ export const COMPANY = ENV_DEFAULTS.company.trim() || "Inteva";
 
 const API_KEY = import.meta.env.VITE_API_KEY as string | undefined;
 const API_SECRET = import.meta.env.VITE_API_SECRET as string | undefined;
-
-// eslint-disable-next-line no-console
-console.log("[Auth] Key:", API_KEY?.slice(0, 8));
-// eslint-disable-next-line no-console
-console.log("[Auth] Secret:", API_SECRET?.slice(0, 8));
 
 /**
  * Same-origin `/api/*` requests — proxied to ERPNext in every environment:
@@ -44,13 +41,6 @@ export const erpnext = axios.create({
 /** Alias for modules that prefer the `erpnextClient` naming convention. */
 export const erpnextClient = erpnext;
 
-// ── TEMPORARY DIAGNOSTICS (remove after verifying the proxy is used) ────────
-// Empty baseURL means every request is same-origin `/api/*` (the Vercel/Vite
-// proxy). If this logs anything containing "frappe.cloud", the client is
-// bypassing the proxy.
-// eslint-disable-next-line no-console
-console.log("API BASE URL =", JSON.stringify(erpnext.defaults.baseURL));
-
 /**
  * Per-request escape hatch: pass `{ _silent: true }` in the axios config to
  * skip the global error toast (the rejected promise is still propagated).
@@ -73,12 +63,64 @@ export function withSilent(
 
 erpnext.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
+    const method = config.method?.toLowerCase();
+    const url = `${config.baseURL ?? ""}${config.url ?? ""}`;
+
+    if (
+      url.includes("Custom Field") &&
+      method &&
+      ["post", "put", "patch", "delete"].includes(method)
+    ) {
+      // eslint-disable-next-line no-console
+      console.error(
+        "[BLOCKED] Attempted to create/modify a Custom Field from the frontend.",
+        "This causes duplicate-field and deadlock errors.",
+        "Custom fields must be created manually in ERPNext, not from the app.",
+        { method, url }
+      );
+      const blocked = new Error(
+        "Custom Field creation from frontend is disabled"
+      ) as AxiosError & SilentRequestConfig;
+      blocked._silent = true;
+      return Promise.reject(blocked);
+    }
+
     // eslint-disable-next-line no-console
-    console.log(
-      "REQUEST",
-      config.method,
-      `${config.baseURL ?? ""}${config.url ?? ""}`
-    );
+    if (import.meta.env.DEV) console.log("REQUEST", config.method, url);
+
+    // Extract and print DocType before query for audit purposes
+    let loggedDocType: string | null = null;
+    if (url.includes("/api/resource/")) {
+      const match = url.match(/\/api\/resource\/([^/?#]+)/);
+      if (match && match[1]) {
+        loggedDocType = decodeURIComponent(match[1]);
+      }
+    } else if (
+      url.includes("frappe.client.get_list") ||
+      url.includes("frappe.client.get") ||
+      url.includes("frappe.client.save") ||
+      url.includes("frappe.client.submit") ||
+      url.includes("frappe.client.cancel")
+    ) {
+      let bodyData: any = null;
+      if (typeof config.data === "string") {
+        try {
+          bodyData = JSON.parse(config.data);
+        } catch {}
+      } else if (config.data && typeof config.data === "object") {
+        bodyData = config.data;
+      }
+      loggedDocType =
+        bodyData?.doctype ||
+        bodyData?.doc?.doctype ||
+        config.params?.doctype ||
+        null;
+    }
+
+    if (loggedDocType) {
+      // eslint-disable-next-line no-console
+      console.log(`Querying ${loggedDocType}...`);
+    }
 
     // Login/logout use session auth (usr/pwd in body), NOT token auth.
     // Remove the Authorization header so Frappe authenticates the submitted
@@ -97,7 +139,6 @@ erpnext.interceptors.request.use(
       }
     }
 
-    const method = config.method?.toLowerCase();
     const isMutation =
       method === "post" ||
       method === "put" ||
@@ -130,9 +171,10 @@ erpnext.interceptors.request.use(
 
 erpnext.interceptors.response.use(
   (response: AxiosResponse) => {
-    // TEMPORARY: confirms responses come back through the proxy.
-    // eslint-disable-next-line no-console
-    console.log("RESPONSE", response.status, response.config.url);
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.log("RESPONSE", response.status, response.config.url);
+    }
 
     const preserve =
       (response.config as SilentRequestConfig | undefined)?._preserveResponse ===
@@ -177,17 +219,31 @@ erpnext.interceptors.response.use(
     return payload;
   },
   (error: AxiosError<ErpNextErrorPayload>) => {
-    // TEMPORARY: surfaces the raw axios error (status + URL) for proxy checks.
-    // eslint-disable-next-line no-console
-    console.error(
-      "AXIOS ERROR",
-      error.response?.status,
-      error.config?.url,
-      error.message
-    );
+    const silentFromConfig =
+      (error.config as (typeof error.config & SilentRequestConfig) | undefined)
+        ?._silent === true;
+    const silentFromError =
+      (error as AxiosError & SilentRequestConfig)._silent === true;
+
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.error(
+        "AXIOS ERROR",
+        error.response?.status,
+        error.config?.url,
+        error.message
+      );
+    }
 
     const status = error.response?.status;
     const data = error.response?.data;
+
+    const isAuthEndpoint =
+      error.config?.url === "/api/method/login" ||
+      error.config?.url === "/api/method/logout";
+    if (status === 401 && !isAuthEndpoint && !silentFromConfig && !silentFromError) {
+      handleSessionExpired();
+    }
 
     // Best-effort parse of the outbound payload so the log shows the
     // exact JSON object axios sent (axios serialises body data to a
@@ -289,6 +345,15 @@ erpnext.interceptors.response.use(
       message =
         friendlyMandatoryErrorMessage(data) ??
         "Please fill in all required fields.";
+    } else if (data?.exc_type === "UpdateAfterSubmitError") {
+      const serverMsg = extractErpNextError(data) || data.message || error.message;
+      const match = String(serverMsg).match(
+        /(?:UpdateAfterSubmitError|Not allowed to change|Cannot change)\s+(?:['"`]?([^'"`\n]+)['"`]?|([^\n]+?))\s+after submission/i
+      );
+      const fieldName = match ? (match[1] || match[2] || "").trim() : "";
+      message = fieldName
+        ? `UpdateAfterSubmitError: Not allowed to change ${fieldName} after submission`
+        : String(serverMsg);
     } else {
       // Combine ALL server messages + the exc exception line so the real
       // ValidationError isn't hidden behind an informational alert.
@@ -309,9 +374,16 @@ erpnext.interceptors.response.use(
     // of "Request failed" when ERPNext is simply offline.
     const friendly = friendlyErrorMessage(error) || message;
 
+    const isSchemaNoise =
+      data?.exc_type === "QueryDeadlockError" ||
+      /QueryDeadlockError/i.test(message) ||
+      /already exists in the/i.test(message) ||
+      error.message === "Custom Field creation from frontend is disabled";
+
     const silent =
-      (error.config as (typeof error.config & SilentRequestConfig) | undefined)
-        ?._silent === true;
+      silentFromConfig ||
+      silentFromError ||
+      isSchemaNoise;
 
     if (!silent && status !== 403 && typeof window !== "undefined") {
       surfaceErrorToast(friendly);
@@ -345,18 +417,22 @@ let lastToastAt = 0;
  * In dev builds the raw message is ALSO logged to the console, but the
  * toast always shows the sanitized version.
  */
-const INFRA_LEAK_PATTERN =
-  /erpnext|frappe\.|bench|localhost|127\.0\.0\.1|ngrok|traceback|econn|network error|\bgateway\b|\/api\/|csrf|stack|exception|502|503|504|No module named|ImportError|ModuleNotFoundError|TypeError:|AttributeError:|KeyError:|ValueError:|RuntimeError:|\.py\b|doctype\.|sql|mariadb|pymysql|Traceback \(most recent/i;
-
+/**
+ * Formats user-facing error messages without masking ERPNext validation errors.
+ * If an UpdateAfterSubmitError occurs, returns the exact field causing the error.
+ */
 function sanitizeUserMessage(message: string): string {
-  if (INFRA_LEAK_PATTERN.test(message)) {
-    if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
-      console.warn("[sanitizeUserMessage] Suppressed raw error from toast:", message);
-      return `Data is temporarily unavailable: ${message}`;
-    }
-    return "Data is temporarily unavailable. Please refresh the page or try again later.";
+  // If this is an UpdateAfterSubmitError or field-change error, extract the exact field
+  const updateAfterSubmitMatch = message.match(
+    /(?:UpdateAfterSubmitError|Not allowed to change|Cannot change)\s+(?:['"`]?([^'"`\n]+)['"`]?|([^\n]+?))\s+after submission/i
+  );
+  if (updateAfterSubmitMatch) {
+    const fieldName = (updateAfterSubmitMatch[1] || updateAfterSubmitMatch[2] || "").trim();
+    return fieldName
+      ? `UpdateAfterSubmitError: Not allowed to change ${fieldName} after submission`
+      : message;
   }
+
   return message;
 }
 
@@ -476,6 +552,63 @@ export async function apiDelete<T = unknown>(
   config?: AxiosRequestConfig
 ): Promise<T> {
   return erpnext.delete(url, config) as unknown as Promise<T>;
+}
+
+const SERVER_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The ERPNext server's current date as `YYYY-MM-DD`, resolved from the most
+ * authoritative source available so posting-date validation exactly matches
+ * how ERPNext validates (its own `frappe.utils.nowdate()`), never the browser
+ * clock. Resolution order:
+ *
+ *   1. `bidsphere_server_date` — a whitelisted Server Script (API) that returns
+ *      `frappe.utils.nowdate()` in the *site's configured time zone*. This is
+ *      the only source that byte-for-byte matches ERPNext's own comparison.
+ *      (Deploy with `scripts/setup-server-date-api.mjs`.)
+ *   2. The HTTP `Date` response header (UTC) — server-anchored but coarser than
+ *      the site time zone; a safe approximation when the script isn't deployed.
+ *
+ * Returns `null` if neither is available, in which case callers should let
+ * ERPNext default the date server-side (omit `posting_date`).
+ */
+export async function fetchServerDate(): Promise<string | null> {
+  // 1) Preferred: the site-local server date (honours the ERPNext time zone).
+  try {
+    const res = await apiGet<{ today?: string } | undefined>(
+      "/api/method/bidsphere_server_date",
+      { ...withSilent(), timeout: 5_000 }
+    );
+    const today = (res as { today?: string } | undefined)?.today;
+    if (typeof today === "string" && SERVER_DATE_RE.test(today)) {
+      return today;
+    }
+  } catch {
+    // Endpoint not deployed / not permitted — fall through to the header.
+  }
+
+  // 2) Fallback: the HTTP `Date` header (UTC).
+  try {
+    const res = (await erpnext.get("/api/method/frappe.auth.get_logged_user", {
+      _preserveResponse: true,
+      _silent: true,
+      timeout: 5_000,
+    } as AxiosRequestConfig & SilentRequestConfig)) as unknown as AxiosResponse;
+
+    const header = res?.headers?.["date"] ?? res?.headers?.["Date"];
+    if (typeof header === "string") {
+      const parsed = new Date(header);
+      if (!Number.isNaN(parsed.getTime())) {
+        const y = parsed.getUTCFullYear();
+        const m = String(parsed.getUTCMonth() + 1).padStart(2, "0");
+        const d = String(parsed.getUTCDate()).padStart(2, "0");
+        return `${y}-${m}-${d}`;
+      }
+    }
+  } catch {
+    // Silent — caller falls back to letting ERPNext set the date.
+  }
+  return null;
 }
 
 /**

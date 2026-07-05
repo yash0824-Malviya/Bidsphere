@@ -204,9 +204,13 @@ export default function FinanceReviewsPage() {
 
 
 
-  const allRecords = allQuery.data ?? [];
+  const allRecords = allQuery.data?.items ?? [];
+
+  const diagnostics = allQuery.data?.diagnostics;
 
   const isLoading = allQuery.isLoading;
+
+  const loadError = allQuery.error instanceof Error ? allQuery.error.message : undefined;
 
 
 
@@ -344,7 +348,11 @@ export default function FinanceReviewsPage() {
 
             title={
 
-              statusFilter === "All"
+              loadError
+
+                ? "Failed to load finance reviews"
+
+                : statusFilter === "All"
 
                 ? "No finance review history found"
 
@@ -354,15 +362,21 @@ export default function FinanceReviewsPage() {
 
             description={
 
-              statusFilter === "All"
+              loadError
 
-                ? "RFQs appear here after legal approval. Check the browser console for Finance Review API Response to verify ERPNext data."
+                ? loadError
 
-                : statusFilter === "Pending Finance Review"
+                : statusFilter !== "All"
 
-                ? "No RFQs are currently awaiting finance review."
+                ? statusFilter === "Pending Finance Review"
 
-                : `No RFQs with finance status "${statusFilter}".`
+                  ? "No RFQs are currently awaiting finance review."
+
+                  : `No RFQs with finance status "${statusFilter}".`
+
+                : diagnostics?.emptyReason ??
+
+                  "RFQs appear here after legal approval. Data is loaded from ERPNext Request for Quotation workflow fields."
 
             }
 

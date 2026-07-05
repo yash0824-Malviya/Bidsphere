@@ -125,12 +125,13 @@ export default function NewGRNPage() {
     isError: warehouseError,
     refetch: refetchWarehouses,
   } = useQuery({
-    queryKey: ["warehouses"],
+    queryKey: ["warehouses", COMPANY],
     queryFn: () =>
       apiGet<WarehouseRow[]>("/api/resource/Warehouse", {
         ...withSilent(),
         params: {
           filters: JSON.stringify([
+            ["company", "=", COMPANY],
             ["is_group", "=", 0],
             ["disabled", "=", 0],
           ]),
@@ -158,6 +159,11 @@ export default function NewGRNPage() {
     retry: 1,
   });
   const existingSubmittedGRN = existingGRNs.find((g) => g.docstatus === 1);
+  // A PO can legitimately receive goods across MULTIPLE GRNs (partial /
+  // staggered shipments). Only block creating another GRN once ERPNext's
+  // own `per_received` says nothing is left to receive — the mere presence
+  // of a prior submitted GRN is not by itself a reason to block.
+  const isFullyReceived = (po?.per_received ?? 0) >= 99.99;
 
   const { data: serverToday } = useQuery({
     queryKey: ["erpnext-server-today"],
@@ -330,6 +336,7 @@ export default function NewGRNPage() {
       queryClient.invalidateQueries({ queryKey: ["po-grns", poName] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["grns-awaiting-invoice"] });
+      queryClient.invalidateQueries({ queryKey: ["warehouse"] });
       invalidateFinanceDashboardMetrics(queryClient);
       navigate("/p2p/grn");
     },
@@ -510,16 +517,37 @@ export default function NewGRNPage() {
         </div>
       )}
 
-      {existingSubmittedGRN && (
+      {existingSubmittedGRN && isFullyReceived && (
         <div className="mb-4 flex items-start gap-3 rounded-xl border border-warning-200 bg-warning-50 p-4">
           <span className="text-lg leading-none">⚠️</span>
           <div className="text-sm">
             <p className="font-semibold text-warning-900">
-              A completed GRN already exists for this Purchase Order
+              This Purchase Order has already been fully received
             </p>
             <p className="mt-0.5 text-warning-800">
-              {existingSubmittedGRN.name} is already submitted. Creating
-              another GRN may result in over-receiving.{" "}
+              {existingSubmittedGRN.name} covers 100% of the ordered
+              quantity. Creating another GRN would over-receive.{" "}
+              <Link
+                to={`/p2p/grn/${encodeURIComponent(existingSubmittedGRN.name)}`}
+                className="font-semibold underline"
+              >
+                View existing GRN →
+              </Link>
+            </p>
+          </div>
+        </div>
+      )}
+
+      {existingSubmittedGRN && !isFullyReceived && (
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-accent-200 bg-accent-50 p-4">
+          <span className="text-lg leading-none">ℹ️</span>
+          <div className="text-sm">
+            <p className="font-semibold text-accent-900">
+              This PO has a prior receipt — {Math.round(po?.per_received ?? 0)}% received so far
+            </p>
+            <p className="mt-0.5 text-accent-800">
+              {existingSubmittedGRN.name} already covers part of this order.
+              You can create another GRN for the remaining quantity.{" "}
               <Link
                 to={`/p2p/grn/${encodeURIComponent(existingSubmittedGRN.name)}`}
                 className="font-semibold underline"
@@ -718,7 +746,7 @@ export default function NewGRNPage() {
           disabled={
             createMutation.isPending ||
             !poName ||
-            !!existingSubmittedGRN ||
+            isFullyReceived ||
             !deliveryGate.allowed ||
             isPostingDateInvalid ||
             poDateIsFuture
@@ -726,8 +754,8 @@ export default function NewGRNPage() {
           title={
             !deliveryGate.allowed
               ? deliveryGate.reason
-              : existingSubmittedGRN
-              ? `${existingSubmittedGRN.name} already covers this PO`
+              : isFullyReceived
+              ? `${existingSubmittedGRN?.name} already covers 100% of this PO`
               : undefined
           }
           className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary-600 disabled:opacity-60"

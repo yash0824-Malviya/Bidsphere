@@ -51,7 +51,12 @@ function TopSuppliersPanel({ rows, loading }: Props) {
       </div>
 
       <ul className="dashboard-panel-body divide-y divide-neutral-100">
-        {rows.map((row) => (
+        {rows.length === 0 ? (
+          <li className="py-8 text-center text-sm text-neutral-500">
+            No supplier spend recorded yet.
+          </li>
+        ) : (
+          rows.map((row) => (
           <li key={row.supplier}>
             <Link
               to={`/suppliers/${encodeURIComponent(row.supplier)}`}
@@ -87,7 +92,8 @@ function TopSuppliersPanel({ rows, loading }: Props) {
               </span>
             </Link>
           </li>
-        ))}
+          ))
+        )}
       </ul>
     </div>
   );

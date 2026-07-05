@@ -1,16 +1,14 @@
 /**
- * Voucher workflow + notification API.
+ * Voucher workflow API — persisted in ERPNext "Voucher" DocType.
  *
- * Persists vouchers and notifications in localStorage. This is a deliberate
- * self-contained workflow layer (the "Voucher" replacement for the Finance
- * invoice flow) and does not call ERPNext. UI conventions are honored:
- * USD currency, the app's auth store for the current actor, etc.
+ * History is stored via ERPNext Comment records linked to each voucher.
+ * UI notifications remain localStorage-based (see notifications.ts).
  */
 
+import erpnextClient, { buildResourceUrl, isDocNotFoundError } from "./erpnext";
 import { useAuthStore } from "../store/authStore";
 import { useVoucherSyncStore } from "../store/voucherSyncStore";
 import { canManageVouchers } from "../config/roles";
-import { scheduleVoucherPush } from "./voucherSync";
 import { notifyVoucherEvent } from "./notifications";
 import type {
   InvoiceRecord,
@@ -20,8 +18,70 @@ import type {
   SupplierInvoice,
   Voucher,
   VoucherActorRole,
+  VoucherHistoryEntry,
+  VoucherItem,
   VoucherStatus,
 } from "../types/voucher";
+
+const DOCTYPE = "Voucher";
+
+/* -------------------------------------------------------------------------- */
+/*  ERPNext record shape                                                      */
+/* -------------------------------------------------------------------------- */
+
+type ErpVoucherStatus =
+  | "Draft"
+  | "Sent"
+  | "Viewed"
+  | "Invoice Raised"
+  | "Under Review"
+  | "Payment Confirmed"
+  | "Payment Received";
+
+interface ErpVoucherRecord {
+  name: string;
+  po_reference?: string;
+  grn_reference?: string;
+  supplier?: string;
+  created_by?: string;
+  amount?: number;
+  currency?: string;
+  status?: string;
+  items_json?: string;
+  invoice_json?: string;
+  payment_json?: string;
+  creation?: string;
+  modified?: string;
+}
+
+interface ItemsJsonPayload {
+  items: VoucherItem[];
+  meta?: {
+    supplier_name?: string;
+    payment_terms?: string;
+    due_date?: string;
+    notes?: string;
+  };
+}
+
+interface ErpCommentRow {
+  name?: string;
+  content?: string;
+  owner?: string;
+  creation?: string;
+}
+
+function resourceBase(): string {
+  return buildResourceUrl(DOCTYPE);
+}
+
+function bumpStore(): void {
+  try {
+    useVoucherSyncStore.getState().bump();
+  } catch {
+    /* non-React context */
+  }
+}
 
 function voucherNotify(
   voucher: Pick<Voucher, "id" | "supplier">,
@@ -31,28 +91,162 @@ function voucherNotify(
   notifyVoucherEvent(forRole, message, voucher.id, {
     supplier_id: voucher.supplier,
   });
-  notifyVoucherStoreChanged();
+  bumpStore();
 }
 
-const VOUCHERS_KEY = "netlink_vouchers";
-const MIGRATION_KEY = "voucher_store_v2_purged";
+function erpToAppStatus(
+  erpStatus: string | undefined,
+  invoice?: SupplierInvoice
+): VoucherStatus {
+  if (invoice?.status === "approved") return "invoice_approved";
+  if (invoice?.status === "rejected") return "invoice_rejected";
+
+  const map: Record<string, VoucherStatus> = {
+    Draft: "draft",
+    Sent: "sent",
+    Viewed: "viewed",
+    "Invoice Raised": "invoice_raised",
+    "Under Review": "under_review",
+    "Payment Confirmed": "payment_confirmed",
+    "Payment Received": "payment_received",
+  };
+  return map[erpStatus ?? ""] ?? "draft";
+}
+
+function parseItemsPayload(raw?: string): ItemsJsonPayload {
+  if (!raw?.trim()) return { items: [] };
+  try {
+    const parsed = JSON.parse(raw) as ItemsJsonPayload | VoucherItem[];
+    if (Array.isArray(parsed)) return { items: parsed };
+    return {
+      items: parsed.items ?? [],
+      meta: parsed.meta,
+    };
+  } catch {
+    return { items: [] };
+  }
+}
+
+function commentsToHistory(rows: ErpCommentRow[]): VoucherHistoryEntry[] {
+  return rows.map((row, idx) => ({
+    id: row.name ?? String(idx),
+    timestamp: row.creation ?? new Date().toISOString(),
+    action: row.content ?? "",
+    actor: row.owner ?? "System",
+    actor_role: "finance" as VoucherActorRole,
+  }));
+}
+
+async function erpRecordToVoucher(
+  doc: ErpVoucherRecord,
+  history?: VoucherHistoryEntry[]
+): Promise<Voucher> {
+  const { items, meta } = parseItemsPayload(doc.items_json);
+  let invoice: SupplierInvoice | undefined;
+  let payment: PaymentConfirmation | undefined;
+
+  if (doc.invoice_json?.trim()) {
+    try {
+      invoice = JSON.parse(doc.invoice_json) as SupplierInvoice;
+    } catch {
+      /* ignore */
+    }
+  }
+  if (doc.payment_json?.trim()) {
+    try {
+      payment = JSON.parse(doc.payment_json) as PaymentConfirmation;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const hist =
+    history ?? commentsToHistory(await fetchVoucherComments(doc.name));
+
+  return {
+    id: doc.name,
+    po_reference: doc.po_reference ?? "",
+    grn_reference: doc.grn_reference ?? "",
+    supplier: doc.supplier ?? "",
+    supplier_name: meta?.supplier_name ?? doc.supplier ?? "",
+    created_by: doc.created_by ?? "Finance Team",
+    created_at: doc.creation ?? new Date().toISOString(),
+    amount: doc.amount ?? 0,
+    currency: doc.currency ?? "USD",
+    items,
+    status: erpToAppStatus(doc.status, invoice),
+    payment_terms: meta?.payment_terms,
+    due_date: meta?.due_date,
+    notes: meta?.notes,
+    history: hist,
+    invoice,
+    payment,
+  };
+}
 
 /**
- * Signal that the local voucher cache changed: re-render subscribed views and
- * push the updated store to the shared ERPNext backend so every environment
- * (localhost / ngrok / other devices) converges on the same workflow state.
+ * Fetches a Voucher by name. Only a genuine ERPNext 404/`DoesNotExistError`
+ * is treated as "does not exist" (returns `null`) — every other failure
+ * (permission, network, 5xx) is re-thrown so callers never mistake a real
+ * backend error for a missing document (which previously surfaced as a
+ * misleading "Invoice not found" even when the invoice existed in ERPNext).
  */
-function notifyVoucherStoreChanged(): void {
+async function fetchErpVoucher(name: string): Promise<ErpVoucherRecord | null> {
   try {
-    useVoucherSyncStore.getState().bump();
-  } catch {
-    /* store not ready (non-React context) — ignore */
+    return (await erpnextClient.get(
+      `${resourceBase()}/${encodeURIComponent(name)}`
+    )) as ErpVoucherRecord;
+  } catch (err) {
+    if (isDocNotFoundError(err)) return null;
+    // eslint-disable-next-line no-console
+    console.error(`[Vouchers] Failed to fetch Voucher "${name}":`, err);
+    throw err;
   }
-  scheduleVoucherPush();
+}
+
+async function fetchVoucherComments(voucherName: string): Promise<ErpCommentRow[]> {
+  try {
+    const rows = (await erpnextClient.get(buildResourceUrl("Comment"), {
+      params: {
+        filters: JSON.stringify([
+          ["reference_doctype", "=", DOCTYPE],
+          ["reference_name", "=", voucherName],
+        ]),
+        fields: JSON.stringify(["name", "content", "owner", "creation"]),
+        order_by: "creation asc",
+        limit_page_length: 100,
+      },
+    })) as ErpCommentRow[];
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function addVoucherHistoryComment(
+  voucherName: string,
+  content: string
+): Promise<void> {
+  try {
+    await erpnextClient.post(buildResourceUrl("Comment"), {
+      doctype: "Comment",
+      comment_type: "Comment",
+      reference_doctype: DOCTYPE,
+      reference_name: voucherName,
+      content,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn("[Voucher History] Could not add comment:", msg);
+  }
+}
+
+export async function getVoucherHistory(voucherName: string) {
+  return fetchVoucherComments(voucherName);
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Status presentation                                                       */
+/*  Status presentation (unchanged)                                           */
 /* -------------------------------------------------------------------------- */
 
 export const VOUCHER_STATUS_LABEL: Record<VoucherStatus, string> = {
@@ -67,7 +261,6 @@ export const VOUCHER_STATUS_LABEL: Record<VoucherStatus, string> = {
   payment_received: "Payment Received",
 };
 
-/** Tailwind classes for each status badge. */
 export const VOUCHER_STATUS_TONE: Record<VoucherStatus, string> = {
   draft: "bg-neutral-100 text-neutral-600 ring-neutral-200",
   sent: "bg-blue-50 text-blue-700 ring-blue-200",
@@ -80,11 +273,6 @@ export const VOUCHER_STATUS_TONE: Record<VoucherStatus, string> = {
   payment_received: "bg-success-100 text-success-700 ring-success-200",
 };
 
-/**
- * Supplier-facing status labels. From the supplier's perspective a "sent"
- * voucher is something they need to review and act on, so the wording differs
- * from the Finance-internal labels above.
- */
 export const SUPPLIER_VOUCHER_STATUS_LABEL: Record<VoucherStatus, string> = {
   draft: "Draft",
   sent: "Awaiting Supplier Review",
@@ -101,8 +289,6 @@ export function supplierVoucherStatusLabel(status: VoucherStatus): string {
   return SUPPLIER_VOUCHER_STATUS_LABEL[status] ?? VOUCHER_STATUS_LABEL[status];
 }
 
-/* ----- Invoice status presentation ----- */
-
 export const INVOICE_STATUS_LABEL: Record<InvoiceStatus, string> = {
   submitted: "Submitted",
   approved: "Approved",
@@ -117,14 +303,6 @@ export const INVOICE_STATUS_TONE: Record<InvoiceStatus, string> = {
   paid: "bg-success-100 text-success-700 ring-success-200",
 };
 
-/* ----- Header display status (payment-aware) ----- */
-
-/**
- * The prominent badge shown on the Invoice Detail header. Unlike the raw
- * `InvoiceStatus`, this collapses the full voucher + invoice + payment state
- * into a single human-readable label so the invoice page is the single source
- * of truth for "is this paid?".
- */
 export type InvoiceDisplayStatus =
   | "Draft"
   | "Submitted"
@@ -150,15 +328,8 @@ export const INVOICE_DISPLAY_TONE: Record<InvoiceDisplayStatus, string> = {
 
 export function invoiceDisplayStatus(v: Voucher): InvoiceDisplayStatus {
   if (!v.invoice) return "Draft";
-  // Supplier has confirmed receipt → fully settled.
   if (v.status === "payment_received") return "Paid";
-  // Finance has released payment (ERPNext Payment Entry submitted) but the
-  // supplier has not yet confirmed receipt → Payment Submitted.
-  if (
-    v.payment ||
-    v.invoice.status === "paid" ||
-    v.status === "payment_confirmed"
-  ) {
+  if (v.payment || v.invoice.status === "paid" || v.status === "payment_confirmed") {
     return "Payment Submitted";
   }
   if (v.invoice.status === "rejected" || v.status === "invoice_rejected") {
@@ -170,8 +341,6 @@ export function invoiceDisplayStatus(v: Voucher): InvoiceDisplayStatus {
   if (v.status === "under_review") return "Under Review";
   return "Submitted";
 }
-
-/* ----- Payment status (for the Payment Summary card) ----- */
 
 export type PaymentStatus =
   | "Awaiting Approval"
@@ -199,24 +368,6 @@ export function paymentStatus(v: Voucher): PaymentStatus {
 /*  Helpers                                                                   */
 /* -------------------------------------------------------------------------- */
 
-function generateVoucherID(): string {
-  const year = new Date().getFullYear();
-  const seq = String(Date.now()).slice(-5);
-  return `VCH-${year}-${seq}`;
-}
-
-function generatePaymentID(): string {
-  const year = new Date().getFullYear();
-  const seq = String(Date.now()).slice(-5);
-  return `PAY-${year}-${seq}`;
-}
-
-/**
- * API-level RBAC backstop: only Finance (or Admin) may create or mutate a
- * voucher. This guards against a Procurement/Warehouse user triggering a
- * voucher mutation by manipulating the URL or calling the API directly — the
- * UI hides the controls, and this throws if one is invoked anyway.
- */
 function assertCanManageVouchers(): void {
   const role = useAuthStore.getState().user?.role;
   if (!canManageVouchers(role)) {
@@ -231,107 +382,17 @@ function currentActor(): { name: string; role: VoucherActorRole } {
     role === "procurement"
       ? "procurement"
       : role === "admin"
-      ? "admin"
-      : "finance";
+        ? "admin"
+        : "finance";
   return { name: user?.full_name || "Finance Team", role: actorRole };
 }
 
-/* -------------------------------------------------------------------------- */
-/*  CRUD                                                                      */
-/* -------------------------------------------------------------------------- */
-
-export function getAllVouchers(): Voucher[] {
-  try {
-    const data = localStorage.getItem(VOUCHERS_KEY);
-    return data ? (JSON.parse(data) as Voucher[]) : [];
-  } catch {
-    return [];
-  }
+function generatePaymentID(): string {
+  const year = new Date().getFullYear();
+  const seq = String(Date.now()).slice(-5);
+  return `PAY-${year}-${seq}`;
 }
 
-export function saveVoucher(voucher: Voucher): void {
-  const all = getAllVouchers();
-  const idx = all.findIndex((v) => v.id === voucher.id);
-  if (idx >= 0) all[idx] = voucher;
-  else all.unshift(voucher);
-  localStorage.setItem(VOUCHERS_KEY, JSON.stringify(all));
-  notifyVoucherStoreChanged();
-}
-
-/**
- * Remove every voucher and notification from localStorage. The next
- * `scheduleVoucherPush()` will propagate the empty store to the shared
- * ERPNext Note so all devices converge on a clean state.
- */
-export function clearAllVouchers(): void {
-  localStorage.removeItem(VOUCHERS_KEY);
-  notifyVoucherStoreChanged();
-}
-
-/**
- * One-time migration: purge stale demo/test voucher data that accumulated
- * in localStorage during development. After this runs the voucher table
- * starts clean and only displays vouchers created through the real workflow.
- *
- * Call this early (e.g. from `VoucherStoreSync` in App.tsx) so the purge
- * happens before the first render.
- *
- * @returns `true` if a purge was performed (callers may want to push).
- */
-export function runVoucherStoreMigration(): boolean {
-  if (localStorage.getItem(MIGRATION_KEY)) return false;
-  const existing = getAllVouchers();
-  if (existing.length > 0) {
-    // eslint-disable-next-line no-console
-    console.log(
-      `[Vouchers] Migration: purging ${existing.length} stale voucher(s) from localStorage`
-    );
-    localStorage.removeItem(VOUCHERS_KEY);
-  }
-  localStorage.setItem(MIGRATION_KEY, new Date().toISOString());
-  return existing.length > 0;
-}
-
-export function getVoucherById(id: string): Voucher | null {
-  return getAllVouchers().find((v) => v.id === id) ?? null;
-}
-
-/** The (single) voucher issued against a given GRN, if any. */
-export function getVoucherByGRN(grnRef: string): Voucher | null {
-  if (!grnRef) return null;
-  return getAllVouchers().find((v) => v.grn_reference === grnRef) ?? null;
-}
-
-/** Set of GRN references that already have a voucher (any status). */
-export function getVoucheredGRNRefs(): Set<string> {
-  return new Set(
-    getAllVouchers()
-      .map((v) => v.grn_reference)
-      .filter((ref): ref is string => !!ref)
-  );
-}
-
-/**
- * Remove GRNs that already have a voucher from an "awaiting voucher creation"
- * list. Because vouchers live in localStorage (not ERPNext billing), the
- * ERPNext "To Bill" status never clears on its own — so every consumer of the
- * awaiting queue must apply this client-side exclusion to stay consistent.
- */
-export function excludeVoucheredGRNs<T extends { name: string }>(
-  grns: T[]
-): T[] {
-  const vouchered = getVoucheredGRNRefs();
-  return grns.filter((g) => !vouchered.has(g.name));
-}
-
-/**
- * Whether a voucher belongs to the given supplier identifier.
- *
- * The supplier portal session stores the ERPNext Supplier `name` (its ID),
- * while a voucher records both the supplier ID (`supplier`) and the display
- * name (`supplier_name`). To be resilient to ID-vs-name and case/whitespace
- * differences, we match the identifier against either field, normalized.
- */
 export function voucherBelongsToSupplier(
   voucher: Voucher,
   identifier: string
@@ -344,32 +405,6 @@ export function voucherBelongsToSupplier(
   );
 }
 
-/** Vouchers addressed to a particular supplier (excludes Finance-only drafts). */
-export function getVouchersForSupplier(supplier: string): Voucher[] {
-  return getAllVouchers().filter(
-    (v) => v.status !== "draft" && voucherBelongsToSupplier(v, supplier)
-  );
-}
-
-/**
- * A single voucher, but only if it is addressed to the given supplier and has
- * left draft. Used by the supplier portal so a supplier cannot open a voucher
- * that is not theirs by guessing the URL.
- */
-export function getVoucherForSupplier(
-  id: string,
-  supplier: string
-): Voucher | null {
-  const v = getVoucherById(id);
-  if (!v || v.status === "draft") return null;
-  return voucherBelongsToSupplier(v, supplier) ? v : null;
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Invoice views (derived from vouchers)                                     */
-/* -------------------------------------------------------------------------- */
-
-/** Flatten a voucher that carries an invoice into a list-friendly record. */
 function voucherToInvoiceRecord(v: Voucher): InvoiceRecord | null {
   if (!v.invoice) return null;
   return {
@@ -387,25 +422,6 @@ function voucherToInvoiceRecord(v: Voucher): InvoiceRecord | null {
     voucher_status: v.status,
   };
 }
-
-/** All supplier invoices across every voucher (Finance + Procurement views). */
-export function getAllInvoices(): InvoiceRecord[] {
-  return getAllVouchers()
-    .map(voucherToInvoiceRecord)
-    .filter((r): r is InvoiceRecord => r !== null);
-}
-
-/** Invoices raised by a particular supplier (Supplier portal view). */
-export function getInvoicesForSupplier(supplier: string): InvoiceRecord[] {
-  return getAllVouchers()
-    .filter((v) => v.invoice && voucherBelongsToSupplier(v, supplier))
-    .map(voucherToInvoiceRecord)
-    .filter((r): r is InvoiceRecord => r !== null);
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Payment views (derived from vouchers — single source of truth)            */
-/* -------------------------------------------------------------------------- */
 
 function voucherToPaymentRecord(v: Voucher): PaymentRecord | null {
   if (!v.payment) return null;
@@ -426,24 +442,174 @@ function voucherToPaymentRecord(v: Voucher): PaymentRecord | null {
   };
 }
 
-/** All released payments across vouchers — drives the Payments module. */
-export function getAllPayments(): PaymentRecord[] {
-  return getAllVouchers()
+/* -------------------------------------------------------------------------- */
+/*  CRUD — ERPNext                                                            */
+/* -------------------------------------------------------------------------- */
+
+export async function getAllVouchers(): Promise<Voucher[]> {
+  try {
+    const rows = (await erpnextClient.get(resourceBase(), {
+      params: {
+        fields: JSON.stringify(["*"]),
+        limit_page_length: 100,
+        order_by: "modified desc",
+      },
+    })) as ErpVoucherRecord[];
+    if (!Array.isArray(rows)) return [];
+    return Promise.all(rows.map((row) => erpRecordToVoucher(row, [])));
+  } catch {
+    return [];
+  }
+}
+
+export async function getVoucherById(id: string): Promise<Voucher | null> {
+  const doc = await fetchErpVoucher(id);
+  if (!doc) return null;
+  return erpRecordToVoucher(doc);
+}
+
+export async function getVoucherByGRN(grnRef: string): Promise<Voucher | null> {
+  if (!grnRef) return null;
+  try {
+    const rows = (await erpnextClient.get(resourceBase(), {
+      params: {
+        filters: JSON.stringify([["grn_reference", "=", grnRef]]),
+        fields: JSON.stringify(["name"]),
+        limit_page_length: 1,
+      },
+    })) as Array<{ name: string }>;
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    return getVoucherById(rows[0].name);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolves a bare supplier invoice number (e.g. "INV-SUMMIT-0594") — as
+ * opposed to the ERPNext Voucher name (e.g. "VCH-2026-00002") — to the
+ * Voucher document that carries it in its embedded `invoice_json`.
+ *
+ * Supplier invoices raised through the portal are NOT their own ERPNext
+ * document; they live as JSON inside the parent Voucher. So a URL/route
+ * that only has the invoice number must look up the owning Voucher first
+ * — it must never be treated as (and searched for) a `Purchase Invoice`
+ * name, which uses a completely different naming series.
+ */
+export async function findVoucherByInvoiceNumber(
+  invoiceNumber: string
+): Promise<Voucher | null> {
+  const trimmed = invoiceNumber.trim();
+  if (!trimmed) return null;
+  try {
+    const rows = (await erpnextClient.get(resourceBase(), {
+      params: {
+        filters: JSON.stringify([
+          ["invoice_json", "like", `%"invoice_number":"${trimmed}"%`],
+        ]),
+        fields: JSON.stringify(["name"]),
+        limit_page_length: 5,
+      },
+    })) as Array<{ name: string }>;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      console.info(
+        `[Invoice Lookup] No Voucher found with invoice_number="${trimmed}".`
+      );
+      return null;
+    }
+    for (const row of rows) {
+      const voucher = await getVoucherById(row.name);
+      if (
+        voucher?.invoice?.invoice_number?.toLowerCase() ===
+        trimmed.toLowerCase()
+      ) {
+        console.info(
+          `[Invoice Lookup] Resolved invoice_number="${trimmed}" -> Voucher "${voucher.id}".`
+        );
+        return voucher;
+      }
+    }
+    console.info(
+      `[Invoice Lookup] "like" filter matched candidate Voucher(s) but none had an exact invoice_number="${trimmed}" match.`
+    );
+    return null;
+  } catch (err) {
+    if (isDocNotFoundError(err)) return null;
+    console.error(
+      `[Invoice Lookup] ERP query failed while searching for invoice_number="${trimmed}":`,
+      err
+    );
+    throw err;
+  }
+}
+
+export async function getVoucheredGRNRefs(): Promise<Set<string>> {
+  const vouchers = await getAllVouchers();
+  return new Set(
+    vouchers.map((v) => v.grn_reference).filter((ref): ref is string => !!ref)
+  );
+}
+
+export async function excludeVoucheredGRNs<T extends { name: string }>(
+  grns: T[]
+): Promise<T[]> {
+  const vouchered = await getVoucheredGRNRefs();
+  return grns.filter((g) => !vouchered.has(g.name));
+}
+
+export async function getVouchersForSupplier(supplier: string): Promise<Voucher[]> {
+  const all = await getAllVouchers();
+  return all.filter(
+    (v) => v.status !== "draft" && voucherBelongsToSupplier(v, supplier)
+  );
+}
+
+export async function getVoucherForSupplier(
+  id: string,
+  supplier: string
+): Promise<Voucher | null> {
+  const v = await getVoucherById(id);
+  if (!v || v.status === "draft") return null;
+  return voucherBelongsToSupplier(v, supplier) ? v : null;
+}
+
+export async function getAllInvoices(): Promise<InvoiceRecord[]> {
+  const vouchers = await getAllVouchers();
+  return vouchers
+    .map(voucherToInvoiceRecord)
+    .filter((r): r is InvoiceRecord => r !== null);
+}
+
+export async function getInvoicesForSupplier(
+  supplier: string
+): Promise<InvoiceRecord[]> {
+  const vouchers = await getAllVouchers();
+  return vouchers
+    .filter((v) => v.invoice && voucherBelongsToSupplier(v, supplier))
+    .map(voucherToInvoiceRecord)
+    .filter((r): r is InvoiceRecord => r !== null);
+}
+
+export async function getAllPayments(): Promise<PaymentRecord[]> {
+  const vouchers = await getAllVouchers();
+  return vouchers
     .map(voucherToPaymentRecord)
     .filter((r): r is PaymentRecord => r !== null);
 }
 
-/** Payments released to a particular supplier (Supplier portal). */
-export function getPaymentsForSupplier(supplier: string): PaymentRecord[] {
-  return getAllVouchers()
+export async function getPaymentsForSupplier(
+  supplier: string
+): Promise<PaymentRecord[]> {
+  const vouchers = await getAllVouchers();
+  return vouchers
     .filter((v) => v.payment && voucherBelongsToSupplier(v, supplier))
     .map(voucherToPaymentRecord)
     .filter((r): r is PaymentRecord => r !== null);
 }
 
-/** Vouchers whose invoice is approved but payment has not yet been released. */
-export function getVouchersAwaitingPayment(): Voucher[] {
-  return getAllVouchers().filter(
+export async function getVouchersAwaitingPayment(): Promise<Voucher[]> {
+  const vouchers = await getAllVouchers();
+  return vouchers.filter(
     (v) =>
       !v.payment &&
       (v.invoice?.status === "approved" || v.status === "invoice_approved")
@@ -459,9 +625,8 @@ export interface PaymentModuleKpis {
   suppliersPaid: number;
 }
 
-/** Headline payment metrics derived entirely from the voucher workflow. */
-export function getPaymentKpis(): PaymentModuleKpis {
-  const vouchers = getAllVouchers();
+export async function getPaymentKpis(): Promise<PaymentModuleKpis> {
+  const vouchers = await getAllVouchers();
   const now = new Date();
   const suppliers = new Set<string>();
   let paidCount = 0;
@@ -501,255 +666,243 @@ export function getPaymentKpis(): PaymentModuleKpis {
   };
 }
 
-export function createVoucher(data: Partial<Voucher>): Voucher {
+export async function createVoucher(
+  data: Partial<Voucher> & { items?: VoucherItem[] }
+): Promise<Voucher> {
   assertCanManageVouchers();
-  // Enforce one active voucher per GRN — if a voucher already exists for this
-  // goods receipt, return it instead of creating a duplicate.
+
   if (data.grn_reference) {
-    const existing = getVoucherByGRN(data.grn_reference);
+    const existing = await getVoucherByGRN(data.grn_reference);
     if (existing) return existing;
   }
 
-  const actor = currentActor();
-  const voucher: Voucher = {
-    id: generateVoucherID(),
-    po_reference: data.po_reference ?? "",
-    grn_reference: data.grn_reference ?? "",
-    supplier: data.supplier ?? "",
-    supplier_name: data.supplier_name ?? data.supplier ?? "",
-    created_by: actor.name,
-    created_at: new Date().toISOString(),
-    amount: data.amount ?? 0,
-    currency: data.currency ?? "USD",
+  const itemsPayload: ItemsJsonPayload = {
     items: data.items ?? [],
-    status: "draft",
-    payment_terms: data.payment_terms,
-    due_date: data.due_date,
-    notes: data.notes,
-    history: [
-      {
-        id: Date.now().toString(),
-        timestamp: new Date().toISOString(),
-        action: "Voucher created by Finance",
-        actor: actor.name,
-        actor_role: "finance",
-      },
-    ],
+    meta: {
+      supplier_name: data.supplier_name ?? data.supplier,
+      payment_terms: data.payment_terms,
+      due_date: data.due_date,
+      notes: data.notes,
+    },
   };
-  saveVoucher(voucher);
+
+  const created = (await erpnextClient.post(resourceBase(), {
+    doctype: DOCTYPE,
+    po_reference: data.po_reference || "",
+    grn_reference: data.grn_reference || "",
+    supplier: data.supplier || "",
+    created_by: currentActor().name,
+    amount: data.amount || 0,
+    currency: data.currency || "USD",
+    status: "Draft",
+    items_json: JSON.stringify(itemsPayload),
+  })) as ErpVoucherRecord;
+
+  await addVoucherHistoryComment(created.name, "Voucher created by Finance");
+  const voucher = await erpRecordToVoucher(created);
   voucherNotify(voucher, "finance", `Voucher ${voucher.id} created`);
   return voucher;
 }
 
-export function sendVoucherToSupplier(id: string): Voucher | null {
-  assertCanManageVouchers();
-  const v = getVoucherById(id);
-  if (!v) return null;
-  const actor = currentActor();
-  v.status = "sent";
-  v.history.push({
-    id: Date.now().toString(),
-    timestamp: new Date().toISOString(),
-    action: "Voucher sent to supplier",
-    actor: actor.name,
-    actor_role: "finance",
+async function updateVoucherStatus(
+  name: string,
+  status: ErpVoucherStatus,
+  historyNote: string,
+  extra?: Record<string, unknown>
+): Promise<Voucher> {
+  await erpnextClient.put(`${resourceBase()}/${encodeURIComponent(name)}`, {
+    status,
+    ...extra,
   });
-  saveVoucher(v);
+  await addVoucherHistoryComment(name, historyNote);
+  const updated = await getVoucherById(name);
+  if (!updated) throw new Error("Voucher not found after update");
+  bumpStore();
+  return updated;
+}
+
+export async function sendVoucherToSupplier(id: string): Promise<Voucher | null> {
+  assertCanManageVouchers();
+  const v = await getVoucherById(id);
+  if (!v) return null;
+  const updated = await updateVoucherStatus(id, "Sent", "Voucher sent to supplier");
   voucherNotify(
-    v,
+    updated,
     "supplier",
     `You have received Voucher ${id} from Netlink. Please review and raise an invoice.`
   );
-  voucherNotify(v, "procurement", `Voucher ${id} sent to ${v.supplier_name}`);
-  return v;
+  voucherNotify(updated, "procurement", `Voucher ${id} sent to ${updated.supplier_name}`);
+  return updated;
 }
 
-/** Supplier opens the voucher — bump status to "viewed" once. */
-export function markVoucherViewed(id: string): Voucher | null {
-  const v = getVoucherById(id);
-  if (!v) return null;
-  if (v.status !== "sent") return v;
-  v.status = "viewed";
-  v.history.push({
-    id: Date.now().toString(),
-    timestamp: new Date().toISOString(),
-    action: "Supplier viewed the voucher",
-    actor: v.supplier_name,
-    actor_role: "supplier",
-  });
-  saveVoucher(v);
-  return v;
+export async function markVoucherViewed(id: string): Promise<Voucher | null> {
+  const v = await getVoucherById(id);
+  if (!v || v.status !== "sent") return v;
+  return updateVoucherStatus(id, "Viewed", "Supplier viewed the voucher");
 }
 
-/**
- * Supplier creates/submits an invoice against a voucher. Allowed while the
- * voucher is awaiting the supplier's action (sent / viewed) or after a prior
- * invoice was rejected by Finance, in which case the supplier may re-create it.
- */
-export function supplierRaiseInvoice(
+export async function supplierRaiseInvoice(
   voucherId: string,
   invoice: SupplierInvoice
-): Voucher | null {
-  const v = getVoucherById(voucherId);
+): Promise<Voucher | null> {
+  const v = await getVoucherById(voucherId);
   if (!v) return null;
-  v.invoice = {
+
+  const invoicePayload: SupplierInvoice = {
     ...invoice,
     status: "submitted",
     rejection_reason: undefined,
     reviewed_by: undefined,
     reviewed_at: undefined,
   };
-  v.status = "invoice_raised";
-  v.history.push({
-    id: Date.now().toString(),
-    timestamp: new Date().toISOString(),
-    action: `Supplier submitted invoice ${invoice.invoice_number} for $${invoice.total.toFixed(
-      2
-    )}`,
-    actor: v.supplier_name,
-    actor_role: "supplier",
-  });
-  saveVoucher(v);
+
+  const updated = await updateVoucherStatus(
+    voucherId,
+    "Invoice Raised",
+    `Supplier submitted invoice ${invoice.invoice_number} for $${invoice.total.toFixed(2)}`,
+    { invoice_json: JSON.stringify(invoicePayload) }
+  );
+
   voucherNotify(
-    v,
+    updated,
     "finance",
-    `Supplier submitted an invoice for Voucher ${voucherId}. Total: $${invoice.total.toFixed(
-      2
-    )}`
+    `Supplier submitted an invoice for Voucher ${voucherId}. Total: $${invoice.total.toFixed(2)}`
   );
   voucherNotify(
-    v,
+    updated,
     "procurement",
-    `Invoice received from ${v.supplier_name} for Voucher ${voucherId}`
+    `Invoice received from ${updated.supplier_name} for Voucher ${voucherId}`
   );
-  return v;
+  return updated;
 }
 
-/** Finance approves the supplier invoice — clears it for payment. */
-export function approveInvoice(voucherId: string): Voucher | null {
+export async function approveInvoice(voucherId: string): Promise<Voucher | null> {
   assertCanManageVouchers();
-  const v = getVoucherById(voucherId);
-  if (!v || !v.invoice) return null;
+  const v = await getVoucherById(voucherId);
+  if (!v?.invoice) return null;
   const actor = currentActor();
-  v.invoice.status = "approved";
-  v.invoice.reviewed_by = actor.name;
-  v.invoice.reviewed_at = new Date().toISOString();
-  v.invoice.rejection_reason = undefined;
-  v.status = "invoice_approved";
-  v.history.push({
-    id: Date.now().toString(),
-    timestamp: new Date().toISOString(),
-    action: `Invoice ${v.invoice.invoice_number} approved by Finance`,
-    actor: actor.name,
-    actor_role: "finance",
-  });
-  saveVoucher(v);
+  const invoicePayload: SupplierInvoice = {
+    ...v.invoice,
+    status: "approved",
+    reviewed_by: actor.name,
+    reviewed_at: new Date().toISOString(),
+    rejection_reason: undefined,
+  };
+  const updated = await updateVoucherStatus(
+    voucherId,
+    "Under Review",
+    `Invoice ${v.invoice.invoice_number} approved by Finance`,
+    { invoice_json: JSON.stringify(invoicePayload) }
+  );
   voucherNotify(
-    v,
+    updated,
     "supplier",
     `Your invoice ${v.invoice.invoice_number} for Voucher ${voucherId} was approved. Payment will follow.`
   );
-  voucherNotify(v, "procurement", `Invoice approved for Voucher ${voucherId}`);
-  return v;
+  voucherNotify(updated, "procurement", `Invoice approved for Voucher ${voucherId}`);
+  return updated;
 }
 
-/** Finance rejects the supplier invoice — supplier may re-create it. */
-export function rejectInvoice(
+export async function rejectInvoice(
   voucherId: string,
   reason: string
-): Voucher | null {
+): Promise<Voucher | null> {
   assertCanManageVouchers();
-  const v = getVoucherById(voucherId);
-  if (!v || !v.invoice) return null;
+  const v = await getVoucherById(voucherId);
+  if (!v?.invoice) return null;
   const actor = currentActor();
-  v.invoice.status = "rejected";
-  v.invoice.reviewed_by = actor.name;
-  v.invoice.reviewed_at = new Date().toISOString();
-  v.invoice.rejection_reason = reason;
-  v.status = "invoice_rejected";
-  v.history.push({
-    id: Date.now().toString(),
-    timestamp: new Date().toISOString(),
-    action: `Invoice ${v.invoice.invoice_number} rejected by Finance`,
-    actor: actor.name,
-    actor_role: "finance",
-    note: reason,
-  });
-  saveVoucher(v);
+  const invoicePayload: SupplierInvoice = {
+    ...v.invoice,
+    status: "rejected",
+    reviewed_by: actor.name,
+    reviewed_at: new Date().toISOString(),
+    rejection_reason: reason,
+  };
+  const updated = await updateVoucherStatus(
+    voucherId,
+    "Under Review",
+    `Invoice ${v.invoice.invoice_number} rejected by Finance`,
+    { invoice_json: JSON.stringify(invoicePayload) }
+  );
   voucherNotify(
-    v,
+    updated,
     "supplier",
     `Your invoice ${v.invoice.invoice_number} for Voucher ${voucherId} was rejected: ${reason}. Please review and re-submit.`
   );
-  voucherNotify(v, "procurement", `Invoice rejected for Voucher ${voucherId}`);
-  return v;
+  voucherNotify(updated, "procurement", `Invoice rejected for Voucher ${voucherId}`);
+  return updated;
 }
 
-/**
- * Finance releases payment against an approved invoice. Kept under the
- * `confirmPayment` name for backward compatibility with existing callers.
- */
-export function confirmPayment(
+export async function confirmPayment(
   voucherId: string,
   payment: PaymentConfirmation
-): Voucher | null {
+): Promise<Voucher | null> {
   assertCanManageVouchers();
-  const v = getVoucherById(voucherId);
+  const v = await getVoucherById(voucherId);
   if (!v) return null;
-  v.payment = {
+
+  const paymentPayload: PaymentConfirmation = {
     ...payment,
     payment_id: payment.payment_id ?? generatePaymentID(),
     status: "Paid",
   };
-  v.status = "payment_confirmed";
-  if (v.invoice) {
-    v.invoice.status = "paid";
-    v.invoice.paid_at = payment.confirmed_at;
+
+  let invoicePayload = v.invoice;
+  if (invoicePayload) {
+    invoicePayload = {
+      ...invoicePayload,
+      status: "paid",
+      paid_at: payment.confirmed_at,
+    };
   }
-  v.history.push({
-    id: Date.now().toString(),
-    timestamp: new Date().toISOString(),
-    action: "Payment released by Finance",
-    actor: payment.confirmed_by,
-    actor_role: "finance",
-    note: `Reference: ${payment.reference_number} · Method: ${
-      payment.payment_method
-    } · Amount: $${payment.amount.toFixed(2)} · Status: Paid`,
+
+  await erpnextClient.put(`${resourceBase()}/${encodeURIComponent(voucherId)}`, {
+    status: "Payment Confirmed",
+    payment_json: JSON.stringify(paymentPayload),
+    ...(invoicePayload ? { invoice_json: JSON.stringify(invoicePayload) } : {}),
   });
-  saveVoucher(v);
-  voucherNotify(
-    v,
-    "supplier",
-    `Payment of $${payment.amount.toFixed(
-      2
-    )} has been released for Voucher ${voucherId}. Ref: ${payment.reference_number}`
+  await addVoucherHistoryComment(
+    voucherId,
+    `Payment released by Finance — Ref: ${payment.reference_number} · $${payment.amount.toFixed(2)}`
   );
-  voucherNotify(v, "procurement", `Payment released for Voucher ${voucherId}`);
-  return v;
+
+  const updated = await getVoucherById(voucherId);
+  if (!updated) return null;
+
+  voucherNotify(
+    updated,
+    "supplier",
+    `Payment of $${payment.amount.toFixed(2)} has been released for Voucher ${voucherId}. Ref: ${payment.reference_number}`
+  );
+  voucherNotify(updated, "procurement", `Payment released for Voucher ${voucherId}`);
+  bumpStore();
+  return updated;
 }
 
-/** Alias that reads better at finance call sites. */
 export const releasePayment = confirmPayment;
 
-export function supplierConfirmPaymentReceived(
+export async function supplierConfirmPaymentReceived(
   voucherId: string
-): Voucher | null {
-  const v = getVoucherById(voucherId);
-  if (!v) return null;
-  v.status = "payment_received";
-  v.history.push({
-    id: Date.now().toString(),
-    timestamp: new Date().toISOString(),
-    action: "Supplier confirmed payment received",
-    actor: v.supplier_name,
-    actor_role: "supplier",
-  });
-  saveVoucher(v);
+): Promise<Voucher | null> {
+  const updated = await updateVoucherStatus(
+    voucherId,
+    "Payment Received",
+    "Supplier confirmed payment received"
+  );
   voucherNotify(
-    v,
+    updated,
     "finance",
     `Supplier confirmed payment receipt for Voucher ${voucherId}`
   );
-  voucherNotify(v, "procurement", `Voucher ${voucherId} fully settled`);
-  return v;
+  voucherNotify(updated, "procurement", `Voucher ${voucherId} fully settled`);
+  return updated;
+}
+
+/** Legacy no-op — localStorage voucher migration removed. */
+export function runVoucherStoreMigration(): boolean {
+  return false;
+}
+
+export function clearAllVouchers(): void {
+  console.warn("[Vouchers] clearAllVouchers is disabled — vouchers live in ERPNext.");
 }

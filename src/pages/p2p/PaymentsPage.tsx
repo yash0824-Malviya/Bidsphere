@@ -113,7 +113,11 @@ export default function PaymentsPage() {
   // ledger. Each carries its voucher id so the row can drill down to the
   // linked Invoice → Voucher → PO → Supplier.
   const syncVersion = useVoucherSyncStore((s) => s.version);
-  const workflowPayments = useMemo(() => getAllPayments(), [syncVersion]);
+  const { data: workflowPayments = [] } = useQuery({
+    queryKey: ["voucher-payments-all", syncVersion],
+    queryFn: () => getAllPayments(),
+    staleTime: 30_000,
+  });
 
   const workflowRows = useMemo(
     () =>
@@ -489,7 +493,7 @@ export default function PaymentsPage() {
                                   ? workflowVoucherByName.get(p.name)
                                   : undefined;
                                 if (voucherId) {
-                                  const v = getVoucherById(voucherId);
+                                  const v = await getVoucherById(voucherId);
                                   if (!v) throw new Error("Voucher not found");
                                   return buildVoucherPaymentPdf(v);
                                 }

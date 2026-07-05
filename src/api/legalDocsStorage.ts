@@ -1,60 +1,59 @@
-// TODO: Replace IndexedDB blob storage with ERPNext File doctype
-// (api/method/upload_file) so View/Download use a real ERPNext file_url
-// instead of a local browser object URL. This makes documents accessible
-// across devices/browsers, not just the one that uploaded them.
+import axios from "axios";
 
-const DB_NAME = 'netlink_legal_docs'
-const DB_VERSION = 1
-const STORE_NAME = 'documents'
+export const uploadFileToERPNext = async (
+  file: File,
+  docType: string,
+  docName: string
+): Promise<string> => {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("is_private", "1");
+  formData.append("doctype", docType);
+  formData.append("docname", docName);
 
-const openDB = (): Promise<IDBDatabase> => {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION)
-    request.onupgradeneeded = () => {
-      const db = request.result
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: 'key' })
-      }
+  const csrf = document.cookie.match(/csrf_token=([^;]+)/)?.[1];
+
+  const response = await axios.post("/api/method/upload_file", formData, {
+    headers: {
+      Authorization: `token ${import.meta.env.VITE_API_KEY}:${import.meta.env.VITE_API_SECRET}`,
+      "Content-Type": "multipart/form-data",
+      ...(csrf ? { "X-Frappe-CSRF-Token": decodeURIComponent(csrf) } : {}),
+    },
+  });
+
+  const fileUrl = response?.data?.message?.file_url;
+  if (!fileUrl) throw new Error("Upload succeeded but no file_url returned");
+  return fileUrl;
+};
+
+/**
+ * Resolve an ERPNext `file_url` (e.g. `/private/files/quote.pdf`) into a
+ * browser-loadable URL.
+ *
+ * ERPNext serves `/private/files/*` ONLY to requests carrying a valid
+ * session cookie or Authorization header — the browser has neither (this
+ * app authenticates via a server-held API key, never a Frappe session
+ * cookie), so linking directly to `${ERPNEXT_URL}${relativeUrl}` always
+ * returned a hard 403 "You don't have permission to access this file" in
+ * every module. Route through `/api/file-proxy`, which attaches the API
+ * key server-side and streams the bytes back.
+ */
+export const getFullFileUrl = (relativeUrl: string): string => {
+  if (!relativeUrl) return "";
+
+  let path = relativeUrl;
+  if (/^https?:\/\//i.test(relativeUrl)) {
+    try {
+      path = new URL(relativeUrl).pathname;
+    } catch {
+      return relativeUrl; // unparsable — return as-is rather than break the link
     }
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
-  })
-}
+  }
 
-export const storeFileBlob = async (key: string, file: File): Promise<void> => {
-  const db = await openDB()
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite')
-    const store = tx.objectStore(STORE_NAME)
-    store.put({ key, blob: file, name: file.name, type: file.type, storedAt: new Date().toISOString() })
-    tx.oncomplete = () => resolve()
-    tx.onerror = () => reject(tx.error)
-  })
-}
+  // Only ERPNext's own file namespaces need proxying; anything else
+  // (external URLs unrelated to ERPNext file storage) passes through as-is.
+  if (!/^\/?(private\/)?files\//.test(path)) return relativeUrl;
 
-export const getFileBlob = async (key: string): Promise<{ blob: Blob; name: string; type: string } | null> => {
-  const db = await openDB()
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly')
-    const store = tx.objectStore(STORE_NAME)
-    const request = store.get(key)
-    request.onsuccess = () => resolve(request.result || null)
-    request.onerror = () => reject(request.error)
-  })
-}
-
-export const getFileObjectUrl = async (key: string): Promise<string | null> => {
-  const result = await getFileBlob(key)
-  if (!result) return null
-  return URL.createObjectURL(result.blob)
-}
-
-export const deleteFileBlob = async (key: string): Promise<void> => {
-  const db = await openDB()
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite')
-    tx.objectStore(STORE_NAME).delete(key)
-    tx.oncomplete = () => resolve()
-    tx.onerror = () => reject(tx.error)
-  })
-}
+  if (!path.startsWith("/")) path = `/${path}`;
+  return `/api/file-proxy?path=${encodeURIComponent(path)}`;
+};

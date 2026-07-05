@@ -28,8 +28,7 @@ import {
 } from "lucide-react";
 
 import { checkQuotationStatus, createSupplierQuotation, getRFQ } from "../../api/sourcing";
-import { saveLegalDocs } from "../../api/legalDocs";
-import { storeFileBlob, getFileBlob, getFileObjectUrl, deleteFileBlob } from "../../api/legalDocsStorage";
+import { uploadFileToERPNext, getFullFileUrl } from "../../api/legalDocsStorage";
 import { Skeleton } from "../../components/Skeleton";
 import type { RFQ, RFQItem } from "../../types/erpnext";
 import {
@@ -207,10 +206,18 @@ export default function SupplierRFQPage() {
           return;
         }
       } catch {
-        // ERPNext check failed — fall back to local data
+        // ERPNext check failed — fall through to the quote_status check
+        // below rather than trusting sessionStorage alone.
       }
 
-      // 3. Check the RFQ supplier row's quote_status
+      // 3. Check the RFQ supplier row's quote_status — the ERPNext-owned
+      // authoritative signal. sessionStorage data is used ONLY to enrich the
+      // read-only summary (line items/terms) once ERPNext confirms
+      // submission — it must NEVER be the sole trigger for "submitted",
+      // otherwise a failed ERPNext create (network error, validation error,
+      // etc.) leaves a local draft behind that permanently masks the
+      // failure: the supplier sees "Quotation Submitted" forever while
+      // procurement never receives a real Supplier Quotation.
       const supplierRow = (rfq?.suppliers ?? []).find((s) => s.supplier === supplierName);
       if (!cancelled && supplierRow?.quote_status === "Received") {
         setAlreadySubmitted({
@@ -221,21 +228,6 @@ export default function SupplierRFQPage() {
           notes: localData?.notes,
           grand_total: localData?.grand_total,
           submitted_at: localData?.submitted_at,
-        });
-        setCheckingStatus(false);
-        return;
-      }
-
-      // 4. Also treat local data as submitted if it exists
-      if (!cancelled && localData?.items && localData.items.length > 0) {
-        setAlreadySubmitted({
-          quoteName: rfqName,
-          items: localData.items,
-          payment_terms: localData.payment_terms,
-          valid_till: localData.valid_till,
-          notes: localData.notes,
-          grand_total: localData.grand_total,
-          submitted_at: localData.submitted_at,
         });
       }
 
@@ -268,9 +260,9 @@ export default function SupplierRFQPage() {
 
   /* ── Legal document uploads ── */
   const [legalDraft, setLegalDraft] = useState({
-    terms_pdf_key: "", terms_pdf_name: "", terms_note: "",
-    warranty_pdf_key: "", warranty_pdf_name: "", warranty_note: "",
-    insurance_pdf_key: "", insurance_pdf_name: "", insurance_note: ""
+    terms_file_url: "", terms_file_name: "", terms_note: "",
+    warranty_file_url: "", warranty_file_name: "", warranty_note: "",
+    insurance_file_url: "", insurance_file_name: "", insurance_note: "",
   });
   const [uploading, setUploading] = useState<string | null>(null);
 
@@ -284,20 +276,21 @@ export default function SupplierRFQPage() {
       return;
     }
 
+    const base = field === "terms_pdf" ? "terms" : field === "warranty_pdf" ? "warranty" : "insurance";
     setUploading(field);
     try {
-      const tempKey = `temp_${field}_${Date.now()}`;
-      await storeFileBlob(tempKey, file);
-
-      setLegalDraft(prev => ({
+      const tempDocName = `temp-${supplierName}-${Date.now()}`.replace(/\s+/g, "_");
+      const fileUrl = await uploadFileToERPNext(file, "Supplier Quotation", tempDocName);
+      setLegalDraft((prev) => ({
         ...prev,
-        [`${field}_key`]: tempKey,
-        [`${field}_name`]: file.name
+        [`${base}_file_url`]: fileUrl,
+        [`${base}_file_name`]: file.name,
       }));
       setExpandedLegalDoc((prev) => ({ ...prev, [field]: false }));
-      toast.success(`${file.name} attached`);
-    } catch (err: any) {
-      toast.error("Could not store file: " + err.message);
+      toast.success(`${file.name} uploaded to server`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error("Upload failed: " + msg);
     } finally {
       setUploading(null);
     }
@@ -313,19 +306,12 @@ export default function SupplierRFQPage() {
   const handleLegalDelete = async (
     field: "terms_pdf" | "warranty_pdf" | "insurance_pdf"
   ) => {
-    const keyField = `${field}_key` as keyof typeof legalDraft;
-    const nameField = `${field}_name` as keyof typeof legalDraft;
-    const tempKey = legalDraft[keyField];
-    if (tempKey) {
-      try {
-        await deleteFileBlob(tempKey);
-      } catch {
-        /* non-fatal */
-      }
-    }
+    const base = field === "terms_pdf" ? "terms" : field === "warranty_pdf" ? "warranty" : "insurance";
+    const urlField = `${base}_file_url` as keyof typeof legalDraft;
+    const nameField = `${base}_file_name` as keyof typeof legalDraft;
     setLegalDraft((prev) => ({
       ...prev,
-      [keyField]: "",
+      [urlField]: "",
       [nameField]: "",
     }));
     setExpandedLegalDoc((prev) => ({ ...prev, [field]: true }));
@@ -333,22 +319,21 @@ export default function SupplierRFQPage() {
   };
 
   async function handleLegalPreview(field: "terms_pdf" | "warranty_pdf" | "insurance_pdf") {
-    const key = legalDraft[`${field}_key` as keyof typeof legalDraft];
-    if (!key) return;
-    try {
-      const url = await getFileObjectUrl(key);
-      if (url) window.open(url, "_blank", "noopener,noreferrer");
-      else toast.error("Could not preview file");
-    } catch {
-      toast.error("Could not preview file");
-    }
+    const base = field === "terms_pdf" ? "terms" : field === "warranty_pdf" ? "warranty" : "insurance";
+    const url = legalDraft[`${base}_file_url` as keyof typeof legalDraft];
+    if (!url) return;
+    window.open(getFullFileUrl(url), "_blank", "noopener,noreferrer");
   }
 
   function toggleLegalDoc(field: "terms_pdf" | "warranty_pdf" | "insurance_pdf") {
     setExpandedLegalDoc((prev) => ({ ...prev, [field]: !prev[field] }));
   }
 
-  const allDocsUploaded = !!(legalDraft.terms_pdf_key && legalDraft.warranty_pdf_key && legalDraft.insurance_pdf_key);
+  const allDocsUploaded = !!(
+    legalDraft.terms_file_url &&
+    legalDraft.warranty_file_url &&
+    legalDraft.insurance_file_url
+  );
   const [submittedQuote, setSubmittedQuote] = useState<{
     name: string;
     status: string;
@@ -388,14 +373,14 @@ export default function SupplierRFQPage() {
           if (draft.legal_documents) {
             const ld = draft.legal_documents;
             setLegalDraft({
-              terms_pdf_key: ld.terms_conditions_pdf ?? "",
-              terms_pdf_name: ld.terms_conditions_name ?? "",
+              terms_file_url: ld.terms_conditions_pdf ?? "",
+              terms_file_name: ld.terms_conditions_name ?? "",
               terms_note: ld.terms_conditions_note ?? "",
-              warranty_pdf_key: ld.warranty_certificate_pdf ?? "",
-              warranty_pdf_name: ld.warranty_certificate_name ?? "",
+              warranty_file_url: ld.warranty_certificate_pdf ?? "",
+              warranty_file_name: ld.warranty_certificate_name ?? "",
               warranty_note: ld.warranty_certificate_note ?? "",
-              insurance_pdf_key: ld.insurance_certificate_pdf ?? "",
-              insurance_pdf_name: ld.insurance_certificate_name ?? "",
+              insurance_file_url: ld.insurance_certificate_pdf ?? "",
+              insurance_file_name: ld.insurance_certificate_name ?? "",
               insurance_note: ld.insurance_certificate_note ?? "",
             });
           }
@@ -434,14 +419,14 @@ export default function SupplierRFQPage() {
           valid_till: validityDate,
           notes,
           legal_documents: {
-            terms_conditions_pdf: legalDraft.terms_pdf_key || null,
-            terms_conditions_name: legalDraft.terms_pdf_name,
+            terms_conditions_pdf: legalDraft.terms_file_url || null,
+            terms_conditions_name: legalDraft.terms_file_name,
             terms_conditions_note: legalDraft.terms_note,
-            warranty_certificate_pdf: legalDraft.warranty_pdf_key || null,
-            warranty_certificate_name: legalDraft.warranty_pdf_name,
+            warranty_certificate_pdf: legalDraft.warranty_file_url || null,
+            warranty_certificate_name: legalDraft.warranty_file_name,
             warranty_certificate_note: legalDraft.warranty_note,
-            insurance_certificate_pdf: legalDraft.insurance_pdf_key || null,
-            insurance_certificate_name: legalDraft.insurance_pdf_name,
+            insurance_certificate_pdf: legalDraft.insurance_file_url || null,
+            insurance_certificate_name: legalDraft.insurance_file_name,
             insurance_certificate_note: legalDraft.insurance_note,
           },
           saved_at,
@@ -485,9 +470,9 @@ export default function SupplierRFQPage() {
 
   const uploadedDocsCount = useMemo(() => {
     return [
-      legalDraft.terms_pdf_key,
-      legalDraft.warranty_pdf_key,
-      legalDraft.insurance_pdf_key,
+      legalDraft.terms_file_url,
+      legalDraft.warranty_file_url,
+      legalDraft.insurance_file_url,
     ].filter(Boolean).length;
   }, [legalDraft]);
 
@@ -601,11 +586,11 @@ export default function SupplierRFQPage() {
 
     // eslint-disable-next-line no-console
     console.log("[SupplierQuote] Legal documents being submitted:", {
-      terms_conditions_pdf: legalDraft.terms_pdf_key ?? "(not uploaded)",
+      terms_conditions_pdf: legalDraft.terms_file_url ?? "(not uploaded)",
       terms_conditions_note: legalDraft.terms_note || "(empty)",
-      warranty_certificate_pdf: legalDraft.warranty_pdf_key ?? "(not uploaded)",
+      warranty_certificate_pdf: legalDraft.warranty_file_url ?? "(not uploaded)",
       warranty_certificate_note: legalDraft.warranty_note || "(empty)",
-      insurance_certificate_pdf: legalDraft.insurance_pdf_key ?? "(not uploaded)",
+      insurance_certificate_pdf: legalDraft.insurance_file_url ?? "(not uploaded)",
       insurance_certificate_note: legalDraft.insurance_note || "(empty)",
     });
 
@@ -633,11 +618,11 @@ export default function SupplierRFQPage() {
           grand_total: grandTotalSnapshot,
           submitted_at: new Date().toISOString(),
           legal_documents: {
-            terms_conditions_pdf: legalDraft.terms_pdf_key ?? null,
+            terms_conditions_pdf: legalDraft.terms_file_url ?? null,
             terms_conditions_note: legalDraft.terms_note,
-            warranty_certificate_pdf: legalDraft.warranty_pdf_key ?? null,
+            warranty_certificate_pdf: legalDraft.warranty_file_url ?? null,
             warranty_certificate_note: legalDraft.warranty_note,
-            insurance_certificate_pdf: legalDraft.insurance_pdf_key ?? null,
+            insurance_certificate_pdf: legalDraft.insurance_file_url ?? null,
             insurance_certificate_note: legalDraft.insurance_note,
           },
         })
@@ -675,73 +660,59 @@ export default function SupplierRFQPage() {
             rfq_item_name: rfqItem?.name,
           };
         }),
+        // Attach the uploaded legal documents to the real ERPNext record —
+        // these are what the Legal Document Review is built from once this
+        // supplier is selected as the winner.
+        legal_documents: {
+          terms_conditions_pdf: legalDraft.terms_file_url || null,
+          terms_conditions_note: legalDraft.terms_note,
+          warranty_certificate_pdf: legalDraft.warranty_file_url || null,
+          warranty_certificate_note: legalDraft.warranty_note,
+          insurance_certificate_pdf: legalDraft.insurance_file_url || null,
+          insurance_certificate_note: legalDraft.insurance_note,
+        },
       });
       const quoteName = (result as { name?: string }).name ?? "";
       const quoteStatus = (result as { status?: string }).status ?? "Draft";
       setSubmittedQuote({ name: quoteName, status: quoteStatus });
-
-      // Persist the legal documents under the REAL Supplier Quotation name
-      if (quoteName) {
-        // eslint-disable-next-line no-console
-        console.log('[DEBUG-1] Quotation created, full result object:', result)
-        // eslint-disable-next-line no-console
-        console.log('[DEBUG-2] Extracted sqName:', quoteName, '| typeof:', typeof quoteName)
-        // eslint-disable-next-line no-console
-        console.log('[DEBUG-3] legalDraft state at submit time:', legalDraft)
-
-        const finalizeLegalDocKey = async (tempKey: string | undefined, sqName: string, field: string) => {
-          if (!tempKey) return undefined;
-          const stored = await getFileBlob(tempKey);
-          if (!stored) return undefined;
-          const permanentKey = `${sqName}_${field}`;
-          await storeFileBlob(permanentKey, new File([stored.blob], stored.name, { type: stored.type }));
-          await deleteFileBlob(tempKey); // cleanup temp entry
-          return permanentKey;
-        };
-
-        const termsKey = await finalizeLegalDocKey(legalDraft.terms_pdf_key, quoteName, "terms_pdf");
-        const warrantyKey = await finalizeLegalDocKey(legalDraft.warranty_pdf_key, quoteName, "warranty_pdf");
-        const insuranceKey = await finalizeLegalDocKey(legalDraft.insurance_pdf_key, quoteName, "insurance_pdf");
-
-        const legalDocPayload = {
-          sq_name: quoteName,
-          rfq_name: rfq.name,
-          supplier: supplierName,
-          terms_pdf_key: termsKey,
-          terms_pdf_name: legalDraft.terms_pdf_name,
-          terms_note: legalDraft.terms_note,
-          warranty_pdf_key: warrantyKey,
-          warranty_pdf_name: legalDraft.warranty_pdf_name,
-          warranty_note: legalDraft.warranty_note,
-          insurance_pdf_key: insuranceKey,
-          insurance_pdf_name: legalDraft.insurance_pdf_name,
-          insurance_note: legalDraft.insurance_note,
-          submitted_by_supplier_at: new Date().toISOString(),
-          review_status: 'pending' as const
-        }
-        // eslint-disable-next-line no-console
-        console.log('[DEBUG-4] About to call saveLegalDocs with:', legalDocPayload)
-        saveLegalDocs(legalDocPayload);
-        // eslint-disable-next-line no-console
-        console.log('[DEBUG-5] saveLegalDocs called. Verifying immediately by reading back:')
-        // eslint-disable-next-line no-console
-        console.log('[DEBUG-6] Readback result:', localStorage.getItem(`legal_docs_${quoteName}`))
-        // eslint-disable-next-line no-console
-        console.log('[DEBUG-7] Index after save:', localStorage.getItem('legal_docs_index'))
-      }
 
       toast.success(
         quoteStatus === "Submitted"
           ? `Quotation ${quoteName} submitted!`
           : `Quotation ${quoteName} saved (Draft)`
       );
+
+      // ── Legal Document Review is NOT created here ─────────────────────────
+      // Reviewing legal documents only makes sense for the WINNING supplier,
+      // so the backend creates exactly one Legal Document Review per RFQ —
+      // gated on the Procurement Manager selecting a supplier (RFQ workflow
+      // → "Pending Legal Review") — never at quotation submission time.
+      // See ensureLegalDocumentReviewForSelection() in RFQDetailPage.tsx and
+      // api/legalReviewCore.ts (createLegalDocumentReview). The terms /
+      // warranty / insurance files captured above are stored on the
+      // Supplier Quotation's own custom fields and are read from there once
+      // this quotation is selected as the winner.
+      if (quoteName) {
+        // eslint-disable-next-line no-console
+        console.log(
+          "[Legal] Quotation submitted — Legal Document Review will be created by the backend only if/when this supplier is selected as the winner."
+        );
+      }
     } catch (err) {
       const realError = err instanceof Error ? err.message : "Unknown error";
       // eslint-disable-next-line no-console
       console.error("[SQ] Full error:", err);
-      toast.error(`Save failed: ${realError}`, { duration: 8_000 });
-      // Data is in sessionStorage so navigate to dashboard regardless.
-      navigate("/supplier/dashboard", { replace: true });
+      // Do NOT navigate away and do NOT set `submittedQuote` on failure.
+      // The sessionStorage snapshot above is a local draft-recovery aid
+      // only — it is never treated as proof of submission (see the
+      // `detect()` effect above) — so staying on this page with the form
+      // still filled in and a clear error is the only way for the supplier
+      // to know the quotation was NOT actually received by procurement and
+      // that they need to retry, instead of silently believing they're done.
+      toast.error(
+        `Quotation was NOT submitted: ${realError}. Please try again.`,
+        { duration: 10_000 }
+      );
     }
 
     setSubmitting(false);
@@ -1729,14 +1700,14 @@ function LegalDocUploadCard({
   expanded: boolean;
   onToggle: () => void;
   legalDraft: {
-    terms_pdf_key: string;
-    terms_pdf_name: string;
+    terms_file_url: string;
+    terms_file_name: string;
     terms_note: string;
-    warranty_pdf_key: string;
-    warranty_pdf_name: string;
+    warranty_file_url: string;
+    warranty_file_name: string;
     warranty_note: string;
-    insurance_pdf_key: string;
-    insurance_pdf_name: string;
+    insurance_file_url: string;
+    insurance_file_name: string;
     insurance_note: string;
   };
   uploading: boolean;
@@ -1752,13 +1723,12 @@ function LegalDocUploadCard({
   onDragLeave: () => void;
   onDrop: (file: File) => void;
 }) {
-  const keyField = `${field}_key` as keyof typeof legalDraft;
-  const nameField = `${field}_name` as keyof typeof legalDraft;
-  const noteField = `${field.replace("_pdf", "_note")}` as
-    | "terms_note"
-    | "warranty_note"
-    | "insurance_note";
-  const uploaded = !!legalDraft[keyField];
+  const base =
+    field === "terms_pdf" ? "terms" : field === "warranty_pdf" ? "warranty" : "insurance";
+  const urlField = `${base}_file_url` as keyof typeof legalDraft;
+  const nameField = `${base}_file_name` as keyof typeof legalDraft;
+  const noteField = `${base}_note` as "terms_note" | "warranty_note" | "insurance_note";
+  const uploaded = !!legalDraft[urlField];
   const fileName = legalDraft[nameField];
 
   return (

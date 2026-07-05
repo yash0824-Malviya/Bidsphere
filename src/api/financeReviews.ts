@@ -1,30 +1,30 @@
 /**
  * Finance Reviews API service.
  *
- * Data source: ERPNext is the SINGLE SOURCE OF TRUTH.
- * Returns complete finance review history — pending, approved, rejected,
- * and RFQs that have progressed to PO (not just the active pending queue).
+ * Data source: ERPNext "Legal Document Review" DocType — the SAME record
+ * created for Legal Review and updated in place with `finance_*` fields.
+ * There is no separate Finance DocType and no dependency on the legacy
+ * `Request for Quotation` custom fields (`custom_legal_status`,
+ * `custom_finance_status`) — ERPNext's `Legal Document Review` is the
+ * single source of truth for the entire Legal → Finance → PO workflow.
+ *
+ * The `FinanceReviewItem` shape returned here is unchanged from before this
+ * migration so downstream consumers (FinanceDashboard, FinanceReviewsPage,
+ * FinanceReviewHistoryTable, financeWorkflow KPIs) did not need to change.
  */
-
 import {
-  fetchErpNextRFQs,
-  mapErpFinanceStatus,
-  mapErpLegalStatus,
-  parseRfqTitle,
-  tryRestoreFromApprovalData,
-  type ErpRFQRow,
-} from "./legalReviews";
-import {
-  getApprovalState,
-  saveApprovalState,
-  updateFinanceStatus,
-  resubmitFinanceReview as resubmitFinanceReviewWorkflow,
-} from "./rfqApprovalWorkflow";
+  getAllFinanceReviews,
+  getFinancePendingReviews,
+  getLegalDocsByFinanceStatus,
+  getLegalDocsByRfq,
+  submitFinanceReview as submitFinanceReviewApi,
+  resubmitFinanceReview as resubmitFinanceReviewApi,
+  type LegalDocumentSet,
+} from "./legalDocs";
 import type {
   FinanceReviewStatus,
   FinanceReviewItem,
   FinanceComment,
-  RFQApprovalState,
   LegalReviewStatus,
 } from "../types/erpnext";
 
@@ -35,234 +35,204 @@ export interface FinanceReviewListParams {
   limit?: number;
 }
 
+export interface FinanceReviewFetchDiagnostics {
+  /** DocType queried — ERPNext is the single source of truth. */
+  doctype: "Legal Document Review";
+  recordsReturned: number;
+  apiError?: string;
+  permissionError?: string;
+  emptyReason?: string;
+}
+
+export interface FinanceReviewQueryResult {
+  items: FinanceReviewItem[];
+  diagnostics: FinanceReviewFetchDiagnostics;
+}
+
 const LOG_TAG = "[FinanceReviews]";
 
-/** RFQ qualifies if it ever entered the finance review workflow. */
-function qualifiesForFinanceHistory(item: FinanceReviewItem): boolean {
-  if (item.legal_status === "Approved") return true;
-  if (item.finance_reviewer || item.finance_review_date) return true;
-  const fs = item.finance_status;
-  if (fs === "Budget Approved" || fs === "Rejected") {
-    return true;
-  }
-  return false;
+function mapLegalStatus(reviewStatus: LegalDocumentSet["review_status"]): LegalReviewStatus {
+  if (reviewStatus === "Approved") return "Approved";
+  if (reviewStatus === "Rejected") return "Rejected";
+  return "Pending Legal Review";
 }
 
-function stateFromErpRow(erpRfq: ErpRFQRow): RFQApprovalState | null {
-  const restored = tryRestoreFromApprovalData(erpRfq);
-  if (restored) return restored;
+function mapFinanceStatus(financeStatus?: LegalDocumentSet["finance_status"]): FinanceReviewStatus {
+  if (financeStatus === "Approved") return "Budget Approved";
+  if (financeStatus === "Rejected") return "Rejected";
+  return "Pending Finance Review";
+}
 
-  const hasFinanceData =
-    erpRfq.custom_finance_status ||
-    erpRfq.custom_finance_reviewer ||
-    erpRfq.custom_finance_review_date;
-  const hasWorkflowData =
-    erpRfq.custom_legal_status ||
-    erpRfq.custom_selected_supplier ||
-    erpRfq.custom_workflow_step ||
-    hasFinanceData;
+function deriveWorkflowStep(doc: LegalDocumentSet): FinanceReviewItem["workflow_status"] {
+  if (doc.review_status === "Rejected") return "Legal Rejected";
+  if (doc.finance_status === "Approved") return "Approved for PO";
+  if (doc.finance_status === "Rejected") return "Finance Rejected";
+  if (doc.review_status === "Approved") return "Pending Finance Review";
+  return "Pending Legal Review";
+}
 
-  if (!hasWorkflowData) return null;
-
-  const mappedLegal = mapErpLegalStatus(erpRfq.custom_legal_status ?? "");
-  const mappedFinance = mapErpFinanceStatus(erpRfq.custom_finance_status ?? "");
+function toFinanceItem(doc: LegalDocumentSet): FinanceReviewItem {
+  const financeStatus = mapFinanceStatus(doc.finance_status);
+  const financeComments: FinanceComment[] = doc.finance_comments
+    ? [
+        {
+          comment: doc.finance_comments,
+          comment_by: doc.finance_approved_by ?? "",
+          comment_date: doc.finance_approved_on ?? "",
+          action: financeStatus,
+        },
+      ]
+    : [];
 
   return {
-    rfq: erpRfq.name,
-    rfq_title: parseRfqTitle(erpRfq.message_for_supplier),
-    company: erpRfq.company ?? "",
-    selected_supplier: erpRfq.custom_selected_supplier ?? "",
-    selected_supplier_total: erpRfq.custom_selected_supplier_total ?? 0,
-    workflow_step: (erpRfq.custom_workflow_step as RFQApprovalState["workflow_step"]) ??
-      (mappedLegal === "Approved" ? "Pending Finance Review" : "Pending Legal Review"),
-    legal_status: mappedLegal,
-    finance_status: mappedFinance,
-    submitted_by: erpRfq.custom_submitted_by ?? erpRfq.owner ?? "",
-    submitted_at: erpRfq.custom_submitted_at ?? erpRfq.creation ?? new Date().toISOString(),
-    legal_reviewer: erpRfq.custom_legal_reviewer,
-    legal_review_date: erpRfq.custom_legal_review_date,
-    finance_reviewer: erpRfq.custom_finance_reviewer,
-    finance_review_date: erpRfq.custom_finance_review_date,
-    legal_comments: [],
-    finance_comments: [],
-    terms_approved: !!erpRfq.custom_terms_approved,
-    warranty_approved: !!erpRfq.custom_warranty_approved,
-    insurance_approved: !!erpRfq.custom_insurance_approved,
+    rfq_name: doc.rfq_name ?? doc.name ?? "",
+    legal_document_name: doc.name,
+    supplier: doc.supplier,
+    company: doc.company ?? "",
+    rfq_value: doc.grand_total ?? 0,
+    submission_date: doc.submission_date,
+    created_date: doc.submission_date,
+    created_by: doc.procurement_manager,
+    legal_status: mapLegalStatus(doc.review_status),
+    legal_review_date: doc.approved_on,
+    workflow_status: deriveWorkflowStep(doc),
+    finance_status: financeStatus,
+    finance_reviewer: doc.finance_approved_by,
+    assigned_finance_manager: doc.finance_approved_by,
+    finance_review_date: doc.finance_approved_on,
+    finance_comments: financeComments,
+    finance_rejection_reason: doc.finance_rejection_reason,
   };
-}
-
-function toFinanceItem(state: RFQApprovalState): FinanceReviewItem {
-  const cached = getApprovalState(state.rfq);
-  const merged = cached ? { ...state, ...cached, rfq: state.rfq } : state;
-
-  return {
-    rfq_name: merged.rfq,
-    rfq_title: merged.rfq_title,
-    supplier: merged.selected_supplier,
-    rfq_value: merged.selected_supplier_total ?? 0,
-    submission_date: merged.submitted_at,
-    created_by: merged.submitted_by,
-    legal_status: merged.legal_status as LegalReviewStatus,
-    finance_status: merged.finance_status ?? "Pending Finance Review",
-    finance_reviewer: merged.finance_reviewer,
-    finance_review_date: merged.finance_review_date,
-    finance_comments: merged.finance_comments ?? [],
-  };
-}
-
-function scanLocalFinanceRecords(exclude: Set<string>): FinanceReviewItem[] {
-  const results: FinanceReviewItem[] = [];
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (!key?.startsWith("rfq_approval_")) continue;
-      const raw = localStorage.getItem(key);
-      if (!raw) continue;
-      try {
-        const state = JSON.parse(raw) as RFQApprovalState;
-        if (!state?.rfq || exclude.has(state.rfq)) continue;
-        const item = toFinanceItem(state);
-        if (qualifiesForFinanceHistory(item)) {
-          results.push(item);
-        }
-      } catch {
-        continue;
-      }
-    }
-  } catch {
-    /* ignore storage errors */
-  }
-  return results;
 }
 
 /**
- * Fetch ALL finance review records from ERPNext — no pending-only restriction.
- * ERPNext query uses docstatus=1 only; finance_status is NOT filtered server-side.
+ * Fetch ALL finance review records from ERPNext's Legal Document Review —
+ * every record that has ever entered the Finance funnel (i.e. Legal has
+ * approved it, so `finance_status` is set).
  */
-export async function fetchAllFinanceReviewRecords(): Promise<FinanceReviewItem[]> {
-  // eslint-disable-next-line no-console
-  console.log(LOG_TAG, "fetchAllFinanceReviewRecords — ERPNext source, no finance_status filter");
+export async function fetchAllFinanceReviewRecords(): Promise<FinanceReviewQueryResult> {
+  const diagnostics: FinanceReviewFetchDiagnostics = {
+    doctype: "Legal Document Review",
+    recordsReturned: 0,
+  };
 
-  const erpMap = await fetchErpNextRFQs();
-  const items: FinanceReviewItem[] = [];
-  const seen = new Set<string>();
+  try {
+    const rows = await getAllFinanceReviews(200);
+    const items = rows.map(toFinanceItem);
 
-  for (const [rfqName, erpRfq] of erpMap) {
-    const state = stateFromErpRow(erpRfq);
-    if (!state) {
-      const localState = getApprovalState(rfqName);
-      if (localState) {
-        const item = toFinanceItem(localState);
-        if (qualifiesForFinanceHistory(item)) {
-          items.push(item);
-          seen.add(rfqName);
-        }
-      }
-      continue;
+    diagnostics.recordsReturned = items.length;
+    if (items.length === 0) {
+      diagnostics.emptyReason =
+        "No RFQs have reached Finance Review yet. RFQs appear here once Legal Review is approved.";
     }
 
-    try {
-      localStorage.setItem(`rfq_approval_${state.rfq}`, JSON.stringify(state));
-    } catch {
-      /* ignore quota */
-    }
-
-    const item = toFinanceItem(state);
-    if (!qualifiesForFinanceHistory(item)) continue;
-
-    items.push(item);
-    seen.add(rfqName);
-  }
-
-  const localOnly = scanLocalFinanceRecords(seen);
-  for (const item of localOnly) {
-    items.push(item);
-    const state = getApprovalState(item.rfq_name);
-    if (state) saveApprovalState(state);
-  }
-
-  items.sort((a, b) => {
-    const da = a.finance_review_date ?? a.submission_date ?? "";
-    const db = b.finance_review_date ?? b.submission_date ?? "";
-    return db.localeCompare(da);
-  });
-
-  // eslint-disable-next-line no-console
-  console.log("Finance Review API Response", {
-    erpRfqCount: erpMap.size,
-    totalRecords: items.length,
-    pending: items.filter((r) => r.finance_status === "Pending Finance Review").length,
-    approved: items.filter((r) => r.finance_status === "Budget Approved").length,
-    rejected: items.filter((r) => r.finance_status === "Rejected").length,
-    data: items,
-  });
-
-  if (items.length === 0) {
     // eslint-disable-next-line no-console
-    console.warn(
-      LOG_TAG,
-      "No finance review records returned — verify ERPNext custom_finance_status / custom_legal_status fields",
-      [...erpMap.values()].slice(0, 5)
-    );
-  }
+    console.log(LOG_TAG, "ERPNext response summary:", {
+      recordsReturned: diagnostics.recordsReturned,
+    });
 
-  return items;
+    return { items, diagnostics };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    diagnostics.apiError = msg;
+    if (/403|permission|not permitted/i.test(msg)) {
+      diagnostics.permissionError = msg;
+    }
+    diagnostics.emptyReason = `Could not load Finance Reviews from ERPNext: ${msg}`;
+    // eslint-disable-next-line no-console
+    console.error(LOG_TAG, "ERPNext fetch failed:", msg);
+    return { items: [], diagnostics };
+  }
 }
 
 /**
- * Returns finance review records, optionally filtered by finance_status client-side.
- * Default filter is "All" (complete history).
+ * Returns finance review records from ERPNext, optionally filtered by
+ * status. Each status uses its own dedicated ERPNext query when possible so
+ * KPI counts can never drift from the records actually displayed.
  */
 export async function getFinanceReviews(
   params?: FinanceReviewListParams
-): Promise<FinanceReviewItem[]> {
+): Promise<FinanceReviewQueryResult> {
   const filter = params?.status ?? "All";
-  const allItems = await fetchAllFinanceReviewRecords();
 
-  let items =
-    filter === "All"
-      ? allItems
-      : allItems.filter((i) => i.finance_status === filter);
-
-  if (params?.limit && items.length > params.limit) {
-    items = items.slice(0, params.limit);
+  if (filter === "All") {
+    const result = await fetchAllFinanceReviewRecords();
+    let items = result.items;
+    if (params?.limit && items.length > params.limit) items = items.slice(0, params.limit);
+    return { items, diagnostics: { ...result.diagnostics, recordsReturned: items.length } };
   }
 
-  // eslint-disable-next-line no-console
-  console.log("RFQ Review Response", { filter, count: items.length, items });
+  const diagnostics: FinanceReviewFetchDiagnostics = {
+    doctype: "Legal Document Review",
+    recordsReturned: 0,
+  };
 
-  return items;
+  try {
+    const rows =
+      filter === "Pending Finance Review"
+        ? await getFinancePendingReviews(params?.limit ?? 200)
+        : await getLegalDocsByFinanceStatus({
+            status: filter === "Budget Approved" ? "Approved" : "Rejected",
+            limit: params?.limit,
+          });
+
+    let items = rows.map(toFinanceItem);
+    if (params?.limit && items.length > params.limit) items = items.slice(0, params.limit);
+
+    diagnostics.recordsReturned = items.length;
+    if (items.length === 0) {
+      diagnostics.emptyReason = `No RFQs with finance status "${filter}".`;
+    }
+
+    // eslint-disable-next-line no-console
+    console.log(LOG_TAG, "Filtered response:", { filter, count: items.length });
+
+    return { items, diagnostics };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    diagnostics.apiError = msg;
+    diagnostics.emptyReason = `Could not load Finance Reviews from ERPNext: ${msg}`;
+    return { items: [], diagnostics };
+  }
 }
 
-/** Latest approved or rejected RFQs for dashboard history. */
+/** Latest approved or rejected RFQs for dashboard/history. */
 export async function getFinanceReviewHistory(limit = 10): Promise<FinanceReviewItem[]> {
-  const all = await fetchAllFinanceReviewRecords();
-  return all
-    .filter(
-      (r) =>
-        r.finance_status === "Budget Approved" ||
-        r.finance_status === "Rejected"
-    )
+  const [approved, rejected] = await Promise.all([
+    getLegalDocsByFinanceStatus({ status: "Approved", limit }),
+    getLegalDocsByFinanceStatus({ status: "Rejected", limit }),
+  ]);
+
+  return [...approved, ...rejected]
+    .map(toFinanceItem)
+    .sort((a, b) => (b.finance_review_date ?? "").localeCompare(a.finance_review_date ?? ""))
     .slice(0, limit);
 }
 
+/**
+ * The ONLY way a Finance Review's verdict may change. Resolves the Legal
+ * Document Review by RFQ name, then updates that SAME record's `finance_*`
+ * fields via the backend gateway — never creates a new document.
+ */
 export async function updateFinanceReviewStatus(
   rfqName: string,
   status: FinanceReviewStatus,
   reviewedBy: string,
-  comment?: string
+  comment?: string,
+  rejectionReason?: string
 ): Promise<void> {
-  await updateFinanceStatus(rfqName, status, reviewedBy, comment);
-}
-
-export function addFinanceComment(
-  rfqName: string,
-  comment: FinanceComment
-): void {
-  const state = getApprovalState(rfqName);
-  if (!state) return;
-  state.finance_comments = [...(state.finance_comments ?? []), comment];
-  saveApprovalState(state);
+  const legalDoc = await getLegalDocsByRfq(rfqName);
+  if (!legalDoc?.name) {
+    throw new Error(`No Legal Document Review found for RFQ ${rfqName}.`);
+  }
+  const mapped = status === "Budget Approved" ? "Approved" : "Rejected";
+  await submitFinanceReviewApi(
+    legalDoc.name,
+    mapped,
+    reviewedBy,
+    comment ?? "",
+    mapped === "Rejected" ? (rejectionReason ?? comment ?? "") : undefined
+  );
 }
 
 export async function resubmitFinanceReview(
@@ -270,5 +240,9 @@ export async function resubmitFinanceReview(
   resubmittedBy: string,
   note?: string
 ): Promise<void> {
-  await resubmitFinanceReviewWorkflow(rfqName, resubmittedBy, note);
+  const legalDoc = await getLegalDocsByRfq(rfqName);
+  if (!legalDoc?.name) {
+    throw new Error(`No Legal Document Review found for RFQ ${rfqName}.`);
+  }
+  await resubmitFinanceReviewApi(legalDoc.name, resubmittedBy, note);
 }

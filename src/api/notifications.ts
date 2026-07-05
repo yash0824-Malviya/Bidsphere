@@ -67,10 +67,10 @@ function uid(): string {
 }
 
 function persist(list: EnterpriseNotification[]) {
-  localStorage.setItem(
-    NOTIF_KEY,
-    JSON.stringify(dedupeNotifications(list).slice(0, 300))
-  );
+  const next = JSON.stringify(dedupeNotifications(list).slice(0, 300));
+  const prev = localStorage.getItem(NOTIF_KEY);
+  if (prev === next) return;
+  localStorage.setItem(NOTIF_KEY, next);
   try {
     useVoucherSyncStore.getState().bump();
   } catch {
@@ -308,11 +308,11 @@ export function getAllNotifications(): EnterpriseNotification[] {
       }
     }
     const raw = localStorage.getItem(NOTIF_KEY);
-    if (!raw) return seedNotifications();
+    if (!raw) return [];
     const parsed = JSON.parse(raw) as EnterpriseNotification[];
-    return Array.isArray(parsed) ? dedupeNotifications(parsed) : seedNotifications();
+    return Array.isArray(parsed) ? dedupeNotifications(parsed) : [];
   } catch {
-    return seedNotifications();
+    return [];
   }
 }
 
@@ -593,6 +593,76 @@ export function triggerFinanceReviewRequired(rfqId: string, amount: number) {
   });
 }
 
+export function triggerBudgetSubmitted(budgetName: string, amount: number, submittedBy?: string) {
+  const fmt = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(amount);
+  createNotification({
+    title: "Budget Submitted",
+    description: `Budget ${budgetName} (${fmt}) submitted${submittedBy ? ` by ${submittedBy}` : ""} and is pending approval.`,
+    module: "Budget",
+    event_type: "budget_submitted",
+    target_role: "finance_executive",
+    target_user: submittedBy,
+    document_type: "Budget",
+    document_name: budgetName,
+    route_path: `/budget/detail/${encodeURIComponent(budgetName)}`,
+  });
+  createNotification({
+    title: "New Budget Pending Approval",
+    description: `Budget ${budgetName} (${fmt}) requires your review.`,
+    module: "Budget",
+    event_type: "budget_submitted",
+    target_role: "finance",
+    document_type: "Budget",
+    document_name: budgetName,
+    route_path: `/budget/approvals`,
+  });
+}
+
+export function triggerBudgetApproved(budgetName: string, amount: number, approvedBy?: string) {
+  const fmt = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(amount);
+  createNotification({
+    title: "Budget Approved",
+    description: `Budget ${budgetName} (${fmt}) was approved${approvedBy ? ` by ${approvedBy}` : ""} and is now active for procurement.`,
+    module: "Budget",
+    event_type: "budget_approved",
+    target_role: "finance_executive",
+    document_type: "Budget",
+    document_name: budgetName,
+    route_path: `/budget/detail/${encodeURIComponent(budgetName)}`,
+  });
+  createNotification({
+    title: "Budget Available for Procurement",
+    description: `Budget ${budgetName} (${fmt}) is approved and available for RFQ validation.`,
+    module: "Budget",
+    event_type: "budget_approved",
+    target_role: "procurement",
+    document_type: "Budget",
+    document_name: budgetName,
+    route_path: `/budget/monitoring`,
+  });
+}
+
+export function triggerBudgetRejected(budgetName: string, rejectedBy?: string, reason?: string) {
+  createNotification({
+    title: "Budget Rejected",
+    description: `Budget ${budgetName} was rejected${rejectedBy ? ` by ${rejectedBy}` : ""}.${reason ? ` Reason: ${reason}` : ""}`,
+    module: "Budget",
+    event_type: "budget_rejected",
+    target_role: "finance_executive",
+    document_type: "Budget",
+    document_name: budgetName,
+    route_path: `/budget/detail/${encodeURIComponent(budgetName)}`,
+  });
+}
+
 export function triggerPOCreated(
   poId: string,
   supplier: string,
@@ -612,7 +682,7 @@ export function triggerPOCreated(
     target_role: "warehouse",
     document_type: "Purchase Order",
     document_name: poId,
-    route_path: `/p2p/grn/new?po=${encodeURIComponent(poId)}`,
+    route_path: `/warehouse/inventory/create-grn?po=${encodeURIComponent(poId)}`,
   });
   createNotification({
     title: "New Purchase Order",
@@ -623,7 +693,7 @@ export function triggerPOCreated(
     supplier_id: supplierId?.trim().toLowerCase() ?? supplier.trim().toLowerCase(),
     document_type: "Purchase Order",
     document_name: poId,
-    route_path: `/supplier/purchase-orders/${encodeURIComponent(poId)}`,
+    route_path: `/supplier/po/${encodeURIComponent(poId)}`,
   });
 }
 
@@ -684,7 +754,7 @@ export function triggerLegalDocumentsRequested(
     target_role: "legal",
     document_type: "Supplier Quotation",
     document_name: sqName,
-    route_path: `/legal/reviews/${encodeURIComponent(sqName)}`,
+    route_path: `/legal/review/${encodeURIComponent(sqName)}`,
   });
 }
 
@@ -714,7 +784,7 @@ export interface OverdueInvoiceAlertInput {
 
 export function syncWarehouseAlerts(alerts: WarehouseAlertInput[]) {
   for (const a of alerts) {
-    const poPath = `/p2p/grn/new?po=${encodeURIComponent(a.poName)}`;
+    const poPath = `/warehouse/inventory/create-grn?po=${encodeURIComponent(a.poName)}`;
     const titles: Record<WarehouseAlertInput["urgency"], string> = {
       overdue: `Overdue receipt: ${a.poName}`,
       "due-today": `Delivery due today: ${a.poName}`,
@@ -798,116 +868,4 @@ export function mergeSyncedNotifications(
   const before = JSON.stringify(local);
   persist([...(remote ?? []), ...local]);
   return before !== JSON.stringify(getAllNotifications());
-}
-
-function seedNotifications(): EnterpriseNotification[] {
-  const now = Date.now();
-  const list: EnterpriseNotification[] = [
-    {
-      id: "seed-proc-1",
-      title: "RFQ Created",
-      description: "RFQ-2025-00042 with 5 items has been created and sent to suppliers.",
-      module: "RFQ",
-      event_type: "rfq_created",
-      target_role: "procurement",
-      document_type: "Request for Quotation",
-      document_name: "RFQ-2025-00042",
-      route_path: "/sourcing/rfq/RFQ-2025-00042",
-      created_at: new Date(now - 30 * 60_000).toISOString(),
-      read_status: false,
-    },
-    {
-      id: "seed-proc-2",
-      title: "Quotation Submitted",
-      description: "TechCorp Ltd submitted a quotation of ₹4,50,000 for RFQ-2025-00041.",
-      module: "Supplier Quotation",
-      event_type: "quotation_submitted",
-      target_role: "procurement",
-      document_type: "Supplier Quotation",
-      document_name: "RFQ-2025-00041",
-      route_path: "/sourcing/rfq/RFQ-2025-00041",
-      created_at: new Date(now - 2 * 3600_000).toISOString(),
-      read_status: false,
-    },
-    {
-      id: "seed-legal-1",
-      title: "Legal Review Required",
-      description: "RFQ-2025-00040 (₹12,00,000) requires legal review before approval.",
-      module: "Legal Review",
-      event_type: "legal_review_required",
-      target_role: "legal",
-      document_type: "Request for Quotation",
-      document_name: "RFQ-2025-00040",
-      route_path: "/legal/reviews/RFQ-2025-00040",
-      created_at: new Date(now - 5 * 3600_000).toISOString(),
-      read_status: false,
-    },
-    {
-      id: "seed-wh-1",
-      title: "Purchase Order Created",
-      description: "PO-2025-00089 for GlobalSupply Inc (₹3,20,000) has been created.",
-      module: "PO Ready for GRN",
-      event_type: "po_created",
-      target_role: "warehouse",
-      document_type: "Purchase Order",
-      document_name: "PO-2025-00089",
-      route_path: "/p2p/grn/new?po=PO-2025-00089",
-      created_at: new Date(now - 24 * 3600_000).toISOString(),
-      read_status: true,
-    },
-    {
-      id: "seed-fin-1",
-      title: "Finance Review Required",
-      description: "RFQ-2025-00039 (₹8,50,000) has passed legal review and requires finance approval.",
-      module: "Budget",
-      event_type: "finance_review_required",
-      target_role: "finance",
-      document_type: "Request for Quotation",
-      document_name: "RFQ-2025-00039",
-      route_path: "/finance/reviews/RFQ-2025-00039",
-      created_at: new Date(now - 48 * 3600_000).toISOString(),
-      read_status: true,
-    },
-    {
-      id: "seed-fin-2",
-      title: "Payment Released",
-      description: "Payment PAY-2025-00034 of ₹2,75,000 released to MegaParts Co.",
-      module: "Payment",
-      event_type: "payment_released",
-      target_role: "finance",
-      document_type: "Payment Entry",
-      document_name: "PAY-2025-00034",
-      route_path: "/p2p/payments",
-      created_at: new Date(now - 72 * 3600_000).toISOString(),
-      read_status: true,
-    },
-    {
-      id: "seed-admin-1",
-      title: "Workflow engine healthy",
-      description: "All approval chains are operational. Last health check passed.",
-      module: "System",
-      event_type: "system_health",
-      target_role: "admin",
-      document_type: "System",
-      document_name: "health-check",
-      route_path: "/admin/system-settings",
-      created_at: new Date(now - 6 * 3600_000).toISOString(),
-      read_status: false,
-    },
-    {
-      id: "seed-admin-2",
-      title: "Audit log export ready",
-      description: "Weekly audit trail export is available for download.",
-      module: "Audit",
-      event_type: "audit_export",
-      target_role: "admin",
-      document_type: "Audit Log",
-      document_name: "audit-week-24",
-      route_path: "/admin/audit-logs",
-      created_at: new Date(now - 12 * 3600_000).toISOString(),
-      read_status: false,
-    },
-  ];
-  persist(list);
-  return list;
 }

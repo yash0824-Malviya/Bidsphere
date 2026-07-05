@@ -154,6 +154,21 @@ export default async function handler(
   const method = (req.method ?? "GET").toUpperCase();
   const body = serializeBody(req, method);
 
+  if (
+    method === "POST" &&
+    (apiPath === "resource/Budget" || apiPath.startsWith("resource/Budget/"))
+  ) {
+    let parsedBody: unknown = req.body;
+    if (typeof parsedBody === "string") {
+      try {
+        parsedBody = JSON.parse(parsedBody);
+      } catch {
+        /* keep raw string */
+      }
+    }
+    console.log("[erpnext-proxy] Budget POST body → ERPNext:", JSON.stringify(parsedBody));
+  }
+
   try {
     const upstream = await fetch(targetUrl, {
       method,

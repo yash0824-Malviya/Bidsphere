@@ -137,6 +137,16 @@ export default function RFQItemLineRow({
                 {g.item_group_name ?? g.name}
               </option>
             ))}
+            {row.item_group &&
+              !itemGroups.some(
+                (g) =>
+                  g.name === row.item_group ||
+                  g.item_group_name === row.item_group,
+              ) && (
+                <option key={row.item_group} value={row.item_group}>
+                  {row.item_group}
+                </option>
+              )}
           </select>
         </SelectWrap>
         {groupError && (
@@ -157,7 +167,7 @@ export default function RFQItemLineRow({
                 ? "Select group first"
                 : itemsLoading
                 ? "Loading items…"
-                : groupItems.length === 0
+                : groupItems.length === 0 && !row.item_code
                 ? "No items available in this group."
                 : "Select item…"}
             </option>
@@ -166,6 +176,12 @@ export default function RFQItemLineRow({
                 {item.item_name}
               </option>
             ))}
+            {row.item_code &&
+              !groupItems.some((i) => i.item_code === row.item_code) && (
+                <option key={row.item_code} value={row.item_code}>
+                  {row.item_name || row.item_code}
+                </option>
+              )}
           </select>
         </SelectWrap>
         {row.item_group && itemsLoading && (

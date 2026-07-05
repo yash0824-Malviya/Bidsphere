@@ -30,6 +30,7 @@ import {
 } from "../../api/paymentEntry";
 import { getVoucherById, releasePayment } from "../../api/vouchers";
 import { useAuthStore } from "../../store/authStore";
+import { useVoucherSyncStore } from "../../store/voucherSyncStore";
 import {
   createPaymentAttachment,
   revokePaymentAttachmentUrl,
@@ -54,7 +55,18 @@ export default function PaymentProcessingPage() {
   const role = user?.role;
   const canAct = role === "finance" || role === "admin";
 
-  const voucher = useMemo(() => getVoucherById(voucherId), [voucherId]);
+  const syncVersion = useVoucherSyncStore((s) => s.version);
+  const {
+    data: voucher,
+    isLoading: voucherLoading,
+    isError: voucherIsError,
+    error: voucherError,
+    refetch: refetchVoucher,
+  } = useQuery({
+    queryKey: ["voucher", voucherId, syncVersion],
+    queryFn: () => getVoucherById(voucherId),
+    enabled: !!voucherId,
+  });
   const invoiceBackLink = `/p2p/invoices/${encodeURIComponent(voucherId)}`;
 
 
@@ -173,6 +185,7 @@ export default function PaymentProcessingPage() {
         .map(([kind, file]) => ({ kind, file }));
       return processInvoicePayment({
         poReference,
+        grnReference: voucher?.grn_reference,
         paymentMethod,
         paymentReference,
         methodDetails,
@@ -180,8 +193,8 @@ export default function PaymentProcessingPage() {
         postingDate,
       });
     },
-    onSuccess: (result) => {
-      releasePayment(voucherId, {
+    onSuccess: async (result) => {
+      await releasePayment(voucherId, {
         payment_id: result.paymentEntry,
         confirmed_at: new Date(`${postingDate}T00:00:00`).toISOString(),
         confirmed_by: user?.full_name ?? "Finance Team",
@@ -223,6 +236,43 @@ export default function PaymentProcessingPage() {
           title="Restricted"
           description="Only the Finance team can release supplier payments."
         />
+      </div>
+    );
+  }
+
+  if (voucherLoading) {
+    return (
+      <div>
+        <BackLink to={invoiceBackLink} />
+        <EmptyState
+          icon={Wallet}
+          title="Loading invoice…"
+          description=""
+        />
+      </div>
+    );
+  }
+
+  if (voucherIsError) {
+    return (
+      <div>
+        <BackLink to={invoiceBackLink} />
+        <EmptyState
+          icon={Wallet}
+          title="Could not load this invoice"
+          description={
+            voucherError instanceof Error
+              ? voucherError.message
+              : "ERPNext returned an error while loading this Voucher. Please retry."
+          }
+        />
+        <button
+          type="button"
+          onClick={() => refetchVoucher()}
+          className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50"
+        >
+          Retry
+        </button>
       </div>
     );
   }

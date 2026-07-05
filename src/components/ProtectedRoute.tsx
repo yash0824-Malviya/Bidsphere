@@ -2,6 +2,7 @@ import { Navigate, useLocation } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 
 import { canAccessPath, getRoleHome } from "../config/roles";
+import { authLog } from "../store/authStorage";
 import { useAuthStore } from "../store/authStore";
 
 interface Props {
@@ -14,10 +15,11 @@ interface Props {
 export default function ProtectedRoute({ children }: Props) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const isVerifying = useAuthStore((s) => s.isVerifying);
+  const hasHydrated = useAuthStore((s) => s.hasHydrated);
   const user = useAuthStore((s) => s.user);
   const location = useLocation();
 
-  if (isVerifying) {
+  if (!hasHydrated || isVerifying) {
     return (
       <div className="flex min-h-screen w-full items-center justify-center bg-neutral-50">
         <div className="flex items-center gap-2 text-sm text-neutral-500">
@@ -29,6 +31,7 @@ export default function ProtectedRoute({ children }: Props) {
   }
 
   if (!isAuthenticated || !user) {
+    authLog("redirect decision", "ProtectedRoute → /login");
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 

@@ -28,6 +28,8 @@ export interface RFQRow {
   name: string;
   status?: string;
   modified?: string;
+  /** 0 = Draft (not yet published to suppliers), 1 = Submitted/published. */
+  docstatus?: number;
 }
 
 export interface PORow {
@@ -104,31 +106,45 @@ export async function getSupplierRFQs(supplierName: string): Promise<RFQRow[]> {
     supplierName,
   ];
 
-  let rows = await tryResourceApi(supplierName, childFilter);
+  const first = await tryResourceApi(supplierName, childFilter);
 
   // Strategy 2 — If the resource API returned nothing (child-table
   // filters can be unreliable in some Frappe builds), retry with
   // frappe.client.get_list via POST (body data is parsed more reliably).
-  if (rows.length === 0) {
+  if (first.rows.length === 0) {
     // eslint-disable-next-line no-console
     console.warn(LOG, "Resource API returned 0 rows — trying frappe.client.get_list POST fallback");
-    rows = await tryGetListPost(supplierName);
+    const second = await tryGetListPost(supplierName);
+
+    // Both strategies came back empty. If BOTH failed with a real error
+    // (network/permission/500), this is NOT a genuine "no RFQs" state —
+    // surface the error so the UI shows an error/retry state instead of a
+    // false "you have no RFQs" empty screen.
+    if (second.rows.length === 0 && first.error && second.error) {
+      // eslint-disable-next-line no-console
+      console.error(LOG, "Both RFQ fetch strategies failed:", first.error, second.error);
+      throw first.error;
+    }
+
+    // eslint-disable-next-line no-console
+    console.log(LOG, `Final RFQ count for "${supplierName}":`, second.rows.length, second.rows);
+    return second.rows;
   }
 
   // eslint-disable-next-line no-console
-  console.log(LOG, `Final RFQ count for "${supplierName}":`, rows.length, rows);
-  return rows;
+  console.log(LOG, `Final RFQ count for "${supplierName}":`, first.rows.length, first.rows);
+  return first.rows;
 }
 
 async function tryResourceApi(
   _supplierName: string,
   childFilter: Filter
-): Promise<RFQRow[]> {
+): Promise<{ rows: RFQRow[]; error?: unknown }> {
   try {
     const raw = await apiGet<RFQRow[]>(
       buildResourceUrl("Request for Quotation"),
       buildListConfig({
-        fields: ["name", "status", "modified"],
+        fields: ["name", "status", "modified", "docstatus"],
         filters: [
           childFilter,
           ["docstatus", "in", [0, 1]],
@@ -141,21 +157,23 @@ async function tryResourceApi(
     const result = Array.isArray(raw) ? raw : [];
     // eslint-disable-next-line no-console
     console.log(LOG, "Resource API result:", result.length, "rows", result);
-    return result;
+    return { rows: result };
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error(LOG, "Resource API failed:", err);
-    return [];
+    return { rows: [], error: err };
   }
 }
 
-async function tryGetListPost(supplierName: string): Promise<RFQRow[]> {
+async function tryGetListPost(
+  supplierName: string
+): Promise<{ rows: RFQRow[]; error?: unknown }> {
   try {
     const raw = await apiPost<RFQRow[] | { message?: RFQRow[] }>(
       "/api/method/frappe.client.get_list",
       {
         doctype: "Request for Quotation",
-        fields: ["name", "status", "modified"],
+        fields: ["name", "status", "modified", "docstatus"],
         filters: [
           ["Request for Quotation Supplier", "supplier", "=", supplierName],
           ["docstatus", "in", [0, 1]],
@@ -168,21 +186,21 @@ async function tryGetListPost(supplierName: string): Promise<RFQRow[]> {
     if (Array.isArray(raw)) {
       // eslint-disable-next-line no-console
       console.log(LOG, "get_list POST result:", raw.length, "rows");
-      return raw;
+      return { rows: raw };
     }
     const msg = (raw as { message?: RFQRow[] })?.message;
     if (Array.isArray(msg)) {
       // eslint-disable-next-line no-console
       console.log(LOG, "get_list POST result (message):", msg.length, "rows");
-      return msg;
+      return { rows: msg };
     }
     // eslint-disable-next-line no-console
     console.warn(LOG, "get_list POST returned unexpected shape:", raw);
-    return [];
+    return { rows: [] };
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error(LOG, "get_list POST fallback failed:", err);
-    return [];
+    return { rows: [], error: err };
   }
 }
 

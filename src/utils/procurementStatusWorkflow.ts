@@ -10,7 +10,6 @@ import {
 } from "lucide-react";
 
 import type { PODeliveryState, PODeliveryStatus } from "../api/poDeliveryWorkflow";
-import { getAllVouchers } from "../api/vouchers";
 import type { Voucher } from "../types/voucher";
 
 export type ProcurementStepState = "completed" | "current" | "pending";
@@ -80,10 +79,9 @@ const RFQ_STEP = {
   icon: FileText,
 } as const;
 
-function vouchersForPO(poName: string, vouchers?: Voucher[]): Voucher[] {
-  if (!poName) return vouchers ?? [];
-  const list = vouchers ?? getAllVouchers();
-  return list.filter((v) => v.po_reference === poName);
+function vouchersForPO(poName: string, vouchers: Voucher[] = []): Voucher[] {
+  if (!poName) return vouchers;
+  return vouchers.filter((v) => v.po_reference === poName);
 }
 
 function isSupplierAccepted(deliveryState: PODeliveryState | null): boolean {

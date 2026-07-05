@@ -26,6 +26,8 @@ const BIDSPHERE_ROLE_MAP: Record<string, { module: string; level: string }> = {
   "Stock User": { module: "Warehouse", level: "Read / Create" },
   "Warehouse Manager": { module: "Warehouse, Inventory", level: "Full Warehouse Access" },
   "Legal Reviewer": { module: "Legal Reviews", level: "Review / Approve" },
+  "Department User": { module: "Material Requests", level: "Create / Submit" },
+  "Finance Executive": { module: "Budget", level: "Create / Request" },
 };
 
 export default function RoleManagementPage() {

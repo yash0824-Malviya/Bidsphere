@@ -23,6 +23,7 @@ import {
 import { getRFQ, getSupplierQuotations } from "../../api/sourcing";
 import { getInvoicesForPO } from "../../api/accounts";
 import { getAllVouchers } from "../../api/vouchers";
+import { useVoucherSyncStore } from "../../store/voucherSyncStore";
 import { syncDeliveryStateFromERPNext, getDeliveryState } from "../../api/poDeliveryWorkflow";
 import {
   createPurchaseOrderFromRFQ,
@@ -31,18 +32,13 @@ import {
   submitPurchaseOrder,
 } from "../../api/purchasing";
 import type { LinkedPORow } from "../../api/purchasing";
-import {
-  getApprovalState,
-  isApprovedForPO,
-  markPOCreated,
-} from "../../api/rfqApprovalWorkflow";
+import { getLegalDocsByRfq, type LegalDocumentSet } from "../../api/legalDocs";
 import POStatusTimeline from "../../components/p2p/POStatusTimeline";
 import { Skeleton } from "../../components/Skeleton";
 import { buildProcurementWorkflowSteps } from "../../utils/procurementStatusWorkflow";
 import { formatCurrency, formatDate } from "../../utils/format";
 import type {
   RFQ,
-  RFQApprovalState,
   SupplierQuotation,
   DocStatus,
 } from "../../types/erpnext";
@@ -91,22 +87,30 @@ export default function RFQtoPOConversionPage() {
   const rfqItems = rfq?.items ?? [];
   const rfqSuppliers = rfq?.suppliers ?? [];
 
-  /* ── Approval state ── */
-  const [approvalState, setApprovalState] = useState<RFQApprovalState | null>(null);
+  /* ── Approval state — sourced from ERPNext's Legal Document Review, the
+   * single source of truth for both Legal and Finance verdicts. ── */
+  const legalDocQuery = useQuery<LegalDocumentSet | null>({
+    queryKey: ["legal-document-review", "by-rfq", decodedId],
+    queryFn: () => getLegalDocsByRfq(decodedId),
+    enabled: !!decodedId,
+    staleTime: 0,
+    refetchOnMount: "always",
+  });
+  const legalDoc = legalDocQuery.data ?? null;
 
-  useEffect(() => {
-    if (decodedId) setApprovalState(getApprovalState(decodedId));
-  }, [decodedId]);
-
-  const approved = isApprovedForPO(approvalState);
-  const selectedSupplier = approvalState?.selected_supplier ?? "";
+  const approved = legalDoc?.review_status === "Approved" && legalDoc?.finance_status === "Approved";
+  const selectedSupplier = legalDoc?.supplier ?? "";
   const selectedQuote = quotations.find(
     (q) => q.supplier === selectedSupplier || q.supplier_name === selectedSupplier
   );
   // Display the friendly supplier name (from quotation or approval state)
   const selectedSupplierDisplay =
     selectedQuote?.supplier_name ?? selectedSupplier;
-  const approvedValue = approvalState?.selected_supplier_total ?? selectedQuote?.grand_total ?? 0;
+  const approvedValue = legalDoc?.grand_total ?? selectedQuote?.grand_total ?? 0;
+
+  /* ── Adapter fields used by the audit / status UI below ── */
+  const legalStatusLabel = legalDoc?.review_status ?? "Pending";
+  const financeStatusLabel = legalDoc?.finance_status || "Pending";
 
   /* ── PO creation state ── */
   const [creatingPO, setCreatingPO] = useState(false);
@@ -153,6 +157,14 @@ export default function RFQtoPOConversionPage() {
     enabled: !!poName,
   });
 
+  const syncVersion = useVoucherSyncStore((s) => s.version);
+  const vouchersQuery = useQuery({
+    queryKey: ["vouchers-all", poName, syncVersion],
+    queryFn: () => getAllVouchers(),
+    enabled: !!poName,
+    staleTime: 30_000,
+  });
+
   const deliveryStateRaw = poName ? getDeliveryState(poName) : null;
   const submittedGRNs = (grnsQuery.data ?? []).filter((g) => g.docstatus === 1);
   const activeInvoices = (invoicesQuery.data ?? []).filter((inv) => inv.docstatus !== 2);
@@ -184,7 +196,7 @@ export default function RFQtoPOConversionPage() {
     invoiceOutstanding: workflowInvoice?.outstanding_amount,
     invoiceGrandTotal: workflowInvoice?.grand_total,
     vouchers: poName
-      ? getAllVouchers().filter((v) => v.po_reference === poName)
+      ? (vouchersQuery.data ?? []).filter((v) => v.po_reference === poName)
       : [],
   });
 
@@ -227,8 +239,6 @@ export default function RFQtoPOConversionPage() {
     try {
       const submitted = await submitPurchaseOrder(poName);
       toast.success(`${submitted.name} submitted successfully!`);
-      markPOCreated(decodedId);
-      setApprovalState(getApprovalState(decodedId));
       void queryClient.invalidateQueries({ queryKey: ["rfq-linked-pos", decodedId] });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -516,14 +526,14 @@ export default function RFQtoPOConversionPage() {
               <StatusRow
                 icon={Gavel}
                 label="Legal Status"
-                value={approvalState?.legal_status ?? "—"}
-                approved={approvalState?.legal_status === "Approved"}
+                value={legalStatusLabel}
+                approved={legalStatusLabel === "Approved"}
               />
               <StatusRow
                 icon={Wallet}
                 label="Finance Status"
-                value={approvalState?.finance_status === "Budget Approved" ? "Approved" : (approvalState?.finance_status ?? "—")}
-                approved={approvalState?.finance_status === "Budget Approved"}
+                value={financeStatusLabel}
+                approved={financeStatusLabel === "Approved"}
               />
               <StatusRow
                 icon={Building2}
@@ -633,18 +643,18 @@ export default function RFQtoPOConversionPage() {
             <div className="space-y-3 px-5 py-4">
               <AuditRow
                 label="Submitted for Review"
-                by={approvalState?.submitted_by}
-                date={approvalState?.submitted_at}
+                by={legalDoc?.procurement_manager}
+                date={legalDoc?.submission_date}
               />
               <AuditRow
                 label="Legal Approved"
-                by={approvalState?.legal_reviewer}
-                date={approvalState?.legal_review_date}
+                by={legalDoc?.approved_by}
+                date={legalDoc?.approved_on}
               />
               <AuditRow
                 label="Finance Approved"
-                by={approvalState?.finance_reviewer}
-                date={approvalState?.finance_review_date}
+                by={legalDoc?.finance_approved_by}
+                date={legalDoc?.finance_approved_on}
               />
             </div>
           </div>

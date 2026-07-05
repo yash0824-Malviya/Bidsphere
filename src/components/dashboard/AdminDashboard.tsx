@@ -5,8 +5,8 @@ import {
   fetchDashboardAnalytics,
   fetchDashboardCounts,
 } from "../../api/dashboard";
+import { getApprovedRFQsAwaitingPO } from "../../api/purchasing";
 import type { AppRole } from "../../config/roles";
-import type { RFQApprovalState } from "../../types/erpnext";
 import {
   filterActivityByRole,
   getDashboardConfig,
@@ -31,13 +31,12 @@ import {
   computeShipmentMetrics,
   computeSupplierConcentration,
   ensureTopSuppliersBySpend,
-  resolveCategorySpend,
 } from "../../utils/dashboardUtils";
 
 const AdminSpendCharts = lazy(() => import("./AdminSpendCharts"));
 
 interface Props {
-  role: Exclude<AppRole, "warehouse" | "legal">;
+  role: Exclude<AppRole, "warehouse" | "legal" | "department">;
   greetingName: string;
 }
 
@@ -71,16 +70,6 @@ export default function AdminDashboard({ role, greetingName }: Props) {
   const monthlySpend = useMemo(
     () => computeMonthlySpendTrend(analytics?.invoices ?? []),
     [analytics?.invoices]
-  );
-
-  const categorySpend = useMemo(
-    () =>
-      resolveCategorySpend(
-        analytics?.invoiceItems ?? [],
-        analytics?.invoices ?? [],
-        analytics?.poSamples ?? []
-      ),
-    [analytics?.invoiceItems, analytics?.invoices, analytics?.poSamples]
   );
 
   const topSuppliers = useMemo(
@@ -156,22 +145,13 @@ export default function AdminDashboard({ role, greetingName }: Props) {
     Number(layout.showSavings) +
     Number(layout.showAlerts);
 
-  const readyForPOCount = useMemo(() => {
-    let count = 0;
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (!key?.startsWith("rfq_approval_")) continue;
-        const raw = localStorage.getItem(key);
-        if (!raw) continue;
-        try {
-          const s = JSON.parse(raw) as RFQApprovalState;
-          if (s.workflow_step === "Approved for PO") count++;
-        } catch { /* skip */ }
-      }
-    } catch { /* ignore */ }
-    return count;
-  }, [counts]);
+  const readyForPOQuery = useQuery({
+    queryKey: ["po-queue-ready-rfqs"],
+    queryFn: getApprovedRFQsAwaitingPO,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const readyForPOCount = readyForPOQuery.data?.length ?? 0;
 
   return (
     <div className="dashboard-stack">
@@ -196,11 +176,7 @@ export default function AdminDashboard({ role, greetingName }: Props) {
             </div>
           }
         >
-          <AdminSpendCharts
-            monthlySpend={monthlySpend}
-            categorySpend={categorySpend}
-            loading={loading}
-          />
+          <AdminSpendCharts monthlySpend={monthlySpend} loading={loading} />
         </Suspense>
       ) : null}
 

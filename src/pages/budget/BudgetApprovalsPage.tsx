@@ -1,219 +1,358 @@
 import { useLayoutEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AlertTriangle,
   Check,
-  CheckCircle2,
-  ChevronDown,
-  Clock,
-  MessageSquare,
-  ShieldAlert,
-  X,
+  Eye,
+  Search,
   XCircle,
 } from "lucide-react";
+import toast from "react-hot-toast";
 
-import { getBudgetApprovals, resolveBudgetApproval } from "../../api/budget";
-import type { BudgetApproval } from "../../api/budget";
+import {
+  approveBudget,
+  canApproveBudget,
+  fetchBudgets,
+  fetchCompanies,
+  fetchFiscalYears,
+  rejectBudget,
+  type BudgetListItem,
+} from "../../api/budget";
+import {
+  triggerBudgetApproved,
+  triggerBudgetRejected,
+} from "../../api/notifications";
+import PageHeader from "../../components/PageHeader";
+import EmptyState from "../../components/EmptyState";
+import { Skeleton } from "../../components/Skeleton";
+import { ConfirmDialog } from "../../components/ui";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
 import { useAuthStore } from "../../store/authStore";
 import { formatCurrency, formatDateTime } from "../../utils/format";
-import hotToast from "react-hot-toast";
 
 const fmt = (n: number) => formatCurrency(n);
 
-type StatusFilter = "" | "Pending" | "Approved" | "Rejected" | "Revision Requested";
+type SortKey = "newest" | "oldest" | "largest";
+
+type PendingAction = {
+  type: "approve" | "reject";
+  item: BudgetListItem;
+};
 
 export default function BudgetApprovalsPage() {
   const layout = useOptionalLayout();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const user = useAuthStore((s) => s.user);
+  const role = user?.role;
+  const canAct = canApproveBudget(role);
+
   useLayoutEffect(() => {
     layout?.registerPageHeader();
     return () => layout?.unregisterPageHeader();
   }, [layout]);
 
-  const role = useAuthStore((s) => s.user?.role);
-  const user = useAuthStore((s) => s.user);
-  const canAct = role === "finance" || role === "admin";
+  const { data: submitted = [], isLoading } = useQuery({
+    queryKey: ["budget-approvals-pending"],
+    queryFn: async () => {
+      const all = await fetchBudgets();
+      return all.filter((b) => b.status === "Submitted");
+    },
+    enabled: canAct,
+  });
 
-  const [approvals, setApprovals] = useState<BudgetApproval[]>(getBudgetApprovals);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("");
-  const [selected, setSelected] = useState<BudgetApproval | null>(null);
+  const { data: companies = [] } = useQuery({
+    queryKey: ["budget-companies"],
+    queryFn: fetchCompanies,
+    enabled: canAct,
+  });
+
+  const { data: fiscalYears = [] } = useQuery({
+    queryKey: ["fiscal-years"],
+    queryFn: fetchFiscalYears,
+    enabled: canAct,
+  });
+
+  const [search, setSearch] = useState("");
+  const [companyFilter, setCompanyFilter] = useState("");
+  const [fiscalYearFilter, setFiscalYearFilter] = useState("");
+  const [deptFilter, setDeptFilter] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("newest");
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [actionNotes, setActionNotes] = useState("");
+  const [acting, setActing] = useState(false);
 
-  const reload = () => setApprovals(getBudgetApprovals());
+  const departments = useMemo(() => {
+    const set = new Set<string>();
+    for (const b of submitted) {
+      const dept = b.cost_center ?? b.project ?? "";
+      if (dept) set.add(dept);
+    }
+    return [...set].sort();
+  }, [submitted]);
 
   const filtered = useMemo(() => {
-    if (!statusFilter) return approvals;
-    return approvals.filter((a) => a.status === statusFilter);
-  }, [approvals, statusFilter]);
+    let list = submitted;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(
+        (b) =>
+          b.name.toLowerCase().includes(q) ||
+          b.owner.toLowerCase().includes(q) ||
+          (b.cost_center ?? "").toLowerCase().includes(q) ||
+          (b.account ?? "").toLowerCase().includes(q)
+      );
+    }
+    if (companyFilter) list = list.filter((b) => b.company === companyFilter);
+    if (fiscalYearFilter) list = list.filter((b) => b.fiscal_year === fiscalYearFilter);
+    if (deptFilter) {
+      list = list.filter(
+        (b) => (b.cost_center ?? b.project) === deptFilter
+      );
+    }
+    list = [...list];
+    if (sortKey === "newest") list.sort((a, b) => b.modified.localeCompare(a.modified));
+    if (sortKey === "oldest") list.sort((a, b) => a.modified.localeCompare(b.modified));
+    if (sortKey === "largest") list.sort((a, b) => b.budget_amount - a.budget_amount);
+    return list;
+  }, [submitted, search, companyFilter, fiscalYearFilter, deptFilter, sortKey]);
 
-  const pendingCount = approvals.filter((a) => a.status === "Pending").length;
+  async function invalidate() {
+    await queryClient.invalidateQueries({ queryKey: ["budget-approvals-pending"] });
+    await queryClient.invalidateQueries({ queryKey: ["finance-manager-budget-dashboard"] });
+    await queryClient.invalidateQueries({ queryKey: ["budget-kpis"] });
+    await queryClient.invalidateQueries({ queryKey: ["budget-history"] });
+    await queryClient.invalidateQueries({ queryKey: ["budget-plans"] });
+  }
 
-  function handleAction(action: "Approved" | "Rejected" | "Revision Requested") {
-    if (!selected) return;
-    resolveBudgetApproval(selected.id, action, user?.full_name ?? user?.email ?? "Finance", actionNotes || undefined);
-    reload();
-    setSelected(null);
-    setActionNotes("");
-    const labels = { Approved: "Override approved", Rejected: "Request rejected", "Revision Requested": "Revision requested" };
-    hotToast.success(labels[action]);
+  async function confirmAction() {
+    if (!pendingAction || !canAct) return;
+    if (pendingAction.type === "reject" && !actionNotes.trim()) {
+      toast.error("Rejection reason is required");
+      return;
+    }
+    setActing(true);
+    try {
+      if (pendingAction.type === "approve") {
+        await approveBudget(pendingAction.item.name, actionNotes || undefined);
+        triggerBudgetApproved(
+          pendingAction.item.name,
+          pendingAction.item.budget_amount,
+          user?.email ?? user?.full_name
+        );
+        toast.success("Budget approved and activated in ERPNext");
+      } else {
+        await rejectBudget(pendingAction.item.name, actionNotes.trim());
+        triggerBudgetRejected(
+          pendingAction.item.name,
+          user?.email ?? user?.full_name,
+          actionNotes.trim()
+        );
+        toast.error("Budget rejected");
+      }
+      await invalidate();
+      setPendingAction(null);
+      setActionNotes("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Action failed");
+    } finally {
+      setActing(false);
+    }
+  }
+
+  if (!canAct) {
+    return (
+      <div className="rounded-xl border border-neutral-200 bg-white p-8 text-center">
+        <p className="text-sm text-neutral-600">
+          Budget approval is restricted to Finance Manager role.
+        </p>
+      </div>
+    );
   }
 
   return (
-    <div className="-mt-1 flex gap-3">
-      {/* Main list */}
-      <div className="flex-1 min-w-0">
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-50">
-              <ShieldAlert className="h-4 w-4 text-rose-600" />
-            </div>
-            <div>
-              <h1 className="text-sm font-bold text-neutral-900">Budget Approvals</h1>
-              <p className="text-[10px] text-neutral-500">Budget override requests &middot; {pendingCount} pending</p>
-            </div>
-          </div>
-          <div className="relative">
-            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as StatusFilter)} className="appearance-none rounded-md border border-neutral-200 bg-white py-1.5 pl-2.5 pr-7 text-xs text-neutral-700 focus:border-primary-400 focus:outline-none">
-              <option value="">All Requests</option>
-              <option value="Pending">Pending</option>
-              <option value="Approved">Approved</option>
-              <option value="Rejected">Rejected</option>
-              <option value="Revision Requested">Revision Requested</option>
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-neutral-400" />
-          </div>
-        </div>
+    <div>
+      <PageHeader
+        title="Budget Approval"
+        description={`Review submitted ERPNext budgets · ${submitted.length} pending`}
+      />
 
-        {filtered.length === 0 ? (
-          <div className="rounded-lg border border-neutral-200 bg-white py-14 text-center shadow-sm">
-            <CheckCircle2 className="mx-auto mb-2 h-8 w-8 text-emerald-400" />
-            <p className="text-sm font-medium text-neutral-700">
-              {statusFilter === "Pending" ? "No pending approvals" : "No budget approval requests"}
-            </p>
-            <p className="mt-0.5 text-xs text-neutral-500">
-              Override requests appear here when PO amounts exceed budget.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-1.5">
-            {filtered.map((a) => (
-              <button
-                key={a.id}
-                type="button"
-                onClick={() => { setSelected(a); setActionNotes(""); }}
-                className={`w-full rounded-lg border bg-white px-3 py-2.5 text-left shadow-sm transition-all cursor-pointer ${
-                  selected?.id === a.id ? "border-primary-300 ring-1 ring-primary-200" : "border-neutral-200 hover:border-neutral-300"
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="text-xs font-bold text-neutral-900">{a.poName}</span>
-                      <ApprovalBadge status={a.status} />
-                    </div>
-                    <p className="text-[11px] text-neutral-600">{a.supplier} &middot; {a.department}</p>
-                    <p className="text-[10px] text-neutral-500">{a.reason}</p>
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-xs font-bold text-red-600 tabular-nums">{fmt(a.overageAmount)}</p>
-                    <p className="text-[10px] text-neutral-500">over budget</p>
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
+      <div className="mb-4 flex flex-wrap gap-2">
+        <div className="relative min-w-[200px] flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search budget ID, department, requester…"
+            className="w-full rounded-lg border border-neutral-200 py-2 pl-9 pr-3 text-sm"
+          />
+        </div>
+        <select
+          value={companyFilter}
+          onChange={(e) => setCompanyFilter(e.target.value)}
+          className="rounded-lg border border-neutral-200 px-3 py-2 text-sm"
+        >
+          <option value="">All Companies</option>
+          {companies.map((c) => (
+            <option key={c.name} value={c.name}>{c.company_name ?? c.name}</option>
+          ))}
+        </select>
+        <select
+          value={fiscalYearFilter}
+          onChange={(e) => setFiscalYearFilter(e.target.value)}
+          className="rounded-lg border border-neutral-200 px-3 py-2 text-sm"
+        >
+          <option value="">All Fiscal Years</option>
+          {fiscalYears.map((fy) => (
+            <option key={fy} value={fy}>{fy}</option>
+          ))}
+        </select>
+        <select
+          value={deptFilter}
+          onChange={(e) => setDeptFilter(e.target.value)}
+          className="rounded-lg border border-neutral-200 px-3 py-2 text-sm"
+        >
+          <option value="">All Departments</option>
+          {departments.map((d) => (
+            <option key={d} value={d}>{d}</option>
+          ))}
+        </select>
+        <select
+          value={sortKey}
+          onChange={(e) => setSortKey(e.target.value as SortKey)}
+          className="rounded-lg border border-neutral-200 px-3 py-2 text-sm"
+        >
+          <option value="newest">Newest</option>
+          <option value="oldest">Oldest</option>
+          <option value="largest">Largest Budget</option>
+        </select>
       </div>
 
-      {/* Detail / action panel */}
-      {selected && (
-        <div className="w-[340px] flex-shrink-0 rounded-lg border border-neutral-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-neutral-100 px-4 py-3">
-            <h3 className="text-xs font-bold text-neutral-900">Override Request</h3>
-            <button type="button" onClick={() => setSelected(null)} className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 cursor-pointer bg-transparent border-none">
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-          <div className="space-y-3 p-4">
-            <div className="rounded-lg border border-neutral-100 bg-neutral-50 p-3">
-              <Row label="PO Number" value={selected.poName} bold />
-              <Row label="PO Amount" value={fmt(selected.poAmount)} />
-              <Row label="Supplier" value={selected.supplier} />
-              <Row label="Department" value={selected.department} />
-              <Row label="Requested By" value={selected.requestedBy} />
-              <Row label="Submitted" value={formatDateTime(selected.createdAt)} />
-            </div>
-            <div className="rounded-lg border border-neutral-100 bg-neutral-50 p-3">
-              <Row label="Budget" value={selected.budgetName} bold />
-              <Row label="Remaining Budget" value={fmt(selected.budgetRemaining)} />
-              <Row label="Overage" value={fmt(selected.overageAmount)} valueColor="text-red-600" />
-            </div>
-            {selected.reason && (
-              <div>
-                <p className="mb-1 text-[10px] font-semibold text-neutral-500">REASON</p>
-                <p className="text-xs text-neutral-700">{selected.reason}</p>
-              </div>
-            )}
-
-            {canAct && selected.status === "Pending" && (
-              <>
-                <div>
-                  <label className="mb-0.5 block text-[10px] font-semibold text-neutral-500">Notes (optional)</label>
-                  <textarea
-                    value={actionNotes}
-                    onChange={(e) => setActionNotes(e.target.value)}
-                    rows={2}
-                    className="w-full rounded-md border border-neutral-200 px-2.5 py-1.5 text-xs focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200 resize-none"
-                    placeholder="Add notes for this decision..."
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <button type="button" onClick={() => handleAction("Approved")} className="inline-flex items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm hover:bg-emerald-700 cursor-pointer border-none">
-                    <Check className="h-3 w-3" /> Approve Override
-                  </button>
-                  <button type="button" onClick={() => handleAction("Rejected")} className="inline-flex items-center justify-center gap-1 rounded-md bg-red-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm hover:bg-red-700 cursor-pointer border-none">
-                    <XCircle className="h-3 w-3" /> Reject
-                  </button>
-                  <button type="button" onClick={() => handleAction("Revision Requested")} className="inline-flex items-center justify-center gap-1 rounded-md bg-white px-3 py-1.5 text-[11px] font-semibold text-amber-700 ring-1 ring-amber-300 hover:bg-amber-50 cursor-pointer border-none">
-                    <MessageSquare className="h-3 w-3" /> Request Revision
-                  </button>
-                </div>
-              </>
-            )}
-
-            {selected.status !== "Pending" && (
-              <div className="rounded-lg border border-neutral-100 bg-neutral-50 p-3">
-                <Row label="Decision" value={selected.status} valueColor={selected.status === "Approved" ? "text-emerald-700" : selected.status === "Rejected" ? "text-red-700" : "text-amber-700"} bold />
-                {selected.resolvedBy && <Row label="Resolved By" value={selected.resolvedBy} />}
-                {selected.resolvedAt && <Row label="Resolved At" value={formatDateTime(selected.resolvedAt)} />}
-                {selected.notes && <Row label="Notes" value={selected.notes} />}
-              </div>
-            )}
+      {isLoading ? (
+        <Skeleton className="h-64 rounded-xl" />
+      ) : filtered.length === 0 ? (
+        <EmptyState
+          title="No budgets pending approval"
+          description="Submitted budgets from Finance Executives will appear here."
+        />
+      ) : (
+        <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-neutral-50 text-left text-xs font-semibold uppercase text-neutral-500">
+                <tr>
+                  <th className="px-4 py-3">Budget ID</th>
+                  <th className="px-4 py-3">Company</th>
+                  <th className="px-4 py-3">Fiscal Year</th>
+                  <th className="px-4 py-3">Department</th>
+                  <th className="px-4 py-3">Cost Center</th>
+                  <th className="px-4 py-3">Expense Account</th>
+                  <th className="px-4 py-3 text-right">Amount</th>
+                  <th className="px-4 py-3">Requested By</th>
+                  <th className="px-4 py-3">Submitted</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-neutral-100">
+                {filtered.map((item) => (
+                  <tr key={item.name} className="hover:bg-neutral-50">
+                    <td className="px-4 py-3 font-medium text-primary-700">{item.name}</td>
+                    <td className="px-4 py-3">{item.company}</td>
+                    <td className="px-4 py-3">{item.fiscal_year}</td>
+                    <td className="px-4 py-3">{item.cost_center ?? item.project ?? "—"}</td>
+                    <td className="px-4 py-3">{item.cost_center ?? "—"}</td>
+                    <td className="px-4 py-3 max-w-[140px] truncate">{item.account ?? "—"}</td>
+                    <td className="px-4 py-3 text-right tabular-nums font-semibold">{fmt(item.budget_amount)}</td>
+                    <td className="px-4 py-3 text-neutral-600">{item.owner}</td>
+                    <td className="px-4 py-3 text-neutral-500">{formatDateTime(item.modified)}</td>
+                    <td className="px-4 py-3">
+                      <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                        Submitted
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap gap-1">
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/budget/detail/${encodeURIComponent(item.name)}`)}
+                          className="inline-flex items-center gap-1 rounded-md border border-neutral-200 px-2 py-1 text-xs font-semibold text-neutral-700 hover:bg-neutral-50"
+                        >
+                          <Eye className="h-3 w-3" /> View
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActionNotes("");
+                            setPendingAction({ type: "approve", item });
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md bg-success-600 px-2 py-1 text-xs font-semibold text-white hover:bg-success-700"
+                        >
+                          <Check className="h-3 w-3" /> Approve
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActionNotes("");
+                            setPendingAction({ type: "reject", item });
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md border border-danger-200 px-2 py-1 text-xs font-semibold text-danger-700 hover:bg-danger-50"
+                        >
+                          <XCircle className="h-3 w-3" /> Reject
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
-    </div>
-  );
-}
 
-function ApprovalBadge({ status }: { status: BudgetApproval["status"] }) {
-  const cfg = {
-    Pending: { bg: "bg-amber-50 text-amber-700", icon: <Clock className="h-2.5 w-2.5" /> },
-    Approved: { bg: "bg-emerald-50 text-emerald-700", icon: <CheckCircle2 className="h-2.5 w-2.5" /> },
-    Rejected: { bg: "bg-red-50 text-red-700", icon: <XCircle className="h-2.5 w-2.5" /> },
-    "Revision Requested": { bg: "bg-violet-50 text-violet-700", icon: <AlertTriangle className="h-2.5 w-2.5" /> },
-  }[status];
-  return (
-    <span className={`inline-flex items-center gap-0.5 rounded px-1.5 py-px text-[9px] font-bold ${cfg.bg}`}>
-      {cfg.icon} {status}
-    </span>
-  );
-}
+      <ConfirmDialog
+        open={!!pendingAction}
+        onClose={() => {
+          if (!acting) {
+            setPendingAction(null);
+            setActionNotes("");
+          }
+        }}
+        onConfirm={confirmAction}
+        isLoading={acting}
+        tone={pendingAction?.type === "approve" ? "primary" : "danger"}
+        title={
+          pendingAction?.type === "approve"
+            ? "Approve Budget?"
+            : "Reject Budget?"
+        }
+        description={
+          pendingAction
+            ? `${pendingAction.item.name} · ${fmt(pendingAction.item.budget_amount)} · ${pendingAction.item.cost_center ?? pendingAction.item.project ?? "—"}`
+            : undefined
+        }
+        confirmLabel={pendingAction?.type === "approve" ? "Approve & Activate" : "Reject Budget"}
+      />
 
-function Row({ label, value, bold, valueColor }: { label: string; value: string; bold?: boolean; valueColor?: string }) {
-  return (
-    <div className="flex items-baseline justify-between gap-2 py-0.5 text-xs">
-      <span className="text-neutral-500">{label}</span>
-      <span className={`text-right ${bold ? "font-semibold" : ""} ${valueColor ?? "text-neutral-900"}`}>{value}</span>
+      {pendingAction && (
+        <div className="fixed inset-x-0 bottom-0 z-50 mx-auto mb-4 max-w-lg rounded-xl border border-neutral-200 bg-white p-4 shadow-xl sm:relative sm:mt-4 sm:shadow-sm">
+          <label className="mb-1 block text-xs font-semibold text-neutral-600">
+            {pendingAction.type === "reject" ? "Rejection reason *" : "Approval notes (optional)"}
+          </label>
+          <textarea
+            value={actionNotes}
+            onChange={(e) => setActionNotes(e.target.value)}
+            rows={2}
+            className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm"
+            placeholder={
+              pendingAction.type === "reject"
+                ? "Explain why this budget is rejected…"
+                : "Optional notes for audit trail…"
+            }
+          />
+        </div>
+      )}
     </div>
   );
 }

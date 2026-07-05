@@ -221,6 +221,16 @@ async function syncStateToErpNext(state: RFQApprovalState): Promise<void> {
     updates.custom_finance_reviewer = state.finance_reviewer ?? "";
   if (fieldSet.has("custom_finance_review_date"))
     updates.custom_finance_review_date = state.finance_review_date ?? "";
+  if (fieldSet.has("custom_finance_comments")) {
+    const financeComments = state.finance_comments ?? [];
+    const latest =
+      financeComments.length > 0
+        ? [...financeComments].sort((a, b) =>
+            (b.comment_date ?? "").localeCompare(a.comment_date ?? "")
+          )[0]?.comment?.trim() ?? ""
+        : "";
+    updates.custom_finance_comments = latest;
+  }
 
   if (fieldSet.has("custom_terms_approved"))
     updates.custom_terms_approved = state.terms_approved ? 1 : 0;
@@ -304,77 +314,6 @@ export async function submitForReview(params: {
 }
 
 /* ────────────────────────────────────────────────────────────────────────────
- *  Update legal status (called from LegalReviewsPage actions)
- * ──────────────────────────────────────────────────────────────────────────── */
-
-export function updateLegalStatus(
-  rfqName: string,
-  status: LegalReviewStatus
-): RFQApprovalState | null {
-  const state = getApprovalState(rfqName);
-  if (!state) return null;
-
-  state.legal_status = status;
-
-  if (status === "Approved") {
-    state.workflow_step = "Pending Finance Review";
-  } else if (status === "Rejected") {
-    state.workflow_step = "Legal Rejected";
-  }
-
-  saveApprovalState(state);
-  return state;
-}
-
-/* ────────────────────────────────────────────────────────────────────────────
- *  Update finance status
- * ──────────────────────────────────────────────────────────────────────────── */
-
-export async function updateFinanceStatus(
-  rfqName: string,
-  status: FinanceReviewStatus,
-  reviewedBy?: string,
-  comment?: string
-): Promise<RFQApprovalState | null> {
-  const state = getApprovalState(rfqName);
-  if (!state) return null;
-
-  const now = new Date().toISOString();
-  state.finance_status = status;
-  state.finance_reviewer = reviewedBy ?? state.finance_reviewer;
-  state.finance_review_date = now;
-
-  let erpFinanceStatus: string;
-
-  if (status === "Budget Approved" && state.legal_status === "Approved") {
-    state.workflow_step = "Approved for PO";
-    erpFinanceStatus = "Approved";
-  } else if (status === "Rejected") {
-    state.workflow_step = "Finance Rejected";
-    erpFinanceStatus = "Rejected";
-  } else {
-    erpFinanceStatus = "Pending";
-  }
-
-  if (comment?.trim()) {
-    state.finance_comments = [
-      ...(state.finance_comments ?? []),
-      {
-        comment: comment.trim(),
-        comment_by: reviewedBy ?? "",
-        comment_date: now,
-        action: status,
-      },
-    ];
-  }
-
-  await writeToErpNext(rfqName, { financeStatus: erpFinanceStatus });
-
-  saveApprovalState(state);
-  return state;
-}
-
-/* ────────────────────────────────────────────────────────────────────────────
  *  Mark PO created
  * ──────────────────────────────────────────────────────────────────────────── */
 
@@ -418,41 +357,6 @@ export async function resubmitLegalReview(
   ];
 
   await writeToErpNext(rfqName, { legalStatus: "Pending" });
-  saveApprovalState(state);
-  return state;
-}
-
-export async function resubmitFinanceReview(
-  rfqName: string,
-  resubmittedBy: string,
-  note?: string
-): Promise<RFQApprovalState> {
-  const state = getApprovalState(rfqName);
-  if (!state) throw new Error("No approval workflow found for this RFQ.");
-  if (state.legal_status !== "Approved") {
-    throw new Error("Legal approval is required before finance resubmission.");
-  }
-  if (state.finance_status !== "Rejected") {
-    throw new Error("Only finance-rejected RFQs can be resubmitted for finance review.");
-  }
-
-  const now = new Date().toISOString();
-  state.finance_status = "Pending Finance Review";
-  state.workflow_step = "Pending Finance Review";
-
-  state.finance_comments = [
-    ...(state.finance_comments ?? []),
-    {
-      comment:
-        note?.trim() ||
-        "RFQ resubmitted for finance review after rejection.",
-      comment_by: resubmittedBy,
-      comment_date: now,
-      action: "Resubmit",
-    },
-  ];
-
-  await writeToErpNext(rfqName, { financeStatus: "Pending" });
   saveApprovalState(state);
   return state;
 }

@@ -21,7 +21,7 @@ import {
   primaryWarehouseFromReceipt,
 } from "../supplierPortalUtils";
 
-export function grnPdfFilename(grn: PurchaseReceipt): string {
+export function grnPdfFilename(grn: Pick<PurchaseReceipt, "name">): string {
   const clean = sanitizeFilename(grn.name ?? "GRN");
   const upper = clean.toUpperCase();
   if (upper.startsWith("GRN-") || upper.startsWith("GRN_")) {

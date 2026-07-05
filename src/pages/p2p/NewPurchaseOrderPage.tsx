@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
@@ -16,21 +16,18 @@ import {
 
 import { ENV_DEFAULTS } from "../../api/erpnext";
 import {
+  assertNoPOForRFQ,
   createPurchaseOrder,
   submitPurchaseOrder,
 } from "../../api/purchasing";
 import { getRFQ, getSupplierQuotations } from "../../api/sourcing";
 import { getSuppliers } from "../../api/supplier";
-import {
-  getApprovalState,
-  isApprovedForPO,
-  saveApprovalState,
-} from "../../api/rfqApprovalWorkflow";
+import { getLegalDocsByRfq, type LegalDocumentSet } from "../../api/legalDocs";
 import ItemPicker from "../../components/ItemPicker";
 import PageHeader from "../../components/PageHeader";
 import { ErpNextDateDisplay, ErpNextDatePicker } from "../../components/ui";
 import { Skeleton } from "../../components/Skeleton";
-import type { PurchaseOrder, RFQApprovalState } from "../../types/erpnext";
+import type { PurchaseOrder } from "../../types/erpnext";
 import { formatCurrency, isoDateOffset, todayIso } from "../../utils/format";
 import { assertERPNextDate } from "../../utils/erpNextDate";
 import { generateId } from "../../utils/id";
@@ -75,13 +72,20 @@ export default function NewPurchaseOrderPage() {
   } | null>(null);
   const [prefillLoaded, setPrefillLoaded] = useState(false);
 
-  /* ── Approval state check ── */
-  const approvalState = useMemo<RFQApprovalState | null>(() => {
-    if (!rfqParam) return null;
-    return getApprovalState(rfqParam);
-  }, [rfqParam]);
+  /* ── Approval state check — ERPNext's Legal Document Review is the single
+   * source of truth for both Legal and Finance approval. ── */
+  const legalDocQuery = useQuery<LegalDocumentSet | null>({
+    queryKey: ["legal-document-review", "by-rfq", rfqParam],
+    queryFn: () => getLegalDocsByRfq(rfqParam),
+    enabled: !!rfqParam,
+    staleTime: 0,
+  });
+  const approvalState = legalDocQuery.data ?? null;
 
-  const approved = isApprovedForPO(approvalState);
+  const approved =
+    !!approvalState &&
+    approvalState.review_status === "Approved" &&
+    approvalState.finance_status === "Approved";
 
   /* ── If ?rfq= is provided, fetch RFQ + quotation data for auto-fill ── */
   const rfqQuery = useQuery({
@@ -105,7 +109,7 @@ export default function NewPurchaseOrderPage() {
 
     const rfq = rfqQuery.data;
     const quotations = sqQuery.data ?? [];
-    const selectedSupplier = approvalState.selected_supplier;
+    const selectedSupplier = approvalState.supplier;
 
     const winningQuote = quotations.find(
       (q) => q.supplier === selectedSupplier || q.supplier_name === selectedSupplier
@@ -153,7 +157,7 @@ export default function NewPurchaseOrderPage() {
     setPrefillInfo({
       rfqRef: rfqParam,
       supplierName: winningQuote?.supplier_name ?? selectedSupplier ?? "",
-      approvedValue: approvalState.selected_supplier_total ?? winningQuote?.grand_total ?? 0,
+      approvedValue: approvalState.grand_total ?? winningQuote?.grand_total ?? 0,
     });
     setPrefillLoaded(true);
     toast.success(`Auto-populated from approved RFQ ${rfqParam}`);
@@ -187,41 +191,48 @@ export default function NewPurchaseOrderPage() {
     }
 
     const rfqRef = prefill.rfq_ref ?? "";
-    const state = rfqRef ? getApprovalState(rfqRef) : null;
-    if (rfqRef && (!state || !isApprovedForPO(state))) {
-      toast.error("PO creation requires Legal and Finance approval.");
-      localStorage.removeItem("po_prefill");
-      navigate("/dashboard");
-      return;
-    }
 
-    if (prefill.supplier) {
-      // eslint-disable-next-line no-console
-      console.log("[NewPO] Legacy prefill supplier:", prefill.supplier);
-      setSupplier(prefill.supplier);
-    }
-    if (Array.isArray(prefill.items) && prefill.items.length > 0) {
-      setItems(
-        prefill.items.map<DraftItem>((it) => ({
-          id: generateId(),
-          item_code: it.item_code,
-          item_name: it.item_name ?? it.item_code,
-          qty: it.qty ?? 1,
-          uom: it.uom ?? "",
-          rate: it.rate ?? 0,
-          schedule_date: isoDateOffset(7),
-        }))
-      );
-    }
-    if (rfqRef) {
-      setPrefillInfo({
-        rfqRef,
-        supplierName: prefill.supplier_name || prefill.supplier,
-        approvedValue: 0,
-      });
-      toast.success(`Pre-filled from RFQ ${rfqRef}`);
-    }
-    localStorage.removeItem("po_prefill");
+    (async () => {
+      if (rfqRef) {
+        const legalDoc = await getLegalDocsByRfq(rfqRef);
+        const isReady =
+          legalDoc?.review_status === "Approved" && legalDoc?.finance_status === "Approved";
+        if (!isReady) {
+          toast.error("PO creation requires Legal and Finance approval.");
+          localStorage.removeItem("po_prefill");
+          navigate("/dashboard");
+          return;
+        }
+      }
+
+      if (prefill.supplier) {
+        // eslint-disable-next-line no-console
+        console.log("[NewPO] Legacy prefill supplier:", prefill.supplier);
+        setSupplier(prefill.supplier);
+      }
+      if (Array.isArray(prefill.items) && prefill.items.length > 0) {
+        setItems(
+          prefill.items.map<DraftItem>((it) => ({
+            id: generateId(),
+            item_code: it.item_code,
+            item_name: it.item_name ?? it.item_code,
+            qty: it.qty ?? 1,
+            uom: it.uom ?? "",
+            rate: it.rate ?? 0,
+            schedule_date: isoDateOffset(7),
+          }))
+        );
+      }
+      if (rfqRef) {
+        setPrefillInfo({
+          rfqRef,
+          supplierName: prefill.supplier_name || prefill.supplier,
+          approvedValue: 0,
+        });
+        toast.success(`Pre-filled from RFQ ${rfqRef}`);
+      }
+      localStorage.removeItem("po_prefill");
+    })();
   }, [rfqParam, navigate]);
 
   const { data: suppliers = [] } = useQuery({
@@ -288,10 +299,11 @@ export default function NewPurchaseOrderPage() {
   }
 
   const draftMutation = useMutation({
-    mutationFn: (payload: Partial<PurchaseOrder>) =>
-      createPurchaseOrder(payload),
+    mutationFn: async (payload: Partial<PurchaseOrder>) => {
+      if (rfqParam) await assertNoPOForRFQ(rfqParam);
+      return createPurchaseOrder(payload);
+    },
     onSuccess: (po) => {
-      markPOCreated();
       toast.success(`Draft saved as ${po.name}`);
       queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
       navigate(`/p2p/purchase-orders/${po.name}`);
@@ -300,26 +312,17 @@ export default function NewPurchaseOrderPage() {
 
   const submitMutation = useMutation({
     mutationFn: async (payload: Partial<PurchaseOrder>) => {
+      if (rfqParam) await assertNoPOForRFQ(rfqParam);
       const draft = await createPurchaseOrder(payload);
       return submitPurchaseOrder(draft.name);
     },
     onSuccess: (po) => {
-      markPOCreated();
       toast.success(`${po.name} submitted`);
       queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
+      queryClient.invalidateQueries({ queryKey: ["po-queue-ready-rfqs"] });
       navigate(`/p2p/purchase-orders/${po.name}`);
     },
   });
-
-  function markPOCreated() {
-    const rfqRef = prefillInfo?.rfqRef ?? rfqParam;
-    if (!rfqRef) return;
-    const state = getApprovalState(rfqRef);
-    if (state) {
-      state.workflow_step = "PO Created";
-      saveApprovalState(state);
-    }
-  }
 
   const isSaving = draftMutation.isPending || submitMutation.isPending;
 
@@ -533,7 +536,7 @@ export default function NewPurchaseOrderPage() {
                             item_code: opt.name,
                             item_name: opt.item_name ?? opt.name,
                             uom: opt.stock_uom ?? "",
-                            rate: opt.standard_rate ?? it.rate,
+                            rate: it.rate,
                           })
                         }
                       />

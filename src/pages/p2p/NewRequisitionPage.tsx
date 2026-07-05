@@ -242,7 +242,7 @@ export default function NewRequisitionPage() {
                             item_code: opt.name,
                             item_name: opt.item_name ?? opt.name,
                             uom: opt.stock_uom ?? "",
-                            rate: opt.standard_rate ?? it.rate,
+                            rate: it.rate,
                           })
                         }
                       />

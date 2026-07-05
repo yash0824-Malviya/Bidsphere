@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, FileText } from "lucide-react";
 
 import EmptyState from "../../components/EmptyState";
@@ -15,8 +16,14 @@ import SupplierPortalLayout from "./SupplierPortalLayout";
 
 export default function SupplierVoucherListPage() {
   const { supplierName, isReady } = useSupplierSession();
-  // Re-render when the shared store syncs so newly-sent vouchers appear.
-  useVoucherSyncStore((s) => s.version);
+  const syncVersion = useVoucherSyncStore((s) => s.version);
+
+  const { data: vouchers = [] } = useQuery({
+    queryKey: ["supplier-vouchers", supplierName, syncVersion],
+    queryFn: () => getVouchersForSupplier(supplierName),
+    enabled: !!supplierName,
+    staleTime: 30_000,
+  });
 
   if (!isReady) {
     return (
@@ -27,8 +34,6 @@ export default function SupplierVoucherListPage() {
       </SupplierPortalLayout>
     );
   }
-
-  const vouchers = getVouchersForSupplier(supplierName);
 
   return (
     <SupplierPortalLayout supplierName={supplierName}>

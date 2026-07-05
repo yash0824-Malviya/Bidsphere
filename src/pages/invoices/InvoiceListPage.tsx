@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { Eye, Receipt, Search } from "lucide-react";
 
 import EmptyState from "../../components/EmptyState";
@@ -40,7 +41,11 @@ export default function InvoiceListPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
   const syncVersion = useVoucherSyncStore((s) => s.version);
-  const invoices = useMemo(() => getAllInvoices(), [syncVersion]);
+  const { data: invoices = [] } = useQuery({
+    queryKey: ["invoices-all", syncVersion],
+    queryFn: () => getAllInvoices(),
+    staleTime: 30_000,
+  });
 
   const q = query.trim().toLowerCase();
 
@@ -183,7 +188,7 @@ export default function InvoiceListPage() {
                             : `INV-${inv.invoice_number}.pdf`
                         }
                         build={async () => {
-                          const v = getVoucherById(inv.voucher_id);
+                          const v = await getVoucherById(inv.voucher_id);
                           if (!v) throw new Error("Voucher not found");
                           return buildVoucherInvoicePdf(v);
                         }}

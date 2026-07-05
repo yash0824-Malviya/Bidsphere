@@ -164,9 +164,12 @@ export async function fetchRelevantData(
         params: {
           fields: JSON.stringify([
             "name",
+            "item_code",
             "item_name",
+            "description",
             "item_group",
             "stock_uom",
+            "disabled",
           ]),
           filters: JSON.stringify([["disabled", "=", 0]]),
           limit_page_length: 50,

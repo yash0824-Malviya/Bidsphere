@@ -70,7 +70,7 @@ export default function CreateVoucherPage() {
     }
     setSubmitting(true);
     try {
-      const voucher = createVoucher({
+      const voucher = await createVoucher({
         po_reference: poName,
         grn_reference: grnName,
         supplier: po.supplier,
@@ -83,7 +83,7 @@ export default function CreateVoucherPage() {
         notes: notes || undefined,
       });
       if (sendNow) {
-        sendVoucherToSupplier(voucher.id);
+        await sendVoucherToSupplier(voucher.id);
         toast.success(`Voucher ${voucher.id} created and sent to supplier.`);
       } else {
         toast.success(`Voucher ${voucher.id} saved as draft.`);

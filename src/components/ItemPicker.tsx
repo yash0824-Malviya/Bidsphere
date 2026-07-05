@@ -6,10 +6,12 @@ import { useDebounce } from "../hooks/useDebounce";
 
 export interface ItemOption {
   name: string;
+  item_code?: string;
   item_name?: string;
   description?: string;
   stock_uom?: string;
-  standard_rate?: number;
+  item_group?: string;
+  disabled?: 0 | 1;
 }
 
 interface Props {
@@ -56,15 +58,18 @@ export default function ItemPicker({
         params: {
           filters: debounced
             ? JSON.stringify([
+                ["disabled", "=", 0],
                 ["item_name", "like", `%${debounced}%`],
               ])
-            : undefined,
+            : JSON.stringify([["disabled", "=", 0]]),
           fields: JSON.stringify([
             "name",
+            "item_code",
             "item_name",
             "description",
             "stock_uom",
-            "standard_rate",
+            "item_group",
+            "disabled",
           ]),
           limit_page_length: 20,
           order_by: "modified desc",

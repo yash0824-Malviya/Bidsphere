@@ -25,7 +25,12 @@ function SavingsOpportunitiesPanel({ items, loading }: Props) {
       </div>
 
       <ul className="dashboard-panel-body divide-y divide-neutral-100">
-        {items.map((item) => (
+        {items.length === 0 ? (
+          <li className="py-8 text-center text-sm text-neutral-500">
+            No savings opportunities identified yet.
+          </li>
+        ) : (
+          items.map((item) => (
           <li
             key={item.id}
             className="flex items-center justify-between gap-3 py-3"
@@ -54,7 +59,8 @@ function SavingsOpportunitiesPanel({ items, loading }: Props) {
               {item.trend}%
             </span>
           </li>
-        ))}
+          ))
+        )}
       </ul>
     </div>
   );

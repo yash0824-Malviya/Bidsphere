@@ -128,7 +128,7 @@ export async function getFinanceDashboardMetrics(): Promise<FinanceWorkflowKpis>
     ]);
 
   const financeReviews =
-    reviewsResult.status === "fulfilled" ? reviewsResult.value : [];
+    reviewsResult.status === "fulfilled" ? reviewsResult.value.items : [];
   if (reviewsResult.status === "rejected") {
     logQueryError("finance reviews", reviewsResult.reason);
   }
@@ -149,13 +149,13 @@ export async function getFinanceDashboardMetrics(): Promise<FinanceWorkflowKpis>
     logQueryError("open purchase orders", posResult.reason);
   }
 
-  const grnsFiltered = excludeVoucheredGRNs(grns);
+  const grnsFiltered = await excludeVoucheredGRNs(grns);
   const unbilledGrnValue = grnsFiltered.reduce(
     (s, g) => s + monetaryAmount(g.grand_total),
     0
   );
   const openPoValue = sumOutstandingPoValue(openPos);
-  const voucherPayables = getVoucherOutstandingPayables();
+  const voucherPayables = await getVoucherOutstandingPayables();
   const payables = mergePayables(erpPayables, voucherPayables);
 
   return computeFinanceDashboardKpis({
@@ -187,7 +187,7 @@ export async function getErpNextOutstandingPayables(): Promise<PayableInvoiceLit
 /** @deprecated Alias — use getErpNextOutstandingPayables. */
 export async function getOutstandingPayables(): Promise<PayableInvoiceLite[]> {
   const erp = await getErpNextOutstandingPayables();
-  return mergePayables(erp, getVoucherOutstandingPayables());
+  return mergePayables(erp, await getVoucherOutstandingPayables());
 }
 
 /** Submitted POs with remaining unbilled commitment. */
@@ -406,22 +406,24 @@ export function sumOutstandingPoValue(pos: OpenPurchaseOrderLite[]): number {
   }, 0);
 }
 
-function getVoucherOutstandingPayables(): PayableInvoiceLite[] {
-  return getAllInvoices()
-    .filter((inv) => inv.status === "submitted" || inv.status === "approved")
-    .map((inv) => ({
-      name: inv.invoice_number,
-      supplier: inv.supplier,
-      supplier_name: inv.supplier_name,
-      status: inv.status,
-      docstatus: 1,
-      due_date: inv.due_date,
-      outstanding_amount: inv.amount,
-      grand_total: inv.amount,
-      currency: inv.currency || "USD",
-      source: "voucher" as const,
-    }))
-    .filter((inv) => invoiceOutstandingAmount(inv) > 0);
+function getVoucherOutstandingPayables(): Promise<PayableInvoiceLite[]> {
+  return getAllInvoices().then((invoices) =>
+    invoices
+      .filter((inv) => inv.status === "submitted" || inv.status === "approved")
+      .map((inv) => ({
+        name: inv.invoice_number,
+        supplier: inv.supplier,
+        supplier_name: inv.supplier_name,
+        status: inv.status,
+        docstatus: 1,
+        due_date: inv.due_date,
+        outstanding_amount: inv.amount,
+        grand_total: inv.amount,
+        currency: inv.currency || "USD",
+        source: "voucher" as const,
+      }))
+      .filter((inv) => invoiceOutstandingAmount(inv) > 0)
+  );
 }
 
 function mergePayables(
