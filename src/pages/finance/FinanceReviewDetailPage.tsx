@@ -20,6 +20,7 @@ import {
   Loader2,
   MessageSquare,
   PieChart,
+  Plus,
   Scale,
   ShieldCheck,
   TrendingUp,
@@ -140,14 +141,25 @@ function readSavedAnalysis(rfqName: string): AIRecommendation | null {
   }
 }
 
-const CHECKLIST_ITEMS = [
-  { id: "budget", label: "Budget Availability", description: "Verify sufficient budget allocation in the relevant cost center" },
-  { id: "forecast", label: "Spend Forecast Impact", description: "Assess impact on quarterly and annual spend forecasts" },
-  { id: "compliance", label: "Financial Compliance", description: "Confirm transaction meets financial policies and controls" },
-  { id: "approval_limits", label: "Approval Limits", description: "Verify the amount is within delegated authority limits" },
-  { id: "cost_allocation", label: "Cost Allocation", description: "Confirm correct GL accounts and cost center mapping" },
-  { id: "payment_terms", label: "Payment Terms Review", description: "Validate payment terms align with cash flow requirements" },
+interface ChecklistItem {
+  id: string;
+  label: string;
+  description: string;
+  /** Auto items are verified from live ERPNext data; manual items are the
+   *  reviewer's judgement call. */
+  auto: boolean;
+}
+
+const CHECKLIST_ITEMS: ChecklistItem[] = [
+  { id: "budget_availability", label: "Budget Availability", description: "An active ERPNext Budget governs this cost center and has funds remaining", auto: true },
+  { id: "cost_center", label: "Cost Center", description: "Cost center is resolved and mapped to a GL budget account", auto: true },
+  { id: "budget_limit", label: "Budget Limit", description: "This RFQ value stays within the allocated budget limit", auto: true },
+  { id: "approval_authority", label: "Approval Authority", description: "Reviewer holds finance approval authority for this decision", auto: true },
+  { id: "financial_compliance", label: "Financial Compliance", description: "Transaction meets financial policies, controls and payment terms", auto: false },
+  { id: "final_approval", label: "Final Approval", description: "Confirm the final budget approval decision", auto: false },
 ];
+
+const FINANCE_APPROVER_ROLES = ["finance", "finance_executive", "admin"];
 
 /* -------------------------------------------------------------------------- */
 /*  Main component                                                             */
@@ -238,15 +250,44 @@ export default function FinanceReviewDetailPage() {
   const rfqValueForBudget =
     selectedQuote?.grand_total ?? approvalState?.selected_supplier_total ?? 0;
 
+  // Always load the budget picture from ERPNext once the RFQ is available —
+  // even before a supplier is selected — so Department, Cost Center, Budget and
+  // Fiscal Year are shown live (never as placeholder dashes).
   const budgetCheckQuery = useQuery({
     queryKey: ["rfq-budget-check-by-cost-center", decodedId, rfqValueForBudget],
     queryFn: () => getRfqBudgetCheckByCostCenter(rfq!, rfqValueForBudget),
-    enabled: !!rfq && rfqValueForBudget > 0,
+    enabled: !!rfq,
   });
 
   /* ── Checklist ── */
+  // Manual items only live in local state; auto items are derived from ERPNext.
   const [checklist, setChecklist] = useState<Record<string, boolean>>({});
-  const checklistComplete = CHECKLIST_ITEMS.every((c) => checklist[c.id]);
+
+  const budgetCheckData = budgetCheckQuery.data;
+  const autoChecks = useMemo<Record<string, boolean>>(() => {
+    const b = budgetCheckData;
+    const found = !!b?.found;
+    return {
+      budget_availability: found && (b?.availableBudget ?? 0) > 0,
+      cost_center: !!b?.costCenter && !!b?.budgetAccount,
+      budget_limit: found && !!b?.withinBudget,
+      approval_authority: FINANCE_APPROVER_ROLES.includes(user?.role ?? ""),
+    };
+  }, [budgetCheckData, user?.role]);
+
+  const isChecklistItemDone = useCallback(
+    (item: ChecklistItem) => (item.auto ? !!autoChecks[item.id] : !!checklist[item.id]),
+    [autoChecks, checklist]
+  );
+
+  const autoComplete = CHECKLIST_ITEMS.filter((c) => c.auto).every(
+    (c) => autoChecks[c.id]
+  );
+  const manualComplete = CHECKLIST_ITEMS.filter((c) => !c.auto).every(
+    (c) => checklist[c.id]
+  );
+  const checklistComplete = autoComplete && manualComplete;
+  const checklistDoneCount = CHECKLIST_ITEMS.filter(isChecklistItemDone).length;
 
   /* ── Notes ── */
   const [reviewNotes, setReviewNotes] = useState("");
@@ -286,10 +327,11 @@ export default function FinanceReviewDetailPage() {
   const canSubmit = (action: string) => {
     if (submitted) return false;
     if (!legalApprovedForFinance) return false;
-    if (!checklistComplete) return false;
     if (!actionReason.trim()) return false;
-    if (action === "reject" && actionReason.trim().length < 10) return false;
-    return true;
+    // A rejection is always allowed (e.g. over-budget) as long as a reason is
+    // given; approval requires every checklist item — auto + manual — to pass.
+    if (action === "reject") return actionReason.trim().length >= 10;
+    return checklistComplete;
   };
 
   const handleAction = useCallback(
@@ -652,20 +694,12 @@ export default function FinanceReviewDetailPage() {
           ) : budgetCheckQuery.data?.found ? (
             <BudgetAnalysisCards check={budgetCheckQuery.data} />
           ) : (
-            <div className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                <InfoField label="Department" value={budgetCheckQuery.data?.department ?? "—"} />
-                <InfoField label="Cost Center" value={budgetCheckQuery.data?.costCenter ?? "—"} />
-                <BudgetCard icon={DollarSign} label="RFQ Value" value={formatCurrency(rfqValue)} tone="neutral" />
-              </div>
-              <div className="flex items-start gap-3 rounded-lg border border-warning-200 bg-warning-50 px-4 py-3.5 text-sm text-warning-800">
-                <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
-                <span className="font-medium">
-                  {budgetCheckQuery.data?.noBudgetMessage ??
-                    "No active ERPNext Budget found for this Cost Center."}
-                </span>
-              </div>
-            </div>
+            <NoActiveBudget
+              check={budgetCheckQuery.data}
+              rfqValue={rfqValue}
+              onCreateBudget={() => navigate(buildBudgetCreatePath(budgetCheckQuery.data))}
+              onAssignBudget={() => navigate("/budget/plans")}
+            />
           )}
         </CollapsibleSection>
 
@@ -684,47 +718,105 @@ export default function FinanceReviewDetailPage() {
                   : "bg-warning-100 text-warning-700"
               }`}
             >
-              {Object.values(checklist).filter(Boolean).length}/{CHECKLIST_ITEMS.length}
+              {checklistDoneCount}/{CHECKLIST_ITEMS.length}
             </span>
           }
         >
+          <div className="mb-3 flex items-center gap-2 rounded-lg bg-neutral-50 px-3 py-2 text-[11px] font-medium text-neutral-500">
+            <Info className="h-3.5 w-3.5 flex-shrink-0" />
+            Budget Availability, Cost Center, Budget Limit and Approval Authority
+            are verified automatically from ERPNext. Only Financial Compliance and
+            Final Approval are manual.
+          </div>
           <div className="space-y-2">
-            {CHECKLIST_ITEMS.map((item) => (
-              <label
-                key={item.id}
-                className={`flex cursor-pointer items-start gap-3 rounded-lg border px-4 py-3 transition ${
-                  checklist[item.id]
-                    ? "border-success-200 bg-success-50/50"
-                    : "border-neutral-200 bg-white hover:border-neutral-300"
-                } ${submitted ? "pointer-events-none opacity-70" : ""}`}
-              >
-                <div className="pt-0.5">
-                  <input
-                    type="checkbox"
-                    checked={!!checklist[item.id]}
-                    onChange={(e) =>
-                      setChecklist((prev) => ({ ...prev, [item.id]: e.target.checked }))
-                    }
-                    disabled={submitted}
-                    className="h-4 w-4 rounded border-neutral-300 text-success-600 focus:ring-success-500"
-                  />
-                </div>
-                <div>
-                  <p className={`text-sm font-semibold ${checklist[item.id] ? "text-success-800" : "text-neutral-900"}`}>
-                    {item.label}
-                  </p>
-                  <p className="mt-0.5 text-xs text-neutral-500">{item.description}</p>
-                </div>
-                {checklist[item.id] && (
-                  <Check className="ml-auto mt-0.5 h-4 w-4 flex-shrink-0 text-success-600" />
-                )}
-              </label>
-            ))}
+            {CHECKLIST_ITEMS.map((item) => {
+              const done = isChecklistItemDone(item);
+              if (item.auto) {
+                const pending = budgetCheckQuery.isLoading;
+                return (
+                  <div
+                    key={item.id}
+                    className={`flex items-start gap-3 rounded-lg border px-4 py-3 ${
+                      done
+                        ? "border-success-200 bg-success-50/50"
+                        : pending
+                          ? "border-neutral-200 bg-neutral-50"
+                          : "border-danger-200 bg-danger-50/40"
+                    }`}
+                  >
+                    <div className="pt-0.5">
+                      {pending ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-neutral-400" />
+                      ) : done ? (
+                        <CheckCircle2 className="h-4 w-4 text-success-600" />
+                      ) : (
+                        <XCircle className="h-4 w-4 text-danger-500" />
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p
+                          className={`text-sm font-semibold ${
+                            done ? "text-success-800" : "text-neutral-900"
+                          }`}
+                        >
+                          {item.label}
+                        </p>
+                        <span className="rounded-full bg-neutral-200/70 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-neutral-500">
+                          Auto
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-xs text-neutral-500">{item.description}</p>
+                    </div>
+                    <span
+                      className={`ml-auto mt-0.5 flex-shrink-0 text-[11px] font-bold ${
+                        done ? "text-success-600" : pending ? "text-neutral-400" : "text-danger-600"
+                      }`}
+                    >
+                      {pending ? "Checking…" : done ? "Verified" : "Attention"}
+                    </span>
+                  </div>
+                );
+              }
+              return (
+                <label
+                  key={item.id}
+                  className={`flex cursor-pointer items-start gap-3 rounded-lg border px-4 py-3 transition ${
+                    checklist[item.id]
+                      ? "border-success-200 bg-success-50/50"
+                      : "border-neutral-200 bg-white hover:border-neutral-300"
+                  } ${submitted ? "pointer-events-none opacity-70" : ""}`}
+                >
+                  <div className="pt-0.5">
+                    <input
+                      type="checkbox"
+                      checked={!!checklist[item.id]}
+                      onChange={(e) =>
+                        setChecklist((prev) => ({ ...prev, [item.id]: e.target.checked }))
+                      }
+                      disabled={submitted}
+                      className="h-4 w-4 rounded border-neutral-300 text-success-600 focus:ring-success-500"
+                    />
+                  </div>
+                  <div>
+                    <p className={`text-sm font-semibold ${checklist[item.id] ? "text-success-800" : "text-neutral-900"}`}>
+                      {item.label}
+                    </p>
+                    <p className="mt-0.5 text-xs text-neutral-500">{item.description}</p>
+                  </div>
+                  {checklist[item.id] && (
+                    <Check className="ml-auto mt-0.5 h-4 w-4 flex-shrink-0 text-success-600" />
+                  )}
+                </label>
+              );
+            })}
           </div>
           {!checklistComplete && !submitted && (
             <div className="mt-3 flex items-center gap-2 rounded-lg bg-warning-50 px-3 py-2 text-xs font-medium text-warning-700">
               <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
-              Complete all checklist items before submitting your review.
+              {autoComplete
+                ? "Complete the manual checklist items (Financial Compliance, Final Approval) before approving."
+                : "Automatic budget verification must pass before this RFQ can be approved. You can still reject with a reason."}
             </div>
           )}
         </CollapsibleSection>
@@ -1000,16 +1092,17 @@ function BudgetAnalysisCards({ check }: { check: RfqCostCenterBudgetCheck }) {
 
   return (
     <>
-      <div className="mb-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <InfoField label="Department" value={check.department ?? "—"} />
-        <InfoField label="Cost Center" value={check.costCenter ?? "—"} />
-        <InfoField label="Budget Account" value={check.budgetAccount ?? "—"} />
+      <div className="mb-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <InfoField label="Department" value={check.department || "Not specified"} />
+        <InfoField label="Cost Center" value={check.costCenter || "Not specified"} />
+        <InfoField label="Fiscal Year" value={check.fiscalYear || "Not specified"} />
+        <InfoField label="Budget Account" value={check.budgetAccount || "Not specified"} />
       </div>
 
       <div className="mb-4 grid gap-3 sm:grid-cols-3">
-        <BudgetCard icon={DollarSign} label="Allocated Budget" value={formatCurrency(check.allocatedBudget ?? 0)} tone="neutral" subtitle={check.budgetName} />
+        <BudgetCard icon={DollarSign} label="Budget Amount" value={formatCurrency(check.allocatedBudget ?? 0)} tone="neutral" subtitle={check.budgetName} />
         <BudgetCard icon={TrendingUp} label="Actual Spend" value={formatCurrency(check.actualSpend ?? 0)} tone="warning" />
-        <BudgetCard icon={Wallet} label="Budget Available" value={formatCurrency(check.availableBudget ?? 0)} tone="success" subtitle="= Remaining Budget" />
+        <BudgetCard icon={Wallet} label="Available Budget" value={formatCurrency(check.availableBudget ?? 0)} tone="success" subtitle="= Budget − Actual Spend" />
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -1020,10 +1113,10 @@ function BudgetAnalysisCards({ check }: { check: RfqCostCenterBudgetCheck }) {
           label="Spend Forecast"
           value={`${check.spendForecastPct ?? 0}%`}
           tone={forecastStatus === "Green" ? "success" : "warning"}
-          subtitle="(Current Spend + RFQ) / Budget"
+          subtitle="(Actual + RFQ) / Budget"
         />
         <div className={`rounded-lg border p-4 ${statusTone[forecastStatus]}`}>
-          <p className="text-xs font-semibold uppercase tracking-wider opacity-80">Forecast Status</p>
+          <p className="text-xs font-semibold uppercase tracking-wider opacity-80">Budget Status</p>
           <p className="mt-1 text-lg font-bold">{statusLabel[forecastStatus]}</p>
         </div>
       </div>
@@ -1031,14 +1124,82 @@ function BudgetAnalysisCards({ check }: { check: RfqCostCenterBudgetCheck }) {
       <div className="mt-4">
         <BudgetCard
           icon={Wallet}
-          label="Forecast Impact"
+          label="Remaining Budget after RFQ Approval"
           value={formatCurrency(check.forecastImpact ?? 0)}
           tone={(check.forecastImpact ?? 0) >= 0 ? "success" : "warning"}
-          subtitle="Remaining budget after this RFQ is committed"
+          subtitle={
+            (check.forecastImpact ?? 0) >= 0
+              ? "Funds left once this RFQ is committed"
+              : "This RFQ would exceed the available budget"
+          }
         />
       </div>
     </>
   );
+}
+
+/** ERPNext-driven "no budget" state — never bare dashes, always the real reason. */
+function NoActiveBudget({
+  check,
+  rfqValue,
+  onCreateBudget,
+  onAssignBudget,
+}: {
+  check?: RfqCostCenterBudgetCheck;
+  rfqValue: number;
+  onCreateBudget: () => void;
+  onAssignBudget: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 rounded-lg border border-warning-200 bg-warning-50 px-4 py-3 text-sm font-bold text-warning-800">
+        <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+        No Active Budget Found
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <InfoField label="Department" value={check?.department || "Not assigned"} />
+        <InfoField label="Cost Center" value={check?.costCenter || "Not assigned"} />
+        <InfoField label="Fiscal Year" value={check?.fiscalYear || "Not assigned"} />
+        <BudgetCard icon={DollarSign} label="RFQ Value" value={formatCurrency(rfqValue)} tone="neutral" />
+      </div>
+
+      <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-400">Reason</p>
+        <p className="mt-1 text-sm text-neutral-700">
+          {check?.noBudgetMessage ??
+            "No Approved or Active ERPNext Budget governs this cost center."}
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-3 sm:flex-row">
+        <button
+          type="button"
+          onClick={onCreateBudget}
+          className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-primary/90"
+        >
+          <Plus className="h-4 w-4" /> Create Budget
+        </button>
+        <button
+          type="button"
+          onClick={onAssignBudget}
+          className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-primary/30 bg-white px-5 py-3 text-sm font-bold text-primary shadow-sm transition hover:bg-primary/5"
+        >
+          <Building2 className="h-4 w-4" /> Assign Budget
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Prefill the Budget create page with the resolved cost center / fiscal year. */
+function buildBudgetCreatePath(check?: RfqCostCenterBudgetCheck): string {
+  const params = new URLSearchParams();
+  if (check?.costCenter) params.set("costCenter", check.costCenter);
+  if (check?.department) params.set("department", check.department);
+  if (check?.fiscalYear) params.set("fiscalYear", check.fiscalYear);
+  const qs = params.toString();
+  return qs ? `/budget/create?${qs}` : "/budget/create";
 }
 
 function FinanceStatusBadge({ status }: { status: FinanceReviewStatus }) {

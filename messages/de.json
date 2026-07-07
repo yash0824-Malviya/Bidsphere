@@ -439,6 +439,148 @@
     "decision": "Entscheidung",
     "decidedOn": "Entschieden am"
   },
+  "adminDashboard": {
+    "title": "Verwaltungszentrum",
+    "subtitle": "Governance · Überwachung · Führungssicht",
+    "sections": {
+      "executiveOverview": "Management-Übersicht",
+      "procurementPipeline": "Beschaffungsprozess",
+      "approvalCenter": "Genehmigungszentrum",
+      "spendAnalytics": "Ausgabenanalyse",
+      "auctionMonitor": "Monitor für Reverse-Auktionen",
+      "slaMonitor": "SLA-Monitor",
+      "supplierAnalytics": "Lieferantenanalyse",
+      "inventorySnapshot": "Bestandsübersicht",
+      "aiInsights": "KI-Erkenntnisse",
+      "notifications": "Benachrichtigungen",
+      "recentActivity": "Letzte Aktivität",
+      "systemHealth": "Systemzustand"
+    },
+    "kpi": {
+      "totalUsers": "Benutzer Gesamt",
+      "activeSuppliers": "Aktive Lieferanten",
+      "openRfqs": "Offene Angebotsanfragen",
+      "liveAuctions": "Live Reverse-Auktionen",
+      "pendingApprovals": "Ausstehende Genehmigungen",
+      "openPos": "Offene Bestellungen",
+      "warehouseRequests": "Lageranfragen",
+      "monthlySpend": "Gesamtausgaben (Dieser Monat)",
+      "budgetUtilization": "Budgetauslastung",
+      "slaBreaches": "SLA-Verstöße"
+    },
+    "quickActions": {
+      "title": "Schnellaktionen",
+      "createRfq": "Angebotsanfrage erstellen",
+      "createSupplier": "Lieferant erstellen",
+      "createUser": "Benutzer erstellen",
+      "startAuction": "Reverse-Auktion starten",
+      "viewReports": "Berichte anzeigen",
+      "manageWorkflow": "Workflow verwalten",
+      "manageSla": "SLA verwalten"
+    },
+    "pipeline": {
+      "materialRequest": "Materialanforderung",
+      "warehouseReview": "Lagerprüfung",
+      "procurementReview": "Beschaffungsprüfung",
+      "rfqCreated": "Anfrage Erstellt",
+      "supplierQuotations": "Lieferantenangebote",
+      "legalReview": "Rechtsprüfung",
+      "financeReview": "Finanzprüfung",
+      "purchaseOrder": "Bestellung",
+      "grn": "Wareneingang",
+      "invoice": "Rechnung",
+      "payment": "Zahlung"
+    },
+    "approval": {
+      "pendingApprovals": "Ausstehende Genehmigungen",
+      "budgetApproval": "Budgetgenehmigung",
+      "legalReview": "Rechtsprüfung",
+      "financeReview": "Finanzprüfung",
+      "poApproval": "Bestellgenehmigung",
+      "warehouseReview": "Lagerprüfung",
+      "highPriority": "{{count}} hohe Priorität",
+      "pending": "ausstehend",
+      "viewAll": "Alle anzeigen"
+    },
+    "sla": {
+      "running": "Laufend",
+      "warning": "Warnung",
+      "breached": "Verletzt",
+      "completed": "Abgeschlossen",
+      "compliance": "SLA-Einhaltung",
+      "upcomingBreaches": "Bevorstehende Verstöße",
+      "noUpcoming": "Keine SLAs kurz vor einem Verstoß."
+    },
+    "supplier": {
+      "topSupplier": "Top-Lieferant",
+      "highestRated": "Bestbewertet",
+      "lowestRated": "Am schlechtesten bewertet",
+      "activeSuppliers": "Aktive Lieferanten",
+      "blocked": "Gesperrte Lieferanten",
+      "avgDelivery": "Durchschn. Lieferverzug",
+      "onTime": "Pünktliche Lieferung",
+      "performanceScore": "Leistungsbewertung",
+      "days": "{{count}} Tage"
+    },
+    "inventory": {
+      "lowStock": "Niedriger Bestand",
+      "outOfStock": "Nicht Vorrätig",
+      "readyToIssue": "Bereit zur Ausgabe",
+      "procurementRequired": "Beschaffung Erforderlich",
+      "grnPending": "Wareneingang Ausstehend",
+      "awaitingInspection": "Warten auf Prüfung"
+    },
+    "health": {
+      "backend": "Backend-Status",
+      "erpnext": "ERPNext-Verbindung",
+      "database": "Datenbank",
+      "api": "API",
+      "email": "E-Mail-Dienst",
+      "notifications": "Benachrichtigungsdienst",
+      "healthy": "Gesund",
+      "warning": "Warnung",
+      "offline": "Offline",
+      "notMonitored": "Nicht Überwacht"
+    },
+    "ai": {
+      "allClear": "Alle Systeme normal — derzeit keine kritischen Erkenntnisse.",
+      "budgetHigh": "Die Budgetauslastung hat {{pct}} % erreicht.",
+      "slaBreached": "{{count}} SLA-Timer wurden bereits verletzt.",
+      "slaDueSoon": "{{count}} SLA-Timer stehen kurz vor einem Verstoß.",
+      "rfqAttention": "{{count}} Genehmigung(en) erfordern sofortige Aufmerksamkeit.",
+      "auctionsLive": "{{count}} Reverse-Auktion(en) sind jetzt live.",
+      "lowStock": "{{count}} Artikel mit niedrigem oder keinem Bestand."
+    },
+    "auction": {
+      "id": "Auktion",
+      "lowestBid": "Niedrigstes Gebot",
+      "timeRemaining": "Verbleibende Zeit",
+      "suppliers": "Lieferanten",
+      "round": "Runde",
+      "status": "Status",
+      "winner": "Gewinner",
+      "open": "Öffnen",
+      "none": "Keine laufenden oder geplanten Auktionen.",
+      "ended": "Beendet"
+    },
+    "common": {
+      "viewAll": "Alle anzeigen",
+      "viewFullAuditTrail": "Vollständiges Audit-Protokoll anzeigen",
+      "viewReports": "Vollständige Berichte anzeigen",
+      "noData": "Noch keine Daten verfügbar.",
+      "noActivity": "Keine aktuelle Aktivität protokolliert.",
+      "noNotifications": "Sie sind auf dem neuesten Stand."
+    },
+    "charts": {
+      "departmentSpend": "Ausgaben nach Abteilung",
+      "budgetVsActual": "Budget vs. Ist",
+      "budget": "Budget",
+      "actual": "Ist",
+      "allocated": "Zugewiesen",
+      "consumed": "Verbraucht",
+      "savings": "Auktions-Einsparungen"
+    }
+  },
   "reports": {
     "totalDirect": "Gesamt direkte Beschaffung",
     "totalIndirect": "Gesamt indirekte Beschaffung",
@@ -483,7 +625,14 @@
     "signedInSuccess": "Erfolgreich angemeldet.",
     "signInFailed": "Anmeldung fehlgeschlagen. Bitte erneut versuchen.",
     "microsoftSoon": "Die Microsoft-Anmeldung wird in der Produktion verfÃ¼gbar sein.",
-    "googleSoon": "Die Google Workspace-Anmeldung ist bald verfÃ¼gbar."
+    "googleSoon": "Die Google Workspace-Anmeldung ist bald verfügbar.",
+    "forgotPassword": "Passwort vergessen?",
+    "tagline": "KI-gestützte Beschaffungsplattform",
+    "headline": "Beschaffungsintelligenz",
+    "headlineAccent": "für Lieferketten von Unternehmen",
+    "description": "Verwalten Sie Sourcing, Lieferanten, Ausschreibungen, Bestellungen und Logistik über eine einheitliche, intelligente Plattform.",
+    "supplyChain": "Lieferketten-Intelligenz",
+    "secureNotice": "Sicherheit auf Unternehmensniveau · SSO-bereit"
   },
   "rfq": {
     "documentDetails": "Dokumentdetails",

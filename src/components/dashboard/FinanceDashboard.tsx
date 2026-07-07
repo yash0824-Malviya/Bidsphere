@@ -12,6 +12,7 @@ import {
 import ActionCenter from "./ActionCenter";
 import DashboardHeader from "./DashboardHeader";
 import FinanceKpiRow from "./FinanceKpiRow";
+import SlaCountdownWidget from "../sla/SlaCountdownWidget";
 import FinanceReviewHistoryTable from "../finance/FinanceReviewHistoryTable";
 import InvoicesAwaitingCreationTable from "../finance/InvoicesAwaitingCreationTable";
 
@@ -47,6 +48,8 @@ export default function FinanceDashboard({ greetingName }: Props) {
         kpis={metricsQuery.data ?? null}
         loading={metricsQuery.isLoading}
       />
+
+      <SlaCountdownWidget role="finance" title="Finance SLA Countdown" />
 
       <FinanceReviewHistoryTable />
 

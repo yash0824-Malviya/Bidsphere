@@ -19,6 +19,7 @@ import { getLegalDocsByStatus } from "../../api/legalDocs";
 import type { LegalDocumentSet } from "../../api/legalDocs";
 import { formatCurrency, formatDate } from "../../utils/format";
 import DashboardHeader from "./DashboardHeader";
+import SlaCountdownWidget from "../sla/SlaCountdownWidget";
 
 interface Props {
   greetingName: string;
@@ -131,6 +132,8 @@ export default function LegalDashboard({ greetingName }: Props) {
           tone="primary"
         />
       </div>
+
+      <SlaCountdownWidget role="legal" title="Legal SLA Countdown" />
 
       {/* ── Quick Actions ── */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

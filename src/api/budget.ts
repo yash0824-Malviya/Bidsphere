@@ -50,6 +50,7 @@ import {
 import { fetchSubmittedPurchaseOrders } from "./budgetConsumption";
 import { fetchAllFinanceReviewRecords } from "./financeReviews";
 import { getMaterialRequest } from "./purchasing";
+import { apiGet, buildListConfig, buildResourceUrl, withSilent } from "./erpnext";
 import type { AppRole } from "../config/roles";
 import type { RFQ } from "../types/erpnext";
 
@@ -881,6 +882,75 @@ export async function findActiveBudgetForCostCenter(
   return { ...util, budgetName: chosen.name, budgetAccount: chosen.account, status: chosen.status };
 }
 
+/** Leading segment of a Cost Center name → department (e.g. "Marketing - NL" → "Marketing"). */
+function departmentFromCostCenter(costCenter?: string | null): string {
+  const src = (costCenter || "").trim();
+  if (!src) return "";
+  return src.split(" - ")[0].trim();
+}
+
+/**
+ * Fallback budget resolver by Department. Material Requests in this app carry a
+ * Department (`custom_department`) but frequently no explicit Cost Center, so we
+ * match an Approved/Active ERPNext Budget whose governing Cost Center belongs to
+ * that department (leading name segment, or contains the department name).
+ */
+export async function findActiveBudgetForDepartment(
+  department: string,
+  company?: string
+): Promise<(BudgetUtilization & { budgetName: string; budgetAccount?: string; status: BudgetWorkflowStatus }) | null> {
+  const dept = (department || "").trim().toLowerCase();
+  if (!dept) return null;
+  const all = await fetchBudgets({ limit: 500 });
+  const candidates = all.filter(
+    (b) =>
+      !!b.cost_center &&
+      isBudgetAvailableForProcurement(b.status) &&
+      (!company || b.company === company) &&
+      (departmentFromCostCenter(b.cost_center).toLowerCase() === dept ||
+        b.cost_center!.toLowerCase().includes(dept))
+  );
+  if (candidates.length === 0) return null;
+
+  candidates.sort((a, b) => {
+    if (a.status !== b.status) return a.status === "Active" ? -1 : 1;
+    return b.modified.localeCompare(a.modified);
+  });
+
+  const chosen = candidates[0];
+  const util = await getBudgetUtilization(chosen.name);
+  return { ...util, budgetName: chosen.name, budgetAccount: chosen.account, status: chosen.status };
+}
+
+/** The ERPNext Fiscal Year covering today (fallback: most recent enabled year). */
+export async function getCurrentFiscalYear(): Promise<string | undefined> {
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    const rows = await apiGet<Array<{ name: string }>>(
+      buildResourceUrl("Fiscal Year"),
+      withSilent(
+        buildListConfig({
+          fields: ["name"],
+          filters: [
+            ["year_start_date", "<=", today],
+            ["year_end_date", ">=", today],
+          ],
+          limit_page_length: 1,
+        })
+      )
+    );
+    if (rows?.[0]?.name) return rows[0].name;
+  } catch {
+    /* fall through to the list-based fallback */
+  }
+  try {
+    const all = await fetchFiscalYears();
+    return all[0];
+  } catch {
+    return undefined;
+  }
+}
+
 export type BudgetForecastStatus = "Green" | "Yellow" | "Red";
 
 export interface RfqCostCenterBudgetCheck {
@@ -929,29 +999,49 @@ export async function getRfqBudgetCheckByCostCenter(
   rfqAmount: number
 ): Promise<RfqCostCenterBudgetCheck> {
   const info = await resolveRfqCostCenter(rfq);
+  const company = info.company;
 
-  if (!info.costCenter) {
-    return {
-      found: false,
-      department: info.department,
-      company: info.company,
-      rfqValue: rfqAmount,
-      noBudgetMessage: "No active ERPNext Budget found for this Cost Center.",
-    };
+  // 1) Prefer a Budget governing the RFQ's explicit Cost Center.
+  let match = info.costCenter
+    ? await findActiveBudgetForCostCenter(info.costCenter, company)
+    : null;
+  let costCenter = info.costCenter;
+
+  // 2) Fall back to a department-scoped Budget when the MR chain carries a
+  //    Department but no Cost Center (the common case in this workflow).
+  if (!match && info.department) {
+    const byDept = await findActiveBudgetForDepartment(info.department, company);
+    if (byDept) {
+      match = byDept;
+      costCenter = byDept.costCenter ?? costCenter;
+    }
   }
 
-  const match = await findActiveBudgetForCostCenter(info.costCenter, info.company);
   if (!match) {
+    const fiscalYear = await getCurrentFiscalYear();
+    let reason: string;
+    if (!costCenter && !info.department) {
+      reason =
+        "This RFQ's Material Requests have no Department or Cost Center assigned in ERPNext.";
+    } else if (!costCenter) {
+      reason = `No Cost Center is mapped to the "${info.department}" department, and no Approved/Active Budget matches it.`;
+    } else {
+      reason = `No Approved or Active ERPNext Budget governs Cost Center "${costCenter}"${
+        fiscalYear ? ` for ${fiscalYear}` : ""
+      }.`;
+    }
     return {
       found: false,
-      costCenter: info.costCenter,
+      costCenter,
       department: info.department,
-      company: info.company,
+      company,
+      fiscalYear,
       rfqValue: rfqAmount,
-      noBudgetMessage: "No active ERPNext Budget found for this Cost Center.",
+      noBudgetMessage: reason,
     };
   }
 
+  const resolvedCostCenter = costCenter ?? match.costCenter;
   const allocatedBudget = match.budgetAmount;
   const actualSpend = match.actualExpense;
   const remainingBudget = match.remainingBudget;
@@ -964,9 +1054,9 @@ export async function getRfqBudgetCheckByCostCenter(
 
   return {
     found: true,
-    costCenter: info.costCenter,
-    department: info.department,
-    company: info.company,
+    costCenter: resolvedCostCenter,
+    department: info.department || departmentFromCostCenter(resolvedCostCenter) || undefined,
+    company,
     budgetName: match.budgetName,
     budgetAccount: match.budgetAccount,
     fiscalYear: match.fiscalYear,

@@ -439,6 +439,148 @@
     "decision": "Décision",
     "decidedOn": "Décidé le"
   },
+  "adminDashboard": {
+    "title": "Centre d'Administration",
+    "subtitle": "Gouvernance · Surveillance · Visibilité Exécutive",
+    "sections": {
+      "executiveOverview": "Vue d'Ensemble Exécutive",
+      "procurementPipeline": "Flux d'Approvisionnement",
+      "approvalCenter": "Centre d'Approbation",
+      "spendAnalytics": "Analyse des Dépenses",
+      "auctionMonitor": "Moniteur d'Enchères Inversées",
+      "slaMonitor": "Moniteur SLA",
+      "supplierAnalytics": "Analyse des Fournisseurs",
+      "inventorySnapshot": "Aperçu de l'Inventaire",
+      "aiInsights": "Analyses IA",
+      "notifications": "Notifications",
+      "recentActivity": "Activité Récente",
+      "systemHealth": "État du Système"
+    },
+    "kpi": {
+      "totalUsers": "Utilisateurs Totaux",
+      "activeSuppliers": "Fournisseurs Actifs",
+      "openRfqs": "Appels d'Offres Ouverts",
+      "liveAuctions": "Enchères Inversées en Direct",
+      "pendingApprovals": "Approbations en Attente",
+      "openPos": "Bons de Commande Ouverts",
+      "warehouseRequests": "Demandes d'Entrepôt",
+      "monthlySpend": "Dépenses Totales (Ce Mois)",
+      "budgetUtilization": "Utilisation du Budget",
+      "slaBreaches": "Violations de SLA"
+    },
+    "quickActions": {
+      "title": "Actions Rapides",
+      "createRfq": "Créer un Appel d'Offres",
+      "createSupplier": "Créer un Fournisseur",
+      "createUser": "Créer un Utilisateur",
+      "startAuction": "Lancer une Enchère Inversée",
+      "viewReports": "Voir les Rapports",
+      "manageWorkflow": "Gérer le Flux",
+      "manageSla": "Gérer les SLA"
+    },
+    "pipeline": {
+      "materialRequest": "Demande de Matériel",
+      "warehouseReview": "Revue d'Entrepôt",
+      "procurementReview": "Revue d'Approvisionnement",
+      "rfqCreated": "Appel d'Offres Créé",
+      "supplierQuotations": "Devis Fournisseurs",
+      "legalReview": "Revue Juridique",
+      "financeReview": "Revue Financière",
+      "purchaseOrder": "Bon de Commande",
+      "grn": "Réception",
+      "invoice": "Facture",
+      "payment": "Paiement"
+    },
+    "approval": {
+      "pendingApprovals": "Approbations en Attente",
+      "budgetApproval": "Approbation du Budget",
+      "legalReview": "Revue Juridique",
+      "financeReview": "Revue Financière",
+      "poApproval": "Approbation du Bon de Commande",
+      "warehouseReview": "Revue d'Entrepôt",
+      "highPriority": "{{count}} haute priorité",
+      "pending": "en attente",
+      "viewAll": "Voir Tout"
+    },
+    "sla": {
+      "running": "En Cours",
+      "warning": "Avertissement",
+      "breached": "Violés",
+      "completed": "Terminés",
+      "compliance": "Conformité SLA",
+      "upcomingBreaches": "Violations Imminentes",
+      "noUpcoming": "Aucun SLA proche de la violation."
+    },
+    "supplier": {
+      "topSupplier": "Meilleur Fournisseur",
+      "highestRated": "Mieux Noté",
+      "lowestRated": "Moins Bien Noté",
+      "activeSuppliers": "Fournisseurs Actifs",
+      "blocked": "Fournisseurs Bloqués",
+      "avgDelivery": "Retard Moyen de Livraison",
+      "onTime": "Livraison à Temps",
+      "performanceScore": "Score de Performance",
+      "days": "{{count}} jours"
+    },
+    "inventory": {
+      "lowStock": "Stock Faible",
+      "outOfStock": "Rupture de Stock",
+      "readyToIssue": "Prêt à Émettre",
+      "procurementRequired": "Approvisionnement Requis",
+      "grnPending": "Réception en Attente",
+      "awaitingInspection": "En Attente d'Inspection"
+    },
+    "health": {
+      "backend": "État du Backend",
+      "erpnext": "Connexion ERPNext",
+      "database": "Base de Données",
+      "api": "API",
+      "email": "Service de Messagerie",
+      "notifications": "Service de Notifications",
+      "healthy": "Sain",
+      "warning": "Avertissement",
+      "offline": "Hors Ligne",
+      "notMonitored": "Non Surveillé"
+    },
+    "ai": {
+      "allClear": "Tous les systèmes sont normaux — aucune analyse critique pour l'instant.",
+      "budgetHigh": "L'utilisation du budget a atteint {{pct}} %.",
+      "slaBreached": "{{count}} minuteur(s) SLA ont déjà été violés.",
+      "slaDueSoon": "{{count}} minuteur(s) SLA sont proches de la violation.",
+      "rfqAttention": "{{count}} approbation(s) nécessitent une attention immédiate.",
+      "auctionsLive": "{{count}} enchère(s) inversée(s) sont en direct maintenant.",
+      "lowStock": "{{count}} article(s) en stock faible ou en rupture."
+    },
+    "auction": {
+      "id": "Enchère",
+      "lowestBid": "Offre la Plus Basse",
+      "timeRemaining": "Temps Restant",
+      "suppliers": "Fournisseurs",
+      "round": "Tour",
+      "status": "Statut",
+      "winner": "Gagnant",
+      "open": "Ouvrir",
+      "none": "Aucune enchère en direct ou programmée.",
+      "ended": "Terminée"
+    },
+    "common": {
+      "viewAll": "Voir Tout",
+      "viewFullAuditTrail": "Voir la Piste d'Audit Complète",
+      "viewReports": "Voir les Rapports Complets",
+      "noData": "Aucune donnée disponible pour le moment.",
+      "noActivity": "Aucune activité récente enregistrée.",
+      "noNotifications": "Vous êtes à jour."
+    },
+    "charts": {
+      "departmentSpend": "Dépenses par Département",
+      "budgetVsActual": "Budget vs Réel",
+      "budget": "Budget",
+      "actual": "Réel",
+      "allocated": "Alloué",
+      "consumed": "Consommé",
+      "savings": "Économies d'Enchères"
+    }
+  },
   "reports": {
     "totalDirect": "Total approvisionnement direct",
     "totalIndirect": "Total approvisionnement indirect",
@@ -483,7 +625,14 @@
     "signedInSuccess": "Connexion réussie.",
     "signInFailed": "Nous n'avons pas pu vous connecter. Veuillez réessayer.",
     "microsoftSoon": "L'authentification Microsoft sera disponible en production.",
-    "googleSoon": "L'authentification Google Workspace arrive bientôt."
+    "googleSoon": "L'authentification Google Workspace arrive bientôt.",
+    "forgotPassword": "Mot de passe oublié ?",
+    "tagline": "Plateforme d'achats propulsée par l'IA",
+    "headline": "Intelligence des achats",
+    "headlineAccent": "pour les chaînes d'approvisionnement d'entreprise",
+    "description": "Gérez le sourcing, les fournisseurs, les appels d'offres, les commandes et la logistique depuis une plateforme unifiée et intelligente.",
+    "supplyChain": "Intelligence de la chaîne d'approvisionnement",
+    "secureNotice": "Sécurité de niveau entreprise · Prêt pour le SSO"
   },
   "rfq": {
     "documentDetails": "Détails du document",

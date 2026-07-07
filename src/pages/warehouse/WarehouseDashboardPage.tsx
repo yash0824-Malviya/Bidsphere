@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
@@ -24,10 +24,18 @@ import {
   type WarehouseMaterialRequest,
 } from "../../services/warehouseService";
 import { getIncomingPurchaseOrders, getPurchaseReceipts } from "../../api/purchasing";
-import { fetchProcurementQueue } from "../../api/materialRequestWorkflow";
+import {
+  fetchProcurementQueue,
+  getMaterialRequestProcurementType,
+  getMaterialRequestWorkflowStatus,
+} from "../../api/materialRequestWorkflow";
 import { computeRequestFulfillment } from "../../utils/materialRequestFulfillment";
+import type { MaterialRequestProcurementType } from "../../types/materialRequestWorkflow";
+import { syncMaterialRequestSlaBatch } from "../../api/slaIntegration";
+import SlaCountdownWidget from "../../components/sla/SlaCountdownWidget";
 import ErrorState from "../../components/ErrorState";
 import PageHeader from "../../components/PageHeader";
+import ProcurementTypeBadge from "../../components/ProcurementTypeBadge";
 import { useAuthStore } from "../../store/authStore";
 import { formatDate, formatDateTime } from "../../utils/format";
 
@@ -52,48 +60,47 @@ interface ReadyToIssueRow {
   department: string;
   requestedBy: string;
   totalItems: number;
+  requestedQty: number;
   availableQty: number;
   uom: string;
-  warehouse: string;
-  requestDate: string;
+  requiredDate: string;
+  priority: string;
+  procurementType: MaterialRequestProcurementType;
 }
 
 interface ProcurementRow {
   name: string;
+  procurementType: MaterialRequestProcurementType;
   department: string;
   itemCount: number;
+  /** Shortage (forward) qty — only meaningful for Direct procurement. */
   shortageQty: number;
+  priority: string;
   forwardDate: string;
   status: string;
   rfqId: string | null;
 }
 
-/** Reshape a fully-in-stock Material Request into a Ready-to-Issue table row. */
+/** Reshape a ready-to-issue Material Request into a Ready-to-Issue table row. */
 function buildReadyRow(mr: WarehouseMaterialRequest): ReadyToIssueRow {
   const items = mr.items ?? [];
+  const requestedQty = items.reduce((acc, i) => acc + (i.required_qty || 0), 0);
   const availableQty = items.reduce(
     (acc, i) => acc + Math.min(i.available_qty, i.required_qty),
     0
   );
-  const warehouses = Array.from(
-    new Set(items.map((i) => i.warehouse).filter((w): w is string => !!w))
-  );
-  const warehouse =
-    warehouses.length === 1
-      ? warehouses[0]
-      : warehouses.length > 1
-        ? "Multiple"
-        : "—";
   const uom = items[0]?.uom || "Nos";
   return {
     name: mr.name,
     department: mr.department || "—",
     requestedBy: mr.requested_by || "—",
     totalItems: mr.items_count || items.length,
+    requestedQty,
     availableQty,
     uom,
-    warehouse,
-    requestDate: mr.request_date || "",
+    requiredDate: mr.required_date || "",
+    priority: mr.priority || "Medium",
+    procurementType: mr.procurement_type,
   };
 }
 
@@ -143,6 +150,12 @@ export default function WarehouseDashboardPage() {
     retry: false,
     refetchOnWindowFocus: true,
   });
+
+  // Ensure SLA timers track the procurement-facing queue the warehouse manages.
+  useEffect(() => {
+    const queue = procurementQueueQuery.data;
+    if (queue && queue.length > 0) void syncMaterialRequestSlaBatch(queue);
+  }, [procurementQueueQuery.data]);
   const recentGrnQuery = useQuery({
     queryKey: ["warehouse", "recent-grn"],
     queryFn: () =>
@@ -180,53 +193,67 @@ export default function WarehouseDashboardPage() {
   const issued = issuedQuery.data ?? [];
   const incoming = incomingQuery.data ?? [];
 
-  // READY TO ISSUE — Material Requests where EVERY requested line is fully in
-  // stock (available_qty ≥ required_qty) and there is something to issue.
+  // READY TO ISSUE — Direct Material Requests whose warehouse review is done and
+  // every requested line is fully in stock (available_qty ≥ required_qty), that
+  // haven't been issued yet. `pending` already excludes issued/completed MRs
+  // (WAREHOUSE_PENDING_STATUSES) and is Direct-only, but we assert both here so
+  // the widget and its KPI count are derived from ONE dataset.
   const readyToIssueMRs = useMemo<ReadyToIssueRow[]>(() => {
     return pending
       .filter((mr) => {
+        if (mr.procurement_type !== "Direct") return false;
         const items = mr.items ?? [];
+        if (items.length === 0) return false;
         const hasDemand = items.some((i) => i.required_qty > 0);
         const allInStock = items.every((i) => i.available_qty >= i.required_qty);
-        return items.length > 0 && hasDemand && allInStock;
+        return hasDemand && allInStock;
       })
       .map((mr) => buildReadyRow(mr));
   }, [pending]);
 
-  // PROCUREMENT REQUIRED — forwarded MRs with a real shortage (forward qty > 0).
+  // PROCUREMENT REQUIRED — the union of:
+  //   • DIRECT   MRs whose warehouse review found a shortage (Available <
+  //              Requested), now in "Procurement Required" / "RFQ Created".
+  //   • INDIRECT MRs approved by Admin, now waiting for Procurement (same
+  //              statuses — no warehouse stock step). Shortage isn't applicable.
+  // Both come from the SAME `fetchProcurementQueue` fetch, so the widget rows
+  // and the KPI count can never disagree.
   const procurementRows = useMemo<ProcurementRow[]>(() => {
     const queue = procurementQueueQuery.data ?? [];
     const rows: ProcurementRow[] = [];
     for (const mr of queue) {
+      const procurementType = getMaterialRequestProcurementType(mr);
       const fulfillment = computeRequestFulfillment(mr);
       const shortageLines = fulfillment.items.filter((i) => i.procurement > 0);
       const shortageQty = fulfillment.totals.procurement;
-      if (shortageLines.length === 0 || shortageQty <= 0) continue;
+
+      // Direct requests must have a genuine shortage to require procurement.
+      // Indirect requests are admin-approved and always proceed to procurement,
+      // regardless of any (usually absent) warehouse shortage snapshot.
+      if (procurementType === "Direct" && shortageQty <= 0) continue;
+
       const rec = mr as unknown as Record<string, unknown>;
       rows.push({
         name: mr.name,
+        procurementType,
         department:
           (rec.custom_department as string) ||
           (rec.department as string) ||
           "General",
-        itemCount: shortageLines.length,
+        itemCount:
+          shortageLines.length || fulfillment.items.length || 0,
         shortageQty,
+        priority: (rec.custom_priority as string) || "Medium",
         forwardDate:
           (rec.modified as string)?.split("T")[0] ||
           (rec.transaction_date as string) ||
           "",
-        status: fulfillment.rollup,
+        status: getMaterialRequestWorkflowStatus(mr),
         rfqId: (rec.custom_linked_rfq as string) || null,
       });
     }
     return rows.sort((a, b) => b.forwardDate.localeCompare(a.forwardDate));
   }, [procurementQueueQuery.data]);
-
-  // Forwarded MRs still awaiting an RFQ — the "Procurement Required" live count.
-  const awaitingRfqCount = useMemo(
-    () => procurementRows.filter((r) => !r.rfqId).length,
-    [procurementRows]
-  );
 
   const kpis = useMemo(() => {
     const partiallyIssued = pending.filter((mr) => {
@@ -238,13 +265,14 @@ export default function WarehouseDashboardPage() {
     }).length;
     return {
       pending: pending.length,
+      // KPIs are the length of the EXACT arrays rendered by the widgets below.
       readyToIssue: readyToIssueMRs.length,
       issuedToday: issued.filter((s) => s.issue_date === todayIso).length,
-      procurementRequired: awaitingRfqCount,
+      procurementRequired: procurementRows.length,
       partiallyIssued,
       lowStock: inventory.filter((i) => i.status !== "In Stock").length,
     };
-  }, [pending, issued, readyToIssueMRs, awaitingRfqCount, inventory, todayIso]);
+  }, [pending, issued, readyToIssueMRs, procurementRows, inventory, todayIso]);
 
   const lowStockItems = useMemo(
     () => inventory.filter((i) => i.status !== "In Stock"),
@@ -377,7 +405,7 @@ export default function WarehouseDashboardPage() {
           accent="bg-indigo-50 text-indigo-600"
           label="Procurement Required"
           value={kpis.procurementRequired}
-          desc="Awaiting RFQ"
+          desc="Direct shortages + indirect"
           loading={procurementQueueQuery.isLoading}
           to="/warehouse/material-requests/forwarded"
         />
@@ -400,6 +428,9 @@ export default function WarehouseDashboardPage() {
           to="/warehouse/inventory/stock"
         />
       </div>
+
+      {/* 2b · SLA countdowns for warehouse-owned stages */}
+      <SlaCountdownWidget role="warehouse" title="Warehouse SLA Countdown" />
 
       {/* 3 · Today's Work Queue */}
       <div className="grid gap-4 lg:grid-cols-2">
@@ -455,9 +486,10 @@ export default function WarehouseDashboardPage() {
               "Department",
               "Requested By",
               "Items",
-              "Avail. Qty",
-              "Warehouse",
-              "Request Date",
+              "Requested",
+              "Available",
+              "Required",
+              "Priority",
               "",
             ]}
           >
@@ -469,12 +501,23 @@ export default function WarehouseDashboardPage() {
                 <td className="py-2 px-2 tabular-nums text-slate-600">
                   {mr.totalItems}
                 </td>
+                <td className="py-2 px-2 tabular-nums text-slate-600">
+                  {mr.requestedQty} {mr.uom}
+                </td>
                 <td className="py-2 px-2 tabular-nums font-semibold text-emerald-700">
                   {mr.availableQty} {mr.uom}
                 </td>
-                <td className="py-2 px-2 text-slate-500">{mr.warehouse}</td>
                 <td className="py-2 px-2 text-slate-500">
-                  {mr.requestDate ? formatDate(mr.requestDate) : "—"}
+                  {mr.requiredDate ? formatDate(mr.requiredDate) : "—"}
+                </td>
+                <td className="py-2 px-2">
+                  <span
+                    className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                      PRIORITY_STYLES[mr.priority] ?? PRIORITY_STYLES.Low
+                    }`}
+                  >
+                    {mr.priority}
+                  </span>
                 </td>
                 <td className="py-2 pl-2 text-right">
                   <RowButton
@@ -485,7 +528,7 @@ export default function WarehouseDashboardPage() {
                       )
                     }
                   >
-                    Issue
+                    Issue Material
                   </RowButton>
                 </td>
               </tr>
@@ -541,10 +584,10 @@ export default function WarehouseDashboardPage() {
           <MiniTable
             head={[
               "MR Number",
+              "Type",
               "Department",
-              "Items",
               "Shortage",
-              "Forwarded",
+              "Priority",
               "Status",
               "",
             ]}
@@ -552,15 +595,21 @@ export default function WarehouseDashboardPage() {
             {procurementRows.slice(0, 5).map((r) => (
               <tr key={r.name} className="hover:bg-slate-50/60">
                 <td className="py-2 pr-2 font-semibold text-slate-800">{r.name}</td>
+                <td className="py-2 px-2">
+                  <ProcurementTypeBadge type={r.procurementType} />
+                </td>
                 <td className="py-2 px-2 text-slate-600">{r.department}</td>
-                <td className="py-2 px-2 tabular-nums text-slate-600">
-                  {r.itemCount}
-                </td>
                 <td className="py-2 px-2 tabular-nums font-semibold text-orange-700">
-                  {r.shortageQty}
+                  {r.procurementType === "Direct" ? r.shortageQty : "—"}
                 </td>
-                <td className="py-2 px-2 text-slate-500">
-                  {r.forwardDate ? formatDate(r.forwardDate) : "—"}
+                <td className="py-2 px-2">
+                  <span
+                    className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                      PRIORITY_STYLES[r.priority] ?? PRIORITY_STYLES.Low
+                    }`}
+                  >
+                    {r.priority}
+                  </span>
                 </td>
                 <td className="py-2 px-2">
                   <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-600">

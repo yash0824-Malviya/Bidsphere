@@ -4,7 +4,6 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import {
-  Award,
   Ban,
   BadgeCheck,
   Brain,
@@ -24,6 +23,8 @@ import {
 } from "lucide-react";
 
 import {
+  buildBidHistoryRows,
+  buildBidTrend,
   cancelAuction,
   currentLowestBid,
   deriveAuctionStatus,
@@ -36,14 +37,18 @@ import {
   lowestRateByItem,
   maybeAutoComplete,
   parseErpDateTime,
+  sameSupplier,
   scheduleAuction,
   sendAuctionWinnerToReview,
   sendInvitations,
   setItemTargets,
   startAuctionNow,
   summarizeBidHistory,
+  supplierBidHistory,
   type AuctionSupplierScore,
+  type FinalRecommendation,
 } from "../../api/reverseBidding";
+import { syncReverseAuctionSla } from "../../api/slaIntegration";
 import type {
   BidItemStatus,
   ReverseBidding,
@@ -51,6 +56,8 @@ import type {
   ReverseBidItem,
 } from "../../types/reverseBidding";
 import AuctionStatusBadge from "../../components/reverse-bidding/AuctionStatusBadge";
+import BidTrendChart from "../../components/reverse-bidding/BidTrendChart";
+import SupplierBidHistoryPanel from "../../components/reverse-bidding/SupplierBidHistoryPanel";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import ConnectionError from "../../components/ConnectionError";
 import { TableSkeleton } from "../../components/Skeleton";
@@ -182,6 +189,11 @@ export default function ReverseBiddingDetailPage() {
   };
 
   /* Back-fill item rows for auctions created before the item-wise feature. */
+  // Keep the SLA timer for this auction aligned to its live start/end window.
+  useEffect(() => {
+    if (auction) void syncReverseAuctionSla(auction);
+  }, [auction?.name, auction?.auction_status, auction?.end_date_time]);
+
   useEffect(() => {
     if (!auction || backfillRef.current) return;
     if ((auction.bid_items ?? []).length > 0) return;
@@ -298,26 +310,17 @@ export default function ReverseBiddingDetailPage() {
     scores?.get(supplier.trim().toLowerCase());
 
   // Bid history is stored append-only with per-item previous/new/reduction.
-  // Newest first for display. Falls back to computing previous for any legacy
-  // rows that predate the item-level fields.
-  const initialBySupplier = new Map<string, number>();
-  for (const s of invited)
-    initialBySupplier.set(s.supplier, s.initial_quotation_amount ?? 0);
-  const bidRowsNewestFirst = [...(auction.bid_history ?? [])]
-    .sort((a, b) => {
-      const ta = parseErpDateTime(a.bid_time) ?? 0;
-      const tb = parseErpDateTime(b.bid_time) ?? 0;
-      if (tb !== ta) return tb - ta;
-      return (b.round_number ?? 0) - (a.round_number ?? 0);
-    })
-    .map((b) => {
-      const previous =
-        b.previous_rate ?? initialBySupplier.get(b.supplier) ?? 0;
-      const reduction =
-        b.reduction_amount ?? (previous > 0 ? previous - b.bid_amount : 0);
-      return { ...b, previous, reduction };
-    });
+  // `buildBidHistoryRows` normalizes every row (and reconstructs from the
+  // item table for auctions that only recorded item-wise bids), so the audit
+  // view always reflects real backend data. Newest first for display.
+  const bidRowsNewestFirst = [...buildBidHistoryRows(auction)].sort((a, b) => {
+    const ta = parseErpDateTime(a.bid_time) ?? 0;
+    const tb = parseErpDateTime(b.bid_time) ?? 0;
+    if (tb !== ta) return tb - ta;
+    return (b.round_number ?? 0) - (a.round_number ?? 0);
+  });
   const bidSummary = summarizeBidHistory(auction);
+  const bidTrend = buildBidTrend(auction);
 
   const toggle = (supplier: string) =>
     setSelected((prev) => {
@@ -408,12 +411,8 @@ export default function ReverseBiddingDetailPage() {
           auction={auction}
           savings={overallSavings}
           savingsPct={overallSavingsPct}
-          recommendationText={
-            recommendationQuery.data?.reasoning ??
-            (recommendationQuery.isLoading
-              ? "Generating AI recommendation…"
-              : undefined)
-          }
+          recommendation={recommendationQuery.data}
+          recommendationLoading={recommendationQuery.isLoading}
           canManage={canManage}
           approved={approved}
           submittedBy={user?.email}
@@ -454,15 +453,20 @@ export default function ReverseBiddingDetailPage() {
                     const isLeader = kind === "Leading" || kind === "Winner";
                     const isOpen = expanded.has(s.supplier);
                     const supplierItems = itemsBySupplier.get(s.supplier) ?? [];
+                    const trail = supplierBidHistory(auction, s.supplier);
+                    const canExpand =
+                      trail.bidCount > 0 ||
+                      trail.initialQuote > 0 ||
+                      supplierItems.length > 0;
                     return (
                       <Fragment key={s.supplier}>
                         <tr className={isLeader ? "bg-emerald-50/60" : undefined}>
                           <td>
-                            {hasItemBids && supplierItems.length > 0 ? (
+                            {canExpand ? (
                               <button
                                 type="button"
                                 onClick={() => toggleExpand(s.supplier)}
-                                aria-label={`Toggle ${s.supplier} items`}
+                                aria-label={`Toggle ${s.supplier} bid history`}
                                 className="inline-flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
                               >
                                 {isOpen ? (
@@ -523,17 +527,30 @@ export default function ReverseBiddingDetailPage() {
                             <BidStatusBadge kind={kind} />
                           </td>
                         </tr>
-                        {isOpen && supplierItems.length > 0 && (
+                        {isOpen && canExpand && (
                           <tr>
                             <td colSpan={8} className="bg-neutral-50/70 p-0">
-                              <SupplierItemBreakdown
-                                items={supplierItems}
+                              <SupplierBidHistoryPanel
+                                trail={trail}
                                 currency={currency}
-                                lowestByItem={lowestByItem}
-                                targets={targets}
-                                canManage={canManage && status !== "Completed"}
-                                onTargetChange={setTarget}
                               />
+                              {supplierItems.length > 0 && (
+                                <div className="border-t border-neutral-200/70">
+                                  <p className="px-4 pt-3 text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                                    Item-wise standing
+                                  </p>
+                                  <SupplierItemBreakdown
+                                    items={supplierItems}
+                                    currency={currency}
+                                    lowestByItem={lowestByItem}
+                                    targets={targets}
+                                    canManage={
+                                      canManage && status !== "Completed"
+                                    }
+                                    onTargetChange={setTarget}
+                                  />
+                                </div>
+                              )}
                             </td>
                           </tr>
                         )}
@@ -587,6 +604,13 @@ export default function ReverseBiddingDetailPage() {
                 {bidSummary.lastBidSupplier ?? "—"}
               </MiniStat>
             </div>
+
+            {/* Price-reduction trend across rounds */}
+            <BidTrendChart
+              data={bidTrend}
+              mode={hasItemBids ? "percent" : "amount"}
+              currency={currency}
+            />
 
             {bidRowsNewestFirst.length === 0 ? (
               <p className="text-sm text-neutral-500">No bids submitted yet.</p>
@@ -891,7 +915,8 @@ function CompletionCard({
   auction,
   savings,
   savingsPct,
-  recommendationText,
+  recommendation,
+  recommendationLoading,
   canManage,
   approved,
   submittedBy,
@@ -900,29 +925,64 @@ function CompletionCard({
   auction: ReverseBidding;
   savings: number;
   savingsPct: number;
-  recommendationText?: string;
+  recommendation?: FinalRecommendation;
+  recommendationLoading?: boolean;
   canManage: boolean;
   approved: boolean;
   submittedBy?: string;
   onDone: () => void;
 }) {
   const currency = auction.currency;
-  const winner = auction.winning_supplier;
+  const winner = auction.winning_supplier ?? "";
   const winnerPrice = auction.winner_price ?? auction.lowest_bid ?? 0;
-  const winnerRow = (auction.invited_suppliers ?? []).find(
-    (s) => s.supplier === winner
+  const winnerRow = (auction.invited_suppliers ?? []).find((s) =>
+    sameSupplier(s.supplier, winner)
   );
   const originalQuote = winnerRow?.initial_quotation_amount ?? 0;
-  const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const totalBidsSubmitted = (auction.bid_history ?? []).length;
+  // Participants who actually bid — candidates for a manual award.
+  const participants = [...(auction.invited_suppliers ?? [])]
+    .filter((s) => (s.current_bid ?? 0) > 0 || (s.initial_quotation_amount ?? 0) > 0)
+    .sort((a, b) => (a.current_bid ?? 1e15) - (b.current_bid ?? 1e15));
+
+  const recommended = recommendation?.recommended_supplier ?? "";
+  const recRow =
+    recommendation?.rows.find((r) => sameSupplier(r.supplier, recommended)) ??
+    recommendation?.rows[0];
+
+  // Award selection: default to the auto-winner, procurement can change it.
+  // `selected` falls back to the winner until procurement picks explicitly, so
+  // we never need a setState-in-effect to seed it.
+  const [picked, setPicked] = useState<string>("");
+  const [reviewed, setReviewed] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const selectedSupplier = picked || winner;
+
+  const priceFor = (supplier: string): number => {
+    const row = (auction.invited_suppliers ?? []).find((s) =>
+      sameSupplier(s.supplier, supplier)
+    );
+    return row?.current_bid ?? row?.initial_quotation_amount ?? 0;
+  };
+  const selectedPrice = priceFor(selectedSupplier);
+  const isManualChoice =
+    !!selectedSupplier && !sameSupplier(selectedSupplier, winner);
+
+  const totalBidsSubmitted = buildBidHistoryRows(auction).length;
   const auctionDuration = formatDuration(
     parseErpDateTime(auction.start_date_time),
     parseErpDateTime(auction.end_date_time)
   );
 
   const approve = useMutation({
-    mutationFn: () => sendAuctionWinnerToReview(auction.name, submittedBy),
+    mutationFn: () =>
+      sendAuctionWinnerToReview(
+        auction.name,
+        submittedBy,
+        isManualChoice
+          ? { supplier: selectedSupplier, price: selectedPrice }
+          : undefined
+      ),
     onSuccess: () => {
       toast.success("Winner approved — sent to Legal & Finance review.");
       setConfirmOpen(false);
@@ -942,22 +1002,24 @@ function CompletionCard({
       toast.error(e instanceof Error ? e.message : "Could not cancel auction"),
   });
 
+  const acceptRecommendation = () => {
+    if (recommended) setPicked(recommended);
+    setConfirmOpen(true);
+  };
+
+  const awardBlocked = !canManage || approved || !reviewed || !selectedSupplier;
+
   return (
     <div className="overflow-hidden rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 via-white to-primary-50/30 p-6 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-600 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-white">
             <Trophy className="h-3 w-3" />
-            Auction Winner
+            Lowest Bidder
           </div>
           <h3 className="mt-3 text-2xl font-bold text-neutral-900">
             {winner || "No winner"}
           </h3>
-          {recommendationText && (
-            <p className="mt-2 max-w-xl text-sm text-neutral-600">
-              {recommendationText}
-            </p>
-          )}
         </div>
         <div className="grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-4">
           <ResultStat label="Winning Price">
@@ -975,65 +1037,191 @@ function CompletionCard({
         </div>
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-emerald-100 pt-4">
-        <div className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">
-          <Award className="h-3.5 w-3.5" />
-          AI Recommendation: Award Purchase Order
+      {/* AI recommendation block */}
+      {recommendationLoading ? (
+        <div className="mt-5 flex items-center gap-2 rounded-xl border border-primary-100 bg-primary-50/40 px-4 py-3 text-sm text-neutral-600">
+          <Brain className="h-4 w-4 animate-pulse text-primary" />
+          Generating AI recommendation…
         </div>
-        {canManage && (
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            {approved ? (
-              <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-100 px-4 py-2 text-sm font-semibold text-emerald-700">
-                <ShieldCheck className="h-4 w-4" />
-                Sent to Legal &amp; Finance Review
+      ) : recRow ? (
+        <div className="mt-5 rounded-xl border border-primary-100 bg-primary-50/40 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <span className="mt-0.5 inline-flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Brain className="h-4 w-4" />
               </span>
-            ) : (
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-wider text-primary">
+                  AI Recommendation
+                  {recommendation?.confidence
+                    ? ` · ${Math.round(recommendation.confidence)}% confidence`
+                    : ""}
+                </p>
+                <p className="text-base font-bold text-neutral-900">
+                  {recRow.supplier}
+                </p>
+                <p className="mt-0.5 max-w-xl text-sm text-neutral-600">
+                  {recRow.reason || recommendation?.reasoning}
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-6">
+              <div className="text-right">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                  Final Bid
+                </p>
+                <p className="text-sm font-bold tabular-nums text-neutral-900">
+                  {formatCurrencyIn(recRow.final_bid, currency)}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                  Score
+                </p>
+                <p className="text-sm font-bold tabular-nums text-primary">
+                  {recRow.score.toFixed(0)}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                  Savings
+                </p>
+                <p className="text-sm font-bold tabular-nums text-emerald-600">
+                  {recRow.savings_pct.toFixed(1)}%
+                </p>
+              </div>
+            </div>
+          </div>
+          {canManage && !approved && (
+            <div className="mt-3 border-t border-primary-100 pt-3">
               <button
                 type="button"
-                className="inline-flex items-center gap-1.5 rounded-lg bg-primary-700 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-primary-800 disabled:opacity-60"
-                disabled={approve.isPending || !winner}
-                onClick={() => setConfirmOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-primary-700 disabled:opacity-50"
+                disabled={!reviewed || approve.isPending}
+                onClick={acceptRecommendation}
               >
                 <BadgeCheck className="h-4 w-4" />
-                {approve.isPending ? "Approving…" : "Approve Winner"}
+                Accept Recommendation
               </button>
-            )}
-            <button
-              type="button"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 px-4 py-2.5 text-sm font-semibold text-rose-600 transition hover:bg-rose-50 disabled:opacity-60"
-              disabled={cancel.isPending || approved}
-              onClick={() => {
-                if (window.confirm("Cancel this auction? No PO will be created."))
-                  cancel.mutate();
-              }}
-            >
-              <Ban className="h-4 w-4" />
-              Cancel Auction
-            </button>
-          </div>
-        )}
-      </div>
+              {!reviewed && (
+                <span className="ml-2 text-xs text-neutral-500">
+                  Review the bid history below to enable.
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {/* Award actions */}
+      {canManage && (
+        <div className="mt-5 border-t border-emerald-100 pt-4">
+          {approved ? (
+            <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-100 px-4 py-2 text-sm font-semibold text-emerald-700">
+              <ShieldCheck className="h-4 w-4" />
+              Sent to Legal &amp; Finance Review
+            </span>
+          ) : (
+            <>
+              <label className="flex items-start gap-2 text-sm text-neutral-700">
+                <input
+                  type="checkbox"
+                  checked={reviewed}
+                  onChange={(e) => setReviewed(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 cursor-pointer rounded border-neutral-300 text-primary-600 focus:ring-primary-500"
+                />
+                I have reviewed the complete bid history for every supplier.
+              </label>
+
+              <div className="mt-3 flex flex-wrap items-end gap-3">
+                <label className="text-sm">
+                  <span className="mb-1 block font-medium text-neutral-600">
+                    Award to
+                  </span>
+                  <select
+                    value={selectedSupplier}
+                    onChange={(e) => setPicked(e.target.value)}
+                    disabled={!reviewed}
+                    className="input-field min-w-[16rem] disabled:opacity-60"
+                  >
+                    {participants.length === 0 && (
+                      <option value="">No participants</option>
+                    )}
+                    {participants.map((s) => (
+                      <option key={s.supplier} value={s.supplier}>
+                        {s.supplier}
+                        {(s.current_bid ?? 0) > 0
+                          ? ` — ${formatCurrencyIn(s.current_bid!, currency)}`
+                          : ""}
+                        {sameSupplier(s.supplier, winner) ? " (lowest)" : ""}
+                        {sameSupplier(s.supplier, recommended) ? " ★ AI" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary-700 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-primary-800 disabled:opacity-60"
+                  disabled={awardBlocked || approve.isPending}
+                  onClick={() => setConfirmOpen(true)}
+                >
+                  <BadgeCheck className="h-4 w-4" />
+                  {approve.isPending
+                    ? "Approving…"
+                    : isManualChoice
+                      ? "Award Selected Supplier"
+                      : "Approve Winner"}
+                </button>
+
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 px-4 py-2.5 text-sm font-semibold text-rose-600 transition hover:bg-rose-50 disabled:opacity-60"
+                  disabled={cancel.isPending}
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        "Cancel this auction? No PO will be created."
+                      )
+                    )
+                      cancel.mutate();
+                  }}
+                >
+                  <Ban className="h-4 w-4" />
+                  Cancel Auction
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       <ConfirmDialog
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
         onConfirm={() => approve.mutate()}
-        title="Approve auction winner?"
-        description="This sends the winner to Legal & Finance review and then creates the Purchase Order using the final reverse-bid prices."
+        title={
+          isManualChoice
+            ? "Award to selected supplier?"
+            : "Approve auction winner?"
+        }
+        description="This sends the chosen supplier to Legal & Finance review and then creates the Purchase Order using the final reverse-bid prices."
         confirmLabel="Approve & Send to Review"
         tone="primary"
         isLoading={approve.isPending}
       >
         <dl className="space-y-1.5 rounded-lg border border-neutral-200 bg-neutral-50 p-3 text-sm">
-          <ConfirmRow label="Winning Supplier">{winner || "—"}</ConfirmRow>
+          <ConfirmRow label="Selected Supplier">
+            {selectedSupplier || "—"}
+          </ConfirmRow>
           <ConfirmRow label="Final Bid">
-            {winnerPrice ? formatCurrencyIn(winnerPrice, currency) : "—"}
+            {selectedPrice ? formatCurrencyIn(selectedPrice, currency) : "—"}
           </ConfirmRow>
-          <ConfirmRow label="Savings">
-            {savings > 0
-              ? `${formatCurrencyIn(savings, currency)}${savingsPct > 0 ? ` (${savingsPct.toFixed(1)}%)` : ""}`
-              : "—"}
-          </ConfirmRow>
+          {isManualChoice && (
+            <ConfirmRow label="Note">
+              Manual override — not the lowest bidder
+            </ConfirmRow>
+          )}
           <ConfirmRow label="Bids Submitted">{totalBidsSubmitted}</ConfirmRow>
           <ConfirmRow label="Auction Duration">{auctionDuration}</ConfirmRow>
         </dl>

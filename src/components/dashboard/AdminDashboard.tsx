@@ -19,6 +19,7 @@ import CompactActivityFeed from "./CompactActivityFeed";
 import DashboardHeader from "./DashboardHeader";
 import SavingsOpportunitiesPanel from "./SavingsOpportunitiesPanel";
 import TopSuppliersPanel from "./TopSuppliersPanel";
+import SlaCountdownWidget from "../sla/SlaCountdownWidget";
 import { Skeleton } from "../Skeleton";
 import {
   buildActivityFeed,
@@ -166,6 +167,8 @@ export default function AdminDashboard({ role, greetingName }: Props) {
         loading={countsQuery.isLoading}
         readyForPOCount={readyForPOCount}
       />
+
+      <SlaCountdownWidget role="admin" title="Admin SLA Countdown" />
 
       {layout.showSpendCharts ? (
         <Suspense

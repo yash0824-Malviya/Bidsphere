@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -39,6 +39,9 @@ import {
 } from "../../api/materialRequestWorkflow";
 import type { MaterialRequestWorkflowStatus } from "../../types/materialRequestWorkflow";
 import { canCreateRfqFromMaterialRequest } from "../../api/createRFQFromMaterialRequest";
+import { listTimersForReference } from "../../api/sla";
+import { syncMaterialRequestSla } from "../../api/slaIntegration";
+import SlaBadge from "../../components/sla/SlaBadge";
 import PageHeader from "../../components/PageHeader";
 import ProcurementTypeBadge from "../../components/ProcurementTypeBadge";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
@@ -467,6 +470,30 @@ export default function MaterialRequestDetailPage() {
     refetchOnWindowFocus: !deleted,
   });
 
+  // Keep the SLA timer for this MR's current stage in sync, then surface it.
+  useEffect(() => {
+    if (mr) void syncMaterialRequestSla(mr);
+  }, [mr]);
+
+  const slaTimersQuery = useQuery({
+    queryKey: ["sla-timers-ref", "Material Request", name],
+    queryFn: () => listTimersForReference("Material Request", name),
+    enabled: !!name && !deleted,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+  const activeSlaTimer = useMemo(() => {
+    const timers = slaTimersQuery.data ?? [];
+    return (
+      timers.find(
+        (t) => t.sla_status === "Running" || t.sla_status === "Due Soon"
+      ) ??
+      timers.find((t) => t.sla_status === "Breached") ??
+      null
+    );
+  }, [slaTimersQuery.data]);
+
   // Live stock levels from ERPNext Bin for the Available column. Read-only —
   // `checkMaterialRequestStock` only queries Bin, it never mutates the MR.
   const stockQuery = useQuery({
@@ -841,6 +868,7 @@ export default function MaterialRequestDetailPage() {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <StageBadge label={stageBadge.label} cls={stageBadge.cls} />
+            {activeSlaTimer ? <SlaBadge timer={activeSlaTimer} /> : null}
             {canEditDraft ? (
               <Link
                 to={`/material-requests/new?edit=${encodeURIComponent(mr.name)}`}

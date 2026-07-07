@@ -439,6 +439,148 @@
     "decision": "Decision",
     "decidedOn": "Decided On"
   },
+  "adminDashboard": {
+    "title": "Administration Center",
+    "subtitle": "Governance · Monitoring · Executive Visibility",
+    "sections": {
+      "executiveOverview": "Executive Overview",
+      "procurementPipeline": "Procurement Pipeline",
+      "approvalCenter": "Approval Center",
+      "spendAnalytics": "Spend Analytics",
+      "auctionMonitor": "Reverse Auction Monitor",
+      "slaMonitor": "SLA Monitor",
+      "supplierAnalytics": "Supplier Analytics",
+      "inventorySnapshot": "Inventory Snapshot",
+      "aiInsights": "AI Insights",
+      "notifications": "Notifications",
+      "recentActivity": "Recent Activity",
+      "systemHealth": "System Health"
+    },
+    "kpi": {
+      "totalUsers": "Total Users",
+      "activeSuppliers": "Active Suppliers",
+      "openRfqs": "Open RFQs",
+      "liveAuctions": "Live Reverse Auctions",
+      "pendingApprovals": "Pending Approvals",
+      "openPos": "Open Purchase Orders",
+      "warehouseRequests": "Warehouse Requests",
+      "monthlySpend": "Total Spend (This Month)",
+      "budgetUtilization": "Budget Utilization",
+      "slaBreaches": "SLA Breaches"
+    },
+    "quickActions": {
+      "title": "Quick Actions",
+      "createRfq": "Create RFQ",
+      "createSupplier": "Create Supplier",
+      "createUser": "Create User",
+      "startAuction": "Start Reverse Auction",
+      "viewReports": "View Reports",
+      "manageWorkflow": "Manage Workflow",
+      "manageSla": "Manage SLA"
+    },
+    "pipeline": {
+      "materialRequest": "Material Request",
+      "warehouseReview": "Warehouse Review",
+      "procurementReview": "Procurement Review",
+      "rfqCreated": "RFQ Created",
+      "supplierQuotations": "Supplier Quotations",
+      "legalReview": "Legal Review",
+      "financeReview": "Finance Review",
+      "purchaseOrder": "Purchase Order",
+      "grn": "GRN",
+      "invoice": "Invoice",
+      "payment": "Payment"
+    },
+    "approval": {
+      "pendingApprovals": "Pending Approvals",
+      "budgetApproval": "Budget Approval",
+      "legalReview": "Legal Review",
+      "financeReview": "Finance Review",
+      "poApproval": "Purchase Order Approval",
+      "warehouseReview": "Warehouse Review",
+      "highPriority": "{{count}} high priority",
+      "pending": "pending",
+      "viewAll": "View All"
+    },
+    "sla": {
+      "running": "Running",
+      "warning": "Warning",
+      "breached": "Breached",
+      "completed": "Completed",
+      "compliance": "SLA Compliance",
+      "upcomingBreaches": "Upcoming Breaches",
+      "noUpcoming": "No SLAs approaching breach."
+    },
+    "supplier": {
+      "topSupplier": "Top Supplier",
+      "highestRated": "Highest Rated",
+      "lowestRated": "Lowest Rated",
+      "activeSuppliers": "Active Suppliers",
+      "blocked": "Blocked Suppliers",
+      "avgDelivery": "Avg. Delivery Delay",
+      "onTime": "On-Time Delivery",
+      "performanceScore": "Performance Score",
+      "days": "{{count}} days"
+    },
+    "inventory": {
+      "lowStock": "Low Stock",
+      "outOfStock": "Out of Stock",
+      "readyToIssue": "Ready to Issue",
+      "procurementRequired": "Procurement Required",
+      "grnPending": "GRN Pending",
+      "awaitingInspection": "Awaiting Inspection"
+    },
+    "health": {
+      "backend": "Backend Status",
+      "erpnext": "ERPNext Connection",
+      "database": "Database",
+      "api": "API",
+      "email": "Email Service",
+      "notifications": "Notification Service",
+      "healthy": "Healthy",
+      "warning": "Warning",
+      "offline": "Offline",
+      "notMonitored": "Not Monitored"
+    },
+    "ai": {
+      "allClear": "All systems nominal — no critical insights right now.",
+      "budgetHigh": "Budget utilization has reached {{pct}}%.",
+      "slaBreached": "{{count}} SLA timer(s) have already breached.",
+      "slaDueSoon": "{{count}} SLA timer(s) are approaching breach.",
+      "rfqAttention": "{{count}} approval(s) require immediate attention.",
+      "auctionsLive": "{{count}} reverse auction(s) are live now.",
+      "lowStock": "{{count}} item(s) are low or out of stock."
+    },
+    "auction": {
+      "id": "Auction",
+      "lowestBid": "Lowest Bid",
+      "timeRemaining": "Time Left",
+      "suppliers": "Suppliers",
+      "round": "Round",
+      "status": "Status",
+      "winner": "Winner",
+      "open": "Open",
+      "none": "No live or scheduled auctions.",
+      "ended": "Ended"
+    },
+    "common": {
+      "viewAll": "View All",
+      "viewFullAuditTrail": "View Full Audit Trail",
+      "viewReports": "View Full Reports",
+      "noData": "No data available yet.",
+      "noActivity": "No recent activity logged.",
+      "noNotifications": "You're all caught up."
+    },
+    "charts": {
+      "departmentSpend": "Department-Wise Spend",
+      "budgetVsActual": "Budget vs Actual",
+      "budget": "Budget",
+      "actual": "Actual",
+      "allocated": "Allocated",
+      "consumed": "Consumed",
+      "savings": "Auction Savings"
+    }
+  },
   "reports": {
     "totalDirect": "Total Direct Procurement",
     "totalIndirect": "Total Indirect Procurement",
@@ -483,7 +625,14 @@
     "signedInSuccess": "Signed in successfully.",
     "signInFailed": "We couldn't sign you in. Please try again.",
     "microsoftSoon": "Microsoft SSO will be available in production.",
-    "googleSoon": "Google Workspace SSO coming soon."
+    "googleSoon": "Google Workspace SSO coming soon.",
+    "forgotPassword": "Forgot password?",
+    "tagline": "AI-Powered Procurement Platform",
+    "headline": "Procurement Intelligence",
+    "headlineAccent": "for Enterprise Supply Chains",
+    "description": "Manage sourcing, suppliers, RFQs, purchase orders and logistics operations from a unified, intelligent platform.",
+    "supplyChain": "Supply Chain Intelligence",
+    "secureNotice": "Enterprise-grade security · SSO ready"
   },
   "rfq": {
     "documentDetails": "Document Details",

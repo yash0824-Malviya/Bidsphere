@@ -155,6 +155,7 @@ const MR_LIST_FIELDS_STANDARD = [
   "transaction_date",
   "schedule_date",
   "modified",
+  "modified_by",
   "owner",
   "company",
   "material_request_type",

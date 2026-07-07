@@ -439,6 +439,148 @@
     "decision": "Decisión",
     "decidedOn": "Decidido el"
   },
+  "adminDashboard": {
+    "title": "Centro de Administración",
+    "subtitle": "Gobernanza · Monitoreo · Visibilidad Ejecutiva",
+    "sections": {
+      "executiveOverview": "Resumen Ejecutivo",
+      "procurementPipeline": "Flujo de Compras",
+      "approvalCenter": "Centro de Aprobaciones",
+      "spendAnalytics": "Analítica de Gasto",
+      "auctionMonitor": "Monitor de Subastas Inversas",
+      "slaMonitor": "Monitor de SLA",
+      "supplierAnalytics": "Analítica de Proveedores",
+      "inventorySnapshot": "Resumen de Inventario",
+      "aiInsights": "Perspectivas de IA",
+      "notifications": "Notificaciones",
+      "recentActivity": "Actividad Reciente",
+      "systemHealth": "Estado del Sistema"
+    },
+    "kpi": {
+      "totalUsers": "Usuarios Totales",
+      "activeSuppliers": "Proveedores Activos",
+      "openRfqs": "RFQ Abiertas",
+      "liveAuctions": "Subastas Inversas en Vivo",
+      "pendingApprovals": "Aprobaciones Pendientes",
+      "openPos": "Órdenes de Compra Abiertas",
+      "warehouseRequests": "Solicitudes de Almacén",
+      "monthlySpend": "Gasto Total (Este Mes)",
+      "budgetUtilization": "Utilización de Presupuesto",
+      "slaBreaches": "Incumplimientos de SLA"
+    },
+    "quickActions": {
+      "title": "Acciones Rápidas",
+      "createRfq": "Crear RFQ",
+      "createSupplier": "Crear Proveedor",
+      "createUser": "Crear Usuario",
+      "startAuction": "Iniciar Subasta Inversa",
+      "viewReports": "Ver Informes",
+      "manageWorkflow": "Gestionar Flujo",
+      "manageSla": "Gestionar SLA"
+    },
+    "pipeline": {
+      "materialRequest": "Solicitud de Material",
+      "warehouseReview": "Revisión de Almacén",
+      "procurementReview": "Revisión de Compras",
+      "rfqCreated": "RFQ Creada",
+      "supplierQuotations": "Cotizaciones",
+      "legalReview": "Revisión Legal",
+      "financeReview": "Revisión Financiera",
+      "purchaseOrder": "Orden de Compra",
+      "grn": "Recepción",
+      "invoice": "Factura",
+      "payment": "Pago"
+    },
+    "approval": {
+      "pendingApprovals": "Aprobaciones Pendientes",
+      "budgetApproval": "Aprobación de Presupuesto",
+      "legalReview": "Revisión Legal",
+      "financeReview": "Revisión Financiera",
+      "poApproval": "Aprobación de Orden de Compra",
+      "warehouseReview": "Revisión de Almacén",
+      "highPriority": "{{count}} de alta prioridad",
+      "pending": "pendientes",
+      "viewAll": "Ver Todo"
+    },
+    "sla": {
+      "running": "En Curso",
+      "warning": "Advertencia",
+      "breached": "Incumplidos",
+      "completed": "Completados",
+      "compliance": "Cumplimiento de SLA",
+      "upcomingBreaches": "Próximos Incumplimientos",
+      "noUpcoming": "Ningún SLA próximo a incumplirse."
+    },
+    "supplier": {
+      "topSupplier": "Mejor Proveedor",
+      "highestRated": "Mejor Calificado",
+      "lowestRated": "Peor Calificado",
+      "activeSuppliers": "Proveedores Activos",
+      "blocked": "Proveedores Bloqueados",
+      "avgDelivery": "Retraso Prom. de Entrega",
+      "onTime": "Entrega a Tiempo",
+      "performanceScore": "Puntaje de Desempeño",
+      "days": "{{count}} días"
+    },
+    "inventory": {
+      "lowStock": "Bajo Stock",
+      "outOfStock": "Sin Stock",
+      "readyToIssue": "Listo para Emitir",
+      "procurementRequired": "Requiere Compra",
+      "grnPending": "Recepción Pendiente",
+      "awaitingInspection": "Esperando Inspección"
+    },
+    "health": {
+      "backend": "Estado del Backend",
+      "erpnext": "Conexión ERPNext",
+      "database": "Base de Datos",
+      "api": "API",
+      "email": "Servicio de Correo",
+      "notifications": "Servicio de Notificaciones",
+      "healthy": "Saludable",
+      "warning": "Advertencia",
+      "offline": "Fuera de Línea",
+      "notMonitored": "Sin Monitoreo"
+    },
+    "ai": {
+      "allClear": "Todos los sistemas en orden — sin perspectivas críticas ahora.",
+      "budgetHigh": "La utilización del presupuesto alcanzó el {{pct}}%.",
+      "slaBreached": "{{count}} temporizador(es) de SLA ya han incumplido.",
+      "slaDueSoon": "{{count}} temporizador(es) de SLA están por incumplirse.",
+      "rfqAttention": "{{count}} aprobación(es) requieren atención inmediata.",
+      "auctionsLive": "{{count}} subasta(s) inversa(s) están en vivo ahora.",
+      "lowStock": "{{count}} artículo(s) con bajo o sin stock."
+    },
+    "auction": {
+      "id": "Subasta",
+      "lowestBid": "Puja Más Baja",
+      "timeRemaining": "Tiempo Restante",
+      "suppliers": "Proveedores",
+      "round": "Ronda",
+      "status": "Estado",
+      "winner": "Ganador",
+      "open": "Abrir",
+      "none": "No hay subastas en vivo o programadas.",
+      "ended": "Finalizada"
+    },
+    "common": {
+      "viewAll": "Ver Todo",
+      "viewFullAuditTrail": "Ver Auditoría Completa",
+      "viewReports": "Ver Informes Completos",
+      "noData": "Aún no hay datos disponibles.",
+      "noActivity": "Sin actividad reciente registrada.",
+      "noNotifications": "Estás al día."
+    },
+    "charts": {
+      "departmentSpend": "Gasto por Departamento",
+      "budgetVsActual": "Presupuesto vs Real",
+      "budget": "Presupuesto",
+      "actual": "Real",
+      "allocated": "Asignado",
+      "consumed": "Consumido",
+      "savings": "Ahorro en Subastas"
+    }
+  },
   "reports": {
     "totalDirect": "Total compra directa",
     "totalIndirect": "Total compra indirecta",
@@ -483,7 +625,14 @@
     "signedInSuccess": "Sesión iniciada correctamente.",
     "signInFailed": "No pudimos iniciar su sesión. Inténtelo de nuevo.",
     "microsoftSoon": "El acceso con Microsoft estará disponible en producción.",
-    "googleSoon": "El acceso con Google Workspace estará disponible próximamente."
+    "googleSoon": "El acceso con Google Workspace estará disponible próximamente.",
+    "forgotPassword": "¿Olvidó su contraseña?",
+    "tagline": "Plataforma de compras con IA",
+    "headline": "Inteligencia de compras",
+    "headlineAccent": "para cadenas de suministro empresariales",
+    "description": "Gestione abastecimiento, proveedores, RFQ, órdenes de compra y operaciones logísticas desde una plataforma unificada e inteligente.",
+    "supplyChain": "Inteligencia de cadena de suministro",
+    "secureNotice": "Seguridad de nivel empresarial · Listo para SSO"
   },
   "rfq": {
     "documentDetails": "Detalles del documento",

@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   Building2,
@@ -166,6 +166,28 @@ export default function BudgetCreatePage() {
     setProject("");
     setAccount("");
   }, [company]);
+
+  // Prefill Cost Center / Fiscal Year when navigated here from the Finance
+  // Review "Create Budget" action (runs once, after the company reset above).
+  const [searchParams] = useSearchParams();
+  const prefillApplied = useRef(false);
+  useEffect(() => {
+    if (prefillApplied.current || !company) return;
+    const ccParam = searchParams.get("costCenter");
+    const fyParam = searchParams.get("fiscalYear");
+    if (!ccParam && !fyParam) {
+      prefillApplied.current = true;
+      return;
+    }
+    if (ccParam && costCentersLoading) return; // wait for the list to resolve
+    if (ccParam && costCenters.some((c) => c.name === ccParam)) {
+      setCostCenter(ccParam);
+    }
+    if (fyParam && fiscalYears.includes(fyParam)) {
+      setFiscalYear(fyParam);
+    }
+    prefillApplied.current = true;
+  }, [company, searchParams, costCenters, costCentersLoading, fiscalYears]);
 
   useEffect(() => {
     if (budgetAgainst === "Cost Center") {

@@ -448,7 +448,13 @@ function buildNavItem(id: NavModuleId, role: AppRole): NavItem {
         icon: MODULE_ICONS["admin-audit"],
         children: [
           { label: "Dashboard", to: "/admin" },
-          { label: "Audit Trail", to: "/admin/audit-trail" },
+          {
+            label: "Pending Approvals",
+            to: "/admin/approvals/pending",
+            group: "Approval Center",
+          },
+          { label: "Approved Requests", to: "/admin/approvals/approved" },
+          { label: "Audit Trail", to: "/admin/audit-trail", group: "Administration" },
           { label: "Procurement Audit", to: "/admin/procurement-audit" },
           { label: "Access Logs", to: "/admin/access-logs" },
           { label: "User Management", to: "/admin/users" },
@@ -459,6 +465,8 @@ function buildNavItem(id: NavModuleId, role: AppRole): NavItem {
           { label: "Inventory", to: "/admin/inventory" },
           { label: "Budget", to: "/admin/budget" },
           { label: "Reports", to: "/admin/reports" },
+          { label: "SLA Configuration", to: "/admin/sla-configuration" },
+          { label: "SLA Reports", to: "/admin/sla-reports" },
           { label: "Security Settings", to: "/admin/security-settings" },
           { label: "System Settings", to: "/admin/settings" },
         ],

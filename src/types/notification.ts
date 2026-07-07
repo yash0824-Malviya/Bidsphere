@@ -25,7 +25,8 @@ export type NotificationModule =
   | "RFQ Invitation"
   | "Quotation Status"
   | "Invoice Status"
-  | "Payment Status";
+  | "Payment Status"
+  | "SLA";
 
 export type NotificationTargetRole = AppRole | "supplier";
 
@@ -68,7 +69,7 @@ export const ROLE_ALLOWED_MODULES: Record<
   Exclude<NotificationTargetRole, "supplier">,
   ReadonlySet<NotificationModule>
 > = {
-  admin: new Set(["System", "Audit", "Users", "Workflow"]),
+  admin: new Set(["System", "Audit", "Users", "Workflow", "SLA"]),
   procurement: new Set([
     "RFQ",
     "Supplier Quotation",
@@ -77,18 +78,20 @@ export const ROLE_ALLOWED_MODULES: Record<
     "Finance Approval",
     "Purchase Order",
     "Budget",
+    "SLA",
   ]),
-  legal: new Set(["Legal Review", "Supplier Documents", "Compliance"]),
+  legal: new Set(["Legal Review", "Supplier Documents", "Compliance", "SLA"]),
   finance: new Set([
     "Voucher",
     "Invoice",
     "Payment",
     "Budget",
     "Outstanding Payables",
+    "SLA",
   ]),
-  finance_executive: new Set(["Budget"]),
-  warehouse: new Set(["PO Ready for GRN", "GRN", "Inventory"]),
-  department: new Set(["Purchase Order"]),
+  finance_executive: new Set(["Budget", "SLA"]),
+  warehouse: new Set(["PO Ready for GRN", "GRN", "Inventory", "SLA"]),
+  department: new Set(["Purchase Order", "SLA"]),
 };
 
 export const SUPPLIER_ALLOWED_MODULES = new Set<NotificationModule>([
@@ -97,6 +100,7 @@ export const SUPPLIER_ALLOWED_MODULES = new Set<NotificationModule>([
   "Purchase Order",
   "Invoice Status",
   "Payment Status",
+  "SLA",
 ]);
 
 export const FINANCE_MODULES = new Set<NotificationModule>([

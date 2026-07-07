@@ -16,6 +16,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import MainLayout from "./components/layout/MainLayout";
 import Placeholder from "./components/Placeholder";
 import ProtectedRoute from "./components/ProtectedRoute";
+import SlaEngine from "./components/sla/SlaEngine";
 
 // Eager — first-paint critical routes. Per the performance policy these are
 // NOT lazy loaded so the primary workspace renders without a chunk fetch.
@@ -174,6 +175,8 @@ const InventoryPage = lazy(() => import("./pages/inventory/InventoryPage"));
 const ItemDetailPage = lazy(() => import("./pages/inventory/ItemDetailPage"));
 
 const AdminDashboardPage = lazy(() => import("./pages/admin/AdminDashboardPage"));
+const PendingApprovalsPage = lazy(() => import("./pages/admin/PendingApprovalsPage"));
+const ApprovedRequestsPage = lazy(() => import("./pages/admin/ApprovedRequestsPage"));
 const UserManagementPage = lazy(() => import("./pages/admin/UserManagementPage"));
 const RoleManagementPage = lazy(() => import("./pages/admin/RoleManagementPage"));
 const AuditTrailPage = lazy(() => import("./pages/admin/AuditTrailPage"));
@@ -188,6 +191,8 @@ const SupplierOverviewPage = lazy(() => import("./pages/admin/SupplierOverviewPa
 const InventoryOverviewPage = lazy(() => import("./pages/admin/InventoryOverviewPage"));
 const BudgetControlPage = lazy(() => import("./pages/admin/BudgetControlPage"));
 const IntegrationsPage = lazy(() => import("./pages/admin/IntegrationsPage"));
+const SlaConfigurationPage = lazy(() => import("./pages/admin/SlaConfigurationPage"));
+const SlaReportsPage = lazy(() => import("./pages/admin/SlaReportsPage"));
 
 const WarehouseDashboardPage = lazy(
   () => import("./pages/warehouse/WarehouseDashboardPage")
@@ -336,6 +341,7 @@ function App() {
         <AuthBootstrap />
         <RFQSchemaBootstrap />
         <VoucherStoreSync />
+        <SlaEngine />
         <Toaster position="top-right" />
         <Suspense fallback={<RouteFallback />}>
         <Routes>
@@ -590,6 +596,8 @@ function App() {
 
             {/* Admin */}
             <Route path="/admin" element={<AdminDashboardPage />} />
+            <Route path="/admin/approvals/pending" element={<PendingApprovalsPage />} />
+            <Route path="/admin/approvals/approved" element={<ApprovedRequestsPage />} />
             <Route path="/admin/users" element={<UserManagementPage />} />
             <Route path="/admin/roles" element={<RoleManagementPage />} />
             <Route path="/admin/procurement" element={<ProcurementOverviewPage />} />
@@ -603,6 +611,8 @@ function App() {
             <Route path="/admin/access-logs" element={<AccessLogsPage />} />
             <Route path="/admin/security-settings" element={<SecuritySettingsPage />} />
             <Route path="/admin/settings" element={<SystemSettingsPage />} />
+            <Route path="/admin/sla-configuration" element={<SlaConfigurationPage />} />
+            <Route path="/admin/sla-reports" element={<SlaReportsPage />} />
             <Route path="/admin/integrations" element={<IntegrationsPage />} />
 
             {/* Inventory */}

@@ -21,6 +21,7 @@ import StatusBadge from "../StatusBadge";
 import ProcurementTypeBadge from "../ProcurementTypeBadge";
 import { Skeleton } from "../Skeleton";
 import DashboardHeader from "./DashboardHeader";
+import SlaCountdownWidget from "../sla/SlaCountdownWidget";
 
 interface Props {
   greetingName: string;
@@ -218,6 +219,8 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
           View All Requests
         </Link>
       </div>
+
+      <SlaCountdownWidget role="department" title="My Request SLAs" />
 
       {rowsQuery.isLoading ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

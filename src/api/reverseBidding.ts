@@ -167,7 +167,9 @@ export interface BidHistorySummary {
  * supplier TOTALS; reduction % averages every recorded bid step.
  */
 export function summarizeBidHistory(doc: ReverseBidding): BidHistorySummary {
-  const rows = doc.bid_history ?? [];
+  // Use the normalized rows so the headline numbers stay in sync with the
+  // audit table even when history is reconstructed from the item table.
+  const rows = buildBidHistoryRows(doc);
   const totals = bidValues(doc.invited_suppliers ?? []);
   const sorted = [...rows].sort(
     (a, b) => (parseErpDateTime(a.bid_time) ?? 0) - (parseErpDateTime(b.bid_time) ?? 0)
@@ -189,6 +191,172 @@ export function summarizeBidHistory(doc: ReverseBidding): BidHistorySummary {
       ? reductions.reduce((a, b) => a + b, 0) / reductions.length
       : 0,
   };
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ * Bid history normalization + per-supplier trail + trend (audit views)
+ *
+ * The append-only `bid_history` child table is the source of truth. For
+ * auctions that only recorded item-wise rows (or legacy ones), we reconstruct
+ * equivalent history rows from the `bid_items` child table — this is still
+ * live backend data reshaped, never mock/demo data.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+export interface NormalizedBid extends ReverseBid {
+  /** Previous standing price this bid improved on (falls back to initial quote). */
+  previous: number;
+  /** Absolute reduction vs `previous` (≥ 0). */
+  reduction: number;
+}
+
+/**
+ * Rebuild history rows from `bid_items` when `bid_history` is empty but
+ * suppliers have actually moved off their opening quote. One row per item that
+ * changed, carrying previous (initial) → latest with computed reduction.
+ */
+function reconstructHistoryFromItems(doc: ReverseBidding): ReverseBid[] {
+  const out: ReverseBid[] = [];
+  for (const it of doc.bid_items ?? []) {
+    const latest = it.latest_rate ?? it.current_rate ?? 0;
+    const initial = it.initial_rate ?? 0;
+    if (!(latest > 0)) continue;
+    const moved = (it.round_number ?? 0) > 0 || (initial > 0 && latest < initial);
+    if (!moved) continue;
+    const reduction = initial > 0 ? initial - latest : 0;
+    out.push({
+      doctype: RB_BID_DOCTYPE,
+      supplier: it.supplier,
+      item_code: it.item_code,
+      item_name: it.item_name ?? it.item_code,
+      bid_amount: latest,
+      previous_rate: initial,
+      reduction_amount: reduction > 0 ? reduction : 0,
+      reduction_pct:
+        initial > 0 && reduction > 0
+          ? Number(((reduction / initial) * 100).toFixed(2))
+          : 0,
+      bid_time: it.bid_time,
+      round_number: it.round_number ?? 1,
+      status: "Accepted",
+    });
+  }
+  return out;
+}
+
+/**
+ * Normalized, audit-ready bid history for a completed/live auction. Every row
+ * carries `previous` and `reduction` so the UI never recomputes. Falls back to
+ * reconstructing from `bid_items` when the history table is empty.
+ */
+export function buildBidHistoryRows(doc: ReverseBidding): NormalizedBid[] {
+  const initialBySupplier = new Map<string, number>();
+  for (const s of doc.invited_suppliers ?? []) {
+    initialBySupplier.set(s.supplier, s.initial_quotation_amount ?? 0);
+  }
+
+  const source =
+    (doc.bid_history ?? []).length > 0
+      ? doc.bid_history!
+      : reconstructHistoryFromItems(doc);
+
+  return source.map((b) => {
+    const previous = b.previous_rate ?? initialBySupplier.get(b.supplier) ?? 0;
+    const reduction =
+      b.reduction_amount ?? (previous > 0 ? Math.max(0, previous - b.bid_amount) : 0);
+    return { ...b, previous, reduction };
+  });
+}
+
+export interface SupplierBidTrail {
+  supplier: string;
+  initialQuote: number;
+  finalBid: number;
+  bidCount: number;
+  totalReductionAmount: number;
+  totalReductionPct: number;
+  /** Chronological (oldest → newest). */
+  rows: NormalizedBid[];
+  /** True when the trail is item-wise (rows carry item_code). */
+  itemWise: boolean;
+}
+
+/** Full negotiation trail for a single supplier — powers the expand row. */
+export function supplierBidHistory(
+  doc: ReverseBidding,
+  supplier: string
+): SupplierBidTrail {
+  const rows = buildBidHistoryRows(doc)
+    .filter((r) => sameSupplier(r.supplier, supplier))
+    .sort((a, b) => {
+      const ta = parseErpDateTime(a.bid_time) ?? 0;
+      const tb = parseErpDateTime(b.bid_time) ?? 0;
+      if (ta !== tb) return ta - tb;
+      return (a.round_number ?? 0) - (b.round_number ?? 0);
+    });
+
+  const invitedRow = (doc.invited_suppliers ?? []).find((s) =>
+    sameSupplier(s.supplier, supplier)
+  );
+  const initialQuote = invitedRow?.initial_quotation_amount ?? 0;
+  const finalBid =
+    invitedRow?.current_bid ??
+    (rows.length ? rows[rows.length - 1].bid_amount : 0);
+  const itemWise = rows.some((r) => !!r.item_code);
+
+  const totalReductionAmount =
+    initialQuote > 0 && finalBid > 0
+      ? Math.max(0, initialQuote - finalBid)
+      : rows.reduce((s, r) => s + (r.reduction > 0 ? r.reduction : 0), 0);
+  const totalReductionPct =
+    initialQuote > 0 && totalReductionAmount > 0
+      ? (totalReductionAmount / initialQuote) * 100
+      : 0;
+
+  return {
+    supplier,
+    initialQuote,
+    finalBid,
+    bidCount: rows.length,
+    totalReductionAmount,
+    totalReductionPct,
+    rows,
+    itemWise,
+  };
+}
+
+export interface BidTrendPoint {
+  round: number;
+  avgReductionPct: number;
+  lowestBid: number;
+  bids: number;
+}
+
+/** Per-round aggregates for the trend chart (price reduction over rounds). */
+export function buildBidTrend(doc: ReverseBidding): BidTrendPoint[] {
+  const byRound = new Map<number, NormalizedBid[]>();
+  for (const r of buildBidHistoryRows(doc)) {
+    const rd = r.round_number ?? 1;
+    const list = byRound.get(rd) ?? [];
+    list.push(r);
+    byRound.set(rd, list);
+  }
+  return [...byRound.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([round, list]) => {
+      const reductions = list
+        .map((r) => r.reduction_pct ?? 0)
+        .filter((p) => p > 0);
+      const avgReductionPct = reductions.length
+        ? reductions.reduce((a, b) => a + b, 0) / reductions.length
+        : 0;
+      const amounts = list.map((r) => r.bid_amount).filter((a) => a > 0);
+      return {
+        round,
+        avgReductionPct: Number(avgReductionPct.toFixed(2)),
+        lowestBid: amounts.length ? Math.min(...amounts) : 0,
+        bids: list.length,
+      };
+    });
 }
 
 /** Re-rank invited suppliers by current bid ascending (lowest = rank 1). */
@@ -1857,14 +2025,29 @@ export async function getAuctionSupplierScores(
  */
 export async function sendAuctionWinnerToReview(
   auctionName: string,
-  submittedBy?: string
+  submittedBy?: string,
+  /**
+   * Optional manual award override. When procurement chooses a supplier other
+   * than the auto-computed lowest bidder (e.g. accepting an AI recommendation
+   * or a strategic choice after reviewing the bid history), pass it here. The
+   * chosen supplier + price are persisted back onto the auction record.
+   */
+  override?: { supplier: string; price?: number }
 ): Promise<ReverseBidding> {
   const doc = await getReverseBidding(auctionName);
   if (deriveAuctionStatus(doc) !== "Completed") {
     throw new Error("The auction must be completed before approving a winner.");
   }
-  const supplier = doc.winning_supplier;
-  const winnerPrice = doc.winner_price ?? doc.lowest_bid ?? 0;
+
+  const supplier = (override?.supplier || doc.winning_supplier || "").trim();
+  const invitedRow = (doc.invited_suppliers ?? []).find((s) =>
+    sameSupplier(s.supplier, supplier)
+  );
+  const winnerPrice =
+    override?.price ??
+    (override?.supplier
+      ? invitedRow?.current_bid ?? invitedRow?.initial_quotation_amount ?? 0
+      : doc.winner_price ?? doc.lowest_bid ?? 0);
   if (!supplier || !(winnerPrice > 0)) {
     throw new Error("No winning supplier / winner price recorded.");
   }
@@ -1930,5 +2113,11 @@ export async function sendAuctionWinnerToReview(
 
   // Tag the auction so its status card reflects that it entered review.
   const remarks = `${(doc.remarks ?? "").replace(REJECTED_TAG, "").trim()}\n${APPROVED_TAG} → Legal Review ${formatERPNextDatetime(new Date())}`.trim();
-  return patchReverseBidding(auctionName, { remarks }, doc.modified);
+  const patch: Partial<ReverseBidding> = { remarks };
+  // Persist a manual award so the record reflects the supplier procurement chose.
+  if (override?.supplier && !sameSupplier(override.supplier, doc.winning_supplier)) {
+    patch.winning_supplier = supplier;
+    patch.winner_price = winnerPrice;
+  }
+  return patchReverseBidding(auctionName, patch, doc.modified);
 }

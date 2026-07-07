@@ -1384,6 +1384,51 @@ export async function getItems(
   });
 }
 
+/**
+ * Resolve a set of items by their exact codes in a single ERPNext call.
+ * Used to enrich BOM component rows with `item_group`, `description` and `uom`
+ * (BOM Item child rows don't reliably carry the item group).
+ */
+export async function getItemsByCodes(
+  codes: string[]
+): Promise<ItemSearchResult[]> {
+  const unique = Array.from(new Set(codes.filter((c) => !!c && c.trim())));
+  if (unique.length === 0) return [];
+
+  const raw = await apiGet<MaybeEnveloped<RawItem[]>>(
+    buildResourceUrl(ITEM_DOCTYPE),
+    {
+      params: {
+        fields: JSON.stringify([
+          "name",
+          "item_name",
+          "item_code",
+          "stock_uom",
+          "description",
+          "item_group",
+          "disabled",
+        ]),
+        filters: JSON.stringify([["item_code", "in", unique]]),
+        limit_page_length: Math.max(unique.length, 20),
+      },
+    }
+  );
+
+  const items = unwrap<RawItem[]>(raw, []);
+  return items.map<ItemSearchResult>((item) => {
+    const code = item.item_code || item.name;
+    return {
+      name: item.name,
+      item_code: code,
+      item_name: item.item_name || item.name,
+      description: item.description,
+      uom: item.stock_uom || "Nos",
+      item_group: item.item_group,
+      disabled: item.disabled,
+    };
+  });
+}
+
 /** Backwards-compatible alias kept for early callers. */
 export const searchItems = getItems;
 

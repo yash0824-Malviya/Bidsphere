@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo } from "react";
+import { lazy, Suspense, useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
@@ -30,6 +30,9 @@ import {
   type MaterialRequestWorkflowRecord,
 } from "../../api/materialRequestWorkflow";
 import { canCreateRfqFromMaterialRequest } from "../../api/createRFQFromMaterialRequest";
+import { syncMaterialRequestSlaBatch } from "../../api/slaIntegration";
+import SlaCountdownWidget from "../sla/SlaCountdownWidget";
+import type { MaterialRequestProcurementType } from "../../types/materialRequestWorkflow";
 import ProcurementTypeBadge from "../ProcurementTypeBadge";
 import { getDashboardConfig } from "../../config/dashboardRoles";
 import {
@@ -55,6 +58,7 @@ interface Props {
 interface ForwardedRow {
   mr: MaterialRequestWorkflowRecord;
   name: string;
+  procurementType: MaterialRequestProcurementType;
   department: string;
   requestDate: string;
   priority: string;
@@ -149,6 +153,11 @@ export default function ProcurementDashboard({ greetingName }: Props) {
     staleTime: 60_000,
     retry: false,
   });
+
+  useEffect(() => {
+    const queue = queueQuery.data;
+    if (queue && queue.length > 0) void syncMaterialRequestSlaBatch(queue);
+  }, [queueQuery.data]);
 
   const quotationsQuery = useQuery({
     queryKey: ["procurement-pending-quotations"],
@@ -343,6 +352,9 @@ export default function ProcurementDashboard({ greetingName }: Props) {
           })}
         </div>
       )}
+
+      {/* ── SLA countdowns for procurement-owned stages ────────────────── */}
+      <SlaCountdownWidget role="procurement" title="Procurement SLA Countdown" />
 
       {/* ── Section 2: Action Center ───────────────────────────────────── */}
       <section className="card p-4 sm:p-5">
