@@ -172,15 +172,6 @@ export default function WarehouseMaterialIssuedPage() {
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 px-4 py-8 duration-300 animate-in fade-in sm:px-6 lg:px-8">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-          Material Issued Logs
-        </h1>
-        <p className="text-sm text-slate-500">
-          Track historical stock disbursements, issue notes, and corresponding departments.
-        </p>
-      </div>
-
       {/* Filters */}
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="relative mb-3">

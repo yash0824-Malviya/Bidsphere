@@ -7,7 +7,8 @@ import {
   type ReactNode,
 } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import {
   Activity,
@@ -82,7 +83,11 @@ import { useOptionalLayout } from "../../contexts/LayoutContext";
 import { Skeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
 import { useAuthStore } from "../../store/authStore";
-import { canManageRFQs } from "../../config/roles";
+import { canManageRFQs, canManageReverseBidding } from "../../config/roles";
+import {
+  createReverseBiddingFromRFQ,
+  getReverseBiddingForRFQ,
+} from "../../api/reverseBidding";
 import type { RFQ, RFQSupplier, SupplierQuotation } from "../../types/erpnext";
 import { formatCurrency, formatDate } from "../../utils/format";
 import RejectedReviewActions from "../../components/sourcing/RejectedReviewActions";
@@ -333,6 +338,7 @@ function supplierStatusTone(
 }
 
 export default function RFQDetailPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { id = "" } = useParams();
@@ -358,6 +364,7 @@ export default function RFQDetailPage() {
   const [aiError, setAiError] = useState<string | null>(null);
   const aiStepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [creatingPO, setCreatingPO] = useState(false);
+  const [startingReverseBidding, setStartingReverseBidding] = useState(false);
   const [savedAnalysis, setSavedAnalysis] = useState<SavedAnalysisRecord | null>(
     () => readSavedAnalysis(rfqName)
   );
@@ -1239,6 +1246,46 @@ export default function RFQDetailPage() {
     }
   }
 
+  /**
+   * Procurement chose to negotiate: create (or reuse) a Reverse Bidding event
+   * from the manually selected AI-ranked suppliers and open the auction page.
+   * This does NOT touch the Legal/Finance/PO path — the auction feeds into it
+   * later via "Approve Winner".
+   */
+  async function handleStartReverseBidding(supplierNames: string[]) {
+    if (!rfq || startingReverseBidding) return;
+    setStartingReverseBidding(true);
+    try {
+      const existing = await getReverseBiddingForRFQ(rfq.name);
+      if (existing) {
+        toast(`Reverse auction already exists for ${rfq.name}.`, { icon: "ℹ️" });
+        setAiModalOpen(false);
+        navigate(
+          `/sourcing/reverse-bidding/${encodeURIComponent(existing.name)}`
+        );
+        return;
+      }
+      const rb = await createReverseBiddingFromRFQ({
+        rfqName: rfq.name,
+        approvedSuppliers: supplierNames,
+        procurementManager: user?.email,
+      });
+      toast.success(
+        `Reverse auction ${rb.name} created with ${supplierNames.length} suppliers.`
+      );
+      setAiModalOpen(false);
+      navigate(`/sourcing/reverse-bidding/${encodeURIComponent(rb.name)}`);
+    } catch (err) {
+      toast.error(
+        `Could not start reverse bidding: ${
+          err instanceof Error ? err.message : "Unknown error"
+        }`
+      );
+    } finally {
+      setStartingReverseBidding(false);
+    }
+  }
+
   /* ─────────────── RFQ submit ─────────────── */
 
   async function handleSubmitRFQ() {
@@ -1465,7 +1512,7 @@ export default function RFQDetailPage() {
           chosenSupplier={
             hasSelectedSupplier ? approvalState?.selected_supplier ?? null : null
           }
-          ctaLabel="Select Supplier"
+          ctaLabel="Create Purchase Order"
           ctaLoadingLabel="Submitting for Review…"
           ctaDoneMessage={
             poExists
@@ -1480,6 +1527,14 @@ export default function RFQDetailPage() {
           onSelectSupplier={
             isReadOnly || hasSelectedSupplier ? undefined : handleSelectAnySupplier
           }
+          onStartReverseBidding={
+            isReadOnly ||
+            hasSelectedSupplier ||
+            !canManageReverseBidding(userRole)
+              ? undefined
+              : handleStartReverseBidding
+          }
+          startingReverseBidding={startingReverseBidding}
         />
       </AIInsightsErrorBoundary>
 
@@ -1683,7 +1738,6 @@ export default function RFQDetailPage() {
       )}
 
       <RfqDetailHeader
-        title={parsedMessage.title || rfq.name}
         rfqName={rfq.name}
         isCompleted={isCompleted}
         status={rfq.status ?? "Draft"}
@@ -1780,59 +1834,59 @@ export default function RFQDetailPage() {
       {/* ── Procurement Command Center ── */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {/* Row 1 · Document Details */}
-        <CommandCard icon={FileText} title="Document Details">
+        <CommandCard icon={FileText} title={t("rfq.documentDetails")}>
           <div className="divide-y divide-neutral-100">
-            <KeyRow label="RFQ Number" value={rfq.name} mono strong />
-            <KeyRow label="Issued Date" value={formatDate(rfq.transaction_date)} />
-            <KeyRow label="Valid Till" value={validTillDisplay} />
-            <KeyRow label="Company" value={COMPANY} />
+            <KeyRow label={t("rfq.rfqNumber")} value={rfq.name} mono strong />
+            <KeyRow label={t("rfq.issuedDate")} value={formatDate(rfq.transaction_date)} />
+            <KeyRow label={t("rfq.validTill")} value={validTillDisplay} />
+            <KeyRow label={t("common.company")} value={COMPANY} />
           </div>
         </CommandCard>
 
         {/* Row 1 · Requested Items Summary */}
         <CommandCard
           icon={Layers}
-          title="Requested Items Summary"
-          badge={<Pill tone="brand">{rfq.items?.length ?? 0} items</Pill>}
+          title={t("rfq.requestedItemsSummary")}
+          badge={<Pill tone="brand">{t("rfq.itemsCount", { count: rfq.items?.length ?? 0 })}</Pill>}
         >
           <div className="grid grid-cols-3 gap-2">
-            <MiniStat value={rfq.items?.length ?? 0} label="Line Items" />
-            <MiniStat value={totalQty} label="Total Qty" />
-            <MiniStat value={uomCount} label="UOMs" />
+            <MiniStat value={rfq.items?.length ?? 0} label={t("rfq.lineItems")} />
+            <MiniStat value={totalQty} label={t("rfq.totalQty")} />
+            <MiniStat value={uomCount} label={t("rfq.uoms")} />
           </div>
         </CommandCard>
 
         {/* Row 1 · RFQ Status Center */}
-        <CommandCard icon={Activity} title="RFQ Status Center">
+        <CommandCard icon={Activity} title={t("rfq.statusCenter")}>
           <div className="space-y-2.5">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-500">Current Status</span>
+              <span className="text-sm text-neutral-500">{t("rfq.currentStatus")}</span>
               <StatusBadge status={rfq.status ?? "Draft"} />
             </div>
             <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-500">Document State</span>
+              <span className="text-sm text-neutral-500">{t("rfq.documentState")}</span>
               <Pill tone={rfq.docstatus === 1 ? "brand" : "neutral"}>
-                {rfq.docstatus === 1 ? "Submitted" : "Draft"}
+                {rfq.docstatus === 1 ? t("status.submitted") : t("status.draft")}
               </Pill>
             </div>
             <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-500">Procurement</span>
+              <span className="text-sm text-neutral-500">{t("rfq.procurement")}</span>
               {isCompleted ? (
                 <Pill tone="success">
                   <CheckCircle2 className="h-3 w-3" />
-                  PO Created
+                  {t("rfq.poCreated")}
                 </Pill>
               ) : (
-                <Pill tone="amber">In Progress</Pill>
+                <Pill tone="amber">{t("status.inProgress")}</Pill>
               )}
             </div>
           </div>
         </CommandCard>
 
         {/* Row 2 · RFQ Status */}
-        <CommandCard icon={Clock} title="RFQ Status">
+        <CommandCard icon={Clock} title={t("rfq.rfqStatus")}>
           <div className="mb-3 flex items-center justify-between rounded-lg border border-primary/15 bg-primary/5 px-3 py-2">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-500">Current Stage</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-500">{t("rfq.currentStage")}</span>
             <span className="text-xs font-bold text-primary-700">{currentStage}</span>
           </div>
           <ol>
@@ -1852,8 +1906,8 @@ export default function RFQDetailPage() {
         {/* Row 2 · Supplier Response Summary (neutral — no winner/ranking) */}
         <CommandCard
           icon={Users}
-          title="Supplier Response Summary"
-          badge={<Pill tone="brand">{supplierCount} invited</Pill>}
+          title={t("rfq.supplierResponseSummary")}
+          badge={<Pill tone="brand">{t("rfq.invitedCount", { count: supplierCount })}</Pill>}
         >
           <div className="space-y-3">
             {quotesQuery.isError && (
@@ -2008,12 +2062,12 @@ export default function RFQDetailPage() {
                 {aiLoading ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Analyzing…
+                    {t("rfq.analyzing")}
                   </>
                 ) : (
                   <>
                     <Sparkles className="h-4 w-4" />
-                    Perform AI Analysis
+                    {t("rfq.performAiAnalysis")}
                   </>
                 )}
               </button>
@@ -2036,6 +2090,21 @@ export default function RFQDetailPage() {
           </div>
         </CommandCard>
       </div>
+
+      {/* Reverse Bidding — available after AI analysis, before PO */}
+      {!procurementFinalized &&
+        hasQuotations &&
+        aiReady &&
+        savedAnalysis &&
+        canManageReverseBidding(userRole) && (
+          <ReverseBiddingCTA
+            rfqName={rfq.name}
+            approvedSuppliers={(savedAnalysis.analysis.supplier_analysis ?? [])
+              .filter((r) => r.verdict !== "AVOID")
+              .map((r) => r.name)}
+            procurementManager={user?.email}
+          />
+        )}
 
       {/* Items requested */}
       <div className="mt-6 overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
@@ -2240,7 +2309,6 @@ function BackLink() {
  * layout (same as PageHeader) so the top-bar title is suppressed while mounted.
  */
 function RfqDetailHeader({
-  title,
   rfqName,
   isCompleted,
   status,
@@ -2254,7 +2322,6 @@ function RfqDetailHeader({
   timeline,
   actions,
 }: {
-  title: string;
   rfqName: string;
   isCompleted: boolean;
   status: string;
@@ -2268,6 +2335,7 @@ function RfqDetailHeader({
   timeline: { label: string; meta: string; done: boolean; active: boolean }[];
   actions?: ReactNode;
 }) {
+  const { t } = useTranslation();
   const layout = useOptionalLayout();
   const register = layout?.registerPageHeader;
   const unregister = layout?.unregisterPageHeader;
@@ -2283,13 +2351,14 @@ function RfqDetailHeader({
       <BackLink />
 
       <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
-        {/* Title bar — large RFQ title, status + priority, actions */}
+        {/* Toolbar — document reference + status/priority + actions (no page title) */}
         <div className="flex flex-col gap-2.5 border-b border-neutral-100 px-5 py-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="truncate text-xl font-bold tracking-tight text-neutral-900 sm:text-2xl">
-                {title}
-              </h1>
+              <span className="inline-flex items-center gap-1.5 rounded-md bg-neutral-50 px-2 py-0.5 font-mono text-xs font-semibold text-neutral-500 ring-1 ring-inset ring-neutral-200">
+                <Sparkles className="h-3 w-3 text-primary-500" />
+                {rfqName}
+              </span>
               {isCompleted ? (
                 <span className="inline-flex items-center gap-1 rounded-full bg-success-50 px-2.5 py-0.5 text-[11px] font-semibold text-success-700 ring-1 ring-inset ring-success-200">
                   <CheckCircle2 className="h-3 w-3" />
@@ -2300,10 +2369,6 @@ function RfqDetailHeader({
               )}
               <PriorityPill value={priority} />
             </div>
-            <span className="mt-1.5 inline-flex items-center gap-1.5 rounded-md bg-neutral-50 px-2 py-0.5 font-mono text-xs font-semibold text-neutral-500 ring-1 ring-inset ring-neutral-200">
-              <Sparkles className="h-3 w-3 text-primary-500" />
-              {rfqName}
-            </span>
           </div>
           {actions && (
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
@@ -2315,17 +2380,17 @@ function RfqDetailHeader({
         {/* Overview — responsive two-column metadata grid */}
         <div className="grid grid-cols-1 gap-x-10 gap-y-1.5 px-5 py-3 sm:grid-cols-2">
           <dl className="divide-y divide-neutral-100/70">
-            <OverviewRow label="RFQ Number" value={rfqName} mono />
-            <OverviewRow label="Material Request" value={materialRequest} mono={materialRequest !== "—"} />
-            <OverviewRow label="Department" value={department} />
-            <OverviewRow label="Company" value={company} />
-            <OverviewRow label="Procurement Owner" value={owner} />
+            <OverviewRow label={t("rfq.rfqNumber")} value={rfqName} mono />
+            <OverviewRow label={t("rfq.materialRequest")} value={materialRequest} mono={materialRequest !== "—"} />
+            <OverviewRow label={t("rfq.department")} value={department} />
+            <OverviewRow label={t("common.company")} value={company} />
+            <OverviewRow label={t("rfq.procurementOwner")} value={owner} />
           </dl>
           <dl className="divide-y divide-neutral-100/70">
-            <OverviewRow label="Created Date" value={createdDate} />
-            <OverviewRow label="Valid Till" value={validTill} />
-            <OverviewRow label="Current Status" node={<StatusBadge status={status} />} />
-            <OverviewRow label="Priority" node={<PriorityPill value={priority} />} />
+            <OverviewRow label={t("rfq.createdDate")} value={createdDate} />
+            <OverviewRow label={t("rfq.validTill")} value={validTill} />
+            <OverviewRow label={t("rfq.currentStatus")} node={<StatusBadge status={status} />} />
+            <OverviewRow label={t("rfq.priority")} node={<PriorityPill value={priority} />} />
           </dl>
         </div>
 
@@ -2756,6 +2821,87 @@ function ApprovalWorkflowTracker({
           )}
         </span>
       </div>
+    </div>
+  );
+}
+
+/* ── Reverse Bidding call-to-action (after AI evaluation) ───────────────── */
+
+function ReverseBiddingCTA({
+  rfqName,
+  approvedSuppliers,
+  procurementManager,
+}: {
+  rfqName: string;
+  approvedSuppliers: string[];
+  procurementManager?: string;
+}) {
+  const navigate = useNavigate();
+
+  const existingQuery = useQuery({
+    queryKey: ["reverse-bidding-for-rfq", rfqName],
+    queryFn: () => getReverseBiddingForRFQ(rfqName),
+    staleTime: 30_000,
+  });
+  const existing = existingQuery.data;
+
+  const createMutation = useMutation({
+    mutationFn: () =>
+      createReverseBiddingFromRFQ({
+        rfqName,
+        approvedSuppliers,
+        procurementManager,
+      }),
+    onSuccess: (rb) => {
+      toast.success(`Reverse auction ${rb.name} created.`);
+      navigate(`/sourcing/reverse-bidding/${encodeURIComponent(rb.name)}`);
+    },
+    onError: (e: unknown) =>
+      toast.error(
+        e instanceof Error ? e.message : "Could not create reverse auction"
+      ),
+  });
+
+  return (
+    <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-[#0ea5e9]/30 bg-[#0ea5e9]/5 p-5 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-start gap-3">
+        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-[#0ea5e9]/15 text-[#0ea5e9]">
+          <Activity className="h-5 w-5" />
+        </span>
+        <div>
+          <p className="text-sm font-semibold text-neutral-900">
+            Reverse Bidding
+          </p>
+          <p className="text-xs leading-relaxed text-neutral-500">
+            Invite the AI-shortlisted suppliers to a live reverse auction to
+            drive the price down before creating a Purchase Order.
+          </p>
+        </div>
+      </div>
+      {existing ? (
+        <button
+          type="button"
+          onClick={() =>
+            navigate(
+              `/sourcing/reverse-bidding/${encodeURIComponent(existing.name)}`
+            )
+          }
+          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-[#0ea5e9] bg-white px-4 py-2 text-sm font-semibold text-[#0ea5e9] shadow-sm transition hover:bg-[#0ea5e9]/5"
+        >
+          <Sparkles className="h-4 w-4" />
+          View Reverse Auction
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => createMutation.mutate()}
+          disabled={createMutation.isPending}
+          className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#0ea5e9] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Sparkles className="h-4 w-4" />
+          {createMutation.isPending ? "Creating…" : "Create Reverse Bidding"}
+        </button>
+      )}
     </div>
   );
 }

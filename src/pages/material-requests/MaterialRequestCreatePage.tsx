@@ -3,12 +3,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 
 import toast from "react-hot-toast";
 
 import {
   ArrowLeft,
+  Briefcase,
   ClipboardList,
+  Factory,
   Loader2,
   Package,
   Plus,
@@ -24,9 +27,16 @@ import {
   submitMaterialRequestWorkflow,
 } from "../../api/materialRequestWorkflow";
 import { updateMaterialRequest } from "../../api/purchasing";
-import { MR_WORKFLOW_FIELD } from "../../types/materialRequestWorkflow";
+import {
+  MR_PROCUREMENT_TYPE_FIELD,
+  MR_WORKFLOW_FIELD,
+} from "../../types/materialRequestWorkflow";
+import { defaultProcurementTypeForDepartment } from "../../config/procurementType";
 
-import type { MaterialRequestPriority } from "../../types/materialRequestWorkflow";
+import type {
+  MaterialRequestPriority,
+  MaterialRequestProcurementType,
+} from "../../types/materialRequestWorkflow";
 
 import MaterialRequestItemLineRow, {
   type MaterialRequestDraftLine,
@@ -114,10 +124,14 @@ function validateMaterialRequestForm(
 
 export default function MaterialRequestCreatePage() {
   const navigate = useNavigate();
+  const { t } = useTranslation();
 
   const queryClient = useQueryClient();
 
   const user = useAuthStore((s) => s.user);
+  // Department users must never see warehouse inventory. Stock columns (and the
+  // underlying stock fetch) are only shown to non-department creators (admin).
+  const showStock = user?.role !== "department";
 
   const [searchParams] = useSearchParams();
   const editName = searchParams.get("edit");
@@ -129,6 +143,10 @@ export default function MaterialRequestCreatePage() {
 
   const [department, setDepartment] = useState("Production");
   const [departmentTouched, setDepartmentTouched] = useState(false);
+
+  const [procurementType, setProcurementType] =
+    useState<MaterialRequestProcurementType>("Direct");
+  const [procurementTypeTouched, setProcurementTypeTouched] = useState(false);
 
   const [priority, setPriority] = useState<MaterialRequestPriority>("Medium");
 
@@ -179,6 +197,12 @@ export default function MaterialRequestCreatePage() {
       setDepartment(doc.custom_department);
       setDepartmentTouched(true);
     }
+    if (doc[MR_PROCUREMENT_TYPE_FIELD]) {
+      setProcurementType(
+        doc[MR_PROCUREMENT_TYPE_FIELD] === "Indirect" ? "Indirect" : "Direct",
+      );
+      setProcurementTypeTouched(true);
+    }
     if (doc.custom_priority) setPriority(doc.custom_priority);
     setPurpose(doc.custom_purpose || "Purchase");
     // `remarks` carries the free-text notes when they differ from the intent
@@ -220,6 +244,13 @@ export default function MaterialRequestCreatePage() {
   const resolvedDepartment = resolveDepartmentValue(
     departmentTouched ? department : fallbackDepartment,
   );
+
+  // Procurement type defaults from the department (Production → Direct, support
+  // departments → Indirect) until the user explicitly overrides it.
+  const resolvedProcurementType: MaterialRequestProcurementType =
+    procurementTypeTouched
+      ? procurementType
+      : defaultProcurementTypeForDepartment(resolvedDepartment);
 
   const usedItemCodes = useMemo(() => {
     const set = new Set<string>();
@@ -274,6 +305,7 @@ export default function MaterialRequestCreatePage() {
           transaction_date: transactionIso,
           schedule_date: scheduleIso,
           custom_department: resolvedDepartment,
+          [MR_PROCUREMENT_TYPE_FIELD]: resolvedProcurementType,
           custom_priority: priority,
           custom_purpose: purpose,
           remarks: notes.trim() || purpose,
@@ -299,6 +331,8 @@ export default function MaterialRequestCreatePage() {
         schedule_date: scheduleIso,
 
         department: resolvedDepartment,
+
+        procurement_type: resolvedProcurementType,
 
         priority,
 
@@ -519,6 +553,23 @@ export default function MaterialRequestCreatePage() {
               />
             </Field>
 
+            <Field label={t("procurementType.label")} required>
+              <ProcurementTypePicker
+                value={resolvedProcurementType}
+                onChange={(next) => {
+                  setProcurementTypeTouched(true);
+                  setProcurementType(next);
+                }}
+                disabled={busy}
+                t={t}
+              />
+              <p className="mt-1 text-[11px] text-neutral-500">
+                {resolvedProcurementType === "Direct"
+                  ? t("procurementType.helpDirect")
+                  : t("procurementType.helpIndirect")}
+              </p>
+            </Field>
+
             <Field label="Priority" required>
               <PriorityPicker
                 value={priority}
@@ -583,8 +634,9 @@ export default function MaterialRequestCreatePage() {
                 </h3>
 
                 <p className="text-xs text-neutral-500">
-                  Search live ERPNext items — UOM and stock are filled
-                  automatically. Use Description to note what each item is for.
+                  {showStock
+                    ? "Search live ERPNext items — UOM and stock are filled automatically. Use Description to note what each item is for."
+                    : "Search live ERPNext items — UOM is filled automatically. Use Description to note what each item is for."}
                 </p>
               </div>
             </div>
@@ -611,16 +663,22 @@ export default function MaterialRequestCreatePage() {
                 : "overflow-x-auto overflow-y-visible"
             }
           >
-            <table className="min-w-[1350px] w-full table-fixed text-sm">
+            <table
+              className={`${showStock ? "min-w-[1350px]" : "min-w-[1010px]"} w-full table-fixed text-sm`}
+            >
               <colgroup>
                 <col style={{ width: 40 }} />
                 <col style={{ width: 320 }} />
                 <col style={{ width: 420 }} />
                 <col style={{ width: 90 }} />
                 <col style={{ width: 90 }} />
-                <col style={{ width: 110 }} />
-                <col style={{ width: 110 }} />
-                <col style={{ width: 120 }} />
+                {showStock && (
+                  <>
+                    <col style={{ width: 110 }} />
+                    <col style={{ width: 110 }} />
+                    <col style={{ width: 120 }} />
+                  </>
+                )}
                 <col style={{ width: 50 }} />
               </colgroup>
 
@@ -656,23 +714,27 @@ export default function MaterialRequestCreatePage() {
                     Qty <span className="text-danger-500">*</span>
                   </th>
 
-                  <th
-                    className={`${shouldScrollLineItems ? "sticky top-0 z-10 bg-neutral-50/95 backdrop-blur" : ""} px-3 py-3 text-right`}
-                  >
-                    Current Stock
-                  </th>
+                  {showStock && (
+                    <>
+                      <th
+                        className={`${shouldScrollLineItems ? "sticky top-0 z-10 bg-neutral-50/95 backdrop-blur" : ""} px-3 py-3 text-right`}
+                      >
+                        Current Stock
+                      </th>
 
-                  <th
-                    className={`${shouldScrollLineItems ? "sticky top-0 z-10 bg-neutral-50/95 backdrop-blur" : ""} px-3 py-3 text-right`}
-                  >
-                    Available Stock
-                  </th>
+                      <th
+                        className={`${shouldScrollLineItems ? "sticky top-0 z-10 bg-neutral-50/95 backdrop-blur" : ""} px-3 py-3 text-right`}
+                      >
+                        Available Stock
+                      </th>
 
-                  <th
-                    className={`${shouldScrollLineItems ? "sticky top-0 z-10 bg-neutral-50/95 backdrop-blur" : ""} px-3 py-3`}
-                  >
-                    Stock Status
-                  </th>
+                      <th
+                        className={`${shouldScrollLineItems ? "sticky top-0 z-10 bg-neutral-50/95 backdrop-blur" : ""} px-3 py-3`}
+                      >
+                        Stock Status
+                      </th>
+                    </>
+                  )}
 
                   <th
                     className={`${shouldScrollLineItems ? "sticky top-0 z-10 bg-neutral-50/95 backdrop-blur" : ""} px-2 py-3`}
@@ -690,6 +752,8 @@ export default function MaterialRequestCreatePage() {
                     rowNumber={idx + 1}
 
                     showErrors={showErrors}
+
+                    showStock={showStock}
 
                     canRemove={items.length > 1}
 
@@ -771,6 +835,8 @@ export default function MaterialRequestCreatePage() {
               </>
             ) : isEditMode ? (
               "Save & Submit for Review"
+            ) : resolvedProcurementType === "Indirect" ? (
+              "Submit for Admin Approval"
             ) : (
               "Submit for Warehouse Review"
             )}
@@ -806,6 +872,63 @@ const PRIORITY_META: Record<
     idle: "border-neutral-200 bg-white text-neutral-500 hover:border-red-200",
   },
 };
+
+function ProcurementTypePicker({
+  value,
+  onChange,
+  disabled,
+  t,
+}: {
+  value: MaterialRequestProcurementType;
+  onChange: (next: MaterialRequestProcurementType) => void;
+  disabled?: boolean;
+  t: (key: string) => string;
+}) {
+  const options: Array<{
+    key: MaterialRequestProcurementType;
+    label: string;
+    Icon: typeof Factory;
+    active: string;
+  }> = [
+    {
+      key: "Direct",
+      label: t("procurementType.direct"),
+      Icon: Factory,
+      active: "border-blue-500 bg-blue-50 text-blue-700",
+    },
+    {
+      key: "Indirect",
+      label: t("procurementType.indirect"),
+      Icon: Briefcase,
+      active: "border-orange-500 bg-orange-50 text-orange-700",
+    },
+  ];
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {options.map((opt) => {
+        const active = value === opt.key;
+        const { Icon } = opt;
+        return (
+          <button
+            key={opt.key}
+            type="button"
+            disabled={disabled}
+            aria-pressed={active}
+            onClick={() => onChange(opt.key)}
+            className={`inline-flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+              active
+                ? opt.active
+                : "border-neutral-200 bg-white text-neutral-500 hover:border-neutral-300"
+            }`}
+          >
+            <Icon className="h-3.5 w-3.5" />
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 function PriorityPicker({
   value,

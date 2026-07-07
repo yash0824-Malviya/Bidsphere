@@ -318,12 +318,7 @@ export default function RFQtoPOConversionPage() {
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-100">
             <Package className="h-5 w-5 text-primary-600" />
           </div>
-          <div>
-            <h1 className="text-xl font-bold text-neutral-900">
-              Create Purchase Order
-            </h1>
-            <p className="text-sm text-neutral-500">from {decodedId}</p>
-          </div>
+          <p className="text-sm font-semibold text-neutral-700">from {decodedId}</p>
         </div>
         {poExists && (
           <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold ring-1 ${

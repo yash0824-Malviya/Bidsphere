@@ -3,47 +3,38 @@ import { useLayoutEffect, type ReactNode } from "react";
 import { useOptionalLayout } from "../contexts/LayoutContext";
 
 interface Props {
-  title: string;
+  /**
+   * Page titles have been removed from the global layout — the top of every
+   * page shows ONLY the breadcrumb (rendered by the global Header). `title`,
+   * `welcome`, and `description` are still accepted so existing call sites keep
+   * compiling, but they are intentionally never rendered. Only `actions` (the
+   * page-level toolbar) is displayed.
+   */
+  title?: string;
   welcome?: string;
   description?: string;
   actions?: ReactNode;
 }
 
-export default function PageHeader({
-  title,
-  welcome,
-  description,
-  actions,
-}: Props) {
+export default function PageHeader({ actions }: Props) {
   const layout = useOptionalLayout();
   const register = layout?.registerPageHeader;
   const unregister = layout?.unregisterPageHeader;
 
-  // Signal the global header to suppress its duplicate title while this
-  // page-level header is mounted (no-op outside the main layout). Depends
-  // only on the stable register/unregister callbacks to avoid re-runs.
+  // Kept for backwards compatibility with the global header's layout state.
   useLayoutEffect(() => {
     if (!register || !unregister) return;
     register();
     return () => unregister();
   }, [register, unregister]);
 
+  // No title/description is rendered anymore — content begins immediately after
+  // the breadcrumb. When a page provides toolbar actions, render them alone.
+  if (!actions) return null;
+
   return (
-    <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
-      <div className="min-w-0 flex-1">
-        <h2 className="page-title">{title}</h2>
-        {welcome && (
-          <p className="mt-1 text-sm font-medium text-neutral-800 sm:text-base">
-            {welcome}
-          </p>
-        )}
-        {description && <p className="page-subtitle">{description}</p>}
-      </div>
-      {actions && (
-        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
-          {actions}
-        </div>
-      )}
+    <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
+      {actions}
     </div>
   );
 }

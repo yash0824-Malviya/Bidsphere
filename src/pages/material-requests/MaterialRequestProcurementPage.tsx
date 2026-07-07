@@ -1,18 +1,24 @@
 import { useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronRight, Truck, Package } from "lucide-react";
 
 import {
+  getMaterialRequestProcurementType,
   getMaterialRequestWorkflowStatus,
   fetchProcurementQueue,
   parseForwardedItemsFromMr,
   type MaterialRequestWorkflowRecord,
 } from "../../api/materialRequestWorkflow";
-import type { MaterialRequestWorkflowStatus } from "../../types/materialRequestWorkflow";
+import type {
+  MaterialRequestProcurementType,
+  MaterialRequestWorkflowStatus,
+} from "../../types/materialRequestWorkflow";
 import { canCreateRfqFromMaterialRequest } from "../../api/createRFQFromMaterialRequest";
 import PageHeader from "../../components/PageHeader";
 import StatusBadge from "../../components/StatusBadge";
+import ProcurementTypeBadge from "../../components/ProcurementTypeBadge";
 import ErrorState from "../../components/ErrorState";
 import { TableSkeleton } from "../../components/Skeleton";
 import { formatDate } from "../../utils/format";
@@ -22,6 +28,8 @@ import { formatDate } from "../../utils/format";
 interface ShortageItem {
   item_code: string;
   item_name: string;
+  requested_qty: number;
+  available_qty: number;
   forward_qty: number;
   uom: string;
   warehouse: string;
@@ -31,6 +39,7 @@ interface GroupedMrRow {
   mr: MaterialRequestWorkflowRecord;
   mrNumber: string;
   department: string;
+  procurementType: MaterialRequestProcurementType;
   priority: string;
   requiredDate: string;
   warehouseRemarks: string;
@@ -53,22 +62,34 @@ function buildGroupedMrRows(
       forwardedItems.length > 0
         ? forwardedItems
             .filter((fi) => (fi.forward_qty ?? fi.shortage_qty ?? 0) > 0)
-            .map((fi) => ({
-              item_code: fi.item_code,
-              item_name: fi.item_name ?? fi.item_code,
-              forward_qty: fi.forward_qty ?? fi.shortage_qty ?? 0,
-              uom: fi.uom ?? "Nos",
-              warehouse: fi.warehouse ?? "—",
-            }))
+            .map((fi) => {
+              const forward_qty = fi.forward_qty ?? fi.shortage_qty ?? 0;
+              const requested_qty = fi.requested_qty ?? forward_qty;
+              return {
+                item_code: fi.item_code,
+                item_name: fi.item_name ?? fi.item_code,
+                requested_qty,
+                available_qty:
+                  fi.issued_qty ?? Math.max(0, requested_qty - forward_qty),
+                forward_qty,
+                uom: fi.uom ?? "Nos",
+                warehouse: fi.warehouse ?? "—",
+              };
+            })
         : (mr.items ?? [])
             .filter((item) => (Number(item.qty) || 0) > 0)
-            .map((item) => ({
-              item_code: item.item_code,
-              item_name: item.item_name ?? item.item_code,
-              forward_qty: Number(item.qty) || 0,
-              uom: item.uom ?? "Nos",
-              warehouse: item.warehouse ?? "—",
-            }));
+            .map((item) => {
+              const requested_qty = Number(item.qty) || 0;
+              return {
+                item_code: item.item_code,
+                item_name: item.item_name ?? item.item_code,
+                requested_qty,
+                available_qty: 0,
+                forward_qty: requested_qty,
+                uom: item.uom ?? "Nos",
+                warehouse: item.warehouse ?? "—",
+              };
+            });
 
     const totalRemainingQty = shortageItems.reduce(
       (sum, item) => sum + item.forward_qty,
@@ -79,6 +100,7 @@ function buildGroupedMrRows(
       mr,
       mrNumber: mr.name,
       department: mr.custom_department || mr.department || "—",
+      procurementType: getMaterialRequestProcurementType(mr),
       priority: mr.custom_priority || "Medium",
       requiredDate: formatDate(mr.schedule_date),
       warehouseRemarks: mr.custom_warehouse_remarks || mr.remarks || "—",
@@ -136,16 +158,24 @@ function ActionCell({ mr }: { mr: MaterialRequestWorkflowRecord }) {
 /* ─── page ───────────────────────────────────────────────────────────────── */
 
 export default function MaterialRequestProcurementPage() {
+  const { t } = useTranslation();
   const [expandedMrNames, setExpandedMrNames] = useState<Set<string>>(
     new Set(),
   );
+  const [typeFilter, setTypeFilter] =
+    useState<MaterialRequestProcurementType | null>(null);
 
   const { data: mrs = [], isLoading, isError, error } = useQuery({
     queryKey: ["mr-procurement-queue"],
     queryFn: fetchProcurementQueue,
   });
 
-  const groupedRows = useMemo(() => buildGroupedMrRows(mrs), [mrs]);
+  const groupedRows = useMemo(() => {
+    const rows = buildGroupedMrRows(mrs);
+    return typeFilter
+      ? rows.filter((r) => r.procurementType === typeFilter)
+      : rows;
+  }, [mrs, typeFilter]);
 
   const toggleExpand = (mrName: string) => {
     setExpandedMrNames((prev) => {
@@ -187,6 +217,35 @@ export default function MaterialRequestProcurementPage() {
       <div className="mb-6 rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-sm text-blue-900">
         All shortage items belonging to the same Material Request are grouped together.
         Click <strong>Create RFQ</strong> to start a single RFQ prefilled with all remaining shortage items.
+      </div>
+
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+          {t("procurementType.filterLabel")}
+        </span>
+        {([null, "Direct", "Indirect"] as const).map((opt) => {
+          const active = typeFilter === opt;
+          const label =
+            opt === null
+              ? t("procurementType.all")
+              : opt === "Direct"
+                ? t("procurementType.direct")
+                : t("procurementType.indirect");
+          return (
+            <button
+              key={opt ?? "all"}
+              type="button"
+              onClick={() => setTypeFilter(opt)}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                active
+                  ? "bg-primary-600 text-white"
+                  : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
       </div>
 
       <div className="card overflow-hidden">
@@ -272,6 +331,10 @@ export default function MaterialRequestProcurementPage() {
                               >
                                 {row.mrNumber}
                               </Link>
+                              <ProcurementTypeBadge
+                                type={row.procurementType}
+                                withIcon={false}
+                              />
                             </div>
 
                             {/* 2. Department */}
@@ -352,7 +415,13 @@ export default function MaterialRequestProcurementPage() {
                                       Item Name / Description
                                     </th>
                                     <th className="px-4 py-2 text-right font-semibold">
-                                      Remaining (Shortage) Qty
+                                      Requested Qty
+                                    </th>
+                                    <th className="px-4 py-2 text-right font-semibold">
+                                      Available Qty
+                                    </th>
+                                    <th className="px-4 py-2 text-right font-semibold">
+                                      Shortage Qty
                                     </th>
                                     <th className="px-4 py-2 text-left font-semibold">
                                       UOM
@@ -373,6 +442,12 @@ export default function MaterialRequestProcurementPage() {
                                       </td>
                                       <td className="px-4 py-2 text-neutral-700">
                                         {item.item_name}
+                                      </td>
+                                      <td className="whitespace-nowrap px-4 py-2 text-right tabular-nums text-neutral-700">
+                                        {item.requested_qty}
+                                      </td>
+                                      <td className="whitespace-nowrap px-4 py-2 text-right tabular-nums text-neutral-600">
+                                        {item.available_qty}
                                       </td>
                                       <td className="whitespace-nowrap px-4 py-2 text-right font-semibold tabular-nums text-amber-700">
                                         {item.forward_qty}

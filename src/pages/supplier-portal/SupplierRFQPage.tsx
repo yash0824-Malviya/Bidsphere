@@ -39,6 +39,15 @@ import {
   todayIso,
 } from "../../utils/format";
 import SupplierPortalLayout from "./SupplierPortalLayout";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
+
+const DELIVERY_DAY_OPTIONS = [1, 2, 3, 5, 7, 10, 14, 15, 21, 30, 45, 60, 90] as const;
 
 interface SupplierSession {
   supplierName: string;
@@ -1522,6 +1531,66 @@ function WorkflowProgress({
   );
 }
 
+function DeliveryDaysField({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (days: number) => void;
+}) {
+  const isPresetValue = (DELIVERY_DAY_OPTIONS as readonly number[]).includes(value);
+  const [isCustom, setIsCustom] = useState(!isPresetValue);
+
+  const selectValue = isCustom ? "custom" : String(value);
+
+  const handleSelect = (next: string) => {
+    if (next === "custom") {
+      // Keep whatever integer is already stored as the custom starting point.
+      setIsCustom(true);
+      return;
+    }
+    setIsCustom(false);
+    onChange(Number(next));
+  };
+
+  return (
+    <div>
+      <label className="mb-0.5 block text-[10px] font-medium text-neutral-600">
+        Delivery Days
+      </label>
+      <Select value={selectValue} onValueChange={handleSelect}>
+        <SelectTrigger className="tabular-nums py-1.5 text-sm">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {DELIVERY_DAY_OPTIONS.map((d) => (
+            <SelectItem key={d} value={String(d)}>
+              {d} {d === 1 ? "Day" : "Days"}
+            </SelectItem>
+          ))}
+          <SelectItem value="custom">Custom…</SelectItem>
+        </SelectContent>
+      </Select>
+      {isCustom && (
+        <div className="mt-1.5">
+          <label className="mb-0.5 block text-[10px] font-medium text-neutral-600">
+            Custom Days
+          </label>
+          <input
+            type="number"
+            min={0}
+            value={value || ""}
+            onChange={(e) => onChange(Number(e.target.value))}
+            placeholder="Enter number of days"
+            className="input-field tabular-nums py-1.5 text-sm"
+            autoFocus
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function QuoteItemCard({
   line,
   index,
@@ -1567,19 +1636,10 @@ function QuoteItemCard({
             className={`input-field tabular-nums py-1.5 text-sm ${!priced ? "border-amber-200 bg-amber-50/30" : ""}`}
           />
         </div>
-        <div>
-          <label className="mb-0.5 block text-[10px] font-medium text-neutral-600">
-            Delivery Days
-          </label>
-          <input
-            type="number"
-            min={0}
-            value={line.delivery_days || ""}
-            onChange={(e) => onPatch(index, { delivery_days: Number(e.target.value) })}
-            placeholder="7"
-            className="input-field tabular-nums py-1.5 text-sm"
-          />
-        </div>
+        <DeliveryDaysField
+          value={line.delivery_days}
+          onChange={(days) => onPatch(index, { delivery_days: days })}
+        />
         <div>
           <label className="mb-0.5 block text-[10px] font-medium text-neutral-600">
             Line Total

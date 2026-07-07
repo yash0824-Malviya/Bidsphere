@@ -50,9 +50,6 @@ export default function FinanceManagerBudgetDashboard() {
             <Wallet className="h-5 w-5 text-emerald-600" />
           </div>
           <div>
-            <h1 className="text-base font-bold text-neutral-900">
-              Finance Manager Budget Dashboard
-            </h1>
             <p className="text-xs text-neutral-500">
               ERPNext budget workflow · Approvals · Utilization · Monitoring
             </p>

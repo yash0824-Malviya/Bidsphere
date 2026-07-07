@@ -929,6 +929,31 @@ export async function fetchRawSQ(name: string): Promise<Record<string, unknown>>
 }
 
 /** Fetch a single Supplier Quotation including child items. */
+/**
+ * Update a single legal-document custom field on a Supplier Quotation.
+ *
+ * Suppliers replace/attach legal documents against the live Supplier
+ * Quotation (ERPNext is the single source of truth — no mock data). We use
+ * `frappe.client.set_value` so the write works both while the quotation is a
+ * Draft and (for `allow_on_submit` legal fields) after it has been submitted,
+ * up until Procurement locks it by selecting a winner.
+ */
+export async function updateSupplierQuotationLegalDoc(
+  sqName: string,
+  fieldname: string,
+  value: string
+): Promise<void> {
+  if (!sqName || !fieldname) {
+    throw new Error("Missing Supplier Quotation name or field for legal-doc update");
+  }
+  await apiPost("/api/method/frappe.client.set_value", {
+    doctype: SQ_DOCTYPE,
+    name: sqName,
+    fieldname,
+    value,
+  });
+}
+
 export async function getSupplierQuotation(
   name: string
 ): Promise<SupplierQuotation> {

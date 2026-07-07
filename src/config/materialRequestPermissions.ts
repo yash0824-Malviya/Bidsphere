@@ -14,6 +14,16 @@ export function canReviewMaterialRequest(role: AppRole | undefined): boolean {
   return role === "warehouse" || role === "admin";
 }
 
+/**
+ * Admin Manager reviews INDIRECT material requests (approve / reject) before
+ * they reach Procurement. Only the admin role holds this gate.
+ */
+export function canReviewIndirectMaterialRequest(
+  role: AppRole | undefined,
+): boolean {
+  return role === "admin";
+}
+
 /** Procurement views forwarded MRs and creates RFQ — never creates MRs. */
 export function canViewProcurementMaterialRequests(role: AppRole | undefined): boolean {
   return role === "procurement" || role === "admin";

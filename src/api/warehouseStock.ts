@@ -1,6 +1,8 @@
 /**
  * Warehouse stock overview — live ERPNext Bin + Item data (no mock fallbacks).
  */
+import type { QueryClient } from "@tanstack/react-query";
+
 import { apiGet, buildListConfig, buildResourceUrl, getCount, withSilent, COMPANY } from "./erpnext";
 import type { Filter } from "./erpnext";
 import type { Bin, Item } from "../types/erpnext";
@@ -270,3 +272,39 @@ export const WAREHOUSE_STOCK_QUERY_KEY = ["warehouse", "stock-summary"] as const
 export const WAREHOUSE_NAMES_QUERY_KEY = ["warehouse", "warehouse-names"] as const;
 export const WAREHOUSE_STOCK_STALE_MS = 5 * 60_000;
 export const WAREHOUSE_STOCK_PAGE_SIZE = DEFAULT_PAGE_SIZE;
+
+/**
+ * Every React Query key that surfaces live ERPNext stock (Bin), inventory,
+ * goods-receipt or procurement-queue data. ERPNext updates `Bin.actual_qty`
+ * synchronously when a Purchase Receipt is submitted, so invalidating all of
+ * these immediately after a GRN forces every stock view to refetch live
+ * quantities — no stale/cached numbers survive a receipt.
+ *
+ * Prefix keys (e.g. `["warehouse"]`, `["bins"]`) match every query whose key
+ * starts with that prefix (React Query's default `exact: false`).
+ */
+const WAREHOUSE_STOCK_INVALIDATION_KEYS: readonly (readonly unknown[])[] = [
+  ["warehouse"], // stock-summary, inventory, pending-requests, issued, incoming-pos, recent-grn
+  ["bins"], // Inventory catalog page
+  ["items"], // Inventory catalog page item master
+  ["item-bins"], // Item detail on-hand per warehouse
+  ["item-movements"], // Item detail stock ledger movements
+  ["purchase-receipts"], // GRN list / history
+  ["purchase-receipt"], // Single GRN detail
+  ["incoming-purchase-orders"], // Deliveries awaiting receipt
+  ["open-purchase-orders"],
+  ["po-grns"], // GRNs linked to a PO
+  ["warehouse-grn-list"],
+  ["mr-procurement-queue"], // Procurement Required queue (may move to Ready to Issue)
+] as const;
+
+/**
+ * Refresh every live-stock, inventory, GRN and procurement view. Call this in
+ * the success handler of every Purchase Receipt (GRN) submission so warehouse
+ * inventory reflects the received quantities immediately, from ERPNext `Bin`.
+ */
+export function invalidateWarehouseStock(queryClient: QueryClient): void {
+  for (const queryKey of WAREHOUSE_STOCK_INVALIDATION_KEYS) {
+    void queryClient.invalidateQueries({ queryKey: queryKey as unknown[] });
+  }
+}

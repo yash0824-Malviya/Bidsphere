@@ -157,6 +157,7 @@ const PROCUREMENT_SOURCING_CHILDREN: NavChild[] = [
   { label: "New RFQ", to: "/sourcing/rfq/new" },
   { label: "RFQ Template Library", to: "/sourcing/rfq-templates" },
   { label: "Supplier Quotations", to: "/sourcing/supplier-quotations" },
+  { label: "Reverse Bidding", to: "/sourcing/reverse-bidding" },
 ];
 
 /**
@@ -763,6 +764,13 @@ export function canAccessPath(role: AppRole, pathname: string): boolean {
   // Finance Manager may approve/monitor budgets but not create them.
   if (role === "finance" && path === "/budget/create") return false;
 
+  // Reverse Bidding — Finance has READ-ONLY visibility (dashboard/list/detail).
+  // Procurement reaches it through the shared "/sourcing" prefix below; Legal,
+  // Department and Warehouse are blocked by their dedicated allowlists above.
+  if (role === "finance" && path.startsWith("/sourcing/reverse-bidding")) {
+    return true;
+  }
+
   // Procurement carries the "budget" module for read-only visibility only
   // (Budget Dashboard + Monitoring) — it must not reach budget creation,
   // approvals, or pending-review workflows, which are Finance-only.
@@ -843,6 +851,24 @@ export function canAccessPath(role: AppRole, pathname: string): boolean {
  */
 export function canManageRFQs(role: AppRole | undefined): boolean {
   return role === "admin" || role === "procurement";
+}
+
+/**
+ * Reverse Bidding management (create auction, invite, schedule, approve, PO).
+ *
+ * Business rule: only the Procurement Manager (and Admin for support) may run
+ * auctions. Finance has read-only visibility; Department, Warehouse and Legal
+ * have no access. Suppliers bid through the separate supplier portal.
+ */
+export function canManageReverseBidding(role: AppRole | undefined): boolean {
+  return role === "admin" || role === "procurement";
+}
+
+/** Read-only visibility of the Reverse Bidding module (Finance + managers). */
+export function canViewReverseBidding(role: AppRole | undefined): boolean {
+  return (
+    role === "admin" || role === "procurement" || role === "finance"
+  );
 }
 
 /** First P2P route the role can land on — used by the /p2p index redirect. */

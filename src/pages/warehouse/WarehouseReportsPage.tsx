@@ -91,16 +91,8 @@ export default function WarehouseReportsPage() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-6 animate-in fade-in duration-300">
-      {/* Title & Actions */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900 font-display">
-            Warehouse Reports
-          </h1>
-          <p className="text-sm text-slate-500">
-            Generate insights, audit inventory distribution, and review valuation summaries.
-          </p>
-        </div>
+      {/* Actions toolbar */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
         <div>
           <button
             onClick={() => alert("Report downloaded successfully (Mock CSV)")}

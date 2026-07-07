@@ -1,5 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { AlertTriangle, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 export type ConfirmTone = "danger" | "warning" | "primary";
 
@@ -44,11 +45,14 @@ export default function ConfirmDialog({
   title,
   description,
   children,
-  confirmLabel = "Confirm",
-  cancelLabel = "Cancel",
+  confirmLabel,
+  cancelLabel,
   tone = "danger",
   isLoading,
 }: Props) {
+  const { t } = useTranslation();
+  const resolvedConfirmLabel = confirmLabel ?? t("common.confirm");
+  const resolvedCancelLabel = cancelLabel ?? t("common.cancel");
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
@@ -80,7 +84,7 @@ export default function ConfirmDialog({
         <button
           type="button"
           onClick={onClose}
-          aria-label="Close"
+          aria-label={t("common.close")}
           className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100"
         >
           <X className="h-4 w-4" />
@@ -113,7 +117,7 @@ export default function ConfirmDialog({
             disabled={isLoading}
             className="btn-touch w-full rounded-md border border-neutral-300 bg-white px-3 py-2.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 sm:w-auto sm:py-1.5"
           >
-            {cancelLabel}
+            {resolvedCancelLabel}
           </button>
           <button
             type="button"
@@ -121,7 +125,7 @@ export default function ConfirmDialog({
             disabled={isLoading}
             className={`btn-touch w-full rounded-md px-3 py-2.5 text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 disabled:opacity-60 sm:w-auto sm:py-1.5 ${TONE_BUTTON[tone]}`}
           >
-            {isLoading ? "Working…" : confirmLabel}
+            {isLoading ? t("common.working") : resolvedConfirmLabel}
           </button>
         </div>
       </div>

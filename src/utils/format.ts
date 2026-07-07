@@ -5,6 +5,7 @@ import {
   parseERPNextDateInput,
   todayERPNextDate,
 } from "./erpNextDate";
+import { getIntlLocale } from "../i18n/locale";
 
 export const DEFAULT_CURRENCY = "USD";
 
@@ -15,7 +16,7 @@ export const formatCurrency = (
   if (amount === null || amount === undefined || amount === "") return "—";
   const n = typeof amount === "number" ? amount : Number(amount);
   if (Number.isNaN(n)) return "—";
-  return new Intl.NumberFormat("en-US", {
+  return new Intl.NumberFormat(getIntlLocale(), {
     style: "currency",
     currency: DEFAULT_CURRENCY,
     minimumFractionDigits: 2,
@@ -29,7 +30,7 @@ export function formatCurrencyCompact(amount: number): string {
   const abs = Math.abs(amount);
   if (abs >= 1_000) {
     try {
-      return new Intl.NumberFormat("en-US", {
+      return new Intl.NumberFormat(getIntlLocale(), {
         style: "currency",
         currency: DEFAULT_CURRENCY,
         notation: "compact",
@@ -51,7 +52,7 @@ export function formatCurrencyIn(
   const n = typeof amount === "number" ? amount : Number(amount);
   if (Number.isNaN(n)) return "—";
   try {
-    return new Intl.NumberFormat("en-US", {
+    return new Intl.NumberFormat(getIntlLocale(), {
       style: "currency",
       currency: currency || DEFAULT_CURRENCY,
       minimumFractionDigits: 2,
@@ -71,7 +72,7 @@ export function formatCurrencyCompactIn(
   const abs = Math.abs(amount);
   if (abs >= 1_000) {
     try {
-      return new Intl.NumberFormat("en-US", {
+      return new Intl.NumberFormat(getIntlLocale(), {
         style: "currency",
         currency: currency || DEFAULT_CURRENCY,
         notation: "compact",
@@ -108,18 +109,44 @@ export function formatDateTime(
   return formatDate(value, "MMM d, yyyy · HH:mm");
 }
 
-/** Premium display date — e.g. Jun 25, 2026 */
+/** Resolve a value into a valid Date, or null. */
+function toDate(value: string | Date | undefined | null): Date | null {
+  if (!value) return null;
+  if (value instanceof Date) return isValid(value) ? value : null;
+  const parsed = parseERPNextDateInput(value);
+  const d = parsed?.isValid() === true ? parsed.toDate() : parseISO(value);
+  return isValid(d) ? d : null;
+}
+
+/** Localized display date — e.g. "Jul 7, 2026" / "7 juil. 2026" / "07.07.2026". */
 export function formatDisplayDate(
   value: string | Date | undefined | null
 ): string {
-  return formatDate(value, "MMM d, yyyy");
+  const d = toDate(value);
+  if (!d) return "—";
+  try {
+    return new Intl.DateTimeFormat(getIntlLocale(), {
+      dateStyle: "medium",
+    }).format(d);
+  } catch {
+    return formatDate(value, "MMM d, yyyy");
+  }
 }
 
-/** Premium display date/time — e.g. Jun 23, 2026, 5:06 PM */
+/** Localized display date/time. */
 export function formatDisplayDateTime(
   value: string | Date | undefined | null
 ): string {
-  return formatDate(value, "MMM d, yyyy, h:mm a");
+  const d = toDate(value);
+  if (!d) return "—";
+  try {
+    return new Intl.DateTimeFormat(getIntlLocale(), {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(d);
+  } catch {
+    return formatDate(value, "MMM d, yyyy, h:mm a");
+  }
 }
 
 /** Format a number with thousand separators. */
@@ -130,7 +157,7 @@ export function formatNumber(
   if (value === null || value === undefined || value === "") return "—";
   const n = typeof value === "number" ? value : Number(value);
   if (Number.isNaN(n)) return "—";
-  return new Intl.NumberFormat("en-US", {
+  return new Intl.NumberFormat(getIntlLocale(), {
     minimumFractionDigits: fractionDigits,
     maximumFractionDigits: fractionDigits,
   }).format(n);

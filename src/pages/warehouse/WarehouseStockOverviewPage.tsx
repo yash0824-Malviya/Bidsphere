@@ -98,15 +98,6 @@ export default function WarehouseStockOverviewPage() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-6 animate-in fade-in duration-300">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-          Stock Overview
-        </h1>
-        <p className="text-sm text-slate-500">
-          Monitor physical on-hand stock, reserved allocations, and reorder alerts across all warehouses.
-        </p>
-      </div>
-
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">

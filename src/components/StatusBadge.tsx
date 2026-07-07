@@ -1,4 +1,7 @@
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
+
+import { translateStatus } from "../i18n/statusLabels";
 
 type StatusTone = "neutral" | "info" | "warning" | "success" | "danger";
 
@@ -35,6 +38,7 @@ const STATUS_STYLES: Record<string, string> = {
   Active: "bg-success-100 text-success-500",
   Inactive: "bg-neutral-100 text-neutral-500",
   "Below Reorder": "bg-danger-100 text-danger-500",
+  "Admin Review": "bg-purple-100 text-purple-700",
   "Under Warehouse Review": "bg-amber-100 text-amber-700",
   "Stock Available": "bg-teal-100 text-teal-700",
   "Material Issued": "bg-emerald-100 text-emerald-700",
@@ -99,6 +103,7 @@ interface Props {
 }
 
 export default memo(function StatusBadge({ status, tone }: Props) {
+  const { t } = useTranslation();
   const label = status?.trim() || "—";
   const resolvedTone: StatusTone = tone ?? STATUS_TONES[label] ?? "neutral";
   const classes = STATUS_STYLES[label] ?? TONE_CLASSES[resolvedTone];
@@ -107,7 +112,7 @@ export default memo(function StatusBadge({ status, tone }: Props) {
     <span
       className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${classes}`}
     >
-      {label}
+      {translateStatus(t, label)}
     </span>
   );
 });

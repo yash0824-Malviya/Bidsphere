@@ -154,6 +154,11 @@ export default function ItemDetailPage() {
         }
       />
 
+      <p className="mb-4 text-sm font-semibold text-neutral-700">
+        {item.item_name}
+        <span className="font-normal text-neutral-500"> · {item.item_code}</span>
+      </p>
+
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <InfoCard
           label="Total Stock"

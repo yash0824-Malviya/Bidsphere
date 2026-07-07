@@ -862,7 +862,7 @@ export default function WarehouseReviewDetailPage() {
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 px-4 py-8 sm:px-6 lg:px-8 animate-in fade-in duration-300">
-      {/* Back + title */}
+      {/* Back + status toolbar (no page title — content starts at the card below) */}
       <div className="flex items-center gap-3">
         <Link
           to="/warehouse/material-requests/pending"
@@ -871,15 +871,7 @@ export default function WarehouseReviewDetailPage() {
         >
           <ArrowLeft className="h-4 w-4" />
         </Link>
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-xl font-bold text-slate-900">{mr.name}</h1>
-            <MrStatusBadge status={mr.status} />
-          </div>
-          <p className="mt-0.5 text-xs text-slate-500">
-            Warehouse Review — Multi-Warehouse Stock Decision
-          </p>
-        </div>
+        <MrStatusBadge status={mr.status} />
       </div>
 
       {/* MR header card */}

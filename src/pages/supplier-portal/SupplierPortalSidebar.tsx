@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import {
   ChevronDown,
   ChevronRight,
   CreditCard,
+  Gavel,
   HelpCircle,
   LayoutDashboard,
   LifeBuoy,
@@ -13,60 +15,62 @@ import {
   Truck,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import type { TFunction } from "i18next";
 
 import BrandLogo from "../../components/BrandLogo";
 import { APP_NAME, APP_SUPPLIER_PORTAL, COMPANY_NAME } from "../../config/branding";
 
 interface NavChild {
-  label: string;
+  labelKey: string;
   to: string;
 }
 
 interface NavGroup {
-  label: string;
+  labelKey: string;
   icon: LucideIcon;
   to: string;
   children?: NavChild[];
 }
 
 const NAV: NavGroup[] = [
-  { label: "Dashboard", icon: LayoutDashboard, to: "/supplier/dashboard" },
+  { labelKey: "supplierNav.dashboard", icon: LayoutDashboard, to: "/supplier/dashboard" },
   {
-    label: "RFQs",
+    labelKey: "supplierNav.rfqs",
     icon: Receipt,
     to: "/supplier/rfqs",
     children: [
-      { label: "My RFQs", to: "/supplier/rfqs" },
-      { label: "Submitted Quotations", to: "/supplier/quotations" },
+      { labelKey: "supplierNav.myRfqs", to: "/supplier/rfqs" },
+      { labelKey: "supplierNav.submittedQuotations", to: "/supplier/quotations" },
     ],
   },
+  { labelKey: "supplierNav.liveAuctions", icon: Gavel, to: "/supplier/auctions" },
   {
-    label: "Orders",
+    labelKey: "supplierNav.orders",
     icon: ShoppingCart,
     to: "/supplier/purchase-orders",
     children: [
-      { label: "Purchase Orders", to: "/supplier/purchase-orders" },
-      { label: "Delivery Schedule", to: "/supplier/delivery-schedule" },
-      { label: "Goods Receipts (GRN)", to: "/supplier/grn" },
+      { labelKey: "supplierNav.purchaseOrders", to: "/supplier/purchase-orders" },
+      { labelKey: "supplierNav.deliverySchedule", to: "/supplier/delivery-schedule" },
+      { labelKey: "supplierNav.goodsReceipts", to: "/supplier/grn" },
     ],
   },
   {
-    label: "Finance",
+    labelKey: "supplierNav.finance",
     icon: CreditCard,
     to: "/supplier/vouchers",
     children: [
-      { label: "Vouchers", to: "/supplier/vouchers" },
-      { label: "Invoices", to: "/supplier/invoices" },
-      { label: "Payments", to: "/supplier/payments" },
+      { labelKey: "supplierNav.vouchers", to: "/supplier/vouchers" },
+      { labelKey: "supplierNav.invoices", to: "/supplier/invoices" },
+      { labelKey: "supplierNav.payments", to: "/supplier/payments" },
     ],
   },
   {
-    label: "Support",
+    labelKey: "supplierNav.support",
     icon: LifeBuoy,
     to: "/supplier/help-desk",
     children: [
-      { label: "Help", to: "/supplier/help-desk" },
-      { label: "Contact Support", to: "/supplier/contact-support" },
+      { labelKey: "supplierNav.help", to: "/supplier/help-desk" },
+      { labelKey: "supplierNav.contactSupport", to: "/supplier/contact-support" },
     ],
   },
 ];
@@ -86,6 +90,7 @@ interface Props {
 
 export default function SupplierPortalSidebar({ supplierName }: Props) {
   const { pathname } = useLocation();
+  const { t } = useTranslation();
 
   return (
     <aside className="hidden h-full w-[260px] shrink-0 flex-col border-r border-neutral-200 bg-slate-900 text-slate-300 lg:flex">
@@ -103,7 +108,7 @@ export default function SupplierPortalSidebar({ supplierName }: Props) {
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
         {NAV.map((group) => (
-          <SidebarGroup key={group.label} group={group} pathname={pathname} />
+          <SidebarGroup key={group.labelKey} group={group} pathname={pathname} t={t} />
         ))}
       </nav>
 
@@ -117,9 +122,11 @@ export default function SupplierPortalSidebar({ supplierName }: Props) {
 function SidebarGroup({
   group,
   pathname,
+  t,
 }: {
   group: NavGroup;
   pathname: string;
+  t: TFunction;
 }) {
   const hasChildren = (group.children?.length ?? 0) > 0;
   const active = groupActive(pathname, group);
@@ -142,7 +149,7 @@ function SidebarGroup({
         }`}
       >
         <Icon className="h-4 w-4 shrink-0" />
-        {group.label}
+        {t(group.labelKey)}
       </Link>
     );
   }
@@ -159,7 +166,7 @@ function SidebarGroup({
         }`}
       >
         <Icon className="h-4 w-4 shrink-0" />
-        <span className="flex-1">{group.label}</span>
+        <span className="flex-1">{t(group.labelKey)}</span>
         {open ? (
           <ChevronDown className="h-3.5 w-3.5 opacity-60" />
         ) : (
@@ -180,7 +187,7 @@ function SidebarGroup({
                     : "text-slate-400 hover:bg-slate-800 hover:text-white"
                 }`}
               >
-                {child.label}
+                {t(child.labelKey)}
               </Link>
             );
           })}
@@ -192,13 +199,15 @@ function SidebarGroup({
 
 export function SupplierPortalMobileNav() {
   const { pathname } = useLocation();
+  const { t } = useTranslation();
   const tabs = [
-    { label: "Home", to: "/supplier/dashboard", icon: LayoutDashboard },
-    { label: "RFQs", to: "/supplier/rfqs", icon: Receipt },
-    { label: "Orders", to: "/supplier/purchase-orders", icon: ShoppingCart },
-    { label: "GRN", to: "/supplier/grn", icon: Truck },
-    { label: "Finance", to: "/supplier/vouchers", icon: CreditCard },
-    { label: "Help", to: "/supplier/help-desk", icon: HelpCircle },
+    { label: t("supplierNav.home"), to: "/supplier/dashboard", icon: LayoutDashboard },
+    { label: t("supplierNav.rfqs"), to: "/supplier/rfqs", icon: Receipt },
+    { label: t("supplierNav.auctions"), to: "/supplier/auctions", icon: Gavel },
+    { label: t("supplierNav.orders"), to: "/supplier/purchase-orders", icon: ShoppingCart },
+    { label: t("supplierNav.grn"), to: "/supplier/grn", icon: Truck },
+    { label: t("supplierNav.finance"), to: "/supplier/vouchers", icon: CreditCard },
+    { label: t("supplierNav.help"), to: "/supplier/help-desk", icon: HelpCircle },
   ];
 
   return (
@@ -226,7 +235,7 @@ export function SupplierPortalMobileNav() {
         className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-neutral-600 hover:bg-neutral-50"
       >
         <Mail className="h-3.5 w-3.5" />
-        Contact
+        {t("supplierNav.contact")}
       </Link>
     </div>
   );

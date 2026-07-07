@@ -23,6 +23,8 @@ import {
   getPurchaseReceipt,
   submitPurchaseReceipt,
 } from "../../api/purchasing";
+import { reconcileProcurementReadyToIssue } from "../../api/materialRequestWorkflow";
+import { invalidateWarehouseStock } from "../../api/warehouseStock";
 import { invalidateFinanceDashboardMetrics } from "../../api/financeWorkflow";
 import ReadOnlyViewBadge from "../../components/document/ReadOnlyViewBadge";
 import EmptyState from "../../components/EmptyState";
@@ -139,13 +141,22 @@ export default function GRNDetailPage() {
   }
 
   const submitMutation = useMutation({
-    mutationFn: () => submitPurchaseReceipt(name),
+    mutationFn: async () => {
+      const submitted = await submitPurchaseReceipt(name);
+      // Goods are now on-hand in ERPNext Bin — advance any procurement MR whose
+      // forwarded quantity is fully received to "Ready to Issue". Best-effort.
+      try {
+        await reconcileProcurementReadyToIssue();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("[GRN submit] Ready-to-Issue reconciliation skipped:", err);
+      }
+      return submitted;
+    },
     onSuccess: () => {
       toast.success(`${name} submitted — goods received recorded.`);
-      void queryClient.invalidateQueries({
-        queryKey: ["purchase-receipt", name],
-      });
-      void queryClient.invalidateQueries({ queryKey: ["purchase-receipts"] });
+      // Refresh live-stock, inventory, GRN and procurement views immediately.
+      invalidateWarehouseStock(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["grns-awaiting-invoice"] });
       invalidateFinanceDashboardMetrics(queryClient);
       const linkedPO =
@@ -235,15 +246,15 @@ export default function GRNDetailPage() {
     <div className="space-y-3 pb-4">
       <BackLink backToPoPath={backToPoPath} />
 
-      {/* Page header + large status */}
+      {/* Toolbar — document reference + status/actions (no page title) */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-primary-600">
-            Goods Receipt Note
-          </p>
-          <h1 className="mt-0.5 text-xl font-bold text-neutral-900 sm:text-2xl">{grn.name}</h1>
-          <p className="mt-0.5 text-sm text-neutral-500">
-            {grn.supplier_name ?? grn.supplier}
+          <p className="text-sm font-semibold text-neutral-700">
+            {grn.name}
+            <span className="font-normal text-neutral-500">
+              {" "}
+              &middot; {grn.supplier_name ?? grn.supplier}
+            </span>
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

@@ -1,20 +1,19 @@
 import { ChevronRight, Home, Menu, Search, X } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 
 import { useLayout } from "../../contexts/LayoutContext";
 import { useAuthStore } from "../../store/authStore";
-import {
-  getBreadcrumbs,
-  getPageTitle,
-  isDashboardRoute,
-} from "../../utils/routes";
+import { translateRouteTitle } from "../../i18n/navLabels";
+import { getBreadcrumbs, isDashboardRoute } from "../../utils/routes";
 import GlobalSearch from "../GlobalSearch";
+import LanguageSwitcher from "../LanguageSwitcher";
 import NotificationsBell from "../NotificationsBell";
 
 export default function Header() {
+  const { t } = useTranslation();
   const { pathname } = useLocation();
   const role = useAuthStore((s) => s.user?.role);
-  const title = getPageTitle(pathname);
   const breadcrumbs = getBreadcrumbs(pathname);
   const onDashboard = isDashboardRoute(pathname, role);
   const {
@@ -23,7 +22,6 @@ export default function Header() {
     mobileSearchOpen,
     toggleMobileSearch,
     setMobileSearchOpen,
-    hasPageHeader,
   } = useLayout();
 
   return (
@@ -42,37 +40,33 @@ export default function Header() {
 
         {!onDashboard && (
           <div className="min-w-0 flex-1 md:flex-none">
-            {!hasPageHeader && (
-              <h1 className="heading-page truncate">{title}</h1>
-            )}
             <nav
               aria-label="Breadcrumb"
-              className={`${
-                hasPageHeader ? "" : "mt-0.5"
-              } hidden items-center gap-1 text-xs text-neutral-500 sm:flex`}
+              className="hidden items-center gap-1 text-xs text-neutral-500 sm:flex"
             >
               <Link
                 to="/dashboard"
                 className="flex items-center gap-1 transition-colors hover:text-primary"
               >
                 <Home className="h-3 w-3" />
-                <span>Home</span>
+                <span>{t("common.home")}</span>
               </Link>
               {breadcrumbs.map((crumb, idx) => {
                 const isLast = idx === breadcrumbs.length - 1;
+                const crumbLabel = translateRouteTitle(t, crumb.label);
                 return (
                   <span key={crumb.to} className="flex items-center gap-1">
                     <ChevronRight className="h-3 w-3 text-neutral-300" />
                     {isLast ? (
                       <span className="font-medium text-neutral-700">
-                        {crumb.label}
+                        {crumbLabel}
                       </span>
                     ) : (
                       <Link
                         to={crumb.to}
                         className="transition-colors hover:text-primary"
                       >
-                        {crumb.label}
+                        {crumbLabel}
                       </Link>
                     )}
                   </span>
@@ -100,6 +94,7 @@ export default function Header() {
             <GlobalSearch />
           </div>
 
+          <LanguageSwitcher />
           <NotificationsBell />
         </div>
       </div>

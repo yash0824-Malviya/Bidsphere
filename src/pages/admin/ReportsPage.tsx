@@ -1,9 +1,12 @@
 import { useLayoutEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import {
   BarChart3,
+  Briefcase,
   Calendar,
   Download,
+  Factory,
   FileText,
   ShoppingCart,
   Truck,
@@ -12,8 +15,10 @@ import {
 
 import { getReportData } from "../../api/admin";
 import type { ReportRow } from "../../api/admin";
+import { fetchProcurementTypeKpis } from "../../api/materialRequestWorkflow";
 import { Skeleton } from "../../components/Skeleton";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
+import { formatCurrencyCompact } from "../../utils/format";
 
 type ReportType = "rfq" | "supplier" | "po" | "spend";
 
@@ -52,9 +57,16 @@ export default function ReportsPage() {
     return () => layout?.unregisterPageHeader();
   }, [layout]);
 
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<ReportType>("rfq");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+
+  const { data: typeKpis } = useQuery({
+    queryKey: ["procurement-type-kpis"],
+    queryFn: fetchProcurementTypeKpis,
+    staleTime: 60_000,
+  });
 
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ["admin-report", activeTab, dateFrom, dateTo],
@@ -105,6 +117,57 @@ export default function ReportsPage() {
         >
           <Download className="h-3 w-3" /> Export CSV
         </button>
+      </div>
+
+      {/* Direct vs Indirect procurement KPIs */}
+      <div className="mb-4">
+        <h2 className="mb-1.5 text-[9px] font-bold uppercase tracking-wider text-neutral-400">
+          {t("reports.procurementTypeBreakdown")}
+        </h2>
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-3 xl:grid-cols-6">
+          <TypeKpi
+            icon={Factory}
+            color="text-blue-600"
+            iconBg="bg-blue-100"
+            label={t("reports.totalDirect")}
+            value={typeKpis?.directCount ?? 0}
+          />
+          <TypeKpi
+            icon={Briefcase}
+            color="text-orange-600"
+            iconBg="bg-orange-100"
+            label={t("reports.totalIndirect")}
+            value={typeKpis?.indirectCount ?? 0}
+          />
+          <TypeKpi
+            icon={DollarSign}
+            color="text-blue-600"
+            iconBg="bg-blue-100"
+            label={t("reports.directSpend")}
+            value={formatCurrencyCompact(typeKpis?.directSpend ?? 0)}
+          />
+          <TypeKpi
+            icon={DollarSign}
+            color="text-orange-600"
+            iconBg="bg-orange-100"
+            label={t("reports.indirectSpend")}
+            value={formatCurrencyCompact(typeKpis?.indirectSpend ?? 0)}
+          />
+          <TypeKpi
+            icon={ShoppingCart}
+            color="text-blue-600"
+            iconBg="bg-blue-100"
+            label={t("reports.directPurchaseOrders")}
+            value={typeKpis?.directPurchaseOrders ?? 0}
+          />
+          <TypeKpi
+            icon={ShoppingCart}
+            color="text-orange-600"
+            iconBg="bg-orange-100"
+            label={t("reports.indirectPurchaseOrders")}
+            value={typeKpis?.indirectPurchaseOrders ?? 0}
+          />
+        </div>
       </div>
 
       {/* Tabs */}
@@ -197,6 +260,34 @@ export default function ReportsPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function TypeKpi({
+  icon: Icon,
+  color,
+  iconBg,
+  label,
+  value,
+}: {
+  icon: typeof Factory;
+  color: string;
+  iconBg: string;
+  label: string;
+  value: string | number;
+}) {
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2.5 shadow-sm">
+      <div className={`mb-1.5 flex h-6 w-6 items-center justify-center rounded-md ${iconBg}`}>
+        <Icon className={`h-3 w-3 ${color}`} />
+      </div>
+      <p className="text-lg font-bold tabular-nums leading-tight text-neutral-900">
+        {value}
+      </p>
+      <p className="mt-0.5 text-[9px] font-medium uppercase tracking-wider text-neutral-500">
+        {label}
+      </p>
     </div>
   );
 }

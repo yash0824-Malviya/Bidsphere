@@ -74,16 +74,6 @@ export default function WarehouseItemMasterPage() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-6 animate-in fade-in duration-300">
-      {/* Title */}
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-          Item Master Catalog
-        </h1>
-        <p className="text-sm text-slate-500">
-          Browse the master repository of items, registered categories, units of measure, and default reorder thresholds.
-        </p>
-      </div>
-
       {/* Filter and Search Bar */}
       <div className="flex flex-col gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:flex-row md:items-center">
         {/* Search */}

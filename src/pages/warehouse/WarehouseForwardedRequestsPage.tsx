@@ -87,16 +87,6 @@ export default function WarehouseForwardedRequestsPage() {
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 px-4 py-8 sm:px-6 lg:px-8">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-          Procurement Required
-        </h1>
-        <p className="text-sm text-slate-500">
-          Shortage items forwarded to Procurement. Track RFQ progress for each
-          line.
-        </p>
-      </div>
-
       <div className="flex flex-col gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:flex-row md:items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />

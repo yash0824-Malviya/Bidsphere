@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ChevronRight,
   ClipboardList,
+  Gavel,
   GitCompare,
   Loader2,
   Lock,
@@ -72,7 +73,19 @@ interface Props {
   onCreatePO: () => void;
   /** Called when the user confirms supplier selection via the new dialog. */
   onSelectSupplier?: (payload: SupplierSelectionPayload) => void;
+  /**
+   * When provided, enables the multi-select ranking checkboxes and the
+   * "Start Reverse Bidding" action. Receives the selected supplier display
+   * names (2–5). Omit to hide reverse-bidding entirely (unchanged behaviour).
+   */
+  onStartReverseBidding?: (supplierNames: string[]) => void;
+  /** Loading flag for the reverse-bidding action button. */
+  startingReverseBidding?: boolean;
 }
+
+/** Reverse Bidding requires between 2 and 5 selected suppliers. */
+export const REVERSE_BIDDING_MIN_SUPPLIERS = 2;
+export const REVERSE_BIDDING_MAX_SUPPLIERS = 5;
 
 const TABS: { id: TabId; label: string; icon: typeof BarChart3 }[] = [
   { id: "overview", label: "Overview", icon: Sparkles },
@@ -728,10 +741,20 @@ function SupplierLeaderboard({
   suppliers,
   recommendedName,
   onSelect,
+  selectable = false,
+  selected,
+  onToggle,
+  maxReached = false,
 }: {
   suppliers: SupplierAnalysisRow[];
   recommendedName: string;
   onSelect: (name: string) => void;
+  /** Show the multi-select checkbox column (Reverse Bidding). */
+  selectable?: boolean;
+  selected?: Set<string>;
+  onToggle?: (name: string) => void;
+  /** True once the max number of suppliers is already selected. */
+  maxReached?: boolean;
 }) {
   return (
     <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
@@ -739,6 +762,7 @@ function SupplierLeaderboard({
         <table className="w-full min-w-[640px] text-left text-sm">
           <thead>
             <tr className="border-b border-neutral-200 bg-neutral-50/90 text-[10px] font-bold uppercase tracking-wider text-neutral-500">
+              {selectable && <th className="px-4 py-3">Select</th>}
               <th className="px-4 py-3">Rank</th>
               <th className="px-4 py-3">Supplier</th>
               <th className="px-4 py-3">AI Score</th>
@@ -755,13 +779,30 @@ function SupplierLeaderboard({
               const risk = supplierRiskLevel(s);
               const verdictStyle =
                 VERDICT_STYLES[s.verdict] ?? VERDICT_STYLES["GOOD OPTION"];
+              const isChecked = selected?.has(s.name) ?? false;
               return (
                 <tr
                   key={s.name}
                   className={`transition hover:bg-neutral-50/80 ${
-                    isRecommended ? "bg-primary-50/40" : ""
+                    isChecked
+                      ? "bg-primary-50/60"
+                      : isRecommended
+                        ? "bg-primary-50/40"
+                        : ""
                   }`}
                 >
+                  {selectable && (
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        disabled={!isChecked && maxReached}
+                        onChange={() => onToggle?.(s.name)}
+                        aria-label={`Select ${s.name} for reverse bidding`}
+                        className="h-4 w-4 cursor-pointer rounded border-neutral-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-40"
+                      />
+                    </td>
+                  )}
                   <td className="px-4 py-3">
                     <RankBadge rank={idx + 1} />
                   </td>
@@ -818,6 +859,10 @@ function RecommendationResultsScreen({
   chosenSupplier,
   onSelectSupplier,
   onViewComparison,
+  bidSelectable = false,
+  bidSelected,
+  onToggleBid,
+  bidMaxReached = false,
 }: {
   result: AIRecommendation;
   ranked: SupplierAnalysisRow[];
@@ -826,6 +871,10 @@ function RecommendationResultsScreen({
   chosenSupplier?: string | null;
   onSelectSupplier: (name: string) => void;
   onViewComparison: () => void;
+  bidSelectable?: boolean;
+  bidSelected?: Set<string>;
+  onToggleBid?: (name: string) => void;
+  bidMaxReached?: boolean;
 }) {
   const overallScore = clampScore(recommendedRow.score?.overall ?? result.confidence_score);
   const risk = supplierRiskLevel(recommendedRow);
@@ -973,7 +1022,9 @@ function RecommendationResultsScreen({
               Supplier Ranking Leaderboard
             </p>
             <p className="mt-0.5 text-sm text-neutral-600">
-              Ranked by composite AI score across all evaluation criteria
+              {bidSelectable
+                ? `Select ${REVERSE_BIDDING_MIN_SUPPLIERS}–${REVERSE_BIDDING_MAX_SUPPLIERS} suppliers to run a reverse auction. AI ranking is a recommendation — the final decision is yours.`
+                : "Ranked by composite AI score across all evaluation criteria"}
             </p>
           </div>
           <button
@@ -989,7 +1040,19 @@ function RecommendationResultsScreen({
           suppliers={ranked}
           recommendedName={result.recommended_supplier}
           onSelect={onSelectSupplier}
+          selectable={bidSelectable}
+          selected={bidSelected}
+          onToggle={onToggleBid}
+          maxReached={bidMaxReached}
         />
+        {bidSelectable && (
+          <p className="mt-2 text-xs text-neutral-500">
+            {(bidSelected?.size ?? 0)} selected
+            {bidMaxReached
+              ? ` · maximum ${REVERSE_BIDDING_MAX_SUPPLIERS} reached`
+              : ""}
+          </p>
+        )}
       </div>
 
       {/* Executive summary */}
@@ -1366,11 +1429,14 @@ export default function AIAnalysisModal({
   onRetry,
   onCreatePO,
   onSelectSupplier,
+  onStartReverseBidding,
+  startingReverseBidding = false,
 }: Props) {
   const [activeTab, setActiveTab] = useState<TabId>("compare");
   const [viewMode, setViewMode] = useState<ResultsViewMode>("recommendation");
   const [selectedSupplier, setSelectedSupplier] = useState<string | null>(null);
   const [confirmingSupplier, setConfirmingSupplier] = useState<SupplierAnalysisRow | null>(null);
+  const [bidSelection, setBidSelection] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!open) return;
@@ -1395,6 +1461,7 @@ export default function AIAnalysisModal({
       setActiveTab("compare");
       setSelectedSupplier(null);
       setConfirmingSupplier(null);
+      setBidSelection(new Set());
     }
   }, [result, loading]);
 
@@ -1403,6 +1470,7 @@ export default function AIAnalysisModal({
       setViewMode("recommendation");
       setSelectedSupplier(null);
       setConfirmingSupplier(null);
+      setBidSelection(new Set());
     }
   }, [open]);
 
@@ -1452,6 +1520,34 @@ export default function AIAnalysisModal({
       grandTotal: confirmingSupplier.grand_total,
     });
     setConfirmingSupplier(null);
+  }
+
+  const reverseBiddingEnabled =
+    !!onStartReverseBidding && !poAlreadyExists && !chosenSupplier;
+
+  function toggleBidSupplier(name: string) {
+    setBidSelection((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) {
+        next.delete(name);
+      } else if (next.size < REVERSE_BIDDING_MAX_SUPPLIERS) {
+        next.add(name);
+      }
+      return next;
+    });
+  }
+
+  const bidCount = bidSelection.size;
+  const canStartReverseBidding =
+    reverseBiddingEnabled &&
+    bidCount >= REVERSE_BIDDING_MIN_SUPPLIERS &&
+    bidCount <= REVERSE_BIDDING_MAX_SUPPLIERS &&
+    !startingReverseBidding &&
+    !creatingPO;
+
+  function handleStartReverseBidding() {
+    if (!onStartReverseBidding || !canStartReverseBidding) return;
+    onStartReverseBidding([...bidSelection]);
   }
 
   if (!open) {
@@ -1646,6 +1742,10 @@ export default function AIAnalysisModal({
                 chosenSupplier={chosenSupplier}
                 onSelectSupplier={setSelectedSupplier}
                 onViewComparison={openComparisonView}
+                bidSelectable={reverseBiddingEnabled}
+                bidSelected={bidSelection}
+                onToggleBid={toggleBidSupplier}
+                bidMaxReached={bidCount >= REVERSE_BIDDING_MAX_SUPPLIERS}
               />
             )}
 
@@ -1785,24 +1885,52 @@ export default function AIAnalysisModal({
                           : "A purchase order has already been created for this RFQ.")}
                     </div>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={handlePrimaryAction}
-                      disabled={creatingPO}
-                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary-700 px-8 py-3.5 text-sm font-bold text-white shadow-lg shadow-primary-500/20 transition hover:bg-primary-800 disabled:opacity-70"
-                    >
-                      {creatingPO ? (
-                        <>
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          {primaryLoadingLabel}
-                        </>
-                      ) : (
-                        <>
-                          <ShoppingCart className="h-4 w-4" />
-                          {primaryActionLabel}
-                        </>
+                    <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center">
+                      {reverseBiddingEnabled && (
+                        <button
+                          type="button"
+                          onClick={handleStartReverseBidding}
+                          disabled={!canStartReverseBidding}
+                          title={
+                            bidCount < REVERSE_BIDDING_MIN_SUPPLIERS
+                              ? `Select at least ${REVERSE_BIDDING_MIN_SUPPLIERS} suppliers`
+                              : undefined
+                          }
+                          className="inline-flex items-center justify-center gap-2 rounded-xl bg-orange-500 px-6 py-3.5 text-sm font-bold text-white shadow-lg shadow-orange-500/20 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {startingReverseBidding ? (
+                            <>
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              Starting Reverse Bidding…
+                            </>
+                          ) : (
+                            <>
+                              <Gavel className="h-4 w-4" />
+                              Start Reverse Bidding
+                              {bidCount > 0 ? ` (${bidCount})` : ""}
+                            </>
+                          )}
+                        </button>
                       )}
-                    </button>
+                      <button
+                        type="button"
+                        onClick={handlePrimaryAction}
+                        disabled={creatingPO || startingReverseBidding}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary-700 px-8 py-3.5 text-sm font-bold text-white shadow-lg shadow-primary-500/20 transition hover:bg-primary-800 disabled:opacity-70"
+                      >
+                        {creatingPO ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            {primaryLoadingLabel}
+                          </>
+                        ) : (
+                          <>
+                            <ShoppingCart className="h-4 w-4" />
+                            {primaryActionLabel}
+                          </>
+                        )}
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>

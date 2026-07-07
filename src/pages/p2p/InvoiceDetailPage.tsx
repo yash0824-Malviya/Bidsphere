@@ -120,8 +120,8 @@ export default function InvoiceDetailPage() {
       <BackLink backToPoPath={backToPoPath} />
 
       <PageHeader
-        title={name}
-        description={invoice.supplier_name ?? invoice.supplier ?? "—"}
+        title="Purchase Invoice"
+        description={`${name} · ${invoice.supplier_name ?? invoice.supplier ?? "—"}`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {isReadOnly ? <ReadOnlyViewBadge /> : null}

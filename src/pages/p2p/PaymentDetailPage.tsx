@@ -247,14 +247,14 @@ export default function PaymentDetailPage() {
       <BackLink />
 
       <PageHeader
-        title={payment.name ?? name}
-        description={
+        title="Payment"
+        description={`${payment.name ?? name} · ${
           isDraft
             ? "Draft payment — review and submit to post to the ledger"
             : isCancelled
               ? "Voided payment — read only"
               : "Submitted payment — read only"
-        }
+        }`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <PdfButton
@@ -286,6 +286,10 @@ export default function PaymentDetailPage() {
           </div>
         }
       />
+
+      <p className="mb-4 text-sm font-semibold text-neutral-700">
+        {payment.name ?? name}
+      </p>
 
       {isDraft && (
         <div className="mt-4 flex items-start gap-3 rounded-2xl border border-warning-300 bg-warning-50 p-4 shadow-sm">

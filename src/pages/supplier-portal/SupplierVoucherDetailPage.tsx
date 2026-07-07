@@ -152,8 +152,8 @@ export default function SupplierVoucherDetailPage() {
     <SupplierPortalLayout supplierName={supplierName}>
       <BackLink />
       <PageHeader
-        title={voucher.id}
-        description={`Voucher from Netlink · PO ${voucher.po_reference || "—"}`}
+        title="Voucher"
+        description={`${voucher.id} · PO ${voucher.po_reference || "—"}`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <PdfActions

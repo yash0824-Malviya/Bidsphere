@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import {
   ChevronDown,
   ChevronRight,
@@ -9,6 +10,7 @@ import type { NavItem } from "../../utils/routes";
 import { useAuthStore } from "../../store/authStore";
 import { APP_SIDEBAR_TITLE, APP_SIDEBAR_TAGLINE } from "../../config/branding";
 import { getNavGroupsForRole, ROLE_LABELS } from "../../config/roles";
+import { translateNavLabel } from "../../i18n/navLabels";
 import BrandLogo from "../BrandLogo";
 
 function isItemActive(pathname: string, to: string): boolean {
@@ -31,6 +33,7 @@ export default function Sidebar({
   className = "",
   fixed = false,
 }: Props) {
+  const { t } = useTranslation();
   const { pathname, search } = useLocation();
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
@@ -100,7 +103,7 @@ export default function Sidebar({
           <div key={group.label}>
             {group.label && !collapsed ? (
               <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.1em] text-neutral-500">
-                {group.label}
+                {translateNavLabel(t, group.label)}
               </p>
             ) : null}
             <div className="space-y-0.5">
@@ -129,7 +132,7 @@ export default function Sidebar({
               className="flex w-full items-center gap-2.5 px-3.5 py-2 text-[13px] font-medium text-red-400 transition hover:bg-white/5 hover:text-red-300 cursor-pointer bg-transparent border-none text-left"
             >
               <LogOut className="h-4 w-4" />
-              Logout
+              {t("sidebar.logout")}
             </button>
           </div>
         )}
@@ -144,7 +147,7 @@ export default function Sidebar({
               setMenuOpen((v) => !v);
             }
           }}
-          title={collapsed ? "Log out" : "Account menu"}
+          title={collapsed ? t("sidebar.logout") : t("sidebar.accountMenu")}
           className={`flex w-full items-center rounded-lg bg-white/[0.03] py-2.5 transition hover:bg-white/[0.07] cursor-pointer border-none text-left ${
             collapsed ? "justify-center px-1" : "gap-3 px-2.5"
           }`}
@@ -156,7 +159,7 @@ export default function Sidebar({
             <>
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[13px] font-medium text-white">
-                  {user?.full_name ?? "Signed out"}
+                  {user?.full_name ?? t("sidebar.signedOut")}
                 </div>
                 <div className="truncate text-[11px] text-sidebar-text">
                   {user?.email ?? ""}
@@ -215,6 +218,8 @@ function SidebarItem({
   collapsed,
   onNavigate,
 }: SidebarItemProps) {
+  const { t } = useTranslation();
+  const label = translateNavLabel(t, item.label);
   const active = isItemActive(pathname, item.to);
   const hasChildren = (item.children?.length ?? 0) > 0;
   const [open, setOpen] = useState(active && hasChildren);
@@ -252,7 +257,7 @@ function SidebarItem({
       <Link
         to={item.to}
         onClick={onNavigate}
-        title={collapsed ? item.label : undefined}
+        title={collapsed ? label : undefined}
         className={linkClass(active)}
       >
         <Icon
@@ -260,7 +265,7 @@ function SidebarItem({
             active ? "text-primary-400" : "text-sidebar-text group-hover:text-white"
           }`}
         />
-        {!collapsed && <span className="truncate">{item.label}</span>}
+        {!collapsed && <span className="truncate">{label}</span>}
       </Link>
     );
   }
@@ -270,7 +275,7 @@ function SidebarItem({
       <Link
         to={item.to}
         onClick={onNavigate}
-        title={item.label}
+        title={label}
         className={linkClass(active)}
       >
         <Icon
@@ -294,7 +299,7 @@ function SidebarItem({
             active ? "text-primary-400" : "text-sidebar-text group-hover:text-white"
           }`}
         />
-        <span className="flex-1 truncate">{item.label}</span>
+        <span className="flex-1 truncate">{label}</span>
         {open ? (
           <ChevronDown className="h-3.5 w-3.5 opacity-60" />
         ) : (
@@ -310,7 +315,7 @@ function SidebarItem({
               <div key={child.to}>
                 {child.group && (
                   <p className="mb-0.5 mt-2 px-3 text-[9px] font-semibold uppercase tracking-[0.12em] text-neutral-500 first:mt-0.5">
-                    {child.group}
+                    {translateNavLabel(t, child.group)}
                   </p>
                 )}
                 <Link
@@ -322,7 +327,7 @@ function SidebarItem({
                       : "text-sidebar-text hover:bg-white/5 hover:text-white"
                   }`}
                 >
-                  {child.label}
+                  {translateNavLabel(t, child.label)}
                 </Link>
               </div>
             );

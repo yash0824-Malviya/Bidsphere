@@ -5,7 +5,6 @@ import { getLegalDocsByStatus } from "../../api/legalDocs";
 import type { LegalDocumentSet } from "../../api/legalDocs";
 import { formatDate } from "../../utils/format";
 import {
-  Gavel,
   FileText,
   Clock,
   CheckCircle2,
@@ -74,17 +73,7 @@ export default function LegalReviewsListPage() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
-      <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-neutral-900 flex items-center gap-2">
-            <Gavel className="h-6 w-6 text-primary-600" />
-            Legal Reviews
-          </h1>
-          <p className="text-sm text-neutral-500">
-            Every supplier quotation with submitted legal and compliance documents.
-          </p>
-        </div>
-
+      <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
         <div className="flex gap-1.5 rounded-lg border border-neutral-200 bg-neutral-50 p-1">
           {(["Pending", "Approved", "Rejected"] as StatusFilter[]).map((status) => (
             <button

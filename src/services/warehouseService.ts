@@ -1,7 +1,9 @@
 import {
   normalizeWorkflowStatus,
+  resolveProcurementType,
   type MaterialRequestWorkflowStatus,
   type MaterialRequestPriority,
+  type MaterialRequestProcurementType,
 } from "../types/materialRequestWorkflow";
 
 export interface WarehouseItem {
@@ -36,6 +38,7 @@ export interface WarehouseMaterialRequest {
   required_date: string;
   priority: MaterialRequestPriority;
   status: MaterialRequestWorkflowStatus;
+  procurement_type: MaterialRequestProcurementType;
   items_count: number;
   items: WarehouseMaterialRequestItem[];
 }
@@ -224,6 +227,7 @@ export async function getPendingMaterialRequests(): Promise<WarehouseMaterialReq
         required_date: mr.schedule_date || "",
         priority: mr.custom_priority || "Medium",
         status: normalizeWorkflowStatus(mr.custom_bidsphere_status) || workflowStatusFromStandardFields(mr),
+        procurement_type: resolveProcurementType(mr.custom_procurement_type),
         items_count: mr.items ? mr.items.length : 0,
         items,
       };
@@ -281,6 +285,7 @@ export async function getMaterialRequestDetail(
     required_date: mr.schedule_date || "",
     priority: mr.custom_priority || "Medium",
     status: normalizeWorkflowStatus(mr.custom_bidsphere_status) || workflowStatusFromStandardFields(mr),
+    procurement_type: resolveProcurementType(mr.custom_procurement_type),
     items_count: mr.items ? mr.items.length : 0,
     items,
   };

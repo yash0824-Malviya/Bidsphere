@@ -19,6 +19,7 @@ import { APP_NAME } from "../../config/branding";
 import { getAdminKpis } from "../../api/admin";
 import { getAuditTrail } from "../../api/auditTrail";
 import { Skeleton } from "../../components/Skeleton";
+import AdminIndirectApprovalPanel from "../../components/dashboard/AdminIndirectApprovalPanel";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
 import { formatCurrencyCompact, formatDateTime } from "../../utils/format";
 
@@ -77,6 +78,11 @@ export default function AdminDashboardPage() {
       <SectionHeader title="Approval Center" />
       <div className="mb-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
         <ApprovalCard icon={FileText} label="RFQ Pending" count={kpis?.pendingApprovals ?? 0} iconBg="bg-blue-50" iconColor="text-blue-600" accentColor="border-blue-400" loading={isLoading} />
+      </div>
+
+      {/* ── Indirect Procurement approvals ──────────────────────────────────── */}
+      <div className="mb-3">
+        <AdminIndirectApprovalPanel />
       </div>
 
       <div className="grid gap-2.5 lg:grid-cols-[1fr_300px]">

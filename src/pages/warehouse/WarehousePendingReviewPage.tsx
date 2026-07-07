@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ClipboardList, Search } from "lucide-react";
 import { getPendingMaterialRequests } from "../../services/warehouseService";
+import ProcurementTypeBadge from "../../components/ProcurementTypeBadge";
 import EmptyState from "../../components/EmptyState";
 import ErrorState from "../../components/ErrorState";
 import { TableSkeleton } from "../../components/Skeleton";
@@ -79,16 +80,6 @@ export default function WarehousePendingReviewPage() {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-6 animate-in fade-in duration-300">
-      {/* Title */}
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-          Pending Material Requests
-        </h1>
-        <p className="text-sm text-slate-500">
-          Review department requisitions, verify stock availability, and authorize issue notes or RFQ routing.
-        </p>
-      </div>
-
       {/* Filter and Search Bar */}
       <div className="flex flex-col gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:flex-row md:items-center">
         {/* Search */}
@@ -161,6 +152,7 @@ export default function WarehousePendingReviewPage() {
                 <thead>
                   <tr className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-500 uppercase tracking-wider">
                     <th className="py-4 px-6">MR Number</th>
+                    <th className="py-4 px-6">Type</th>
                     <th className="py-4 px-6">Department</th>
                     <th className="py-4 px-6">Requested By</th>
                     <th className="py-4 px-6 text-center">Items Count</th>
@@ -179,6 +171,9 @@ export default function WarehousePendingReviewPage() {
                     >
                       <td className="py-4 px-6 font-semibold text-slate-900 group-hover:text-primary transition-colors">
                         {mr.name}
+                      </td>
+                      <td className="py-4 px-6">
+                        <ProcurementTypeBadge type={mr.procurement_type} />
                       </td>
                       <td className="py-4 px-6 text-slate-600">{mr.department}</td>
                       <td className="py-4 px-6 text-slate-600">{mr.requested_by}</td>

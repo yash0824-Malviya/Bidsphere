@@ -400,12 +400,7 @@ export default function FinanceReviewDetailPage() {
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100">
                 <Wallet className="h-5 w-5 text-emerald-600" />
               </div>
-              <div>
-                <h1 className="text-xl font-bold text-neutral-900">
-                  Finance Review Workspace
-                </h1>
-                <p className="text-sm text-neutral-500">{decodedId}</p>
-              </div>
+              <p className="text-sm font-semibold text-neutral-700">{decodedId}</p>
             </div>
           </div>
           <FinanceStatusBadge status={currentFinanceStatus} />

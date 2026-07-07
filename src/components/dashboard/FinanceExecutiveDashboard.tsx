@@ -197,9 +197,6 @@ export default function FinanceExecutiveDashboard({ greetingName }: Props) {
             <Wallet className="h-5 w-5 text-emerald-600" />
           </div>
           <div>
-            <h1 className="text-base font-bold text-neutral-900">
-              Finance Executive Dashboard
-            </h1>
             <p className="text-xs text-neutral-500">
               Welcome back, {displayName} · Live ERPNext budgets
             </p>

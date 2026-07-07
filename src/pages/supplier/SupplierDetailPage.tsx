@@ -327,6 +327,13 @@ export default function SupplierDetailPage() {
         }
       />
 
+      <p className="mb-4 text-sm font-semibold text-neutral-700">
+        {supplier.supplier_name ?? supplier.name}
+        {supplier.supplier_name && supplier.name !== supplier.supplier_name && (
+          <span className="font-normal text-neutral-500"> · {supplier.name}</span>
+        )}
+      </p>
+
       {profileIncomplete && (
         <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-warning-300 bg-warning-50 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">

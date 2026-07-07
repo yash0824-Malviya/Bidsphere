@@ -78,8 +78,8 @@ export default function RequisitionDetailPage() {
       </Link>
 
       <PageHeader
-        title={mr.name}
-        description={mr.title ?? mr.remarks ?? "Material Request (Purchase)"}
+        title="Material Request"
+        description={mr.name}
         actions={
           <>
             <StatusBadge status={mr.status ?? "Draft"} />
@@ -101,6 +101,8 @@ export default function RequisitionDetailPage() {
           </>
         }
       />
+
+      <p className="mb-4 text-sm font-semibold text-neutral-700">{mr.name}</p>
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <InfoCard

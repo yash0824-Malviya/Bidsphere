@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import {
   ClipboardList,
   Clock,
@@ -12,13 +13,18 @@ import {
 } from "lucide-react";
 
 import {
+  getMaterialRequestProcurementType,
   getMaterialRequestWorkflowStatus,
   listMaterialRequestsWorkflow,
 } from "../../api/materialRequestWorkflow";
 import { canCreateMaterialRequest } from "../../config/materialRequestPermissions";
-import type { MaterialRequestWorkflowStatus } from "../../types/materialRequestWorkflow";
+import type {
+  MaterialRequestProcurementType,
+  MaterialRequestWorkflowStatus,
+} from "../../types/materialRequestWorkflow";
 import PageHeader from "../../components/PageHeader";
 import StatusBadge from "../../components/StatusBadge";
+import ProcurementTypeBadge from "../../components/ProcurementTypeBadge";
 import { useAuthStore } from "../../store/authStore";
 import { formatDate } from "../../utils/format";
 import {
@@ -37,12 +43,23 @@ const FULFILLMENT_FILTERS: Record<string, RequestFulfillmentStatus[]> = {
 };
 
 export default function MaterialRequestsListPage() {
-  const [params] = useSearchParams();
+  const { t } = useTranslation();
+  const [params, setParams] = useSearchParams();
   const statusFilter = params.get(
     "status",
   ) as MaterialRequestWorkflowStatus | null;
+  const typeParam = params.get("type");
+  const typeFilter: MaterialRequestProcurementType | null =
+    typeParam === "Direct" || typeParam === "Indirect" ? typeParam : null;
   const user = useAuthStore((s) => s.user);
   const canCreate = canCreateMaterialRequest(user?.role);
+
+  const setTypeFilter = (next: MaterialRequestProcurementType | null) => {
+    const nextParams = new URLSearchParams(params);
+    if (next) nextParams.set("type", next);
+    else nextParams.delete("type");
+    setParams(nextParams, { replace: true });
+  };
 
   const { data = [], isLoading } = useQuery({
     queryKey: ["material-requests-workflow", statusFilter, "all"],
@@ -100,6 +117,12 @@ export default function MaterialRequestsListPage() {
   const rows = useMemo(() => {
     let base = data;
 
+    if (typeFilter) {
+      base = base.filter(
+        (m) => getMaterialRequestProcurementType(m) === typeFilter,
+      );
+    }
+
     if (fParam && FULFILLMENT_FILTERS[fParam]) {
       const allowed = new Set(FULFILLMENT_FILTERS[fParam]);
       base = base.filter((m) =>
@@ -142,7 +165,7 @@ export default function MaterialRequestsListPage() {
 
       return workflow === statusFilter || status === statusFilter;
     });
-  }, [data, statusFilter, fParam]);
+  }, [data, statusFilter, fParam, typeFilter]);
 
   return (
     <div>
@@ -205,6 +228,35 @@ export default function MaterialRequestsListPage() {
         />
       </div>
 
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+          {t("procurementType.filterLabel")}
+        </span>
+        {([null, "Direct", "Indirect"] as const).map((opt) => {
+          const active = typeFilter === opt;
+          const label =
+            opt === null
+              ? t("procurementType.all")
+              : opt === "Direct"
+                ? t("procurementType.direct")
+                : t("procurementType.indirect");
+          return (
+            <button
+              key={opt ?? "all"}
+              type="button"
+              onClick={() => setTypeFilter(opt)}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                active
+                  ? "bg-primary-600 text-white"
+                  : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
       <div className="card overflow-hidden">
         {isLoading ? (
           <div className="flex justify-center py-16">
@@ -216,6 +268,7 @@ export default function MaterialRequestsListPage() {
               <thead className="bg-neutral-50 text-left text-xs font-medium uppercase text-neutral-500">
                 <tr>
                   <th className="px-4 py-3">MR Number</th>
+                  <th className="px-4 py-3">{t("procurementType.label")}</th>
                   <th className="px-4 py-3">Request Date</th>
                   <th className="px-4 py-3">Required Date</th>
                   <th className="px-4 py-3">Department</th>
@@ -235,6 +288,11 @@ export default function MaterialRequestsListPage() {
                       </Link>
                     </td>
                     <td className="px-4 py-3">
+                      <ProcurementTypeBadge
+                        type={getMaterialRequestProcurementType(mr)}
+                      />
+                    </td>
+                    <td className="px-4 py-3">
                       {formatDate(mr.transaction_date)}
                     </td>
                     <td className="px-4 py-3">
@@ -252,7 +310,7 @@ export default function MaterialRequestsListPage() {
                 {rows.length === 0 && (
                   <tr>
                     <td
-                      colSpan={6}
+                      colSpan={7}
                       className="px-4 py-12 text-center text-neutral-500"
                     >
                       No material requests found.

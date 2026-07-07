@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import toast from "react-hot-toast";
 import {
   ArrowLeft,
@@ -17,23 +18,29 @@ import {
 } from "lucide-react";
 
 import {
+  approveIndirectMaterialRequest,
   checkMaterialRequestStock,
   completeMaterialRequest,
   deleteMaterialRequestWorkflow,
   fetchMaterialRequestWorkflow,
   forwardMaterialRequestToProcurement,
+  getMaterialRequestProcurementProgress,
+  getMaterialRequestProcurementType,
   getMaterialRequestWorkflowStatus,
   getUserFullName,
   isMaterialRequestOwnedByUser,
   issueMaterialRequest,
   markMaterialRequestStockAvailable,
+  rejectIndirectMaterialRequest,
   rejectMaterialRequest,
   submitMaterialRequestWorkflow,
+  type MaterialRequestProcurementProgress,
   type MaterialRequestWorkflowRecord,
 } from "../../api/materialRequestWorkflow";
 import type { MaterialRequestWorkflowStatus } from "../../types/materialRequestWorkflow";
 import { canCreateRfqFromMaterialRequest } from "../../api/createRFQFromMaterialRequest";
 import PageHeader from "../../components/PageHeader";
+import ProcurementTypeBadge from "../../components/ProcurementTypeBadge";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { Skeleton } from "../../components/Skeleton";
 import { useAuthStore } from "../../store/authStore";
@@ -41,6 +48,7 @@ import {
   canCreateMaterialRequest,
   canCreateRfqFromMR,
   canDeleteMaterialRequest,
+  canReviewIndirectMaterialRequest,
   canReviewMaterialRequest,
 } from "../../config/materialRequestPermissions";
 import { ROLE_LABELS } from "../../config/roles";
@@ -66,6 +74,10 @@ const MR_BADGE: Record<
 > = {
   Draft: { label: "Draft", cls: "bg-neutral-100 text-neutral-600" },
   Submitted: { label: "Submitted", cls: "bg-orange-100 text-orange-700" },
+  "Admin Review": {
+    label: "Admin Review",
+    cls: "bg-purple-100 text-purple-700",
+  },
   "Under Warehouse Review": {
     label: "Under Warehouse Review",
     cls: "bg-orange-100 text-orange-700",
@@ -87,13 +99,46 @@ const MR_BADGE: Record<
   Cancelled: { label: "Cancelled", cls: "bg-red-100 text-red-700" },
 };
 
-function MrStatusBadge({ status }: { status: MaterialRequestWorkflowStatus }) {
-  const meta = MR_BADGE[status] ?? MR_BADGE.Draft;
+/** Milestones that exist as live documents but not as MR workflow statuses. */
+const STAGE_BADGE_EXTRA: Record<string, { label: string; cls: string }> = {
+  "Purchase Ordered": {
+    label: "Purchase Ordered",
+    cls: "bg-indigo-100 text-indigo-700",
+  },
+  "Goods Received": {
+    label: "Goods Received",
+    cls: "bg-teal-100 text-teal-700",
+  },
+};
+
+/**
+ * Resolve the badge that best reflects the request's TRUE stage. For a
+ * procurement request the stored status stalls at "RFQ Created", so the live
+ * PO / GRN / Stock Entry milestones take precedence — the badge tracks the
+ * same signal as the timeline.
+ */
+function resolveStageBadge(
+  effectiveStatus: MaterialRequestWorkflowStatus,
+  procurementInvolved: boolean,
+  progress: MaterialRequestProcurementProgress | null | undefined,
+  fullyIssued: boolean,
+): { label: string; cls: string } {
+  const fallback = MR_BADGE[effectiveStatus] ?? MR_BADGE.Draft;
+  if (!procurementInvolved || !progress) return fallback;
+  if (fullyIssued) return MR_BADGE.Completed;
+  if (progress.stockEntries.length > 0) return MR_BADGE["Material Issued"];
+  if (progress.goodsReceipts.length > 0) return STAGE_BADGE_EXTRA["Goods Received"];
+  if (progress.purchaseOrders.length > 0)
+    return STAGE_BADGE_EXTRA["Purchase Ordered"];
+  return fallback;
+}
+
+function StageBadge({ label, cls }: { label: string; cls: string }) {
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${meta.cls}`}
+      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${cls}`}
     >
-      {meta.label}
+      {label}
     </span>
   );
 }
@@ -121,6 +166,18 @@ const PROCUREMENT_PATH_STEPS = [
   "Completed",
 ];
 
+/** Indirect procurement path — Admin approval replaces warehouse review. */
+const INDIRECT_PATH_STEPS = [
+  "Request Submitted",
+  "Admin Review",
+  "Sent to Procurement",
+  "RFQ Created",
+  "Purchase Ordered",
+  "Goods Received",
+  "Material Issued",
+  "Completed",
+];
+
 /** Whether Procurement has actually handled this request (drives the timeline). */
 function isProcurementInvolved(
   mr: MaterialRequestWorkflowRecord,
@@ -138,9 +195,44 @@ function isProcurementInvolved(
 function resolveTimeline(
   status: MaterialRequestWorkflowStatus,
   procurementInvolved: boolean,
+  progress?: MaterialRequestProcurementProgress | null,
+  fullyIssued?: boolean,
+  isIndirect?: boolean,
 ): { steps: string[]; currentIndex: number } {
+  // Indirect requests use a fixed 8-step path where Admin Review replaces the
+  // warehouse review stage. Steps 4–6 (PO / GRN / Material Issued) advance from
+  // live linked documents just like the direct procurement path.
+  if (isIndirect) {
+    let index = (() => {
+      switch (status) {
+        case "Submitted":
+          return 0;
+        case "Admin Review":
+          return 1;
+        case "Procurement Required":
+          return 2;
+        case "RFQ Created":
+          return 3;
+        case "Material Issued":
+          return 6;
+        case "Completed":
+          return 7;
+        default:
+          return 0;
+      }
+    })();
+    if (progress) {
+      if (progress.purchaseOrders.length > 0) index = Math.max(index, 4);
+      if (progress.goodsReceipts.length > 0) index = Math.max(index, 5);
+      if (progress.stockEntries.length > 0) index = Math.max(index, 6);
+    }
+    if (fullyIssued) index = 7;
+    return { steps: INDIRECT_PATH_STEPS, currentIndex: index };
+  }
+
   if (procurementInvolved) {
-    const index = (() => {
+    // Base index from the stored workflow status…
+    let index = (() => {
       switch (status) {
         case "Submitted":
           return 0;
@@ -159,6 +251,19 @@ function resolveTimeline(
           return 0;
       }
     })();
+
+    // …then advance it from LIVE linked documents. `custom_bidsphere_status`
+    // stops at "RFQ Created", so the PO / GRN / Stock Entry milestones (steps
+    // 4–6) are driven entirely by whether the submitted document exists. Using
+    // Math.max also prevents a status regression (e.g. an MR moved back to
+    // "Stock Available" after goods arrived) from rewinding the bar.
+    if (progress) {
+      if (progress.purchaseOrders.length > 0) index = Math.max(index, 4);
+      if (progress.goodsReceipts.length > 0) index = Math.max(index, 5);
+      if (progress.stockEntries.length > 0) index = Math.max(index, 6);
+    }
+    if (fullyIssued) index = 7;
+
     return { steps: PROCUREMENT_PATH_STEPS, currentIndex: index };
   }
 
@@ -183,9 +288,15 @@ function resolveTimeline(
 function WorkflowTimeline({
   status,
   procurementInvolved,
+  progress,
+  fullyIssued,
+  isIndirect,
 }: {
   status: MaterialRequestWorkflowStatus;
   procurementInvolved: boolean;
+  progress?: MaterialRequestProcurementProgress | null;
+  fullyIssued?: boolean;
+  isIndirect?: boolean;
 }) {
   if (status === "Draft") {
     return (
@@ -213,7 +324,13 @@ function WorkflowTimeline({
     );
   }
 
-  const { steps, currentIndex } = resolveTimeline(status, procurementInvolved);
+  const { steps, currentIndex } = resolveTimeline(
+    status,
+    procurementInvolved,
+    progress,
+    fullyIssued,
+    isIndirect,
+  );
   const stepCount = steps.length;
   const lastIndex = stepCount - 1;
   const inset = 100 / (2 * stepCount);
@@ -320,6 +437,10 @@ export default function MaterialRequestDetailPage() {
   const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const role = user?.role;
+  const { t } = useTranslation();
+  // Department users must never see warehouse inventory. The "Available" column
+  // and its live stock fetch are gated to warehouse / procurement / admin.
+  const showStock = role !== "department";
 
   const [warehouseRemarks, setWarehouseRemarks] = useState("");
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -351,7 +472,27 @@ export default function MaterialRequestDetailPage() {
   const stockQuery = useQuery({
     queryKey: ["material-request-live-stock", name],
     queryFn: () => checkMaterialRequestStock(name),
-    enabled: !!name && !deleted,
+    enabled: !!name && !deleted && showStock,
+    staleTime: 30_000,
+    refetchOnWindowFocus: !deleted,
+  });
+
+  // Live procurement milestones (submitted PO → GRN → Stock Entry) read
+  // straight from the linked ERPNext documents. This is what advances the
+  // Track Request timeline past "RFQ Created" — the stored MR status never
+  // does. Enabled once the request is on the procurement path.
+  const procurementPath =
+    !!mr &&
+    (Boolean(mr.custom_linked_rfq) ||
+      Boolean(mr.custom_procurement_remarks?.trim()) ||
+      getMaterialRequestWorkflowStatus(mr) === "Procurement Required" ||
+      getMaterialRequestWorkflowStatus(mr) === "RFQ Created");
+
+  const progressQuery = useQuery({
+    queryKey: ["material-request-progress", name],
+    queryFn: () =>
+      getMaterialRequestProcurementProgress(name, mr?.custom_linked_rfq),
+    enabled: !!name && !deleted && procurementPath,
     staleTime: 30_000,
     refetchOnWindowFocus: !deleted,
   });
@@ -378,6 +519,12 @@ export default function MaterialRequestDetailPage() {
   const invalidate = () => {
     queryClient.invalidateQueries({
       queryKey: ["material-request-workflow", name],
+    });
+    queryClient.invalidateQueries({
+      queryKey: ["material-request-progress", name],
+    });
+    queryClient.invalidateQueries({
+      queryKey: ["material-request-live-stock", name],
     });
     queryClient.invalidateQueries({ queryKey: ["material-requests-workflow"] });
     queryClient.invalidateQueries({ queryKey: ["mr-dashboard-counts"] });
@@ -466,6 +613,29 @@ export default function MaterialRequestDetailPage() {
       toast.error(e instanceof Error ? e.message : "Cancel failed"),
   });
 
+  // Admin approval gate for Indirect Material Requests.
+  const adminApproveMutation = useMutation({
+    mutationFn: () =>
+      approveIndirectMaterialRequest(name, warehouseRemarks || undefined),
+    onSuccess: () => {
+      toast.success(t("adminReview.approved"));
+      invalidate();
+    },
+    onError: (e) =>
+      toast.error(e instanceof Error ? e.message : "Approve failed"),
+  });
+
+  const adminRejectMutation = useMutation({
+    mutationFn: () =>
+      rejectIndirectMaterialRequest(name, warehouseRemarks || undefined),
+    onSuccess: () => {
+      toast.success(t("adminReview.rejected"));
+      invalidate();
+    },
+    onError: (e) =>
+      toast.error(e instanceof Error ? e.message : "Reject failed"),
+  });
+
   const backPath =
     role === "department" ? "/material-requests/list" : "/material-requests";
 
@@ -538,21 +708,37 @@ export default function MaterialRequestDetailPage() {
   const workflowStatus = getMaterialRequestWorkflowStatus(mr);
   const fulfillment = computeRequestFulfillment(mr);
   const procurementInvolved = isProcurementInvolved(mr, fulfillment);
+  const progress = progressQuery.data ?? null;
 
   // Auto-complete for display: once every requested unit is issued from stock
   // (Remaining = 0 and Issued = Requested) the request is effectively Completed,
   // so the badge and the final workflow step reflect that — not "Material
   // Issued". Only derived off the stock path; a procurement-pending MR is never
   // auto-completed.
+  const requestedTotal = fulfillment.totals.requested;
+  const liveIssuedQty = progress?.issuedQty ?? 0;
   const isFullyIssued =
-    fulfillment.totals.requested > 0 &&
-    fulfillment.totals.remaining === 0 &&
-    fulfillment.totals.issued === fulfillment.totals.requested;
+    requestedTotal > 0 &&
+    ((fulfillment.totals.remaining === 0 &&
+      fulfillment.totals.issued === requestedTotal) ||
+      liveIssuedQty >= requestedTotal);
+  const hasStockEntry = (progress?.stockEntries.length ?? 0) > 0;
   const effectiveStatus: MaterialRequestWorkflowStatus =
-    (workflowStatus === "Material Issued" || workflowStatus === "Completed") &&
-    isFullyIssued
+    isFullyIssued &&
+    (workflowStatus === "Material Issued" ||
+      workflowStatus === "Completed" ||
+      hasStockEntry)
       ? "Completed"
       : workflowStatus;
+
+  // Badge that reflects the true live stage (PO / GRN / Issue), not the stalled
+  // stored status.
+  const stageBadge = resolveStageBadge(
+    effectiveStatus,
+    procurementInvolved,
+    progress,
+    isFullyIssued,
+  );
 
   // Requested By — a real name, never an email. Prefer a stored human name,
   // then the ERPNext User lookup, then the logged-in user's own name, and
@@ -589,10 +775,17 @@ export default function MaterialRequestDetailPage() {
   const canSubmit =
     isDraft && workflowStatus === "Draft" && canCreateMaterialRequest(role);
   const isSubmitted = (mr.docstatus ?? 0) === 1;
+  const procurementType = getMaterialRequestProcurementType(mr);
   const canWarehouseAct =
     canReviewMaterialRequest(role) &&
     (workflowStatus === "Under Warehouse Review" ||
       workflowStatus === "Stock Available") &&
+    isSubmitted;
+  // Admin approve/reject is only for Indirect MRs sitting in "Admin Review".
+  const canAdminReview =
+    canReviewIndirectMaterialRequest(role) &&
+    procurementType === "Indirect" &&
+    workflowStatus === "Admin Review" &&
     isSubmitted;
   // Issue Material is only unlocked once stock has been confirmed available.
   const stockConfirmed =
@@ -629,6 +822,8 @@ export default function MaterialRequestDetailPage() {
     completeMutation.isPending ||
     forwardMutation.isPending ||
     rejectMutation.isPending ||
+    adminApproveMutation.isPending ||
+    adminRejectMutation.isPending ||
     deleteMutation.isPending;
 
   return (
@@ -645,7 +840,7 @@ export default function MaterialRequestDetailPage() {
         description={cleanRemarks(mr.custom_purpose) || cleanRemarks(mr.remarks) || undefined}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <MrStatusBadge status={effectiveStatus} />
+            <StageBadge label={stageBadge.label} cls={stageBadge.cls} />
             {canEditDraft ? (
               <Link
                 to={`/material-requests/new?edit=${encodeURIComponent(mr.name)}`}
@@ -669,6 +864,36 @@ export default function MaterialRequestDetailPage() {
                 )}
                 Submit
               </button>
+            ) : null}
+            {canAdminReview ? (
+              <>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => adminApproveMutation.mutate()}
+                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                >
+                  {adminApproveMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="h-4 w-4" />
+                  )}
+                  {t("adminReview.approve")}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => adminRejectMutation.mutate()}
+                  className="inline-flex items-center gap-2 rounded-lg border border-rose-300 bg-white px-3 py-2 text-sm font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-60"
+                >
+                  {adminRejectMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <XCircle className="h-4 w-4" />
+                  )}
+                  {t("adminReview.reject")}
+                </button>
+              </>
             ) : null}
             {showDelete ? (
               <button
@@ -728,6 +953,7 @@ export default function MaterialRequestDetailPage() {
         <span className="font-mono font-semibold text-neutral-800">
           {mr.name}
         </span>
+        <ProcurementTypeBadge type={procurementType} />
         {mr.custom_department ? (
           <>
             <span className="text-neutral-300">•</span>
@@ -739,6 +965,9 @@ export default function MaterialRequestDetailPage() {
       <WorkflowTimeline
         status={effectiveStatus}
         procurementInvolved={procurementInvolved}
+        progress={progress}
+        fullyIssued={isFullyIssued}
+        isIndirect={procurementType === "Indirect"}
       />
 
       <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-5">
@@ -747,6 +976,11 @@ export default function MaterialRequestDetailPage() {
           { label: "Required Date", value: formatDate(mr.schedule_date) },
           { label: "Requested By", value: requesterName },
           { label: "Department", value: mr.custom_department },
+          { label: t("procurementType.label"), value: t(
+            procurementType === "Direct"
+              ? "procurementType.direct"
+              : "procurementType.indirect",
+          ) },
           { label: "Priority", value: mr.custom_priority },
           { label: "Company", value: mr.company },
         ]
@@ -775,7 +1009,9 @@ export default function MaterialRequestDetailPage() {
                 <th className="px-4 py-2 text-left">Item Code</th>
                 <th className="px-4 py-2 text-left">Item Name</th>
                 <th className="px-4 py-2 text-right">Requested</th>
-                <th className="px-4 py-2 text-right">Available</th>
+                {showStock ? (
+                  <th className="px-4 py-2 text-right">Available</th>
+                ) : null}
                 <th className="px-4 py-2 text-right">Issued</th>
                 <th className="px-4 py-2 text-right">Remaining</th>
                 {procurementInvolved ? (
@@ -806,17 +1042,19 @@ export default function MaterialRequestDetailPage() {
                     <td className="px-4 py-2 text-right tabular-nums">
                       {it.requested} {it.uom}
                     </td>
-                    <td className="px-4 py-2 text-right tabular-nums text-neutral-600">
-                      {availableQty == null ? (
-                        stockQuery.isLoading ? (
-                          <span className="text-neutral-400">…</span>
+                    {showStock ? (
+                      <td className="px-4 py-2 text-right tabular-nums text-neutral-600">
+                        {availableQty == null ? (
+                          stockQuery.isLoading ? (
+                            <span className="text-neutral-400">…</span>
+                          ) : (
+                            `0 ${it.uom}`
+                          )
                         ) : (
-                          `0 ${it.uom}`
-                        )
-                      ) : (
-                        `${availableQty} ${it.uom}`
-                      )}
-                    </td>
+                          `${availableQty} ${it.uom}`
+                        )}
+                      </td>
+                    ) : null}
                     <td className="px-4 py-2 text-right font-semibold tabular-nums text-emerald-700">
                       {it.issued} {it.uom}
                     </td>
@@ -837,7 +1075,9 @@ export default function MaterialRequestDetailPage() {
               {fulfillment.items.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={procurementInvolved ? 8 : 7}
+                    colSpan={
+                      (procurementInvolved ? 8 : 7) - (showStock ? 0 : 1)
+                    }
                     className="px-4 py-8 text-center text-neutral-500"
                   >
                     No items on this request.

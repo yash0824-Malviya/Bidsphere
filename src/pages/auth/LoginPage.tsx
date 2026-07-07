@@ -4,6 +4,8 @@ import type { FormEvent } from "react";
 
 import { useLocation, useNavigate } from "react-router-dom";
 
+import { useTranslation } from "react-i18next";
+
 import toast from "react-hot-toast";
 
 import {
@@ -43,6 +45,8 @@ interface LocationState {
 
 
 export default function LoginPage() {
+
+  const { t } = useTranslation();
 
   const navigate = useNavigate();
 
@@ -107,7 +111,7 @@ export default function LoginPage() {
 
     if (!username.trim() || !password) {
 
-      const msg = "Please enter your username and password.";
+      const msg = t("login.enterCredentials");
 
       setFormError(msg);
 
@@ -128,10 +132,10 @@ export default function LoginPage() {
               useAuthStore.getState().mfaPending?.user.role ?? "procurement"
             )
         );
-        toast.success("Credentials verified — enter your security code.");
+        toast.success(t("login.credentialsVerified"));
         navigate("/verify-otp", { replace: true });
       } else {
-        toast.success("Signed in successfully.");
+        toast.success(t("login.signedInSuccess"));
         const signedInUser = useAuthStore.getState().user;
         if (signedInUser) {
           navigate(
@@ -148,7 +152,7 @@ export default function LoginPage() {
 
           ? err.message
 
-          : "We couldn't sign you in. Please try again.";
+          : t("login.signInFailed");
 
       setFormError(message);
 
@@ -164,7 +168,7 @@ export default function LoginPage() {
 
   const handleMicrosoftSso = () => {
 
-    toast("Microsoft SSO will be available in production.");
+    toast(t("login.microsoftSoon"));
 
   };
 
@@ -174,7 +178,7 @@ export default function LoginPage() {
 
   const handleGoogleSso = () => {
 
-    toast("Google Workspace SSO coming soon.");
+    toast(t("login.googleSoon"));
 
   };
 
@@ -192,7 +196,7 @@ export default function LoginPage() {
 
           <p className="text-sm font-medium tracking-wide text-neutral-600">
 
-            Restoring your session…
+            {t("login.restoringSession")}
 
           </p>
 
@@ -236,7 +240,7 @@ export default function LoginPage() {
 
                   <div className="text-[11px] font-medium text-neutral-400">
 
-                    Procurement Workspace
+                    {t("login.workspace")}
 
                   </div>
 
@@ -246,13 +250,13 @@ export default function LoginPage() {
 
               <h2 className="text-2xl font-semibold tracking-tight text-neutral-900">
 
-                Welcome back
+                {t("login.welcomeBack")}
 
               </h2>
 
               <p className="mt-1.5 text-sm text-neutral-500">
 
-                Sign in to your procurement workspace
+                {t("login.subtitle")}
 
               </p>
 
@@ -284,7 +288,7 @@ export default function LoginPage() {
 
                 id="username"
 
-                label="Username / Email"
+                label={t("login.usernameLabel")}
 
                 icon={<Mail className="h-4 w-4" />}
 
@@ -298,7 +302,7 @@ export default function LoginPage() {
 
                 }}
 
-                placeholder="you@company.com"
+                placeholder={t("login.usernamePlaceholder")}
 
                 autoComplete="username"
 
@@ -320,7 +324,7 @@ export default function LoginPage() {
 
                 >
 
-                  Password
+                  {t("login.passwordLabel")}
 
                 </label>
 
@@ -348,7 +352,7 @@ export default function LoginPage() {
 
                     }}
 
-                    placeholder="Enter your password"
+                    placeholder={t("login.passwordPlaceholder")}
 
                     autoComplete="current-password"
 
@@ -368,7 +372,7 @@ export default function LoginPage() {
 
                     className="absolute inset-y-0 right-0 flex items-center pr-3 text-neutral-400 hover:text-neutral-700"
 
-                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    aria-label={showPassword ? t("login.hidePassword") : t("login.showPassword")}
 
                     tabIndex={-1}
 
@@ -408,7 +412,7 @@ export default function LoginPage() {
 
                 />
 
-                Remember me
+                {t("login.rememberMe")}
 
               </label>
 
@@ -426,7 +430,7 @@ export default function LoginPage() {
 
                 {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
 
-                {isLoading ? "Signing in…" : "Sign In"}
+                {isLoading ? t("login.signingIn") : t("login.signIn")}
 
               </button>
 
@@ -444,7 +448,7 @@ export default function LoginPage() {
 
                 <SsoButton
 
-                  label="Continue with Microsoft"
+                  label={t("login.continueMicrosoft")}
 
                   icon={<MicrosoftIcon />}
 
@@ -456,7 +460,7 @@ export default function LoginPage() {
 
                 <SsoButton
 
-                  label="Continue with Google"
+                  label={t("login.continueGoogle")}
 
                   icon={<GoogleIcon />}
 
@@ -486,6 +490,8 @@ export default function LoginPage() {
 
 function SsoDivider() {
 
+  const { t } = useTranslation();
+
   return (
 
     <div className="relative flex items-center">
@@ -494,7 +500,7 @@ function SsoDivider() {
 
       <span className="mx-4 text-xs font-semibold uppercase tracking-wider text-neutral-400">
 
-        Or
+        {t("login.or")}
 
       </span>
 

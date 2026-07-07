@@ -11,6 +11,8 @@ import {
   submitPurchaseReceipt,
 } from "../../api/purchasing";
 import { invalidateFinanceDashboardMetrics } from "../../api/financeWorkflow";
+import { reconcileProcurementReadyToIssue } from "../../api/materialRequestWorkflow";
+import { invalidateWarehouseStock } from "../../api/warehouseStock";
 import type { Filter } from "../../api/erpnext";
 import type {
   PurchaseReceipt,
@@ -238,11 +240,18 @@ export default function GRNPage() {
                                     const loadToast = toast.loading(`Submitting GRN ${g.name}...`);
                                     try {
                                       await submitPurchaseReceipt(g.name);
+                                      // Goods are on-hand in ERPNext Bin now —
+                                      // advance any fully-received procurement
+                                      // MR to Ready to Issue (best-effort).
+                                      try {
+                                        await reconcileProcurementReadyToIssue();
+                                      } catch (reconcileErr) {
+                                        // eslint-disable-next-line no-console
+                                        console.warn("[GRN submit] Ready-to-Issue reconciliation skipped:", reconcileErr);
+                                      }
                                       toast.success(`GRN ${g.name} submitted successfully`, { id: loadToast });
-                                      void queryClient.invalidateQueries({ queryKey: ["purchase-receipts"] });
-                                      void queryClient.invalidateQueries({ queryKey: ["purchase-receipt", g.name] });
+                                      invalidateWarehouseStock(queryClient);
                                       void queryClient.invalidateQueries({ queryKey: ["grns-awaiting-invoice"] });
-                                      void queryClient.invalidateQueries({ queryKey: ["incoming-purchase-orders"] });
                                       invalidateFinanceDashboardMetrics(queryClient);
                                     } catch (err) {
                                       toast.error(err instanceof Error ? err.message : "Failed to submit GRN", { id: loadToast });

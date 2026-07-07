@@ -16,10 +16,13 @@ import {
 } from "lucide-react";
 
 import { getSupplierQuotation } from "../../api/sourcing";
+import { getLegalDocs } from "../../api/legalDocs";
 import type { SupplierQuotation } from "../../types/erpnext";
 import EmptyState from "../../components/EmptyState";
 import { Skeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
+import SupplierLegalDocuments from "../../components/supplier/SupplierLegalDocuments";
+import { isSelectedAsWinner } from "../../utils/supplierLegalDocs";
 import { formatCurrency, formatDate, formatDateTime } from "../../utils/format";
 import SupplierPortalLayout from "./SupplierPortalLayout";
 
@@ -146,6 +149,15 @@ export default function SupplierQuotationDetailPage() {
     retry: false,
   });
 
+  /* ── Legal documents review record (exists only after winner selection) ── */
+  const reviewQuery = useQuery({
+    queryKey: ["supplier-legal-review", sqName],
+    queryFn: () => getLegalDocs(sqName),
+    enabled: !!sqName && !!supplierName,
+    staleTime: 30_000,
+  });
+  const review = reviewQuery.data ?? null;
+
   const sq = sqQuery.data;
   const items = sq?.items ?? [];
   const subtotal = items.reduce((s, it) => s + (it.amount ?? it.rate * it.qty), 0);
@@ -264,10 +276,7 @@ export default function SupplierQuotationDetailPage() {
       {/* Page header with actions */}
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold text-neutral-900">{sq.name}</h1>
-          <p className="mt-0.5 text-sm text-neutral-500">
-            Supplier Quotation Details
-          </p>
+          <p className="text-sm font-semibold text-neutral-700">{sq.name}</p>
         </div>
         <div className="flex items-center gap-2">
           <StatusBadge status={statusLabel} />
@@ -457,6 +466,16 @@ export default function SupplierQuotationDetailPage() {
             </div>
           </section>
         )}
+
+        {/* ── Legal & Compliance Documents ── */}
+        <SupplierLegalDocuments
+          sq={sq}
+          review={review}
+          editable={!isSelectedAsWinner(review)}
+          onChanged={async () => {
+            await Promise.all([sqQuery.refetch(), reviewQuery.refetch()]);
+          }}
+        />
 
         {/* ── Audit Information ── */}
         <section className="card">

@@ -37,6 +37,12 @@ interface Props {
   showErrors: boolean;
   canRemove: boolean;
   usedItemCodes: ReadonlySet<string>;
+  /**
+   * Whether warehouse stock columns (Current / Available / Status) are shown and
+   * fetched. Department users never see warehouse inventory, so this is false
+   * for them — no stock query runs at all.
+   */
+  showStock?: boolean;
   onChange: (patch: Partial<MaterialRequestDraftLine>) => void;
   onRemove: () => void;
 }
@@ -90,6 +96,7 @@ export default function MaterialRequestItemLineRow({
   showErrors,
   canRemove,
   usedItemCodes,
+  showStock = false,
   onChange,
   onRemove,
 }: Props) {
@@ -115,10 +122,12 @@ export default function MaterialRequestItemLineRow({
     staleTime: 60_000,
   });
 
+  // Warehouse stock is only fetched when stock columns are visible. Department
+  // users never trigger this query — they must not see warehouse inventory.
   const stockQuery = useQuery({
     queryKey: ["mr-item-stock", row.item_code],
     queryFn: () => getItemStockSummary(row.item_code),
-    enabled: !!row.item_code,
+    enabled: !!row.item_code && showStock,
     staleTime: 30_000,
   });
 
@@ -422,25 +431,29 @@ export default function MaterialRequestItemLineRow({
           />
         </td>
 
-        <td className="w-[110px] px-3 py-2 align-middle text-right tabular-nums text-sm text-neutral-700">
-          {stockQuery.isLoading && row.item_code ? (
-            <Loader2 className="ml-auto h-4 w-4 animate-spin text-neutral-400" />
-          ) : stock ? (
-            formatQty(stock.current_stock)
-          ) : (
-            "-"
-          )}
-        </td>
+        {showStock && (
+          <>
+            <td className="w-[110px] px-3 py-2 align-middle text-right tabular-nums text-sm text-neutral-700">
+              {stockQuery.isLoading && row.item_code ? (
+                <Loader2 className="ml-auto h-4 w-4 animate-spin text-neutral-400" />
+              ) : stock ? (
+                formatQty(stock.current_stock)
+              ) : (
+                "-"
+              )}
+            </td>
 
-        <td className="w-[110px] px-3 py-2 align-middle text-right tabular-nums text-sm font-medium text-neutral-900">
-          {stock ? formatQty(stock.available_qty) : "-"}
-        </td>
+            <td className="w-[110px] px-3 py-2 align-middle text-right tabular-nums text-sm font-medium text-neutral-900">
+              {stock ? formatQty(stock.available_qty) : "-"}
+            </td>
 
-        <td className="w-[120px] px-3 py-2 align-middle">
-          <div className="flex items-center">
-            <StockStatusBadge status={stockStatus} />
-          </div>
-        </td>
+            <td className="w-[120px] px-3 py-2 align-middle">
+              <div className="flex items-center">
+                <StockStatusBadge status={stockStatus} />
+              </div>
+            </td>
+          </>
+        )}
 
         <td className="w-[50px] px-2 py-2 align-middle">
           <div className="flex items-center justify-center">

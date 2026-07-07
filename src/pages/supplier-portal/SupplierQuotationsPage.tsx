@@ -22,6 +22,10 @@ import {
 } from "../../utils/listSort";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
 import { getLegalDocs } from "../../api/legalDocs";
+import {
+  hasAnyLegalDoc,
+  isSelectedAsWinner,
+} from "../../utils/supplierLegalDocs";
 import SupplierPortalLayout from "./SupplierPortalLayout";
 
 const SQ_COMPARATORS = supplierQuotationComparators<{
@@ -214,11 +218,16 @@ export default function SupplierQuotationsPage() {
 
                   const detailUrl = `/supplier/quotations/${encodeURIComponent(sq.name)}`;
                   const legalDocs = legalDocsBySq.get(sq.name);
-                  const hasLegalDocs = !!(
-                    legalDocs?.terms_file_url &&
-                    legalDocs?.warranty_file_url &&
-                    legalDocs?.insurance_file_url
-                  );
+                  // Legal docs are uploaded at quote time onto the Supplier
+                  // Quotation itself — so detection must read the hydrated SQ
+                  // custom fields, not only the (post-winner) review record.
+                  const hasLegalDocs = hasAnyLegalDoc(hydrated, legalDocs);
+                  const winnerLocked = isSelectedAsWinner(legalDocs);
+                  const legalLabel = !hasLegalDocs
+                    ? "Add Legal Docs"
+                    : winnerLocked
+                      ? "View Legal Docs"
+                      : "Manage Legal Docs";
 
                   return (
                     <tr
@@ -282,7 +291,7 @@ export default function SupplierQuotationsPage() {
                                   : "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 animate-pulse"
                               }`}
                             >
-                              📋 {hasLegalDocs ? "View Legal Docs" : "Add Legal Docs"}
+                              📋 {legalLabel}
                             </Link>
                           )}
                           <Link

@@ -125,6 +125,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/sourcing/rfq/new": "New RFQ",
   "/sourcing/rfq-templates": "RFQ Template Library",
   "/sourcing/legal-reviews": "Legal Reviews",
+  "/sourcing/reverse-bidding": "Reverse Bidding",
   "/legal": "Legal",
   "/legal/reviews": "Legal Reviews",
   "/finance": "Finance",
@@ -196,10 +197,50 @@ export function getBreadcrumbs(pathname: string): Breadcrumb[] {
   return crumbs;
 }
 
+/**
+ * Detect ERPNext-style document identifiers / record ids that must NEVER be
+ * shown as the large page title (e.g. MAT-MR-2026-00001, PO-00015,
+ * RFQ-2026-0001, SQ-0008, GRN-0002, pure numbers, or long hashes). These
+ * belong only inside the page content and the breadcrumb, never the header.
+ */
+function looksLikeDocumentId(segment: string): boolean {
+  const s = decodePathSegment(segment).trim();
+  if (!s) return false;
+  if (/\d/.test(s) && /[-_]/.test(s)) return true; // MAT-MR-2026-00001, RFQ-2026-0001
+  if (/^\d+$/.test(s)) return true; // 000123
+  if (/^[A-Za-z]{2,}-?\d{2,}$/.test(s)) return true; // PO-00015, SQ0008
+  if (/^[0-9a-f]{8,}$/i.test(s)) return true; // uuid / hash fragment
+  return false;
+}
+
+/**
+ * The large title in the global header is ALWAYS the page/module name — never
+ * a document number. For detail routes (…/:id) with no exact title, we walk up
+ * the path to the nearest ancestor that has a static module title (so
+ * `/…/review/MAT-MR-2026-00001` → "Review Material Request"). The breadcrumb is
+ * unaffected and still shows the document number as its last crumb.
+ */
 export function getPageTitle(pathname: string): string {
   if (ROUTE_TITLES[pathname]) return ROUTE_TITLES[pathname];
-  const crumbs = getBreadcrumbs(pathname);
-  return crumbs.length > 0 ? crumbs[crumbs.length - 1].label : APP_NAME;
+
+  const segments = pathname.split("/").filter(Boolean);
+
+  // Nearest ancestor path with a known static module title.
+  for (let i = segments.length - 1; i > 0; i -= 1) {
+    const ancestor = `/${segments.slice(0, i).join("/")}`;
+    if (ROUTE_TITLES[ancestor]) return ROUTE_TITLES[ancestor];
+  }
+
+  // No known ancestor — fall back to the last readable, non-document segment.
+  for (let i = segments.length - 1; i >= 0; i -= 1) {
+    if (looksLikeDocumentId(segments[i])) continue;
+    const decoded = decodePathSegment(segments[i]);
+    return decoded.includes("-") && !decoded.includes(" ")
+      ? toTitleCase(decoded)
+      : decoded;
+  }
+
+  return APP_NAME;
 }
 
 /** Landing page — no breadcrumb trail in the global header. */

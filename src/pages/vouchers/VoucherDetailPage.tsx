@@ -114,8 +114,8 @@ export default function VoucherDetailPage() {
       <BackLink />
 
       <PageHeader
-        title={voucher.id}
-        description={`Issued to ${voucher.supplier_name}`}
+        title="Voucher"
+        description={`${voucher.id} · Issued to ${voucher.supplier_name}`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <PdfActions
@@ -150,6 +150,8 @@ export default function VoucherDetailPage() {
           </div>
         }
       />
+
+      <p className="mb-4 text-sm font-semibold text-neutral-700">{voucher.id}</p>
 
       {/* Summary */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

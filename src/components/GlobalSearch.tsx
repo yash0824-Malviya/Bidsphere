@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { useNavigate } from "react-router-dom";
 
+import { useTranslation } from "react-i18next";
+
 import { useQuery } from "@tanstack/react-query";
 
 import {
@@ -112,6 +114,8 @@ interface Props {
 }
 
 export default function GlobalSearch({ onSelect }: Props) {
+
+  const { t } = useTranslation();
 
   const navigate = useNavigate();
 
@@ -303,7 +307,7 @@ export default function GlobalSearch({ onSelect }: Props) {
 
       key: "suppliers",
 
-      label: "Suppliers",
+      label: t("nav.suppliers"),
 
       icon: Users,
 
@@ -325,7 +329,7 @@ export default function GlobalSearch({ onSelect }: Props) {
 
       key: "purchaseOrders",
 
-      label: "Purchase Orders",
+      label: t("nav.purchaseOrders"),
 
       icon: ShoppingCart,
 
@@ -347,7 +351,7 @@ export default function GlobalSearch({ onSelect }: Props) {
 
       key: "invoices",
 
-      label: "Invoices",
+      label: t("nav.invoices"),
 
       icon: Receipt,
 
@@ -373,7 +377,7 @@ export default function GlobalSearch({ onSelect }: Props) {
 
             key: "requisitions" as keyof SearchResults,
 
-            label: "Material Requests",
+            label: t("nav.materialRequests"),
 
             icon: FileText,
 
@@ -450,7 +454,7 @@ export default function GlobalSearch({ onSelect }: Props) {
 
           onFocus={() => trimmed.length >= 2 && setOpen(true)}
 
-          placeholder={`Search suppliers, POs, invoices${FEATURE_FLAGS.showMaterialRequests ? ", PRs" : ""}…`}
+          placeholder={FEATURE_FLAGS.showMaterialRequests ? t("search.placeholderFull") : t("search.placeholder")}
 
           className="input-search pr-14"
 
@@ -486,7 +490,7 @@ export default function GlobalSearch({ onSelect }: Props) {
 
               <FileSearch className="h-5 w-5 text-neutral-400" />
 
-              <span>No results for "{trimmed}"</span>
+              <span>{t("search.noResults", { query: trimmed })}</span>
 
             </div>
 

@@ -26,7 +26,8 @@ import {
   getPurchaseReceipts,
   submitPurchaseReceipt,
 } from "../../api/purchasing";
-import { WAREHOUSE_STOCK_QUERY_KEY } from "../../api/warehouseStock";
+import { invalidateWarehouseStock } from "../../api/warehouseStock";
+import { reconcileProcurementReadyToIssue } from "../../api/materialRequestWorkflow";
 import ErrorState from "../../components/ErrorState";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
@@ -611,23 +612,27 @@ export default function WarehouseCreateGRNPage() {
       for (const entry of attachments) {
         await uploadFileToERPNext(entry.file, "Purchase Receipt", draft.name);
       }
-      return submitPurchaseReceipt(draft.name);
+      const submitted = await submitPurchaseReceipt(draft.name);
+      // ERPNext updates Bin stock synchronously on submit, so on-hand stock is
+      // already live here. Advance any procurement MR whose forwarded quantity
+      // is now fully received from "Procurement Required" → "Ready to Issue".
+      // Best-effort: a reconciliation failure must never fail the receipt.
+      try {
+        await reconcileProcurementReadyToIssue();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("[GRN submit] Ready-to-Issue reconciliation skipped:", err);
+      }
+      return submitted;
     },
     onSuccess: (grn) => {
       setSubmittedGrnName(grn.name);
       toast.success("Goods Receipt created successfully.");
-      // Both the Upcoming Deliveries tab and the GRN History tab observe
-      // these query keys directly, so they update live — the PO drops out of
-      // "incoming-purchase-orders" (now that it has a receipt) and the new
-      // GRN appears in "purchase-receipts" — with no page reload needed.
-      void queryClient.invalidateQueries({ queryKey: ["purchase-receipts"] });
-      void queryClient.invalidateQueries({ queryKey: ["incoming-purchase-orders"] });
+      // Refresh every live-stock, inventory, GRN and procurement view so the
+      // received quantities (and any MR moved to Ready to Issue) show instantly
+      // — all read live from ERPNext Bin, no page reload needed.
+      invalidateWarehouseStock(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["purchase-order", poName] });
-      void queryClient.invalidateQueries({ queryKey: WAREHOUSE_STOCK_QUERY_KEY });
-      // Receiving goods can move Material Requests into "Ready to Issue" — keep
-      // the Warehouse dashboard widgets and counts live.
-      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
-      void queryClient.invalidateQueries({ queryKey: ["mr-procurement-queue"] });
     },
     onError: (err: unknown) => {
       // A posting-date conflict (future date / before PO) is a server-date vs

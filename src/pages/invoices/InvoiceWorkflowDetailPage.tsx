@@ -184,13 +184,13 @@ export default function InvoiceWorkflowDetailPage() {
       {/* Content header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-primary-600">
-            Supplier Invoice
-          </p>
-          <h1 className="mt-0.5 text-xl font-bold text-neutral-900 sm:text-2xl">
+          <p className="text-sm font-semibold text-neutral-700">
             {invoice.invoice_number}
-          </h1>
-          <p className="mt-0.5 text-sm text-neutral-500">{voucher.supplier_name}</p>
+            <span className="font-normal text-neutral-500">
+              {" "}
+              &middot; {voucher.supplier_name}
+            </span>
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <PdfActions

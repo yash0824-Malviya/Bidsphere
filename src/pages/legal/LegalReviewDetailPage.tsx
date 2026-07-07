@@ -24,7 +24,13 @@ import {
   XCircle,
 } from "lucide-react";
 
-import { getRFQ, getSupplierQuotations, fetchRawSQ } from "../../api/sourcing";
+import {
+  getRFQ,
+  getSupplierQuotations,
+  getSupplierQuotation,
+  fetchRawSQ,
+} from "../../api/sourcing";
+import { resolveSupplierLegalDocs } from "../../utils/supplierLegalDocs";
 import {
   getLegalDocs,
   updateLegalDocs,
@@ -207,7 +213,34 @@ export default function LegalReviewDetailPage() {
         return;
       }
       setLoadingDocs(true);
-      const docs = await getLegalDocs(lookupSq);
+      let docs = await getLegalDocs(lookupSq);
+      // Fallback: if the review record is missing any file URL (e.g. the copy
+      // from the Supplier Quotation at winner-selection didn't run), pull the
+      // URLs straight from the SQ custom fields so Procurement always sees the
+      // supplier's uploaded PDFs. Display-only — approve/view flags still
+      // persist against the review record by name.
+      if (
+        docs &&
+        (!docs.terms_file_url ||
+          !docs.warranty_file_url ||
+          !docs.insurance_file_url)
+      ) {
+        try {
+          const sq = await getSupplierQuotation(lookupSq);
+          const resolved = resolveSupplierLegalDocs(sq, docs);
+          const byKey = Object.fromEntries(resolved.map((d) => [d.key, d.url]));
+          docs = {
+            ...docs,
+            terms_file_url: docs.terms_file_url || byKey.terms || undefined,
+            warranty_file_url:
+              docs.warranty_file_url || byKey.warranty || undefined,
+            insurance_file_url:
+              docs.insurance_file_url || byKey.insurance || undefined,
+          };
+        } catch {
+          /* keep whatever the review record already had */
+        }
+      }
       // eslint-disable-next-line no-console
       console.log("[LegalReview] Loaded from ERPNext:", docs);
       setLegalDocs(docs);
@@ -438,14 +471,9 @@ export default function LegalReviewDetailPage() {
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
                 <Scale className="h-5 w-5 text-primary" />
               </div>
-              <div>
-                <h1 className="text-xl font-bold text-neutral-900">
-                  Legal Review Workspace
-                </h1>
-                <p className="text-sm text-neutral-500">
-                  {parsed.title ?? decodedId}
-                </p>
-              </div>
+              <p className="text-sm font-semibold text-neutral-700">
+                {parsed.title ?? decodedId}
+              </p>
             </div>
           </div>
           <LegalStatusBadge status={currentLegalStatus} />

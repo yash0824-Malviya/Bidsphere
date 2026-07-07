@@ -11,7 +11,6 @@ function DashboardHeader({ config, greetingName }: Props) {
   return (
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div className="min-w-0 flex-1">
-        <h1 className="heading-page">{config.title}</h1>
         <p className="page-subtitle">
           Welcome back, {greetingName} · {config.subtitle}
         </p>

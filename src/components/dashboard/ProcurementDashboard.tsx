@@ -24,11 +24,13 @@ import { apiGet, buildListConfig, buildResourceUrl } from "../../api/erpnext";
 import type { Filter } from "../../api/erpnext";
 import {
   fetchProcurementQueue,
+  getMaterialRequestProcurementType,
   getMaterialRequestWorkflowStatus,
   parseForwardedItemsFromMr,
   type MaterialRequestWorkflowRecord,
 } from "../../api/materialRequestWorkflow";
 import { canCreateRfqFromMaterialRequest } from "../../api/createRFQFromMaterialRequest";
+import ProcurementTypeBadge from "../ProcurementTypeBadge";
 import { getDashboardConfig } from "../../config/dashboardRoles";
 import {
   computeExecutiveKpis,
@@ -108,6 +110,7 @@ function buildForwardedRows(
     return {
       mr,
       name: mr.name,
+      procurementType: getMaterialRequestProcurementType(mr),
       department: mr.custom_department || mr.department || "—",
       requestDate: formatDate(mr.transaction_date),
       priority: mr.custom_priority || "Medium",
@@ -286,7 +289,6 @@ export default function ProcurementDashboard({ greetingName }: Props) {
       {/* ── Header with compact action ─────────────────────────────────── */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <h1 className="heading-page">{config.title}</h1>
           <p className="page-subtitle">
             Welcome back, {greetingName} · {config.subtitle}
           </p>
@@ -447,12 +449,18 @@ export default function ProcurementDashboard({ greetingName }: Props) {
                 forwardedRows.map((row) => (
                   <tr key={row.name} className="hover:bg-neutral-50">
                     <td className="whitespace-nowrap px-4 py-2.5">
-                      <Link
-                        to={`/material-requests/${encodeURIComponent(row.name)}`}
-                        className="font-semibold text-primary-600 no-underline hover:underline"
-                      >
-                        {row.name}
-                      </Link>
+                      <div className="flex items-center gap-2">
+                        <Link
+                          to={`/material-requests/${encodeURIComponent(row.name)}`}
+                          className="font-semibold text-primary-600 no-underline hover:underline"
+                        >
+                          {row.name}
+                        </Link>
+                        <ProcurementTypeBadge
+                          type={row.procurementType}
+                          withIcon={false}
+                        />
+                      </div>
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-neutral-700">
                       {row.department}

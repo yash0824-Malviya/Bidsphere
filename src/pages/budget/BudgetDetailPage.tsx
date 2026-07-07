@@ -200,7 +200,7 @@ export default function BudgetDetailPage() {
 
   return (
     <div>
-      <PageHeader title={budget.name} description={`ERPNext Budget · ${status}`} />
+      <PageHeader title="Budget Details" description={`${budget.name} · ${status}`} />
 
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">

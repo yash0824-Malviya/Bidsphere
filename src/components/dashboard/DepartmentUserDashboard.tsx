@@ -11,12 +11,14 @@ import {
 } from "lucide-react";
 
 import {
+  getMaterialRequestProcurementType,
   getMaterialRequestWorkflowStatus,
   listMaterialRequestsWorkflow,
 } from "../../api/materialRequestWorkflow";
 import { getDashboardConfig } from "../../config/dashboardRoles";
 import { formatDate } from "../../utils/format";
 import StatusBadge from "../StatusBadge";
+import ProcurementTypeBadge from "../ProcurementTypeBadge";
 import { Skeleton } from "../Skeleton";
 import DashboardHeader from "./DashboardHeader";
 
@@ -309,6 +311,10 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
                           <p className="text-sm font-semibold text-neutral-900">
                             {mr.name}
                           </p>
+                          <ProcurementTypeBadge
+                            type={getMaterialRequestProcurementType(mr)}
+                            withIcon={false}
+                          />
                           {mr.custom_priority ? (
                             <PriorityBadge priority={mr.custom_priority} />
                           ) : null}

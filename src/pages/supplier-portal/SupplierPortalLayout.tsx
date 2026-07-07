@@ -1,10 +1,12 @@
 import type { ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { LogOut, User } from "lucide-react";
 
 import { APP_SUPPLIER_PORTAL } from "../../config/branding";
 import { useDocumentTitle } from "../../hooks/useDocumentTitle";
 import BrandLogo from "../../components/BrandLogo";
+import LanguageSwitcher from "../../components/LanguageSwitcher";
 import SupplierPortalSidebar, {
   SupplierPortalMobileNav,
 } from "./SupplierPortalSidebar";
@@ -19,6 +21,7 @@ export default function SupplierPortalLayout({
   children,
 }: Props) {
   const navigate = useNavigate();
+  const { t } = useTranslation();
   useDocumentTitle();
 
   function handleLogout() {
@@ -51,6 +54,7 @@ export default function SupplierPortalLayout({
 
             {supplierName ? (
               <div className="ml-auto flex items-center gap-2 sm:gap-3">
+                <LanguageSwitcher />
                 <span className="hidden items-center gap-1.5 rounded-full bg-accent-50 px-3 py-1 text-xs font-medium text-accent-700 ring-1 ring-inset ring-accent-200 sm:inline-flex">
                   <User className="h-3 w-3" />
                   <span className="max-w-[140px] truncate">{supplierName}</span>
@@ -61,13 +65,16 @@ export default function SupplierPortalLayout({
                   className="btn-touch inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-3 py-2 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
                 >
                   <LogOut className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">Logout</span>
+                  <span className="hidden sm:inline">{t("supplierNav.logout")}</span>
                 </button>
               </div>
             ) : (
-              <span className="ml-auto text-xs text-neutral-500">
-                Supplier sign in
-              </span>
+              <div className="ml-auto flex items-center gap-2 sm:gap-3">
+                <LanguageSwitcher />
+                <span className="text-xs text-neutral-500">
+                  {t("supplierNav.supplierSignIn")}
+                </span>
+              </div>
             )}
           </div>
           {supplierName && <SupplierPortalMobileNav />}

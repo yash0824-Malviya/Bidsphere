@@ -93,6 +93,12 @@ const SupplierDetailPage = lazy(() => import("./pages/supplier/SupplierDetailPag
 const NewRFQPage = lazy(() => import("./pages/sourcing/NewRFQPage"));
 const RFQDetailPage = lazy(() => import("./pages/sourcing/RFQDetailPage"));
 const RFQTemplatesPage = lazy(() => import("./pages/sourcing/RFQTemplatesPage"));
+const ReverseBiddingListPage = lazy(
+  () => import("./pages/sourcing/ReverseBiddingListPage")
+);
+const ReverseBiddingDetailPage = lazy(
+  () => import("./pages/sourcing/ReverseBiddingDetailPage")
+);
 const LegalReviewDetailPage = lazy(() => import("./pages/legal/LegalReviewDetailPage"));
 const LegalReviewsListPage = lazy(() => import("./pages/legal/LegalReviewsListPage"));
 const FinanceReviewDetailPage = lazy(() => import("./pages/finance/FinanceReviewDetailPage"));
@@ -105,6 +111,12 @@ const SupplierDashboard = lazy(
 );
 const SupplierRFQPage = lazy(
   () => import("./pages/supplier-portal/SupplierRFQPage")
+);
+const SupplierAuctionsListPage = lazy(
+  () => import("./pages/supplier-portal/SupplierAuctionsListPage")
+);
+const SupplierAuctionPage = lazy(
+  () => import("./pages/supplier-portal/SupplierAuctionPage")
 );
 const SupplierLegalUploadPage = lazy(
   () => import("./pages/supplier-portal/SupplierLegalUploadPage")
@@ -369,6 +381,11 @@ function App() {
           />
           <Route path="/supplier/rfq/:rfqName" element={<SupplierRFQPage />} />
           <Route path="/supplier/po/:poName" element={<SupplierPOPage />} />
+          <Route path="/supplier/auctions" element={<SupplierAuctionsListPage />} />
+          <Route
+            path="/supplier/auctions/:auctionName"
+            element={<SupplierAuctionPage />}
+          />
 
           <Route
             element={
@@ -478,6 +495,14 @@ function App() {
             <Route path="/sourcing/rfq" element={<RFQListPage />} />
             <Route path="/sourcing/rfq/new" element={<NewRFQPage />} />
             <Route path="/sourcing/rfq/:id" element={<RFQDetailPage />} />
+            <Route
+              path="/sourcing/reverse-bidding"
+              element={<ReverseBiddingListPage />}
+            />
+            <Route
+              path="/sourcing/reverse-bidding/:id"
+              element={<ReverseBiddingDetailPage />}
+            />
             <Route
               path="/sourcing/supplier-quotations"
               element={<SupplierQuotationsListPage />}

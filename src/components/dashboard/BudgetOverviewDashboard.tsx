@@ -127,7 +127,6 @@ export default function BudgetOverviewDashboard() {
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <h1 className="heading-page">Budget Dashboard</h1>
           <p className="page-subtitle">
             Live ERPNext budget allocation, consumption and utilization
           </p>

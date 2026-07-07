@@ -5,20 +5,39 @@
 
 export const MR_WORKFLOW_FIELD = "custom_bidsphere_status";
 
+/** ERPNext custom field storing the procurement classification of an MR. */
+export const MR_PROCUREMENT_TYPE_FIELD = "custom_procurement_type";
+
+/**
+ * Every Material Request belongs to exactly one procurement class:
+ *   • Direct   — manufacturing / raw materials. Routed through Warehouse first.
+ *   • Indirect — office / support items. Routed through Admin approval first.
+ */
+export type MaterialRequestProcurementType = "Direct" | "Indirect";
+
+export const MATERIAL_REQUEST_PROCUREMENT_TYPES: MaterialRequestProcurementType[] = [
+  "Direct",
+  "Indirect",
+];
+
 /**
  * Canonical Material Request workflow statuses — the ONLY values written to
  * ERPNext (`custom_bidsphere_status`) and rendered in the UI. This is the real
- * ERPNext procurement flow:
+ * ERPNext procurement flow, branched by procurement type:
  *
  *   Draft (pre-submission only)
- *     └▶ Submitted ─▶ Under Warehouse Review
- *                       ├─ stock ok ─▶ Stock Available ─▶ Material Issued ─▶ Completed
- *                       └─ no stock ─▶ Procurement Required ─▶ RFQ Created ─▶ Completed
+ *     ├▶ DIRECT ──▶ Under Warehouse Review
+ *     │              ├─ stock ok ─▶ Stock Available ─▶ Material Issued ─▶ Completed
+ *     │              └─ no stock ─▶ Procurement Required ─▶ RFQ Created ─▶ Completed
+ *     └▶ INDIRECT ─▶ Admin Review
+ *                    ├─ approved  ─▶ Procurement Required ─▶ RFQ Created ─▶ Completed
+ *                    └─ rejected  ─▶ Cancelled
  *   Cancelled (terminal)
  */
 export type MaterialRequestWorkflowStatus =
   | "Draft"
   | "Submitted"
+  | "Admin Review"
   | "Under Warehouse Review"
   | "Stock Available"
   | "Material Issued"
@@ -33,6 +52,7 @@ export type MaterialRequestWorkflowStatus =
  */
 export const MR_DASHBOARD_STATUSES: MaterialRequestWorkflowStatus[] = [
   "Submitted",
+  "Admin Review",
   "Under Warehouse Review",
   "Stock Available",
   "Material Issued",
@@ -40,6 +60,13 @@ export const MR_DASHBOARD_STATUSES: MaterialRequestWorkflowStatus[] = [
   "RFQ Created",
   "Completed",
   "Cancelled",
+];
+
+/**
+ * Statuses that put an Indirect Material Request in the Admin approval queue.
+ */
+export const ADMIN_REVIEW_STATUSES: MaterialRequestWorkflowStatus[] = [
+  "Admin Review",
 ];
 
 /**
@@ -108,6 +135,7 @@ export function normalizeWorkflowStatus(
 const UI_TO_ERP_STATUS: Record<MaterialRequestWorkflowStatus, string> = {
   Draft: "Draft",
   Submitted: "Submitted",
+  "Admin Review": "Admin Review",
   "Under Warehouse Review": "Under Warehouse Review",
   // ERPNext's field has no "Stock Available" option; store the closest valid
   // state so the write never fails. Read-back shows "Under Warehouse Review".
@@ -136,6 +164,7 @@ export type MaterialRequestPriority = "Low" | "Medium" | "High" | "Urgent";
 
 export interface MaterialRequestWorkflowFields {
   [MR_WORKFLOW_FIELD]?: MaterialRequestWorkflowStatus;
+  [MR_PROCUREMENT_TYPE_FIELD]?: MaterialRequestProcurementType;
   custom_department?: string;
   custom_priority?: MaterialRequestPriority;
   custom_purpose?: string;
@@ -143,6 +172,18 @@ export interface MaterialRequestWorkflowFields {
   custom_procurement_remarks?: string;
   custom_linked_rfq?: string;
   custom_requested_by?: string;
+  custom_admin_remarks?: string;
+}
+
+/**
+ * Resolve the procurement type of a Material Request. Existing records created
+ * before this feature won't carry `custom_procurement_type`; we treat those as
+ * "Direct" so the legacy warehouse-first flow keeps working (backward compat).
+ */
+export function resolveProcurementType(
+  raw: string | null | undefined,
+): MaterialRequestProcurementType {
+  return (raw ?? "").trim().toLowerCase() === "indirect" ? "Indirect" : "Direct";
 }
 
 export interface MaterialRequestStockLine {

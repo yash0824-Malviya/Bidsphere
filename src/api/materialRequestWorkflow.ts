@@ -31,11 +31,15 @@ import {
 import { lookupDefaultWarehouse } from "./sourcing";
 import type { MaterialRequest, MaterialRequestItem } from "../types/erpnext";
 import {
+  ADMIN_REVIEW_STATUSES,
+  MR_PROCUREMENT_TYPE_FIELD,
   MR_WORKFLOW_FIELD,
   PROCUREMENT_QUEUE_STATUSES,
   normalizeWorkflowStatus,
+  resolveProcurementType,
   toErpBidsphereStatus,
   type MaterialRequestPriority,
+  type MaterialRequestProcurementType,
   type MaterialRequestStockCheck,
   type MaterialRequestStockLine,
   type MaterialRequestWorkflowFields,
@@ -49,6 +53,7 @@ const MR_DOCTYPE = "Material Request";
 export const MR_WORKFLOW_STATUSES: MaterialRequestWorkflowStatus[] = [
   "Draft",
   "Submitted",
+  "Admin Review",
   "Under Warehouse Review",
   "Stock Available",
   "Material Issued",
@@ -126,6 +131,7 @@ export interface CreateMaterialRequestWorkflowInput {
   transaction_date?: string;
   schedule_date?: string;
   department?: string;
+  procurement_type?: MaterialRequestProcurementType;
   priority?: MaterialRequestPriority;
   purpose?: string;
   requested_by?: string;
@@ -158,11 +164,13 @@ const MR_LIST_FIELDS_STANDARD = [
 /** Custom workflow fields — require scripts/setup-material-request-workflow.mjs */
 const MR_CUSTOM_QUERY_FIELDS = [
   MR_WORKFLOW_FIELD,
+  MR_PROCUREMENT_TYPE_FIELD,
   "custom_department",
   "custom_priority",
   "custom_purpose",
   "custom_warehouse_remarks",
   "custom_procurement_remarks",
+  "custom_admin_remarks",
   "custom_linked_rfq",
   "custom_requested_by",
 ] as const;
@@ -337,6 +345,17 @@ export function getMaterialRequestWorkflowStatus(
   return workflowStatus(doc);
 }
 
+/**
+ * Resolve the procurement type (Direct / Indirect) of a Material Request.
+ * Records created before this feature have no `custom_procurement_type` and are
+ * treated as Direct so the legacy warehouse-first flow keeps working.
+ */
+export function getMaterialRequestProcurementType(
+  doc: MaterialRequestWorkflowRecord,
+): MaterialRequestProcurementType {
+  return resolveProcurementType(doc[MR_PROCUREMENT_TYPE_FIELD]);
+}
+
 export async function fetchMaterialRequestWorkflow(
   name: string,
 ): Promise<MaterialRequestWorkflowRecord> {
@@ -424,15 +443,67 @@ export async function listMaterialRequestsWorkflow(params?: {
   return filtered;
 }
 
-/** Warehouse review queue — submitted Material Issue MRs pending warehouse action. */
+/**
+ * Warehouse review queue — submitted Material Issue MRs pending warehouse action.
+ * Only DIRECT procurement requests reach the warehouse; Indirect requests are
+ * gated by Admin approval and never appear here.
+ */
 export async function listWarehouseMaterialRequestQueue(
   limit = 100,
 ): Promise<MaterialRequestWorkflowRecord[]> {
-  return listMaterialRequestsWorkflow({
+  const rows = await listMaterialRequestsWorkflow({
     docstatus: 1,
     materialRequestType: "Material Issue",
     workflowStatus: WAREHOUSE_PENDING_STATUSES,
     limit,
+  });
+  return rows.filter(
+    (mr) => getMaterialRequestProcurementType(mr) === "Direct",
+  );
+}
+
+/**
+ * Admin approval queue — submitted INDIRECT Material Requests awaiting admin
+ * review. This is the gate that must pass before an Indirect MR reaches
+ * Procurement. Live ERPNext data, no mock records.
+ */
+export async function listAdminReviewQueue(
+  limit = 200,
+): Promise<MaterialRequestWorkflowRecord[]> {
+  const rows = await listMaterialRequestsWorkflow({
+    docstatus: 1,
+    workflowStatus: ADMIN_REVIEW_STATUSES,
+    limit,
+  });
+  return rows.filter(
+    (mr) => getMaterialRequestProcurementType(mr) === "Indirect",
+  );
+}
+
+/**
+ * Admin approves an Indirect Material Request. Approval forwards it straight to
+ * Procurement (status "Procurement Required"), which is where the RFQ flow
+ * begins — identical to the direct path once a request is with Procurement.
+ */
+export async function approveIndirectMaterialRequest(
+  name: string,
+  adminRemarks?: string,
+): Promise<MaterialRequestWorkflowRecord> {
+  return updateMaterialRequestWorkflowStatus(name, "Procurement Required", {
+    custom_admin_remarks: adminRemarks,
+  });
+}
+
+/**
+ * Admin rejects an Indirect Material Request. It returns to the requester as a
+ * cancelled request with the admin's reason recorded.
+ */
+export async function rejectIndirectMaterialRequest(
+  name: string,
+  adminRemarks?: string,
+): Promise<MaterialRequestWorkflowRecord> {
+  return updateMaterialRequestWorkflowStatus(name, "Cancelled", {
+    custom_admin_remarks: adminRemarks,
   });
 }
 
@@ -459,6 +530,9 @@ export async function createMaterialRequestWorkflow(
   const created = await createMaterialRequest(payload);
   const updates: Record<string, unknown> = {
     [MR_WORKFLOW_FIELD]: toErpBidsphereStatus("Draft"),
+    // Every MR is classified at creation. Defaults to Direct when the caller
+    // doesn't supply a type, preserving the legacy warehouse-first behaviour.
+    [MR_PROCUREMENT_TYPE_FIELD]: input.procurement_type ?? "Direct",
   };
   if (input.department) updates.custom_department = input.department;
   if (input.priority) updates.custom_priority = input.priority;
@@ -476,24 +550,29 @@ export async function createMaterialRequestWorkflow(
 
 /**
  * Department submits the Material Request. This submits the ERPNext document
- * (docstatus 0 → 1, so it leaves the Draft state permanently) and routes it to
- * the warehouse by setting the status to "Under Warehouse Review" — the status
- * is the assignment mechanism: warehouse queues/dashboards filter on it, so the
- * request appears for the warehouse team on any device. Persisted entirely in
- * ERPNext, so it survives refresh and logout.
+ * (docstatus 0 → 1, so it leaves the Draft state permanently) and routes it by
+ * procurement type — the status is the assignment mechanism that queues and
+ * dashboards filter on, so the request appears for the right team on any device:
+ *   • Direct   → "Under Warehouse Review" (warehouse stock check first).
+ *   • Indirect → "Admin Review" (admin approval gate, bypasses warehouse).
+ * Persisted entirely in ERPNext, so it survives refresh and logout.
  */
 export async function submitMaterialRequestWorkflow(
   name: string,
 ): Promise<MaterialRequestWorkflowRecord> {
   const endpoint = buildResourceUrl(MR_DOCTYPE, name);
-  const fresh = await apiGet<MaterialRequest>(endpoint);
+  const fresh = await apiGet<MaterialRequestWorkflowRecord>(endpoint);
   const modified =
     (fresh as { modified?: string }).modified ??
     (fresh as { data?: { modified?: string } }).data?.modified;
 
+  const procurementType = getMaterialRequestProcurementType(fresh);
+  const targetStatus: MaterialRequestWorkflowStatus =
+    procurementType === "Indirect" ? "Admin Review" : "Under Warehouse Review";
+
   const payload: Record<string, unknown> = {
     docstatus: 1,
-    [MR_WORKFLOW_FIELD]: toErpBidsphereStatus("Under Warehouse Review"),
+    [MR_WORKFLOW_FIELD]: toErpBidsphereStatus(targetStatus),
   };
   if (modified) payload.modified = modified;
 
@@ -1012,6 +1091,11 @@ export interface WarehouseItemDecision {
   shortage_qty: number;
   /** Qty to issue from stock. */
   issue_qty: number;
+  /**
+   * Qty already issued from stock, as persisted in the forwarded-items JSON
+   * (`[BidSphere:ForwardedItems:...]`). Present on parsed forwarded items.
+   */
+  issued_qty?: number;
   /** Qty to forward to procurement. */
   forward_qty: number;
   status: WarehouseItemDecisionStatus;
@@ -1318,6 +1402,347 @@ export async function fetchProcurementQueue(): Promise<MaterialRequestWorkflowRe
   return queue;
 }
 
+/* ─── Procurement → Ready to Issue reconciliation ────────────────────────── */
+
+/**
+ * Sum live on-hand stock (`Bin.actual_qty`) per item across the company's
+ * warehouses in a single batched query. Cross-company bins are excluded so a
+ * receipt into another company never counts. Never throws — an empty map means
+ * "no stock found" so reconciliation simply won't advance any MR.
+ */
+async function fetchCompanyStockByItem(
+  itemCodes: string[],
+): Promise<Map<string, number>> {
+  const stock = new Map<string, number>();
+  const codes = [...new Set(itemCodes.filter(Boolean))];
+  if (codes.length === 0) return stock;
+
+  let warehouseNames: string[] = [];
+  try {
+    const list = await apiGet<Array<{ name?: string }>>(
+      buildResourceUrl("Warehouse"),
+      withSilent(
+        buildListConfig({
+          fields: ["name"],
+          filters: [
+            ["company", "=", COMPANY],
+            ["is_group", "=", 0],
+            ["disabled", "=", 0],
+          ],
+          limit_page_length: 500,
+        }),
+      ),
+    );
+    warehouseNames = (list ?? [])
+      .map((w) => w.name)
+      .filter((n): n is string => Boolean(n));
+  } catch {
+    // Fall through with no warehouse filter — better to over-count than to
+    // wrongly leave an MR stuck in Procurement Required.
+  }
+
+  const filters: Filter[] = [["item_code", "in", codes]];
+  if (warehouseNames.length > 0) filters.push(["warehouse", "in", warehouseNames]);
+
+  let bins: Array<{ item_code?: string; actual_qty?: number }> = [];
+  try {
+    bins = await apiGet<Array<{ item_code?: string; actual_qty?: number }>>(
+      buildResourceUrl("Bin"),
+      withSilent(
+        buildListConfig({
+          fields: ["item_code", "actual_qty"],
+          filters,
+          limit_page_length: 2000,
+        }),
+      ),
+    );
+  } catch (err) {
+    if (import.meta.env.DEV) {
+      console.warn("[MR reconcile] Bin stock fetch failed:", err);
+    }
+    return stock;
+  }
+
+  for (const bin of bins ?? []) {
+    if (!bin.item_code) continue;
+    stock.set(
+      bin.item_code,
+      (stock.get(bin.item_code) ?? 0) + (Number(bin.actual_qty) || 0),
+    );
+  }
+  return stock;
+}
+
+/**
+ * Move procurement-path Material Requests to "Ready to Issue" once the goods
+ * they forwarded have been received into the warehouse.
+ *
+ * Called after every Goods Receipt (Purchase Receipt) submission. For each
+ * Material Issue MR still sitting in the procurement queue ("Procurement
+ * Required" / "RFQ Created"), it compares the forwarded shortage quantities
+ * against live ERPNext `Bin` stock. When on-hand stock now covers every
+ * forwarded line, the MR is advanced to "Stock Available" — the status that
+ * removes it from Procurement Required and lists it under Ready to Issue for
+ * the warehouse team. No hardcoded quantities; stock is read live from `Bin`.
+ *
+ * Best-effort and non-fatal: any failure is logged and the receipt still
+ * succeeds. Returns the names of the MRs that were advanced.
+ */
+export async function reconcileProcurementReadyToIssue(): Promise<string[]> {
+  let queue: MaterialRequestWorkflowRecord[];
+  try {
+    queue = await fetchProcurementQueue();
+  } catch (err) {
+    if (import.meta.env.DEV) {
+      console.warn("[MR reconcile] procurement queue fetch failed:", err);
+    }
+    return [];
+  }
+  if (queue.length === 0) return [];
+
+  interface ForwardedNeed {
+    item_code: string;
+    qty: number;
+  }
+
+  // Build the "received quantity required" per MR from the forwarded-items
+  // snapshot (falling back to the raw MR items when no snapshot exists). Only
+  // Material Issue requests can return to the warehouse issue queue.
+  const mrNeeds = new Map<string, ForwardedNeed[]>();
+  const allItemCodes: string[] = [];
+
+  for (const mr of queue) {
+    if (mr.material_request_type !== "Material Issue") continue;
+
+    const forwarded = parseForwardedItemsFromMr(mr);
+    const shortage = forwarded.filter((fi) => (Number(fi.forward_qty) || 0) > 0);
+    const needs: ForwardedNeed[] =
+      shortage.length > 0
+        ? shortage.map((fi) => ({
+            item_code: fi.item_code,
+            qty: Number(fi.forward_qty) || 0,
+          }))
+        : (mr.items ?? [])
+            .map((i) => ({ item_code: i.item_code, qty: Number(i.qty) || 0 }))
+            .filter((n) => n.item_code && n.qty > 0);
+
+    if (needs.length === 0) continue;
+    mrNeeds.set(mr.name, needs);
+    for (const need of needs) allItemCodes.push(need.item_code);
+  }
+
+  if (mrNeeds.size === 0) return [];
+
+  const stockByItem = await fetchCompanyStockByItem(allItemCodes);
+
+  const advanced: string[] = [];
+  for (const mr of queue) {
+    const needs = mrNeeds.get(mr.name);
+    if (!needs) continue;
+
+    const fullyReceived = needs.every(
+      (need) => (stockByItem.get(need.item_code) ?? 0) >= need.qty,
+    );
+    if (!fullyReceived) continue;
+
+    try {
+      // Advance to "Stock Available" (ERPNext "Under Warehouse Review") — the
+      // warehouse pending status that surfaces the request under Ready to
+      // Issue. Existing custom_warehouse_remarks (forwarded-items history) is
+      // preserved by not overwriting it.
+      await updateMaterialRequestWorkflowStatus(mr.name, "Stock Available");
+      advanced.push(mr.name);
+      // eslint-disable-next-line no-console
+      console.log(
+        "[MR reconcile] Forwarded quantity received in full — moved to Ready to Issue",
+        {
+          mr: mr.name,
+          needs,
+          onHand: needs.map((n) => ({
+            item_code: n.item_code,
+            available: stockByItem.get(n.item_code) ?? 0,
+          })),
+        },
+      );
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        console.warn(`[MR reconcile] failed to advance ${mr.name}:`, err);
+      }
+    }
+  }
+
+  return advanced;
+}
+
+/* ─── Live procurement progress (PO → GRN → Stock Entry) ─────────────────── */
+
+/**
+ * The furthest procurement milestone a Material Request has reached, derived
+ * purely from linked ERPNext documents (never from `custom_bidsphere_status`,
+ * which stops advancing at "RFQ Created"). Drives the Track Request timeline
+ * so the progress bar moves the moment a PO / GRN / Stock Entry is submitted.
+ */
+export interface MaterialRequestProcurementProgress {
+  rfqName: string | null;
+  supplierQuotations: string[];
+  /** Submitted Purchase Orders that fulfil this MR. */
+  purchaseOrders: string[];
+  /** Submitted Purchase Receipts (GRNs) against those POs. */
+  goodsReceipts: string[];
+  /** Submitted Stock Entries (Material Issue) for this MR. */
+  stockEntries: string[];
+  /** Qty ordered on submitted POs. */
+  orderedQty: number;
+  /** Qty received via submitted GRNs. */
+  receivedQty: number;
+  /** Qty issued via submitted Stock Entries. */
+  issuedQty: number;
+  /** Furthest milestone reached from live documents, or null when none. */
+  stage:
+    | "Purchase Ordered"
+    | "Goods Received"
+    | "Material Issued"
+    | null;
+}
+
+async function safeChildQuery<T>(
+  promise: Promise<T[]>,
+): Promise<T[]> {
+  try {
+    return (await promise) ?? [];
+  } catch (err) {
+    if (import.meta.env.DEV) {
+      console.warn("[MR progress] linked-document query failed:", err);
+    }
+    return [];
+  }
+}
+
+/**
+ * Resolve the live procurement progress for a Material Request from its linked
+ * ERPNext documents. Every step is a `docstatus = 1` (submitted) check:
+ *   • Purchase Order Item.material_request === MR  → Purchase Ordered
+ *   • Purchase Receipt Item.purchase_order ∈ POs   → Goods Received
+ *   • Stock Entry Detail.material_request === MR   → Material Issued
+ *
+ * Never throws — each sub-query degrades to empty so a permission/field quirk
+ * on one doctype can't blank the whole timeline. No hardcoded quantities.
+ */
+export async function getMaterialRequestProcurementProgress(
+  mrName: string,
+  linkedRfq?: string | null,
+): Promise<MaterialRequestProcurementProgress> {
+  // 1. Submitted Purchase Order lines that fulfil this MR.
+  const poItems = await safeChildQuery(
+    apiGet<Array<{ parent?: string; qty?: number; received_qty?: number }>>(
+      buildResourceUrl("Purchase Order Item"),
+      withSilent(
+        buildListConfig({
+          fields: ["parent", "qty", "received_qty"],
+          filters: [
+            ["material_request", "=", mrName],
+            ["docstatus", "=", 1],
+          ],
+          limit_page_length: 200,
+        }),
+      ),
+    ),
+  );
+  const purchaseOrders = [
+    ...new Set(poItems.map((r) => r.parent).filter((p): p is string => Boolean(p))),
+  ];
+  const orderedQty = poItems.reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
+  let receivedQty = poItems.reduce(
+    (sum, r) => sum + (Number(r.received_qty) || 0),
+    0,
+  );
+
+  // 2. Submitted Purchase Receipt (GRN) lines against those POs.
+  let goodsReceipts: string[] = [];
+  if (purchaseOrders.length > 0) {
+    const prItems = await safeChildQuery(
+      apiGet<Array<{ parent?: string; qty?: number; received_qty?: number }>>(
+        buildResourceUrl("Purchase Receipt Item"),
+        withSilent(
+          buildListConfig({
+            fields: ["parent", "qty", "received_qty"],
+            filters: [
+              ["purchase_order", "in", purchaseOrders],
+              ["docstatus", "=", 1],
+            ],
+            limit_page_length: 500,
+          }),
+        ),
+      ),
+    );
+    goodsReceipts = [
+      ...new Set(
+        prItems.map((r) => r.parent).filter((p): p is string => Boolean(p)),
+      ),
+    ];
+    const prReceived = prItems.reduce(
+      (sum, r) => sum + (Number(r.received_qty ?? r.qty) || 0),
+      0,
+    );
+    if (prReceived > 0) receivedQty = prReceived;
+  }
+
+  // 3. Submitted Stock Entry (Material Issue) lines for this MR.
+  const seItems = await safeChildQuery(
+    apiGet<Array<{ parent?: string; qty?: number }>>(
+      buildResourceUrl("Stock Entry Detail"),
+      withSilent(
+        buildListConfig({
+          fields: ["parent", "qty"],
+          filters: [
+            ["material_request", "=", mrName],
+            ["docstatus", "=", 1],
+          ],
+          limit_page_length: 200,
+        }),
+      ),
+    ),
+  );
+  const stockEntries = [
+    ...new Set(seItems.map((r) => r.parent).filter((p): p is string => Boolean(p))),
+  ];
+  const issuedQty = seItems.reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
+
+  // 4. Supplier Quotations that quoted this MR (display only, best-effort).
+  const sqItems = await safeChildQuery(
+    apiGet<Array<{ parent?: string }>>(
+      buildResourceUrl("Supplier Quotation Item"),
+      withSilent(
+        buildListConfig({
+          fields: ["parent"],
+          filters: [["material_request", "=", mrName]],
+          limit_page_length: 100,
+        }),
+      ),
+    ),
+  );
+  const supplierQuotations = [
+    ...new Set(sqItems.map((r) => r.parent).filter((p): p is string => Boolean(p))),
+  ];
+
+  let stage: MaterialRequestProcurementProgress["stage"] = null;
+  if (purchaseOrders.length > 0) stage = "Purchase Ordered";
+  if (goodsReceipts.length > 0) stage = "Goods Received";
+  if (stockEntries.length > 0) stage = "Material Issued";
+
+  return {
+    rfqName: linkedRfq ?? null,
+    supplierQuotations,
+    purchaseOrders,
+    goodsReceipts,
+    stockEntries,
+    orderedQty,
+    receivedQty,
+    issuedQty,
+    stage,
+  };
+}
+
 /* ─── Dashboard aggregates ───────────────────────────────────────────────── */
 
 export async function fetchMaterialRequestDashboardCounts(role: {
@@ -1424,4 +1849,87 @@ export async function fetchMaterialRequestDashboardCounts(role: {
   });
 
   return counts;
+}
+
+/* ─── Direct vs Indirect procurement KPIs (Reports) ──────────────────────── */
+
+export interface ProcurementTypeKpis {
+  directCount: number;
+  indirectCount: number;
+  directSpend: number;
+  indirectSpend: number;
+  directPurchaseOrders: number;
+  indirectPurchaseOrders: number;
+}
+
+/**
+ * Aggregate Direct vs Indirect KPIs entirely from live ERPNext data:
+ *   • Counts   — submitted Material Requests grouped by `custom_procurement_type`.
+ *   • Spend/POs — submitted Purchase Order lines joined to their originating MR
+ *                 (`Purchase Order Item.material_request`) and resolved to the
+ *                 MR's procurement type. No mock/hardcoded figures.
+ */
+export async function fetchProcurementTypeKpis(): Promise<ProcurementTypeKpis> {
+  const mrs = await listMaterialRequestsWorkflow({ docstatus: 1, limit: 1000 });
+
+  const typeByMr = new Map<string, MaterialRequestProcurementType>();
+  let directCount = 0;
+  let indirectCount = 0;
+  for (const mr of mrs) {
+    const type = getMaterialRequestProcurementType(mr);
+    typeByMr.set(mr.name, type);
+    if (type === "Indirect") indirectCount += 1;
+    else directCount += 1;
+  }
+
+  const poItems = await safeChildQuery(
+    apiGet<
+      Array<{
+        parent?: string;
+        material_request?: string;
+        amount?: number;
+        base_amount?: number;
+      }>
+    >(
+      buildResourceUrl("Purchase Order Item"),
+      withSilent(
+        buildListConfig({
+          fields: ["parent", "material_request", "amount", "base_amount"],
+          filters: [
+            ["docstatus", "=", 1],
+            ["material_request", "is", "set"],
+          ],
+          limit_page_length: 2000,
+        }),
+      ),
+    ),
+  );
+
+  let directSpend = 0;
+  let indirectSpend = 0;
+  const directPOs = new Set<string>();
+  const indirectPOs = new Set<string>();
+
+  for (const item of poItems) {
+    const mrName = item.material_request;
+    if (!mrName) continue;
+    const type = typeByMr.get(mrName) ?? "Direct";
+    const amount = Number(item.base_amount ?? item.amount) || 0;
+    if (type === "Indirect") {
+      indirectSpend += amount;
+      if (item.parent) indirectPOs.add(item.parent);
+    } else {
+      directSpend += amount;
+      if (item.parent) directPOs.add(item.parent);
+    }
+  }
+
+  return {
+    directCount,
+    indirectCount,
+    directSpend,
+    indirectSpend,
+    directPurchaseOrders: directPOs.size,
+    indirectPurchaseOrders: indirectPOs.size,
+  };
 }

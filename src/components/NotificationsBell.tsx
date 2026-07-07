@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import {
   Bell,
@@ -69,6 +70,7 @@ const EMPTY_OVERDUE_INVOICES: InvoiceRow[] = [];
  * Header bell — shows only notifications visible to the logged-in user's role.
  */
 export default function NotificationsBell() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const role = useAuthStore((s) => s.user?.role);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -279,7 +281,7 @@ export default function NotificationsBell() {
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="relative flex h-9 w-9 items-center justify-center rounded-full text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition-colors"
-        aria-label="Notifications"
+        aria-label={t("notifications.title")}
         aria-expanded={open}
       >
         <Bell className="h-5 w-5" />
@@ -295,12 +297,15 @@ export default function NotificationsBell() {
           <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
             <div>
               <h3 className="text-sm font-semibold text-neutral-900">
-                Notifications
+                {t("notifications.title")}
               </h3>
               <p className="text-xs text-neutral-500">
                 {notifications.length === 0
-                  ? "You're all caught up"
-                  : `${unreadCount} unread of ${notifications.length}`}
+                  ? t("notifications.allCaughtUp")
+                  : t("notifications.unreadOf", {
+                      unread: unreadCount,
+                      total: notifications.length,
+                    })}
               </p>
             </div>
             {notifications.length > 0 && (
@@ -310,7 +315,7 @@ export default function NotificationsBell() {
                 className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-primary-700 hover:bg-primary-50"
               >
                 <CheckCheck className="h-3 w-3" />
-                Mark all read
+                {t("notifications.markAllRead")}
               </button>
             )}
           </div>
@@ -318,7 +323,7 @@ export default function NotificationsBell() {
           {preview.length === 0 ? (
             <div className="flex flex-col items-center gap-2 px-6 py-10 text-center text-sm text-neutral-500">
               <Clock className="h-6 w-6 text-neutral-400" />
-              <p>No alerts right now.</p>
+              <p>{t("notifications.noAlerts")}</p>
             </div>
           ) : (
             <ul className="divide-y divide-neutral-100">
@@ -371,7 +376,7 @@ export default function NotificationsBell() {
               className="flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-primary-700 hover:bg-primary-50 transition-colors no-underline"
             >
               <ExternalLink className="h-3 w-3" />
-              View All Notifications
+              {t("notifications.viewAll")}
             </Link>
           </div>
         </div>
