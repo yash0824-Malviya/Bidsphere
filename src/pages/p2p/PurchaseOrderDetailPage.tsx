@@ -31,6 +31,7 @@ import {
 import EmptyState from "../../components/EmptyState";
 import { Skeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
+import SlaStageBadge from "../../components/sla/SlaStageBadge";
 import { useAuthStore } from "../../store/authStore";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
 import { canCreateGRN } from "../../config/roles";
@@ -111,6 +112,7 @@ export default function PurchaseOrderDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["purchase-order", name] });
       queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
       queryClient.invalidateQueries({ queryKey: ["po-grns", name] });
+      queryClient.invalidateQueries({ queryKey: ["procurement-analytics"] });
     },
   });
 
@@ -246,6 +248,12 @@ export default function PurchaseOrderDetailPage() {
             <div className="flex items-center gap-2">
               <span className="text-sm font-bold text-neutral-900 tabular-nums">{po.name}</span>
               <CompactStatus status={displayStatus} />
+              <SlaStageBadge
+                workflow="Purchase Order"
+                referenceDoctype="Purchase Order"
+                referenceName={po.name}
+                open={isDraft}
+              />
             </div>
             <p className="text-xs text-neutral-500 truncate">
               {po.supplier_name ?? po.supplier} &middot; {po.company ?? "—"} &middot; {po.currency ?? "USD"}

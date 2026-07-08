@@ -18,6 +18,7 @@ import {
 import AuthShell from "../../components/auth/AuthShell";
 import BrandLogo from "../../components/BrandLogo";
 import { getRoleHome } from "../../config/roles";
+import { prefetchDashboardForRole } from "../../api/prefetchDashboard";
 import { useAuthStore, setMfaRedirectPath } from "../../store/authStore";
 
 /*
@@ -111,6 +112,9 @@ export default function LoginPage() {
         toast.success(t("login.signedInSuccess"));
         const signedInUser = useAuthStore.getState().user;
         if (signedInUser) {
+          // Warm the dashboard cache during the login→redirect transition so
+          // it paints from cache instead of hitting the network on mount.
+          prefetchDashboardForRole(signedInUser.role);
           navigate(savedFromPath ?? getRoleHome(signedInUser.role), {
             replace: true,
           });

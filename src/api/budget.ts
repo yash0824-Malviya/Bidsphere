@@ -50,6 +50,7 @@ import {
 import { fetchSubmittedPurchaseOrders } from "./budgetConsumption";
 import { fetchAllFinanceReviewRecords } from "./financeReviews";
 import { getMaterialRequest } from "./purchasing";
+import { getAssignedBudgetName } from "./rfqBudgetAssignment";
 import { apiGet, buildListConfig, buildResourceUrl, withSilent } from "./erpnext";
 import type { AppRole } from "../config/roles";
 import type { RFQ } from "../types/erpnext";
@@ -802,9 +803,76 @@ export interface RfqCostCenterInfo {
   costCenter?: string;
   department?: string;
   company?: string;
+  fiscalYear?: string;
 }
 
-/** Resolve an RFQ's Cost Center/Department via its items' Material Requests. */
+/** A Company's default Cost Center from ERPNext (live), or undefined. */
+async function getCompanyDefaultCostCenter(
+  company?: string
+): Promise<string | undefined> {
+  if (!company) return undefined;
+  try {
+    const doc = await apiGet<{ cost_center?: string } | null>(
+      buildResourceUrl("Company", company),
+      withSilent()
+    );
+    return doc?.cost_center || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A Department's cost center from ERPNext (live), or undefined. */
+async function getDepartmentDefaultCostCenter(
+  department?: string
+): Promise<string | undefined> {
+  if (!department) return undefined;
+  try {
+    const doc = await apiGet<
+      { payroll_cost_center?: string; cost_center?: string } | null
+    >(buildResourceUrl("Department", department), withSilent());
+    return doc?.payroll_cost_center || doc?.cost_center || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The ERPNext Fiscal Year covering a specific date (fallback: current FY). */
+async function resolveFiscalYearForDate(
+  dateStr?: string
+): Promise<string | undefined> {
+  const date = (dateStr || "").slice(0, 10);
+  if (date) {
+    try {
+      const rows = await apiGet<Array<{ name: string }>>(
+        buildResourceUrl("Fiscal Year"),
+        withSilent(
+          buildListConfig({
+            fields: ["name"],
+            filters: [
+              ["year_start_date", "<=", date],
+              ["year_end_date", ">=", date],
+            ],
+            limit_page_length: 1,
+          })
+        )
+      );
+      if (rows?.[0]?.name) return rows[0].name;
+    } catch {
+      /* fall through */
+    }
+  }
+  return getCurrentFiscalYear();
+}
+
+/**
+ * Resolve an RFQ's Cost Center / Department / Fiscal Year via its items'
+ * Material Requests, with ERPNext-driven fallbacks:
+ *   • Department & Cost Center from the Material Request(s).
+ *   • Cost Center missing → the Department's default cost center.
+ *   • Still missing → the Company's default cost center.
+ *   • Fiscal Year from the earliest MR date, else the current fiscal year.
+ */
 export async function resolveRfqCostCenter(rfq: RFQ): Promise<RfqCostCenterInfo> {
   const mrNames = Array.from(
     new Set(
@@ -815,7 +883,13 @@ export async function resolveRfqCostCenter(rfq: RFQ): Promise<RfqCostCenterInfo>
   );
 
   if (mrNames.length === 0) {
-    return { company: rfq.company };
+    // No MR chain — still resolve a company default cost center + fiscal year so
+    // a governing Budget can be matched (or manually assigned) downstream.
+    const [costCenter, fiscalYear] = await Promise.all([
+      getCompanyDefaultCostCenter(rfq.company),
+      resolveFiscalYearForDate(rfq.transaction_date),
+    ]);
+    return { costCenter, company: rfq.company, fiscalYear };
   }
 
   const mrDocs = await Promise.all(
@@ -823,12 +897,16 @@ export async function resolveRfqCostCenter(rfq: RFQ): Promise<RfqCostCenterInfo>
   );
 
   let department: string | undefined;
+  let earliestMrDate: string | undefined;
   const costCenterVotes = new Map<string, number>();
 
   for (const mr of mrDocs) {
     if (!mr) continue;
     if (!department) {
       department = mr.department || mr.custom_department || undefined;
+    }
+    if (mr.transaction_date && (!earliestMrDate || mr.transaction_date < earliestMrDate)) {
+      earliestMrDate = mr.transaction_date;
     }
     if (mr.cost_center) {
       costCenterVotes.set(mr.cost_center, (costCenterVotes.get(mr.cost_center) ?? 0) + 1);
@@ -849,7 +927,16 @@ export async function resolveRfqCostCenter(rfq: RFQ): Promise<RfqCostCenterInfo>
     }
   }
 
-  return { costCenter, department, company: rfq.company };
+  // Fallbacks when the MR chain carries a Department but no explicit Cost Center.
+  if (!costCenter) {
+    costCenter =
+      (await getDepartmentDefaultCostCenter(department)) ??
+      (await getCompanyDefaultCostCenter(rfq.company));
+  }
+
+  const fiscalYear = await resolveFiscalYearForDate(earliestMrDate ?? rfq.transaction_date);
+
+  return { costCenter, department, company: rfq.company, fiscalYear };
 }
 
 /**
@@ -861,7 +948,8 @@ export async function resolveRfqCostCenter(rfq: RFQ): Promise<RfqCostCenterInfo>
  */
 export async function findActiveBudgetForCostCenter(
   costCenter: string,
-  company?: string
+  company?: string,
+  fiscalYear?: string
 ): Promise<(BudgetUtilization & { budgetName: string; budgetAccount?: string; status: BudgetWorkflowStatus }) | null> {
   const all = await fetchBudgets({ limit: 500 });
   const candidates = all.filter(
@@ -873,6 +961,13 @@ export async function findActiveBudgetForCostCenter(
   if (candidates.length === 0) return null;
 
   candidates.sort((a, b) => {
+    // Prefer a budget for the target fiscal year, then Active over Approved,
+    // then the most recently modified.
+    if (fiscalYear) {
+      const am = a.fiscal_year === fiscalYear ? 0 : 1;
+      const bm = b.fiscal_year === fiscalYear ? 0 : 1;
+      if (am !== bm) return am - bm;
+    }
     if (a.status !== b.status) return a.status === "Active" ? -1 : 1;
     return b.modified.localeCompare(a.modified);
   });
@@ -951,6 +1046,50 @@ export async function getCurrentFiscalYear(): Promise<string | undefined> {
   }
 }
 
+/** An Active budget option for the Finance "Assign Budget" picker. */
+export interface AssignableBudgetOption {
+  name: string;
+  costCenter?: string;
+  department?: string;
+  fiscalYear: string;
+  budgetAmount: number;
+  company?: string;
+  status: BudgetWorkflowStatus;
+}
+
+/**
+ * All Active (procurement-available) Budgets for a fiscal year — the choices
+ * shown when a Finance Manager manually assigns a budget to an RFQ. When
+ * `fiscalYear` is omitted, returns every Active budget so the picker is never
+ * empty. Live ERPNext data only.
+ */
+export async function getActiveBudgetsForFiscalYear(
+  fiscalYear?: string,
+  company?: string
+): Promise<AssignableBudgetOption[]> {
+  const all = await fetchBudgets({ limit: 500 });
+  return all
+    .filter(
+      (b) =>
+        isBudgetAvailableForProcurement(b.status) &&
+        (!company || b.company === company) &&
+        (!fiscalYear || b.fiscal_year === fiscalYear)
+    )
+    .sort((a, b) => {
+      if (a.status !== b.status) return a.status === "Active" ? -1 : 1;
+      return b.modified.localeCompare(a.modified);
+    })
+    .map((b) => ({
+      name: b.name,
+      costCenter: b.cost_center,
+      department: departmentFromCostCenter(b.cost_center) || undefined,
+      fiscalYear: b.fiscal_year,
+      budgetAmount: b.budget_amount,
+      company: b.company,
+      status: b.status,
+    }));
+}
+
 export type BudgetForecastStatus = "Green" | "Yellow" | "Red";
 
 export interface RfqCostCenterBudgetCheck {
@@ -1001,9 +1140,34 @@ export async function getRfqBudgetCheckByCostCenter(
   const info = await resolveRfqCostCenter(rfq);
   const company = info.company;
 
+  // 0) A manually-assigned Budget (Finance Manager picked one) always wins —
+  //    load it directly so Department / Cost Center / availability resolve
+  //    immediately after assignment, regardless of the MR chain.
+  const assignedName = await getAssignedBudgetName(rfq.name);
+  if (assignedName) {
+    try {
+      const budget = await fetchBudgetByName(assignedName);
+      const util = await getBudgetUtilization(assignedName);
+      const resolvedCostCenter = budget.cost_center ?? info.costCenter;
+      return buildBudgetCheckResult({
+        util,
+        budgetName: assignedName,
+        budgetAccount: budget.account,
+        costCenter: resolvedCostCenter,
+        department:
+          info.department || departmentFromCostCenter(resolvedCostCenter) || undefined,
+        company: budget.company ?? company,
+        fiscalYear: util.fiscalYear ?? info.fiscalYear,
+        rfqAmount,
+      });
+    } catch {
+      /* assigned budget vanished — fall through to auto-resolution */
+    }
+  }
+
   // 1) Prefer a Budget governing the RFQ's explicit Cost Center.
   let match = info.costCenter
-    ? await findActiveBudgetForCostCenter(info.costCenter, company)
+    ? await findActiveBudgetForCostCenter(info.costCenter, company, info.fiscalYear)
     : null;
   let costCenter = info.costCenter;
 
@@ -1018,7 +1182,7 @@ export async function getRfqBudgetCheckByCostCenter(
   }
 
   if (!match) {
-    const fiscalYear = await getCurrentFiscalYear();
+    const fiscalYear = info.fiscalYear ?? (await getCurrentFiscalYear());
     let reason: string;
     if (!costCenter && !info.department) {
       reason =
@@ -1042,9 +1206,34 @@ export async function getRfqBudgetCheckByCostCenter(
   }
 
   const resolvedCostCenter = costCenter ?? match.costCenter;
-  const allocatedBudget = match.budgetAmount;
-  const actualSpend = match.actualExpense;
-  const remainingBudget = match.remainingBudget;
+  return buildBudgetCheckResult({
+    util: match,
+    budgetName: match.budgetName,
+    budgetAccount: match.budgetAccount,
+    costCenter: resolvedCostCenter,
+    department:
+      info.department || departmentFromCostCenter(resolvedCostCenter) || undefined,
+    company,
+    fiscalYear: match.fiscalYear,
+    rfqAmount,
+  });
+}
+
+/** Assemble a `found: true` budget check from a resolved budget utilization. */
+function buildBudgetCheckResult(args: {
+  util: BudgetUtilization;
+  budgetName: string;
+  budgetAccount?: string;
+  costCenter?: string;
+  department?: string;
+  company?: string;
+  fiscalYear?: string;
+  rfqAmount: number;
+}): RfqCostCenterBudgetCheck {
+  const { util, rfqAmount } = args;
+  const allocatedBudget = util.budgetAmount;
+  const actualSpend = util.actualExpense;
+  const remainingBudget = util.remainingBudget;
   const forecastSpend = actualSpend + rfqAmount;
   const budgetUtilizationPct =
     allocatedBudget > 0 ? Math.round((actualSpend / allocatedBudget) * 100) : 0;
@@ -1054,12 +1243,12 @@ export async function getRfqBudgetCheckByCostCenter(
 
   return {
     found: true,
-    costCenter: resolvedCostCenter,
-    department: info.department || departmentFromCostCenter(resolvedCostCenter) || undefined,
-    company,
-    budgetName: match.budgetName,
-    budgetAccount: match.budgetAccount,
-    fiscalYear: match.fiscalYear,
+    costCenter: args.costCenter,
+    department: args.department,
+    company: args.company,
+    budgetName: args.budgetName,
+    budgetAccount: args.budgetAccount,
+    fiscalYear: args.fiscalYear,
     allocatedBudget,
     actualSpend,
     remainingBudget,

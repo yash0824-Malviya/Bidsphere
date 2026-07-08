@@ -35,7 +35,7 @@ export interface AdminApprovalRow {
 
 /** Statuses an INDIRECT MR reaches only after the admin has approved it. */
 const APPROVED_STATUSES: MaterialRequestWorkflowStatus[] = [
-  "Procurement Required",
+  "Forwarded to Procurement",
   "RFQ Created",
   "Stock Available",
   "Material Issued",

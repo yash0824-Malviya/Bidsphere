@@ -810,10 +810,62 @@ export async function createPurchaseOrderFromRFQ(
   const warehouse = await lookupDefaultWarehouse(COMPANY);
   const winnerItems = winningSq?.items ?? [];
 
+  // 5b. If this RFQ went through a completed Reverse Bidding auction, the
+  // negotiated final rates in `bid_items` supersede the pre-auction Supplier
+  // Quotation rates — otherwise the PO would silently ignore the auction
+  // savings. Best-effort and additive: any failure (no auction, fields not
+  // provisioned, etc.) leaves the existing SQ-based pricing untouched.
+  const winnerRateByItem = new Map<string, number>();
+  try {
+    const auctions = await apiGet<
+      Array<{ name: string; auction_status?: string; winning_supplier?: string }>
+    >(
+      buildResourceUrl("Reverse Bidding"),
+      buildListConfig({
+        fields: ["name", "auction_status", "winning_supplier"],
+        filters: [["rfq", "=", rfqId]],
+        order_by: "modified desc",
+        limit_page_length: 5,
+      }),
+    );
+    const completed = (auctions ?? []).find(
+      (a) => a.auction_status === "Completed" && a.winning_supplier,
+    );
+    if (
+      completed &&
+      (completed.winning_supplier === resolvedSupplierId ||
+        completed.winning_supplier === selectedSupplier)
+    ) {
+      const full = await apiGet<{
+        bid_items?: Array<{ supplier: string; item_code: string; current_rate?: number }>;
+      }>(buildResourceUrl("Reverse Bidding", completed.name));
+      for (const it of full.bid_items ?? []) {
+        if (
+          (it.supplier === resolvedSupplierId || it.supplier === selectedSupplier) &&
+          (it.current_rate ?? 0) > 0
+        ) {
+          winnerRateByItem.set(it.item_code, it.current_rate!);
+        }
+      }
+      // eslint-disable-next-line no-console
+      console.log(
+        "[createPOFromRFQ] Applying negotiated auction rates from",
+        completed.name,
+        "for",
+        winnerRateByItem.size,
+        "item(s)",
+      );
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("[createPOFromRFQ] Reverse auction rate lookup skipped:", err);
+  }
+
   // 6. Build PO items
   const poItems = (rfq.items ?? []).map((it) => {
+    const auctionRate = winnerRateByItem.get(it.item_code);
     const sqItem = winnerItems.find((si) => si.item_code === it.item_code);
-    const rate = sqItem?.rate ?? 0;
+    const rate = auctionRate ?? sqItem?.rate ?? 0;
     const scheduleDate = resolvePoItemScheduleDate(it.schedule_date, poTransactionDate);
     return {
       item_code: it.item_code,

@@ -17,6 +17,8 @@ import {
   buildListConfig,
   buildResourceUrl,
   COMPANY,
+  fetchPagedList,
+  type PagedListResult,
 } from "./erpnext";
 import { getRFQ, getSupplierQuotations } from "./sourcing";
 import { createPurchaseOrder } from "./purchasing";
@@ -60,6 +62,8 @@ const DEFAULT_CURRENCY =
 /** Approval markers stored in `remarks` (no dedicated approval field exists). */
 const APPROVED_TAG = "[RB:Approved]";
 const REJECTED_TAG = "[RB:Rejected]";
+/** Audit marker written when Procurement manually accepts the auction winner. */
+const WINNER_ACCEPTED_TAG = "[RB:WinnerAccepted]";
 
 /* ────────────────────────────────────────────────────────────────────────
  * Date helpers
@@ -129,9 +133,33 @@ export function sameSupplier(
   return normalizeSupplierId(a) === normalizeSupplierId(b);
 }
 
-/** Invitations that make an auction visible to the supplier portal. */
-function isInvitationVisible(status: InvitationStatus | undefined): boolean {
-  return status === "Sent" || status === "Accepted";
+/**
+ * Invitations that make an auction visible to the supplier portal.
+ *
+ * "Sent"/"Accepted" are always visible — the normal, explicit path. "Pending"
+ * is ALSO treated as visible once the auction itself has moved past Draft
+ * (Scheduled/Live/Completed): Procurement can schedule or force-start an
+ * auction (`scheduleAuction` / `startAuctionNow`) without first clicking the
+ * separate "Send Invitations" button, and once those complete they now
+ * auto-promote Pending → Sent going forward — but this keeps ANY
+ * already-Scheduled/Live/Completed auction (including ones that reached that
+ * state before this fix) visible to its invited suppliers too, so an invited
+ * supplier is never silently locked out of a live auction just because the
+ * "Sent" flag was never technically written. Only "Declined" ever hides it.
+ */
+function isInvitationVisible(
+  status: InvitationStatus | undefined,
+  auctionStatus?: AuctionStatus
+): boolean {
+  if (status === "Sent" || status === "Accepted") return true;
+  if (status === "Declined") return false;
+  // Pending (or unset) — visible as soon as the auction itself is no longer
+  // a bare Draft.
+  return (
+    auctionStatus === "Scheduled" ||
+    auctionStatus === "Live" ||
+    auctionStatus === "Completed"
+  );
 }
 
 function bidValues(suppliers: ReverseBiddingSupplier[]): number[] {
@@ -244,9 +272,53 @@ function reconstructHistoryFromItems(doc: ReverseBidding): ReverseBid[] {
 }
 
 /**
+ * Last-resort reconstruction from the standing bids in `invited_suppliers`.
+ *
+ * Used only when BOTH the append-only `bid_history` table and the item-wise
+ * `bid_items` table are empty, yet suppliers hold a `current_bid` (and/or a
+ * winner has been recorded). This guarantees Requirement: "if a winner exists,
+ * there is always at least one row in the Live Bid History" — a missing history
+ * table is a backend data bug, and this reshapes the surviving live data so the
+ * UI never falsely shows the empty state. One row per supplier who has a
+ * standing bid; the auction end/modified time is used as an approximate stamp.
+ */
+function reconstructHistoryFromSuppliers(doc: ReverseBidding): ReverseBid[] {
+  const fallbackTime = doc.end_date_time || doc.modified || undefined;
+  const out: ReverseBid[] = [];
+  for (const s of doc.invited_suppliers ?? []) {
+    const current = s.current_bid ?? 0;
+    const initial = s.initial_quotation_amount ?? 0;
+    const amount = current > 0 ? current : initial;
+    if (!(amount > 0)) continue;
+    const reduction = initial > 0 && current > 0 ? Math.max(0, initial - current) : 0;
+    out.push({
+      doctype: RB_BID_DOCTYPE,
+      reverse_bidding: doc.name,
+      supplier: s.supplier,
+      bid_amount: amount,
+      previous_rate: initial,
+      reduction_amount: reduction,
+      reduction_pct:
+        initial > 0 && reduction > 0
+          ? Number(((reduction / initial) * 100).toFixed(2))
+          : 0,
+      bid_time: fallbackTime,
+      round_number: 1,
+      status: "Accepted",
+    });
+  }
+  return out;
+}
+
+/**
  * Normalized, audit-ready bid history for a completed/live auction. Every row
- * carries `previous` and `reduction` so the UI never recomputes. Falls back to
- * reconstructing from `bid_items` when the history table is empty.
+ * carries `previous` and `reduction` so the UI never recomputes.
+ *
+ * Source priority: the append-only `bid_history` table is authoritative; if it
+ * is empty we reconstruct from `bid_items`, and finally from the standing bids
+ * in `invited_suppliers`. The last two are still live backend data reshaped —
+ * never mock data — and ensure the history is never falsely empty when bids or
+ * a winner exist.
  */
 export function buildBidHistoryRows(doc: ReverseBidding): NormalizedBid[] {
   const initialBySupplier = new Map<string, number>();
@@ -254,10 +326,14 @@ export function buildBidHistoryRows(doc: ReverseBidding): NormalizedBid[] {
     initialBySupplier.set(s.supplier, s.initial_quotation_amount ?? 0);
   }
 
-  const source =
-    (doc.bid_history ?? []).length > 0
-      ? doc.bid_history!
-      : reconstructHistoryFromItems(doc);
+  let source: ReverseBid[];
+  if ((doc.bid_history ?? []).length > 0) {
+    source = doc.bid_history!;
+  } else {
+    const fromItems = reconstructHistoryFromItems(doc);
+    source =
+      fromItems.length > 0 ? fromItems : reconstructHistoryFromSuppliers(doc);
+  }
 
   return source.map((b) => {
     const previous = b.previous_rate ?? initialBySupplier.get(b.supplier) ?? 0;
@@ -265,6 +341,51 @@ export function buildBidHistoryRows(doc: ReverseBidding): NormalizedBid[] {
       b.reduction_amount ?? (previous > 0 ? Math.max(0, previous - b.bid_amount) : 0);
     return { ...b, previous, reduction };
   });
+}
+
+/**
+ * Bid events for the procurement "Live Bid History" audit table.
+ *
+ * Identical to `buildBidHistoryRows` while the auction is still running, but
+ * once a winner is accepted (auction Completed) the winner's FINAL resting bid
+ * is removed — one row per item, or the single total-amount row. That accepted
+ * winning price is already surfaced in the Supplier Comparison, Auction Summary
+ * and AI ranking, so echoing it in the live history is redundant. Every other
+ * bid event (including the winner's earlier bids) is preserved for the audit
+ * trail.
+ */
+export function buildLiveBidHistory(doc: ReverseBidding): NormalizedBid[] {
+  const rows = buildBidHistoryRows(doc);
+  const winner = doc.winning_supplier;
+  if (deriveAuctionStatus(doc) !== "Completed" || !winner || rows.length === 0) {
+    return rows;
+  }
+
+  // The winner's final standing bid per bucket (item_code, or "__total__" for
+  // legacy total-amount auctions): latest by time, then highest round, then the
+  // lowest amount (the resting winning price).
+  const finalByBucket = new Map<string, NormalizedBid>();
+  for (const r of rows) {
+    if (!sameSupplier(r.supplier, winner)) continue;
+    const bucket = r.item_code ?? "__total__";
+    const cur = finalByBucket.get(bucket);
+    if (!cur) {
+      finalByBucket.set(bucket, r);
+      continue;
+    }
+    const t = parseErpDateTime(r.bid_time) ?? 0;
+    const tc = parseErpDateTime(cur.bid_time) ?? 0;
+    const rRound = r.round_number ?? 0;
+    const cRound = cur.round_number ?? 0;
+    const isMoreFinal =
+      t > tc ||
+      (t === tc && rRound > cRound) ||
+      (t === tc && rRound === cRound && r.bid_amount < cur.bid_amount);
+    if (isMoreFinal) finalByBucket.set(bucket, r);
+  }
+
+  const excluded = new Set<NormalizedBid>(finalByBucket.values());
+  return rows.filter((r) => !excluded.has(r));
 }
 
 export interface SupplierBidTrail {
@@ -428,7 +549,7 @@ function recomputeItemState(
     const isLowest = lowestFlag.get(it) ?? false;
     let status: BidItemStatus;
     if (opts.completed) {
-      status = opts.winner && it.supplier === opts.winner ? "Winner" : "Outbid";
+      status = opts.winner && sameSupplier(it.supplier, opts.winner) ? "Winner" : "Outbid";
     } else if (rate <= 0) {
       status = "Waiting";
     } else if (isLowest) {
@@ -558,6 +679,19 @@ export async function listReverseBiddings(): Promise<ReverseBidding[]> {
     })
   );
   return rows ?? [];
+}
+
+/** Server-side paginated auction list for the "Reverse Bidding" list page. */
+export async function listReverseBiddingsPaged(options: {
+  page: number;
+  pageSize: number;
+}): Promise<PagedListResult<ReverseBidding>> {
+  return fetchPagedList<ReverseBidding>(RB_DOCTYPE, {
+    fields: LIST_FIELDS,
+    order_by: "modified desc",
+    page: options.page,
+    pageSize: options.pageSize,
+  });
 }
 
 export async function getReverseBidding(name: string): Promise<ReverseBidding> {
@@ -823,15 +957,22 @@ export async function createReverseBiddingFromRFQ(
  * Invitations
  * ──────────────────────────────────────────────────────────────────────── */
 
-export async function sendInvitations(name: string): Promise<ReverseBidding> {
-  const doc = await getReverseBidding(name);
-  const invited = doc.invited_suppliers ?? [];
-  if (invited.length === 0) {
-    throw new Error("Cannot send invitations — no suppliers are invited.");
-  }
-
-  const sentAt = formatERPNextDatetime(new Date()) ?? undefined;
-  const updated: ReverseBiddingSupplier[] = invited.map((s) => {
+/**
+ * Promote every still-"Pending" invited supplier to "Sent" (Declined/Accepted
+ * rows are left untouched). Shared by the explicit "Send Invitations" action
+ * AND by `scheduleAuction` / `startAuctionNow` — those two must never leave an
+ * invited supplier stuck at "Pending", because `getSupplierAuctions` only
+ * shows suppliers auctions whose invitation is "Sent"/"Accepted"
+ * (`isInvitationVisible`). Without this, a Procurement user who schedules or
+ * force-starts an auction WITHOUT first clicking "Send Invitations" leaves
+ * the auction fully Live/Scheduled in ERPNext yet invisible to every invited
+ * supplier — the auction "exists" but nobody was ever actually notified.
+ */
+function promotePendingInvitations(
+  invited: ReverseBiddingSupplier[],
+  sentAt: string | undefined
+): ReverseBiddingSupplier[] {
+  return invited.map((s) => {
     // Never downgrade suppliers who already declined or accepted/joined.
     if (s.invitation_status === "Declined" || s.invitation_status === "Accepted") {
       return s;
@@ -842,6 +983,17 @@ export async function sendInvitations(name: string): Promise<ReverseBidding> {
       invitation_sent_at: s.invitation_sent_at ?? sentAt,
     };
   });
+}
+
+export async function sendInvitations(name: string): Promise<ReverseBidding> {
+  const doc = await getReverseBidding(name);
+  const invited = doc.invited_suppliers ?? [];
+  if (invited.length === 0) {
+    throw new Error("Cannot send invitations — no suppliers are invited.");
+  }
+
+  const sentAt = formatERPNextDatetime(new Date()) ?? undefined;
+  const updated: ReverseBiddingSupplier[] = promotePendingInvitations(invited, sentAt);
 
   // Email notification hook placeholder — integrate with the notification
   // service / ERPNext email queue here when SMTP is provisioned.
@@ -910,16 +1062,25 @@ export async function scheduleAuction(
 
   const doc = await getReverseBidding(name);
   if (!doc.rfq) throw new Error("Cannot schedule an auction without an RFQ.");
-  if ((doc.invited_suppliers ?? []).length === 0) {
+  const invited = doc.invited_suppliers ?? [];
+  if (invited.length === 0) {
     throw new Error("Cannot schedule an auction without invited suppliers.");
   }
 
-  // 2. Persist to ERPNext (retry-safe on timestamp conflicts).
+  // 2. Persist to ERPNext (retry-safe on timestamp conflicts). Scheduling an
+  // auction must never leave an invited supplier stuck at "Pending" — promote
+  // them to "Sent" here too, in case Procurement scheduled without first
+  // clicking the separate "Send Invitations" button (see
+  // `promotePendingInvitations`).
   const payload = {
     start_date_time: startErp,
     end_date_time: endErp,
     minimum_decrement: input.minimumDecrement,
     auction_status: "Scheduled" as AuctionStatus,
+    invited_suppliers: promotePendingInvitations(
+      invited,
+      formatERPNextDatetime(new Date()) ?? undefined
+    ),
   };
   // eslint-disable-next-line no-console
   console.log("[ReverseBidding] Scheduling auction", { name, ...payload });
@@ -945,7 +1106,8 @@ export async function scheduleAuction(
 /** Force a scheduled/draft auction into the Live state immediately. */
 export async function startAuctionNow(name: string): Promise<ReverseBidding> {
   const doc = await getReverseBidding(name);
-  if ((doc.invited_suppliers ?? []).length === 0) {
+  const invited = doc.invited_suppliers ?? [];
+  if (invited.length === 0) {
     throw new Error("Cannot start an auction without invited suppliers.");
   }
   const now = new Date();
@@ -957,12 +1119,21 @@ export async function startAuctionNow(name: string): Promise<ReverseBidding> {
     doc.end_date_time && parseErpDateTime(doc.end_date_time)! > now.getTime()
       ? doc.end_date_time
       : formatERPNextDatetime(new Date(end));
+  // Force-starting an auction must never leave an invited supplier stuck at
+  // "Pending" — promote them to "Sent" so the Supplier Portal's
+  // `getSupplierAuctions` (which only returns Sent/Accepted invitations)
+  // shows the now-Live auction immediately, even if Procurement never clicked
+  // the separate "Send Invitations" button first.
   await patchReverseBidding(
     name,
     {
       start_date_time: startIso,
       end_date_time: endIso,
       auction_status: "Live",
+      invited_suppliers: promotePendingInvitations(
+        invited,
+        formatERPNextDatetime(new Date()) ?? undefined
+      ),
     },
     doc.modified
   );
@@ -1014,7 +1185,7 @@ export function validateBid(
 ): BidValidation {
   const currentLowest = currentLowestBid(doc);
   const decrement = doc.minimum_decrement ?? 0;
-  const row = (doc.invited_suppliers ?? []).find((s) => s.supplier === supplier);
+  const row = (doc.invited_suppliers ?? []).find((s) => sameSupplier(s.supplier, supplier));
   const ownCurrent = row?.current_bid ?? 0;
   const isLeader = ownCurrent > 0 && currentLowest > 0 && ownCurrent <= currentLowest;
   const maxAllowed = isLeader
@@ -1080,10 +1251,10 @@ export async function submitBid(input: SubmitBidInput): Promise<ReverseBidding> 
 
   const now = new Date();
   const prevMaxRound = (doc.bid_history ?? [])
-    .filter((b) => b.supplier === input.supplier)
+    .filter((b) => sameSupplier(b.supplier, input.supplier))
     .reduce((m, b) => Math.max(m, b.round_number ?? 0), 0);
   const previous =
-    (doc.invited_suppliers ?? []).find((s) => s.supplier === input.supplier)
+    (doc.invited_suppliers ?? []).find((s) => sameSupplier(s.supplier, input.supplier))
       ?.current_bid ?? 0;
   const reduction = previous > 0 ? previous - input.amount : 0;
 
@@ -1104,7 +1275,7 @@ export async function submitBid(input: SubmitBidInput): Promise<ReverseBidding> 
   const history: ReverseBid[] = [...(doc.bid_history ?? []), newBid];
 
   const invited = (doc.invited_suppliers ?? []).map((s) =>
-    s.supplier === input.supplier
+    sameSupplier(s.supplier, input.supplier)
       ? {
           ...s,
           current_bid: input.amount,
@@ -1173,7 +1344,7 @@ export function validateItemBid(
 ): ItemBidValidation {
   const items = doc.bid_items ?? [];
   const forItem = items.filter((i) => i.item_code === itemCode);
-  const own = forItem.find((i) => i.supplier === supplier);
+  const own = forItem.find((i) => sameSupplier(i.supplier, supplier));
   const lowestMap = lowestRateByItem(items);
   const currentLowest = lowestMap.get(itemCode) ?? own?.current_rate ?? 0;
   const decrement = doc.minimum_decrement ?? 0;
@@ -1246,14 +1417,14 @@ export async function submitItemBids(
   // Round number for this supplier = highest prior round + 1 (history now holds
   // one row per item, so count rounds not rows).
   const prevMaxRound = (doc.bid_history ?? [])
-    .filter((b) => b.supplier === input.supplier)
+    .filter((b) => sameSupplier(b.supplier, input.supplier))
     .reduce((m, b) => Math.max(m, b.round_number ?? 0), 0);
   const round = prevMaxRound + 1;
 
   // Capture each item's price BEFORE this bid, to record the reduction.
   const prevRateByItem = new Map<string, { rate: number; name: string }>();
   for (const it of doc.bid_items ?? []) {
-    if (it.supplier === input.supplier) {
+    if (sameSupplier(it.supplier, input.supplier)) {
       prevRateByItem.set(it.item_code, {
         rate: it.current_rate ?? 0,
         name: it.item_name ?? it.item_code,
@@ -1263,7 +1434,7 @@ export async function submitItemBids(
 
   // Apply new rates to this supplier's item rows.
   let items = (doc.bid_items ?? []).map((it) => {
-    if (it.supplier !== input.supplier) return it;
+    if (!sameSupplier(it.supplier, input.supplier)) return it;
     const newRate = rateByItem.get(it.item_code);
     if (newRate == null) return it;
     return {
@@ -1282,7 +1453,7 @@ export async function submitItemBids(
   const totals = supplierTotalsFromItems(items);
   const invited = (doc.invited_suppliers ?? []).map((s) => {
     const total = totals.get(s.supplier);
-    if (s.supplier === input.supplier) {
+    if (sameSupplier(s.supplier, input.supplier)) {
       return {
         ...s,
         current_bid: total ?? s.current_bid,
@@ -1526,6 +1697,13 @@ export async function setItemTargets(
  * Close auction / determine winner
  * ──────────────────────────────────────────────────────────────────────── */
 
+/**
+ * Finalize an auction once its timer expires. Persists status = "Completed"
+ * (which stops the supplier portal from accepting further bids) and freezes the
+ * final ranks / lowest bid — but DELIBERATELY does NOT pick a winner. The buyer
+ * must manually accept a winner via {@link acceptAuctionWinner}; the lowest
+ * bidder is never auto-awarded.
+ */
 export async function closeAuction(name: string): Promise<ReverseBidding> {
   const doc = await getReverseBidding(name);
   const invited = doc.invited_suppliers ?? [];
@@ -1536,23 +1714,111 @@ export async function closeAuction(name: string): Promise<ReverseBidding> {
   const withBids = finalRanked
     .filter((s) => typeof s.current_bid === "number" && s.current_bid! > 0)
     .sort((a, b) => (a.current_bid ?? 0) - (b.current_bid ?? 0));
-  const winner = withBids[0];
+  const lowest = withBids[0];
 
-  // Finalize item-wise statuses (winner rows → Winner, rest → Outbid).
+  // Freeze item ranks/lowest flags WITHOUT marking any supplier as the Winner —
+  // acceptance is a separate, manual procurement action.
   const finalItems = recomputeItemState(doc.bid_items ?? [], {
-    completed: true,
-    winner: winner?.supplier,
+    completed: false,
+    live: false,
   });
 
   return patchReverseBidding(
     name,
     {
       auction_status: "Completed",
-      winning_supplier: winner?.supplier,
-      winner_price: winner?.current_bid,
-      lowest_bid: winner?.current_bid ?? doc.lowest_bid,
+      lowest_bid: lowest?.current_bid ?? doc.lowest_bid,
       invited_suppliers: finalRanked,
       bid_items: finalItems,
+    },
+    doc.modified
+  );
+}
+
+export interface WinnerAcceptance {
+  /** User (email/name) recorded as accepting the winner. */
+  user: string;
+  /** ERPNext datetime string of acceptance. */
+  at: string;
+}
+
+/** Parse the manual winner-acceptance audit entry from `remarks`, if present. */
+export function getWinnerAcceptance(
+  doc: Pick<ReverseBidding, "remarks">
+): WinnerAcceptance | null {
+  const remarks = doc.remarks ?? "";
+  const idx = remarks.indexOf(WINNER_ACCEPTED_TAG);
+  if (idx < 0) return null;
+  const line = remarks
+    .slice(idx + WINNER_ACCEPTED_TAG.length)
+    .split("\n")[0]
+    .trim();
+  const [user, at] = line.split("|").map((s) => s.trim());
+  return { user: user || "Procurement", at: at || "" };
+}
+
+/** Whether a winner has been manually accepted by Procurement. */
+export function isWinnerAccepted(
+  doc: Pick<ReverseBidding, "remarks" | "winning_supplier">
+): boolean {
+  return !!(doc.winning_supplier && doc.winning_supplier.trim()) ||
+    (doc.remarks ?? "").includes(WINNER_ACCEPTED_TAG);
+}
+
+/**
+ * Manually award the auction to `supplier` (Requirement: the buyer must click
+ * "Accept Winner"; the lowest bidder is never auto-accepted). Marks the winner,
+ * finalizes item-wise "Winner" statuses, keeps status Completed and writes an
+ * audit entry ("Winner Accepted by Procurement" with user + timestamp).
+ */
+export async function acceptAuctionWinner(
+  name: string,
+  supplier: string,
+  acceptedBy?: string
+): Promise<ReverseBidding> {
+  const doc = await getReverseBidding(name);
+  if (deriveAuctionStatus(doc) !== "Completed") {
+    throw new Error("The auction must have ended before a winner can be accepted.");
+  }
+  const invited = doc.invited_suppliers ?? [];
+  const winnerRow = invited.find((s) => sameSupplier(s.supplier, supplier));
+  if (!winnerRow) {
+    throw new Error("The selected supplier is not part of this auction.");
+  }
+  const winnerPrice =
+    winnerRow.current_bid ?? winnerRow.initial_quotation_amount ?? 0;
+
+  const finalRanked = recomputeRanks(invited, "final_rank").map((s) => ({
+    ...s,
+    rank: s.final_rank,
+  }));
+  const trueLowest = finalRanked
+    .filter((s) => (s.current_bid ?? 0) > 0)
+    .reduce((min, s) => Math.min(min, s.current_bid ?? Infinity), Infinity);
+
+  const finalItems = recomputeItemState(doc.bid_items ?? [], {
+    completed: true,
+    winner: supplier,
+  });
+
+  const stamp = formatERPNextDatetime(new Date());
+  const auditLine = `${WINNER_ACCEPTED_TAG} ${acceptedBy || "Procurement"} | ${stamp}`;
+  const remarks = `${(doc.remarks ?? "")
+    .split("\n")
+    .filter((l) => !l.includes(WINNER_ACCEPTED_TAG))
+    .join("\n")
+    .trim()}\n${auditLine}`.trim();
+
+  return patchReverseBidding(
+    name,
+    {
+      auction_status: "Completed",
+      winning_supplier: supplier,
+      winner_price: winnerPrice,
+      lowest_bid: Number.isFinite(trueLowest) ? trueLowest : doc.lowest_bid,
+      invited_suppliers: finalRanked,
+      bid_items: finalItems,
+      remarks,
     },
     doc.modified
   );
@@ -1770,8 +2036,8 @@ export async function createPurchaseOrderFromAuction(
 
   const rfq = await getRFQ(doc.rfq);
   const quotations = await getSupplierQuotations(doc.rfq);
-  const winningSq = quotations.find(
-    (q) => (q.supplier ?? q.supplier_name) === supplier
+  const winningSq = quotations.find((q) =>
+    sameSupplier(q.supplier ?? q.supplier_name, supplier)
   );
 
   const sqTotal = winningSq
@@ -1790,7 +2056,7 @@ export async function createPurchaseOrderFromAuction(
   // Winning supplier's FINAL item-wise negotiated rates take precedence.
   const winnerRateByItem = new Map<string, number>();
   for (const it of doc.bid_items ?? []) {
-    if (it.supplier === supplier && (it.current_rate ?? 0) > 0) {
+    if (sameSupplier(it.supplier, supplier) && (it.current_rate ?? 0) > 0) {
       winnerRateByItem.set(it.item_code, it.current_rate ?? 0);
     }
   }
@@ -1952,7 +2218,7 @@ export async function getSupplierAuctions(
         (doc.invited_suppliers ?? []).some(
           (s) =>
             sameSupplier(s.supplier, supplier) &&
-            isInvitationVisible(s.invitation_status)
+            isInvitationVisible(s.invitation_status, doc.auction_status)
         )
     );
 }
@@ -2055,7 +2321,7 @@ export async function sendAuctionWinnerToReview(
   const rfq = await getRFQ(doc.rfq);
   const quotations = await getSupplierQuotations(doc.rfq);
   const sq = quotations.find(
-    (q) => q.supplier === supplier || q.supplier_name === supplier
+    (q) => sameSupplier(q.supplier, supplier) || sameSupplier(q.supplier_name, supplier)
   );
 
   const pm = submittedBy || doc.procurement_manager || "procurement@netlink.com";

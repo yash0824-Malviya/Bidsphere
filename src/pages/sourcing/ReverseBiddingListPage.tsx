@@ -12,28 +12,35 @@ import {
 import {
   deriveAuctionStatus,
   getReverseBiddingStats,
-  listReverseBiddings,
+  listReverseBiddingsPaged,
 } from "../../api/reverseBidding";
 import type { ReverseBidding } from "../../types/reverseBidding";
 import AuctionStatusBadge from "../../components/reverse-bidding/AuctionStatusBadge";
 import ConnectionError from "../../components/ConnectionError";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
+import PaginationBar from "../../components/PaginationBar";
 import { TableSkeleton } from "../../components/Skeleton";
+import { usePagination } from "../../hooks/usePagination";
 import { formatCurrencyIn, formatDateTime } from "../../utils/format";
 
 const LIST_STALE = 60_000;
 
 export default function ReverseBiddingListPage() {
   const navigate = useNavigate();
+  const { page, pageSize, setPage, setPageSize } = usePagination();
 
   const listQuery = useQuery({
-    queryKey: ["reverse-biddings"],
-    queryFn: listReverseBiddings,
+    queryKey: ["reverse-biddings", page, pageSize],
+    queryFn: () => listReverseBiddingsPaged({ page, pageSize }),
     staleTime: LIST_STALE,
     refetchInterval: 30_000,
+    placeholderData: (prev) => prev,
   });
 
+  // The KPI cards below summarize ALL auctions regardless of the current
+  // page, so they stay on their own full-dataset query (unaffected by
+  // pagination of the table).
   const statsQuery = useQuery({
     queryKey: ["reverse-bidding-stats"],
     queryFn: getReverseBiddingStats,
@@ -41,7 +48,7 @@ export default function ReverseBiddingListPage() {
     refetchInterval: 30_000,
   });
 
-  const rows = useMemo(() => listQuery.data ?? [], [listQuery.data]);
+  const rows = useMemo(() => listQuery.data?.data ?? [], [listQuery.data]);
   const stats = statsQuery.data;
 
   return (
@@ -166,6 +173,17 @@ export default function ReverseBiddingListPage() {
               </tbody>
             </table>
           </div>
+        )}
+
+        {!listQuery.isLoading && !listQuery.isError && rows.length > 0 && (
+          <PaginationBar
+            currentPage={listQuery.data?.current_page ?? page}
+            totalPages={listQuery.data?.total_pages ?? 1}
+            totalRecords={listQuery.data?.total_records ?? 0}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+          />
         )}
 
         {/* Mobile cards */}

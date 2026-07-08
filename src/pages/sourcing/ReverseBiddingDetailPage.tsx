@@ -23,11 +23,14 @@ import {
 } from "lucide-react";
 
 import {
+  acceptAuctionWinner,
   buildBidHistoryRows,
   buildBidTrend,
   cancelAuction,
   currentLowestBid,
   deriveAuctionStatus,
+  getWinnerAcceptance,
+  isWinnerAccepted,
   ensureBidItems,
   getAuctionSupplierScores,
   getFinalRecommendation,
@@ -49,6 +52,7 @@ import {
   type FinalRecommendation,
 } from "../../api/reverseBidding";
 import { syncReverseAuctionSla } from "../../api/slaIntegration";
+import { isSlaVisibleForRole } from "../../config/slaAccess";
 import type {
   BidItemStatus,
   ReverseBidding,
@@ -56,12 +60,17 @@ import type {
   ReverseBidItem,
 } from "../../types/reverseBidding";
 import AuctionStatusBadge from "../../components/reverse-bidding/AuctionStatusBadge";
+import AuctionCountdownAlert, {
+  countdownPhaseClass,
+} from "../../components/reverse-bidding/AuctionCountdownAlert";
 import BidTrendChart from "../../components/reverse-bidding/BidTrendChart";
 import SupplierBidHistoryPanel from "../../components/reverse-bidding/SupplierBidHistoryPanel";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import ConnectionError from "../../components/ConnectionError";
 import { TableSkeleton } from "../../components/Skeleton";
 import { useCountdown } from "../../hooks/useCountdown";
+import { useServerTimeOffset } from "../../hooks/useServerTimeOffset";
+import { useAuctionCountdownAlerts } from "../../hooks/useAuctionCountdownAlerts";
 import { canManageReverseBidding } from "../../config/roles";
 import { useAuthStore } from "../../store/authStore";
 import { formatCurrencyIn, formatDateTime } from "../../utils/format";
@@ -95,7 +104,7 @@ function computeBidStatus(
   winningSupplier?: string
 ): BidStatusKind {
   const hasBid = typeof s.current_bid === "number" && s.current_bid > 0;
-  if (status === "Completed" && winningSupplier && s.supplier === winningSupplier)
+  if (status === "Completed" && winningSupplier && sameSupplier(s.supplier, winningSupplier))
     return "Winner";
   if (hasBid) {
     if (s.rank === 1) return "Leading";
@@ -148,6 +157,7 @@ export default function ReverseBiddingDetailPage() {
   const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const canManage = canManageReverseBidding(user?.role);
+  const slaVisible = isSlaVisibleForRole(user?.role);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [targets, setTargets] = useState<Record<string, string>>({});
@@ -158,7 +168,14 @@ export default function ReverseBiddingDetailPage() {
     queryKey: ["reverse-bidding", name],
     queryFn: () => getReverseBidding(name),
     enabled: !!name,
-    refetchInterval: 5000, // live refresh every 5s
+    // Auto-refresh every 5s only while the auction is active (Scheduled/Live).
+    // Once Completed/Cancelled/Draft the bid history is frozen — stop polling.
+    refetchInterval: (query) => {
+      const doc = query.state.data as ReverseBidding | undefined;
+      if (!doc) return 5000;
+      const s = deriveAuctionStatus(doc);
+      return s === "Live" || s === "Scheduled" ? 5000 : false;
+    },
     refetchOnWindowFocus: true,
   });
 
@@ -191,8 +208,8 @@ export default function ReverseBiddingDetailPage() {
   /* Back-fill item rows for auctions created before the item-wise feature. */
   // Keep the SLA timer for this auction aligned to its live start/end window.
   useEffect(() => {
-    if (auction) void syncReverseAuctionSla(auction);
-  }, [auction?.name, auction?.auction_status, auction?.end_date_time]);
+    if (auction && slaVisible) void syncReverseAuctionSla(auction);
+  }, [auction?.name, auction?.auction_status, auction?.end_date_time, slaVisible]);
 
   useEffect(() => {
     if (!auction || backfillRef.current) return;
@@ -263,7 +280,12 @@ export default function ReverseBiddingDetailPage() {
     if (status === "Scheduled") return parseErpDateTime(auction.start_date_time);
     return null;
   }, [auction, status]);
-  const countdown = useCountdown(countdownTarget);
+  const serverOffset = useServerTimeOffset();
+  const countdown = useCountdown(countdownTarget, serverOffset);
+  const alerts = useAuctionCountdownAlerts({
+    msRemaining: countdown.msRemaining,
+    active: status === "Live",
+  });
   const timeRemaining =
     status === "Live" || status === "Scheduled"
       ? countdown.label
@@ -310,9 +332,10 @@ export default function ReverseBiddingDetailPage() {
     scores?.get(supplier.trim().toLowerCase());
 
   // Bid history is stored append-only with per-item previous/new/reduction.
-  // `buildBidHistoryRows` normalizes every row (and reconstructs from the
-  // item table for auctions that only recorded item-wise bids), so the audit
-  // view always reflects real backend data. Newest first for display.
+  // `buildBidHistoryRows` normalizes every row and reconstructs from the item
+  // table (or the standing supplier bids) when the append-only table is empty,
+  // so the COMPLETE history stays visible — including after completion and even
+  // when a winner exists. Sorted newest-first for display.
   const bidRowsNewestFirst = [...buildBidHistoryRows(auction)].sort((a, b) => {
     const ta = parseErpDateTime(a.bid_time) ?? 0;
     const tb = parseErpDateTime(b.bid_time) ?? 0;
@@ -320,6 +343,11 @@ export default function ReverseBiddingDetailPage() {
     return (b.round_number ?? 0) - (a.round_number ?? 0);
   });
   const bidSummary = summarizeBidHistory(auction);
+  const hasBidActivity = bidSummary.totalBids > 0;
+  // A winner is only set once Procurement manually accepts one — the lowest
+  // bidder is never auto-awarded (see `closeAuction` / `acceptAuctionWinner`).
+  const winnerAccepted = isWinnerAccepted(auction);
+  const winnerAcceptance = getWinnerAcceptance(auction);
   const bidTrend = buildBidTrend(auction);
 
   const toggle = (supplier: string) =>
@@ -356,6 +384,11 @@ export default function ReverseBiddingDetailPage() {
     <div className="space-y-5">
       {/* ── Top header ─────────────────────────────────────────────────── */}
       <div className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
+        <AuctionCountdownAlert
+          phase={alerts.phase}
+          secondsLeft={alerts.secondsLeft}
+          closed={status === "Completed"}
+        />
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex items-center gap-3">
             <span className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
@@ -377,8 +410,12 @@ export default function ReverseBiddingDetailPage() {
                 Time Remaining
               </p>
               <p
-                className={`text-lg font-bold tabular-nums ${
-                  status === "Live" ? "text-emerald-600" : "text-neutral-800"
+                className={`inline-block text-lg font-bold tabular-nums ${
+                  status === "Live"
+                    ? alerts.phase === "none"
+                      ? "text-emerald-600"
+                      : countdownPhaseClass(alerts.phase)
+                    : "text-neutral-800"
                 }`}
               >
                 {timeRemaining}
@@ -405,8 +442,8 @@ export default function ReverseBiddingDetailPage() {
         <ActionBar auction={auction} status={status} onDone={invalidate} />
       )}
 
-      {/* ── Completion result card (Part 7) ────────────────────────────── */}
-      {status === "Completed" && (
+      {/* ── Completion result card (Part 7) — only after a winner is accepted ── */}
+      {status === "Completed" && winnerAccepted && (
         <CompletionCard
           auction={auction}
           savings={overallSavings}
@@ -571,9 +608,60 @@ export default function ReverseBiddingDetailPage() {
 
           {/* Live bid history (Part 5) */}
           <Section
-            title={`Live Bid History (${bidSummary.totalBids})`}
+            title={`Live Bid History (${bidRowsNewestFirst.length})`}
             icon={History}
+            action={
+              status === "Completed" ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2.5 py-0.5 text-[11px] font-semibold text-neutral-600">
+                  <History className="h-3 w-3" />
+                  Auction Completed
+                </span>
+              ) : null
+            }
           >
+            {!hasBidActivity ? (
+              <p className="py-6 text-center text-sm text-neutral-500">
+                No bidding activity available.
+              </p>
+            ) : (
+              <>
+            {/* Winner acceptance (Part 6/7): bidding has ended — the buyer must
+                manually accept a winner; the lowest bidder is never auto-awarded. */}
+            {status === "Completed" && !winnerAccepted ? (
+              <AcceptWinnerPanel
+                auction={auction}
+                currency={currency}
+                canManage={canManage}
+                acceptedBy={user?.email}
+                onDone={invalidate}
+              />
+            ) : null}
+
+            {winnerAccepted && winnerAcceptance ? (
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-600 text-white">
+                    <Trophy className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <p className="text-sm font-bold text-emerald-800">
+                      Winner Accepted by Procurement
+                    </p>
+                    <p className="text-xs text-neutral-600">
+                      {auction.winning_supplier ? `${auction.winning_supplier} · ` : ""}
+                      {winnerAcceptance.user}
+                      {winnerAcceptance.at
+                        ? ` · ${formatDateTime(winnerAcceptance.at)}`
+                        : ""}
+                    </p>
+                  </div>
+                </div>
+                <span className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2.5 py-0.5 text-[11px] font-semibold text-neutral-600">
+                  Bid history locked
+                </span>
+              </div>
+            ) : null}
+
             {/* Summary strip */}
             <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">
               <MiniStat label="Total Bids">{bidSummary.totalBids}</MiniStat>
@@ -612,9 +700,12 @@ export default function ReverseBiddingDetailPage() {
               currency={currency}
             />
 
-            {bidRowsNewestFirst.length === 0 ? (
-              <p className="text-sm text-neutral-500">No bids submitted yet.</p>
-            ) : (
+            {status === "Completed" ? (
+              <p className="mb-2 text-xs text-neutral-500">
+                This auction is completed — the bid history below is read-only.
+              </p>
+            ) : null}
+            {(
               <div className="max-h-[28rem] overflow-auto">
                 <table className="data-table">
                   <thead className="sticky top-0 z-10 bg-white">
@@ -676,6 +767,8 @@ export default function ReverseBiddingDetailPage() {
                   </tbody>
                 </table>
               </div>
+            )}
+              </>
             )}
           </Section>
 
@@ -910,6 +1003,134 @@ export default function ReverseBiddingDetailPage() {
 }
 
 /* ── Completion result card + post-auction actions (Parts 7 & 8) ───────── */
+
+/**
+ * Shown above the Live Bid History once bidding has ended but no winner has
+ * been accepted. Surfaces the lowest standing bid and lets Procurement manually
+ * award the auction (Requirement 5–7). The lowest bidder is NOT auto-accepted.
+ */
+function AcceptWinnerPanel({
+  auction,
+  currency,
+  canManage,
+  acceptedBy,
+  onDone,
+}: {
+  auction: ReverseBidding;
+  currency?: string;
+  canManage: boolean;
+  acceptedBy?: string;
+  onDone: () => void;
+}) {
+  const participants = [...(auction.invited_suppliers ?? [])]
+    .filter((s) => (s.current_bid ?? 0) > 0)
+    .sort((a, b) => (a.current_bid ?? 0) - (b.current_bid ?? 0));
+  const lowest = participants[0];
+  const [picked, setPicked] = useState<string>("");
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const selected = picked || lowest?.supplier || "";
+  const selectedRow = participants.find((s) => sameSupplier(s.supplier, selected));
+  const selectedPrice = selectedRow?.current_bid ?? 0;
+  const isManualChoice = !!lowest && !sameSupplier(selected, lowest.supplier);
+
+  const accept = useMutation({
+    mutationFn: () => acceptAuctionWinner(auction.name, selected, acceptedBy),
+    onSuccess: () => {
+      toast.success("Winner accepted — auction finalized.");
+      setConfirmOpen(false);
+      onDone();
+    },
+    onError: (e: unknown) =>
+      toast.error(e instanceof Error ? e.message : "Could not accept winner"),
+  });
+
+  if (!lowest) {
+    return (
+      <div className="mb-4 rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3 text-sm text-neutral-500">
+        Bidding has ended, but no bids were submitted — there is no winner to accept.
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
+            Lowest Bid
+          </p>
+          <p className="mt-0.5 text-base font-bold text-neutral-900">
+            {lowest.supplier}
+          </p>
+          <p className="text-sm font-semibold tabular-nums text-emerald-700">
+            {formatCurrencyIn(lowest.current_bid ?? 0, currency)}
+          </p>
+        </div>
+
+        {canManage ? (
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="text-sm">
+              <span className="mb-1 block text-xs font-medium text-neutral-600">
+                Award to
+              </span>
+              <select
+                value={selected}
+                onChange={(e) => setPicked(e.target.value)}
+                className="input-field min-w-[15rem]"
+              >
+                {participants.map((s) => (
+                  <option key={s.supplier} value={s.supplier}>
+                    {s.supplier}
+                    {(s.current_bid ?? 0) > 0
+                      ? ` — ${formatCurrencyIn(s.current_bid!, currency)}`
+                      : ""}
+                    {sameSupplier(s.supplier, lowest.supplier) ? " (lowest)" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={accept.isPending || !selected}
+              onClick={() => setConfirmOpen(true)}
+            >
+              <Trophy className="h-4 w-4" />
+              Accept Winner
+            </button>
+          </div>
+        ) : (
+          <span className="text-xs text-neutral-500">
+            Awaiting Procurement to accept a winner.
+          </span>
+        )}
+      </div>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        onConfirm={() => accept.mutate()}
+        title="Accept auction winner?"
+        description="This marks the supplier as the winner, updates the Supplier Comparison and Auction Summary, locks the bid history and unlocks Purchase Order creation. The lowest bidder is never auto-selected — you are confirming this choice."
+        confirmLabel="Accept Winner"
+        tone="primary"
+        isLoading={accept.isPending}
+      >
+        <dl className="space-y-1.5 rounded-lg border border-neutral-200 bg-neutral-50 p-3 text-sm">
+          <ConfirmRow label="Winner">{selected || "—"}</ConfirmRow>
+          <ConfirmRow label="Winning Bid">
+            {selectedPrice ? formatCurrencyIn(selectedPrice, currency) : "—"}
+          </ConfirmRow>
+          {isManualChoice ? (
+            <ConfirmRow label="Note">
+              Manual override — not the lowest bidder
+            </ConfirmRow>
+          ) : null}
+        </dl>
+      </ConfirmDialog>
+    </div>
+  );
+}
 
 function CompletionCard({
   auction,
@@ -1575,18 +1796,23 @@ function SupplierItemBreakdown({
 function Section({
   title,
   icon: Icon,
+  action,
   children,
 }: {
   title: string;
   icon: typeof Clock;
+  action?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <section className="rounded-xl border border-neutral-200 bg-white p-4">
-      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-neutral-800">
-        <Icon className="h-4 w-4 text-neutral-400" />
-        {title}
-      </h2>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-neutral-800">
+          <Icon className="h-4 w-4 text-neutral-400" />
+          {title}
+        </h2>
+        {action}
+      </div>
       {children}
     </section>
   );

@@ -1,26 +1,29 @@
-import { useMemo } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { FileSearch, Plus } from "lucide-react";
 
 import { getRFQNamesWithPO } from "../../api/purchasing";
 import {
   getQuoteCountsForRFQs,
-  getRFQs,
+  getRFQsPaged,
   type RFQListRow,
 } from "../../api/sourcing";
+import type { Filter } from "../../api/erpnext";
 import ConnectionError from "../../components/ConnectionError";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
+import PaginationBar from "../../components/PaginationBar";
 import { TableSkeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
 import { ownerTitleFromEmail } from "../../config/roles";
 import { SortableTableHeader } from "../../components/ui";
-import { useListSort } from "../../hooks/useListSort";
+import { usePagination } from "../../hooks/usePagination";
 import {
   RFQ_DEFAULT_SORT,
   rfqComparators,
   sortNewestFirst,
+  sortRows,
 } from "../../utils/listSort";
 import { formatDate } from "../../utils/format";
 
@@ -32,21 +35,52 @@ interface RFQRow extends RFQListRow {
 
 const RFQ_COMPARATORS = rfqComparators<RFQRow>();
 
+/** Sort keys that map directly to a real `Request for Quotation` field, so
+ * the server can order the whole dataset (not just the current page). The
+ * `quotes`/`status` columns are computed client-side from joined data, so
+ * they fall back to the default order and are only reordered within the
+ * currently-loaded page. */
+const RFQ_ORDER_BY_FIELD: Record<string, string> = {
+  name: "name",
+  modified: "modified",
+  owner: "owner",
+};
+
 export default function RFQListPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const preset = (searchParams.get("preset") ?? "").toLowerCase();
 
   // List data cached for 5 minutes — re-navigating between pages no longer
   // re-fetches the same ERPNext list on every visit.
   const LIST_STALE_TIME = 5 * 60_000;
 
-  const rfqsQuery = useQuery<RFQListRow[]>({
-    queryKey: ["rfqs"],
-    queryFn: getRFQs,
+  const [sort, setSort] = useState(RFQ_DEFAULT_SORT);
+  const orderByField = RFQ_ORDER_BY_FIELD[sort.key];
+  const order_by = orderByField
+    ? `${orderByField} ${sort.direction}, name desc`
+    : "modified desc, name desc";
+
+  const filters = useMemo<Filter[] | undefined>(() => {
+    if (preset === "open") {
+      return [["status", "in", ["Submitted", "Open"]]] as Filter[];
+    }
+    return undefined;
+  }, [preset]);
+
+  const { page, pageSize, setPage, setPageSize } = usePagination({
+    resetKey: JSON.stringify(filters ?? []) + order_by,
+  });
+
+  const rfqsQuery = useQuery({
+    queryKey: ["rfqs", filters, page, pageSize, order_by],
+    queryFn: () => getRFQsPaged({ page, pageSize, order_by, filters }),
     staleTime: LIST_STALE_TIME,
+    placeholderData: (prev) => prev,
   });
 
   const rfqNames = useMemo(
-    () => (rfqsQuery.data ?? []).map((r) => r.name),
+    () => (rfqsQuery.data?.data ?? []).map((r) => r.name),
     [rfqsQuery.data]
   );
 
@@ -78,7 +112,7 @@ export default function RFQListPage() {
   const rows: RFQRow[] = useMemo(() => {
     const quoteCounts = quotesQuery.data;
     const poSet = linkedPOsQuery.data;
-    return (rfqsQuery.data ?? []).map<RFQRow>((rfq) => {
+    return (rfqsQuery.data?.data ?? []).map<RFQRow>((rfq) => {
       const quote_count = quoteCounts?.get(rfq.name) ?? 0;
       const hasPO = poSet?.has(rfq.name) ?? false;
       const erpStatus = rfq.status ?? "Draft";
@@ -95,20 +129,16 @@ export default function RFQListPage() {
     });
   }, [rfqsQuery.data, quotesQuery.data, linkedPOsQuery.data]);
 
-  const normalizedRows = useMemo(
-    () =>
-      sortNewestFirst(rows, {
-        date: (rfq) => rfq.modified,
-        name: (rfq) => rfq.name,
-      }),
-    [rows]
-  );
-
-  const { sort, setSort, sortedRows } = useListSort(
-    normalizedRows,
-    RFQ_DEFAULT_SORT,
-    RFQ_COMPARATORS
-  );
+  // `rows` is already server-ordered for real-field sort keys (name/modified/
+  // owner); this client pass keeps the computed `quotes`/`status` columns
+  // sortable within the current page and provides a stable tie-breaker.
+  const sortedRows = useMemo(() => {
+    const normalized = sortNewestFirst(rows, {
+      date: (rfq) => rfq.modified,
+      name: (rfq) => rfq.name,
+    });
+    return sortRows(normalized, sort, RFQ_COMPARATORS);
+  }, [rows, sort]);
 
   return (
     <div>
@@ -247,6 +277,15 @@ export default function RFQListPage() {
               </tbody>
             </table>
             </div>
+
+            <PaginationBar
+              currentPage={rfqsQuery.data?.current_page ?? page}
+              totalPages={rfqsQuery.data?.total_pages ?? 1}
+              totalRecords={rfqsQuery.data?.total_records ?? 0}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+            />
           </>
         )}
       </div>

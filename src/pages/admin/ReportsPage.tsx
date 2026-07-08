@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
   BarChart3,
+  Ban,
   Briefcase,
   Calendar,
   Download,
@@ -16,17 +17,22 @@ import {
 import { getReportData } from "../../api/admin";
 import type { ReportRow } from "../../api/admin";
 import { fetchProcurementTypeKpis } from "../../api/materialRequestWorkflow";
+import {
+  getAllDeclineResponses,
+  summarizeDeclineReasons,
+} from "../../api/supplierRfqResponse";
 import { Skeleton } from "../../components/Skeleton";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
 import { formatCurrencyCompact } from "../../utils/format";
 
-type ReportType = "rfq" | "supplier" | "po" | "spend";
+type ReportType = "rfq" | "supplier" | "po" | "spend" | "decline";
 
 const REPORT_TABS: Array<{ id: ReportType; label: string; icon: typeof FileText }> = [
   { id: "rfq", label: "RFQ Reports", icon: FileText },
   { id: "supplier", label: "Supplier Reports", icon: Truck },
   { id: "po", label: "PO Reports", icon: ShoppingCart },
   { id: "spend", label: "Spend Analysis", icon: DollarSign },
+  { id: "decline", label: "Supplier Declines", icon: Ban },
 ];
 
 const REPORT_COLUMNS: Record<ReportType, string[]> = {
@@ -34,10 +40,12 @@ const REPORT_COLUMNS: Record<ReportType, string[]> = {
   supplier: ["name", "supplier_name", "country", "disabled"],
   po: ["name", "supplier", "transaction_date", "grand_total", "status", "per_received", "per_billed"],
   spend: ["name", "supplier", "transaction_date", "grand_total", "status"],
+  decline: ["rfq", "supplier_name", "decline_reason", "reason_details", "response_date"],
 };
 
 const COL_LABELS: Record<string, string> = {
   name: "ID",
+  rfq: "RFQ",
   transaction_date: "Date",
   status: "Status",
   supplier: "Supplier",
@@ -48,6 +56,9 @@ const COL_LABELS: Record<string, string> = {
   grand_total: "Amount",
   per_received: "Received %",
   per_billed: "Billed %",
+  decline_reason: "Decline Reason",
+  reason_details: "Details",
+  response_date: "Declined On",
 };
 
 export default function ReportsPage() {
@@ -68,11 +79,25 @@ export default function ReportsPage() {
     staleTime: 60_000,
   });
 
-  const { data: rows = [], isLoading } = useQuery({
+  const { data: rows = [], isLoading } = useQuery<ReportRow[]>({
     queryKey: ["admin-report", activeTab, dateFrom, dateTo],
-    queryFn: () => getReportData(activeTab, dateFrom || undefined, dateTo || undefined),
+    queryFn: async () => {
+      if (activeTab === "decline") {
+        const responses = await getAllDeclineResponses({
+          dateFrom: dateFrom || undefined,
+          dateTo: dateTo || undefined,
+        });
+        return responses as unknown as ReportRow[];
+      }
+      return getReportData(activeTab, dateFrom || undefined, dateTo || undefined);
+    },
     staleTime: 30_000,
   });
+
+  const declineStats =
+    activeTab === "decline"
+      ? summarizeDeclineReasons(rows as unknown as Parameters<typeof summarizeDeclineReasons>[0])
+      : [];
 
   const columns = REPORT_COLUMNS[activeTab];
 
@@ -217,6 +242,33 @@ export default function ReportsPage() {
           </button>
         )}
       </div>
+
+      {/* Most Common Decline Reasons */}
+      {activeTab === "decline" && declineStats.length > 0 && (
+        <div className="mb-4 rounded-lg border border-neutral-200 bg-white p-4 shadow-sm">
+          <h2 className="mb-3 text-[11px] font-bold uppercase tracking-wider text-neutral-500">
+            Most Common Decline Reasons · {rows.length} total
+          </h2>
+          <div className="space-y-2">
+            {declineStats.map((stat) => (
+              <div key={stat.reason} className="flex items-center gap-3">
+                <span className="w-52 shrink-0 truncate text-xs font-medium text-neutral-700">
+                  {stat.reason}
+                </span>
+                <div className="h-2 flex-1 overflow-hidden rounded-full bg-neutral-100">
+                  <div
+                    className="h-full rounded-full bg-warning-500"
+                    style={{ width: `${stat.pct}%` }}
+                  />
+                </div>
+                <span className="w-16 shrink-0 text-right text-xs tabular-nums text-neutral-500">
+                  {stat.count} ({stat.pct}%)
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Data Table */}
       {isLoading ? (

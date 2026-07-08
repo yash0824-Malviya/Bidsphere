@@ -14,6 +14,7 @@ import {
 } from "../../config/dashboardRoles";
 import ActionCenter from "./ActionCenter";
 import AdminKpiRow from "./AdminKpiRow";
+import ProcurementAnalyticsSection from "./ProcurementAnalyticsSection";
 import AlertsRisksPanel from "./AlertsRisksPanel";
 import CompactActivityFeed from "./CompactActivityFeed";
 import DashboardHeader from "./DashboardHeader";
@@ -37,7 +38,7 @@ import {
 const AdminSpendCharts = lazy(() => import("./AdminSpendCharts"));
 
 interface Props {
-  role: Exclude<AppRole, "warehouse" | "legal" | "department">;
+  role: Exclude<AppRole, "warehouse" | "legal" | "department" | "manufacturing">;
   greetingName: string;
 }
 
@@ -166,6 +167,13 @@ export default function AdminDashboard({ role, greetingName }: Props) {
         kpiKeys={layout.kpiKeys}
         loading={countsQuery.isLoading}
         readyForPOCount={readyForPOCount}
+      />
+
+      <ProcurementAnalyticsSection
+        title="Enterprise Analytics"
+        subtitle="Budget & savings from ERPNext"
+        kpis={["budgetUtilisation", "costSavings"]}
+        charts={["budgetVsActual", "costSavings"]}
       />
 
       <SlaCountdownWidget role="admin" title="Admin SLA Countdown" />

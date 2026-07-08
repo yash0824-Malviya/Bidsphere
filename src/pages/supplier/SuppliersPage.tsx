@@ -11,18 +11,30 @@ import {
 } from "lucide-react";
 
 import { getPurchaseOrders } from "../../api/purchasing";
-import { getSupplierGroups, getSuppliers } from "../../api/supplier";
+import { getSupplierGroups, getSuppliers, getSuppliersPaged } from "../../api/supplier";
 import type { Filter } from "../../api/erpnext";
 import ConnectionError from "../../components/ConnectionError";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
+import PaginationBar from "../../components/PaginationBar";
 import { Skeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
 import { FilterBar, FilterField, SearchInput, SortableTableHeader } from "../../components/ui";
 import { useListSort } from "../../hooks/useListSort";
+import { usePagination } from "../../hooks/usePagination";
 import { useDebounce } from "../../hooks/useDebounce";
 import type { Supplier } from "../../types/erpnext";
 import { formatCurrency } from "../../utils/format";
+
+const SUPPLIER_DIRECTORY_FIELDS = [
+  "name",
+  "supplier_name",
+  "supplier_group",
+  "country",
+  "disabled",
+  "tax_id",
+  "email_id",
+];
 
 type StatusFilter = "all" | "active" | "inactive";
 type SuppliersTab = "directory" | "performance";
@@ -32,10 +44,14 @@ export default function SuppliersPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab: SuppliersTab =
     searchParams.get("tab") === "performance" ? "performance" : "directory";
+  const statusFromUrl = (() => {
+    const raw = (searchParams.get("status") ?? "").toLowerCase();
+    return raw === "active" || raw === "inactive" ? (raw as StatusFilter) : "all";
+  })();
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
   const [group, setGroup] = useState("");
-  const [status, setStatus] = useState<StatusFilter>("all");
+  const [status, setStatus] = useState<StatusFilter>(statusFromUrl);
 
   const filters = useMemo<Filter[]>(() => {
     const f: Filter[] = [];
@@ -47,30 +63,46 @@ export default function SuppliersPage() {
     return f;
   }, [group, status, debouncedSearch]);
 
-  const {
-    data: suppliers = [],
-    isLoading,
-    isError,
-    error,
-    refetch,
-  } = useQuery({
-    queryKey: ["suppliers", filters],
+  const { page, pageSize, setPage, setPageSize } = usePagination({
+    resetKey: JSON.stringify(filters),
+  });
+
+  // Directory tab — server-side paginated (10/20/50/100 per page).
+  const directoryQuery = useQuery({
+    queryKey: ["suppliers-directory", filters, page, pageSize],
+    queryFn: () =>
+      getSuppliersPaged({
+        filters,
+        fields: SUPPLIER_DIRECTORY_FIELDS,
+        order_by: "supplier_name asc",
+        page,
+        pageSize,
+      }),
+    enabled: activeTab === "directory",
+    placeholderData: (prev) => prev,
+  });
+
+  // Performance tab ranks EVERY matching supplier by PO volume/spend, so it
+  // needs the full filtered set rather than a single page.
+  const performanceQuery = useQuery({
+    queryKey: ["suppliers-performance", filters],
     queryFn: () =>
       getSuppliers({
         filters,
-        fields: [
-          "name",
-          "supplier_name",
-          "supplier_group",
-          "country",
-          "disabled",
-          "tax_id",
-          "email_id",
-        ],
+        fields: SUPPLIER_DIRECTORY_FIELDS,
         limit_page_length: 200,
         order_by: "supplier_name asc",
       }),
+    enabled: activeTab === "performance",
   });
+
+  const suppliers = activeTab === "performance"
+    ? performanceQuery.data ?? []
+    : directoryQuery.data?.data ?? [];
+  const isLoading = activeTab === "performance" ? performanceQuery.isLoading : directoryQuery.isLoading;
+  const isError = activeTab === "performance" ? performanceQuery.isError : directoryQuery.isError;
+  const error = activeTab === "performance" ? performanceQuery.error : directoryQuery.error;
+  const refetch = activeTab === "performance" ? performanceQuery.refetch : directoryQuery.refetch;
 
   const { data: groups = [] } = useQuery({
     queryKey: ["supplier-groups"],
@@ -217,11 +249,10 @@ export default function SuppliersPage() {
   );
 
   function setTab(tab: SuppliersTab) {
-    if (tab === "directory") {
-      setSearchParams({});
-      return;
-    }
-    setSearchParams({ tab: "performance" });
+    const next = new URLSearchParams(searchParams);
+    if (tab === "directory") next.delete("tab");
+    else next.set("tab", "performance");
+    setSearchParams(next);
   }
 
   return (
@@ -373,7 +404,14 @@ export default function SuppliersPage() {
         <FilterField label="Status" className="min-w-[160px]">
           <select
             value={status}
-            onChange={(e) => setStatus(e.target.value as StatusFilter)}
+            onChange={(e) => {
+              const nextStatus = e.target.value as StatusFilter;
+              setStatus(nextStatus);
+              const next = new URLSearchParams(searchParams);
+              if (nextStatus === "all") next.delete("status");
+              else next.set("status", nextStatus);
+              setSearchParams(next);
+            }}
             className="select-field"
           >
             <option value="all">All</option>
@@ -403,18 +441,31 @@ export default function SuppliersPage() {
           }
         />
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {suppliers.map((supplier) => (
-            <SupplierCard
-              key={supplier.name}
-              supplier={supplier}
-              poCount={poCounts[supplier.name] ?? 0}
-              onClick={() =>
-                navigate(`/suppliers/${encodeURIComponent(supplier.name)}`)
-              }
+        <>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {suppliers.map((supplier) => (
+              <SupplierCard
+                key={supplier.name}
+                supplier={supplier}
+                poCount={poCounts[supplier.name] ?? 0}
+                onClick={() =>
+                  navigate(`/suppliers/${encodeURIComponent(supplier.name)}`)
+                }
+              />
+            ))}
+          </div>
+
+          <div className="mt-4 overflow-hidden rounded-xl border border-neutral-200 bg-white">
+            <PaginationBar
+              currentPage={directoryQuery.data?.current_page ?? page}
+              totalPages={directoryQuery.data?.total_pages ?? 1}
+              totalRecords={directoryQuery.data?.total_records ?? 0}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
             />
-          ))}
-        </div>
+          </div>
+        </>
       )}
         </>
       )}

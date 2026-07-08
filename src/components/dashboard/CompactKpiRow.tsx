@@ -56,7 +56,7 @@ function CompactKpiRow({ kpis, counts, loading }: Props) {
       label: "Total Spend",
       value: formatCurrencyCompact(kpis.ytdSpend),
       icon: DollarSign,
-      to: "/p2p/invoices",
+      to: "/p2p/total-spend",
       accent: "text-primary bg-primary-50",
     },
     {
@@ -76,14 +76,14 @@ function CompactKpiRow({ kpis, counts, loading }: Props) {
       label: "Active Suppliers",
       value: counts.activeSuppliers.toLocaleString(),
       icon: Users,
-      to: "/suppliers",
+      to: "/suppliers?status=active",
       accent: "text-primary bg-primary-50",
     },
     {
       label: "Open RFQs",
       value: counts.openRfqs.toLocaleString(),
       icon: FileSearch,
-      to: "/sourcing/rfq",
+      to: "/sourcing/rfq?preset=open",
       accent: "text-primary bg-primary-50",
     },
     {

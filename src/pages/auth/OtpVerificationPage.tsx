@@ -23,6 +23,7 @@ import {
   MFA_OTP_LENGTH,
 } from "../../config/mfaConfig";
 import { getRoleHome, canAccessPath } from "../../config/roles";
+import { prefetchDashboardForRole } from "../../api/prefetchDashboard";
 import { sendOTP, verifyOTP } from "../../services/mfa/otpService";
 import {
   getActiveMfaPending,
@@ -331,6 +332,8 @@ export default function OtpVerificationPage() {
           : user?.role
             ? getRoleHome(user.role)
             : "/dashboard";
+
+      if (user?.role) prefetchDashboardForRole(user.role);
 
       window.setTimeout(() => {
         completeMfaLogin();

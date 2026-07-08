@@ -5,6 +5,7 @@ import toast from "react-hot-toast";
 import {
   AlertTriangle,
   ArrowLeft,
+  Ban,
   Building2,
   Calendar,
   CheckCircle2,
@@ -28,6 +29,15 @@ import {
 } from "lucide-react";
 
 import { checkQuotationStatus, createSupplierQuotation, getRFQ } from "../../api/sourcing";
+import {
+  declineRfq,
+  getSupplierResponse,
+  type SupplierRfqResponse,
+} from "../../api/supplierRfqResponse";
+import { triggerQuotationDeclined } from "../../api/notifications";
+import NoQuoteDialog, {
+  type NoQuotePayload,
+} from "../../components/supplier-portal/NoQuoteDialog";
 import { uploadFileToERPNext, getFullFileUrl } from "../../api/legalDocsStorage";
 import { Skeleton } from "../../components/Skeleton";
 import type { RFQ, RFQItem } from "../../types/erpnext";
@@ -171,6 +181,9 @@ export default function SupplierRFQPage() {
   }
 
   const [alreadySubmitted, setAlreadySubmitted] = useState<SubmittedData | null>(null);
+  const [declined, setDeclined] = useState<SupplierRfqResponse | null>(null);
+  const [noQuoteOpen, setNoQuoteOpen] = useState(false);
+  const [declining, setDeclining] = useState(false);
   const [checkingStatus, setCheckingStatus] = useState(true);
 
   useEffect(() => {
@@ -196,6 +209,19 @@ export default function SupplierRFQPage() {
 
       if (localRaw) {
         try { localData = JSON.parse(localRaw); } catch { /* ignore */ }
+      }
+
+      // 1b. Check ERPNext for an explicit "No Quote" decline response. A
+      // declined supplier gets a read-only screen instead of the quote form.
+      try {
+        const response = await getSupplierResponse(rfqName, supplierName);
+        if (!cancelled && response) {
+          setDeclined(response);
+          setCheckingStatus(false);
+          return;
+        }
+      } catch {
+        /* fall through */
       }
 
       // 2. Check ERPNext for a submitted Supplier Quotation
@@ -228,6 +254,17 @@ export default function SupplierRFQPage() {
       // failure: the supplier sees "Quotation Submitted" forever while
       // procurement never receives a real Supplier Quotation.
       const supplierRow = (rfq?.suppliers ?? []).find((s) => s.supplier === supplierName);
+      if (!cancelled && supplierRow?.quote_status === "No Quote") {
+        setDeclined({
+          name: rfqName,
+          rfq: rfqName,
+          supplier: supplierName,
+          response_status: "No Quote",
+          decline_reason: "",
+        });
+        setCheckingStatus(false);
+        return;
+      }
       if (!cancelled && supplierRow?.quote_status === "Received") {
         setAlreadySubmitted({
           quoteName: rfqName,
@@ -727,6 +764,42 @@ export default function SupplierRFQPage() {
     setSubmitting(false);
   }
 
+  async function handleDecline(payload: NoQuotePayload) {
+    if (!rfq) return;
+    setDeclining(true);
+    try {
+      const rfqSupplierRow = (rfq.suppliers ?? []).find(
+        (s) => s.supplier === supplierName
+      );
+      const response = await declineRfq({
+        rfq: rfq.name,
+        supplier: supplierName,
+        supplierDisplayName: supplierName,
+        rfqSupplierRow: rfqSupplierRow?.name,
+        reason: payload.reason,
+        reasonDetails: payload.reasonDetails,
+        comment: payload.comment,
+        respondedBy: supplierName,
+      });
+
+      // Notify the procurement manager (in-app). Non-fatal on failure.
+      try {
+        triggerQuotationDeclined(rfq.name, supplierName, payload.reason);
+      } catch {
+        /* ignore */
+      }
+
+      setNoQuoteOpen(false);
+      setDeclined(response);
+      toast.success("Your 'No Quote' response has been sent to the buyer.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      toast.error(`Could not submit No Quote: ${msg}`, { duration: 10_000 });
+    } finally {
+      setDeclining(false);
+    }
+  }
+
   /* ─────────────── Render ─────────────── */
 
   if (!session) {
@@ -871,6 +944,80 @@ export default function SupplierRFQPage() {
         <div className="flex min-h-[40vh] items-center justify-center gap-2">
           <Loader2 className="h-5 w-5 animate-spin text-neutral-400" />
           <span className="text-sm text-neutral-500">Checking quotation status…</span>
+        </div>
+      </SupplierPortalLayout>
+    );
+  }
+
+  /* ── Read-only view: Supplier declined (No Quote) ─────────────────── */
+  if (declined) {
+    return (
+      <SupplierPortalLayout supplierName={supplierName}>
+        <BackToDashboard />
+
+        <div className="mb-4 rounded-2xl border border-warning-200 bg-warning-50 p-5">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-warning-100">
+              <Ban className="h-5 w-5 text-warning-600" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-bold text-warning-900">No Quote Submitted</h2>
+                <span className="inline-flex items-center gap-1 rounded-full bg-warning-500 px-2.5 py-0.5 text-[10px] font-bold text-white">
+                  <Lock className="h-2.5 w-2.5" /> Declined
+                </span>
+              </div>
+              <p className="mt-1 text-sm text-warning-800">
+                You have declined to quote for this RFQ. The buyer has been notified of your response.
+              </p>
+              {declined.response_date && (
+                <p className="mt-1 text-xs text-warning-700">
+                  <Clock className="mr-1 inline h-3 w-3" />
+                  Submitted on {formatDateTime(declined.response_date)}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="mb-2">
+          <h1 className="text-xl font-bold text-neutral-900">
+            RFQ {rfq.name} — Declined
+          </h1>
+          <p className="text-sm text-neutral-600">
+            {parsedMessage.title || "Your decline response is shown below in read-only mode."}
+          </p>
+        </div>
+
+        <div className="mt-4 card divide-y divide-neutral-100">
+          <div className="flex items-start justify-between gap-4 px-5 py-3">
+            <span className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+              Reason
+            </span>
+            <span className="text-right text-sm font-medium text-neutral-800">
+              {declined.decline_reason || "—"}
+            </span>
+          </div>
+          {declined.reason_details && (
+            <div className="flex items-start justify-between gap-4 px-5 py-3">
+              <span className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+                Details
+              </span>
+              <span className="max-w-[70%] text-right text-sm text-neutral-700">
+                {declined.reason_details}
+              </span>
+            </div>
+          )}
+          {declined.comment && (
+            <div className="flex items-start justify-between gap-4 px-5 py-3">
+              <span className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+                Comments
+              </span>
+              <span className="max-w-[70%] text-right text-sm text-neutral-700">
+                {declined.comment}
+              </span>
+            </div>
+          )}
         </div>
       </SupplierPortalLayout>
     );
@@ -1434,6 +1581,15 @@ export default function SupplierRFQPage() {
               </button>
               <button
                 type="button"
+                onClick={() => setNoQuoteOpen(true)}
+                disabled={submitting}
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-warning-300 bg-warning-50 px-4 py-2.5 text-sm font-semibold text-warning-700 shadow-sm transition hover:border-warning-400 hover:bg-warning-100 disabled:opacity-60"
+              >
+                <Ban className="h-4 w-4" />
+                No Quote
+              </button>
+              <button
+                type="button"
                 onClick={handleSubmit}
                 disabled={!canSubmit}
                 title={!canSubmit ? submitBlockers.join("; ") : undefined}
@@ -1450,6 +1606,14 @@ export default function SupplierRFQPage() {
           </div>
         </div>
       </div>
+
+      <NoQuoteDialog
+        open={noQuoteOpen}
+        rfqName={rfq.name}
+        submitting={declining}
+        onClose={() => setNoQuoteOpen(false)}
+        onSubmit={handleDecline}
+      />
     </SupplierPortalLayout>
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 
 import { evaluateSlaTimers } from "../../api/sla";
+import { isSlaVisibleForRole } from "../../config/slaAccess";
 import { useAuthStore } from "../../store/authStore";
 
 /**
@@ -20,7 +21,9 @@ export default function SlaEngine() {
   const running = useRef(false);
 
   useEffect(() => {
-    if (!user) return;
+    // SLA is temporarily Admin-only — only admin sessions advance the SLA queue
+    // (reminders / breaches / escalations). Backend logic is untouched.
+    if (!user || !isSlaVisibleForRole(user.role)) return;
     let cancelled = false;
 
     const runOnce = async () => {
@@ -41,7 +44,7 @@ export default function SlaEngine() {
       window.clearTimeout(kickoff);
       window.clearInterval(id);
     };
-  }, [user]);
+  }, [user, user?.role]);
 
   return null;
 }

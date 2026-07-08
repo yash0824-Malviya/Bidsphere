@@ -48,6 +48,7 @@ export default function ExecutiveKpiRow({
       value: formatCurrencyCompact(kpis.ytdSpend),
       sub: "Purchase invoices · submitted",
       tone: "primary",
+      to: "/p2p/total-spend",
       trend: {
         value: kpis.ytdSpendTrend,
         label: "vs prior year",
@@ -79,7 +80,7 @@ export default function ExecutiveKpiRow({
       value: kpis.activeSuppliers.toLocaleString(),
       sub: "Enabled supplier master",
       tone: "neutral",
-      to: "/suppliers",
+      to: "/suppliers?status=active",
     },
     {
       icon: TrendingUp,
@@ -95,7 +96,7 @@ export default function ExecutiveKpiRow({
       value: kpis.avgCycleDays > 0 ? `${kpis.avgCycleDays}d` : "—",
       sub: `${counts.openRfqs} active RFQs`,
       tone: "primary",
-      to: "/sourcing/rfq",
+      to: "/sourcing/rfq?preset=open",
     },
   ];
 

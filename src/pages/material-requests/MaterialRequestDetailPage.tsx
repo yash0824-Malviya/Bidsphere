@@ -41,6 +41,7 @@ import type { MaterialRequestWorkflowStatus } from "../../types/materialRequestW
 import { canCreateRfqFromMaterialRequest } from "../../api/createRFQFromMaterialRequest";
 import { listTimersForReference } from "../../api/sla";
 import { syncMaterialRequestSla } from "../../api/slaIntegration";
+import { isSlaVisibleForRole } from "../../config/slaAccess";
 import SlaBadge from "../../components/sla/SlaBadge";
 import PageHeader from "../../components/PageHeader";
 import ProcurementTypeBadge from "../../components/ProcurementTypeBadge";
@@ -94,6 +95,10 @@ const MR_BADGE: Record<
     cls: "bg-blue-100 text-blue-700",
   },
   "Procurement Required": {
+    label: "Procurement Required",
+    cls: "bg-orange-100 text-orange-700",
+  },
+  "Forwarded to Procurement": {
     label: "Sent to Procurement",
     cls: "bg-purple-100 text-purple-700",
   },
@@ -191,6 +196,7 @@ function isProcurementInvolved(
     Boolean(mr.custom_procurement_remarks?.trim()) ||
     fulfillment.totals.procurement > 0 ||
     fulfillment.workflowStatus === "Procurement Required" ||
+    fulfillment.workflowStatus === "Forwarded to Procurement" ||
     fulfillment.workflowStatus === "RFQ Created"
   );
 }
@@ -213,6 +219,8 @@ function resolveTimeline(
         case "Admin Review":
           return 1;
         case "Procurement Required":
+          return 1;
+        case "Forwarded to Procurement":
           return 2;
         case "RFQ Created":
           return 3;
@@ -242,7 +250,11 @@ function resolveTimeline(
         case "Under Warehouse Review":
         case "Stock Available":
           return 1;
+        // "Procurement Required" = shortage identified, Warehouse hasn't
+        // clicked "Send to Procurement" yet — still at Warehouse Review.
         case "Procurement Required":
+          return 1;
+        case "Forwarded to Procurement":
           return 2;
         case "RFQ Created":
           return 3;
@@ -440,6 +452,9 @@ export default function MaterialRequestDetailPage() {
   const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const role = user?.role;
+  // SLA is temporarily Admin-only — non-admin users skip SLA sync/fetch and the
+  // SLA badge entirely.
+  const slaVisible = isSlaVisibleForRole(role);
   const { t } = useTranslation();
   // Department users must never see warehouse inventory. The "Available" column
   // and its live stock fetch are gated to warehouse / procurement / admin.
@@ -472,13 +487,13 @@ export default function MaterialRequestDetailPage() {
 
   // Keep the SLA timer for this MR's current stage in sync, then surface it.
   useEffect(() => {
-    if (mr) void syncMaterialRequestSla(mr);
-  }, [mr]);
+    if (mr && slaVisible) void syncMaterialRequestSla(mr);
+  }, [mr, slaVisible]);
 
   const slaTimersQuery = useQuery({
     queryKey: ["sla-timers-ref", "Material Request", name],
     queryFn: () => listTimersForReference("Material Request", name),
-    enabled: !!name && !deleted,
+    enabled: slaVisible && !!name && !deleted,
     staleTime: 30_000,
     refetchInterval: 60_000,
     retry: false,
@@ -513,6 +528,7 @@ export default function MaterialRequestDetailPage() {
     (Boolean(mr.custom_linked_rfq) ||
       Boolean(mr.custom_procurement_remarks?.trim()) ||
       getMaterialRequestWorkflowStatus(mr) === "Procurement Required" ||
+      getMaterialRequestWorkflowStatus(mr) === "Forwarded to Procurement" ||
       getMaterialRequestWorkflowStatus(mr) === "RFQ Created");
 
   const progressQuery = useQuery({
@@ -557,6 +573,13 @@ export default function MaterialRequestDetailPage() {
     queryClient.invalidateQueries({ queryKey: ["mr-dashboard-counts"] });
     queryClient.invalidateQueries({ queryKey: ["mr-dashboard-recent"] });
     queryClient.invalidateQueries({ queryKey: ["mr-dashboard-rows"] });
+    // Forwarding from this page must surface the request in Procurement's
+    // queue immediately too — this key was previously missing here, so a
+    // "Send to Procurement" click from the MR detail page (as opposed to the
+    // Warehouse dashboard/review pages, which already invalidate it) left the
+    // Procurement page showing stale/empty data until an unrelated refetch.
+    queryClient.invalidateQueries({ queryKey: ["mr-procurement-queue"] });
+    queryClient.invalidateQueries({ queryKey: ["warehouse"] });
   };
 
   const submitMutation = useMutation({
@@ -868,7 +891,7 @@ export default function MaterialRequestDetailPage() {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <StageBadge label={stageBadge.label} cls={stageBadge.cls} />
-            {activeSlaTimer ? <SlaBadge timer={activeSlaTimer} /> : null}
+            {slaVisible && activeSlaTimer ? <SlaBadge timer={activeSlaTimer} /> : null}
             {canEditDraft ? (
               <Link
                 to={`/material-requests/new?edit=${encodeURIComponent(mr.name)}`}

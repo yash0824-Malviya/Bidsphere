@@ -74,7 +74,13 @@ export async function syncMaterialRequestSla(
       }
       return;
 
+    // "Procurement Required" = shortage identified, but Warehouse hasn't
+    // clicked "Send to Procurement" yet — the Warehouse Review SLA timer
+    // (started above) keeps running untouched until the actual forward.
     case "Procurement Required":
+      return;
+
+    case "Forwarded to Procurement":
       await completeSlaTimer(MR_DOCTYPE, mr.name, { workflow: "Warehouse Review" });
       await completeSlaTimer(MR_DOCTYPE, mr.name, { workflow: "Material Request" });
       await ensureSlaTimer({

@@ -1,4 +1,4 @@
-import { useLayoutEffect } from "react";
+import { useLayoutEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -9,9 +9,18 @@ import {
   Timer,
 } from "lucide-react";
 
-import { fetchSlaReport, type SlaReportBreakdownRow } from "../../api/sla";
+import {
+  deriveTimerStatus,
+  listAllTimers,
+  parseSlaTime,
+  summarizeTimers,
+  type SlaReportBreakdownRow,
+} from "../../api/sla";
+import { SLA_PRIORITIES, SLA_WORKFLOWS } from "../../config/slaWorkflows";
 import { Skeleton } from "../../components/Skeleton";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
+
+const STATUS_OPTIONS = ["Running", "Due Soon", "Breached", "Completed", "Cancelled"] as const;
 
 function fmtMinutes(min: number): string {
   if (!(min > 0)) return "—";
@@ -31,11 +40,54 @@ export default function SlaReportsPage() {
   }, [layout]);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["sla-report"],
-    queryFn: fetchSlaReport,
+    queryKey: ["sla-report-timers"],
+    queryFn: listAllTimers,
     staleTime: 60_000,
     retry: false,
   });
+
+  const [workflow, setWorkflow] = useState("");
+  const [role, setRole] = useState("");
+  const [priority, setPriority] = useState("");
+  const [status, setStatus] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+
+  const roleOptions = useMemo(() => {
+    const set = new Set<string>();
+    (data ?? []).forEach((t) => t.role && set.add(t.role));
+    return Array.from(set).sort();
+  }, [data]);
+
+  const filtered = useMemo(() => {
+    const rows = data ?? [];
+    const from = fromDate ? new Date(fromDate).getTime() : null;
+    const to = toDate ? new Date(toDate).getTime() + 86_400_000 : null;
+    return rows.filter((t) => {
+      if (workflow && String(t.workflow) !== workflow) return false;
+      if (role && (t.role ?? "") !== role) return false;
+      if (priority && (t.priority ?? "") !== priority) return false;
+      if (status && deriveTimerStatus(t) !== status) return false;
+      if (from != null || to != null) {
+        const started = parseSlaTime(t.start_time);
+        if (started == null) return false;
+        if (from != null && started < from) return false;
+        if (to != null && started > to) return false;
+      }
+      return true;
+    });
+  }, [data, workflow, role, priority, status, fromDate, toDate]);
+
+  const report = useMemo(() => summarizeTimers(filtered), [filtered]);
+
+  const resetFilters = () => {
+    setWorkflow("");
+    setRole("");
+    setPriority("");
+    setStatus("");
+    setFromDate("");
+    setToDate("");
+  };
 
   return (
     <div className="space-y-5">
@@ -51,28 +103,103 @@ export default function SlaReportsPage() {
         </div>
       </div>
 
-      {isLoading || !data ? (
+      <div className="grid gap-3 rounded-xl border border-neutral-200 bg-white p-4 sm:grid-cols-2 lg:grid-cols-6">
+        <FilterSelect label="Workflow" value={workflow} onChange={setWorkflow}>
+          <option value="">All</option>
+          {SLA_WORKFLOWS.map((w) => (
+            <option key={w} value={w}>{w}</option>
+          ))}
+        </FilterSelect>
+        <FilterSelect label="Role" value={role} onChange={setRole}>
+          <option value="">All</option>
+          {roleOptions.map((r) => (
+            <option key={r} value={r}>{r}</option>
+          ))}
+        </FilterSelect>
+        <FilterSelect label="Priority" value={priority} onChange={setPriority}>
+          <option value="">All</option>
+          {SLA_PRIORITIES.filter((p) => p !== "All").map((p) => (
+            <option key={p} value={p}>{p}</option>
+          ))}
+        </FilterSelect>
+        <FilterSelect label="Status" value={status} onChange={setStatus}>
+          <option value="">All</option>
+          {STATUS_OPTIONS.map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </FilterSelect>
+        <label className="text-sm">
+          <span className="mb-1 block font-medium text-neutral-600">From</span>
+          <input
+            type="date"
+            className="input-field"
+            value={fromDate}
+            onChange={(e) => setFromDate(e.target.value)}
+          />
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block font-medium text-neutral-600">To</span>
+          <input
+            type="date"
+            className="input-field"
+            value={toDate}
+            onChange={(e) => setToDate(e.target.value)}
+          />
+        </label>
+        <div className="flex items-end">
+          <button type="button" className="btn-secondary" onClick={resetFilters}>
+            Reset
+          </button>
+        </div>
+      </div>
+
+      {isLoading ? (
         <Skeleton className="h-40 w-full" />
       ) : (
         <>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
-            <Kpi icon={ListChecks} accent="bg-slate-50 text-slate-600" label="Total SLAs" value={String(data.total)} />
-            <Kpi icon={CheckCircle2} accent="bg-emerald-50 text-emerald-600" label="Completed On Time" value={String(data.completedOnTime)} />
-            <Kpi icon={AlertTriangle} accent="bg-rose-50 text-rose-600" label="Breached" value={String(data.breached)} />
-            <Kpi icon={Timer} accent="bg-amber-50 text-amber-600" label="Avg Resolution" value={fmtMinutes(data.avgResolutionMinutes)} />
-            <Kpi icon={Gauge} accent="bg-primary/10 text-primary" label="Compliance" value={`${data.compliancePct}%`} />
-            <Kpi icon={Clock} accent="bg-blue-50 text-blue-600" label="Open (Run/Due)" value={String(data.running + data.dueSoon)} />
+            <Kpi icon={ListChecks} accent="bg-slate-50 text-slate-600" label="Total SLAs" value={String(report.total)} />
+            <Kpi icon={CheckCircle2} accent="bg-emerald-50 text-emerald-600" label="Completed On Time" value={String(report.completedOnTime)} />
+            <Kpi icon={AlertTriangle} accent="bg-rose-50 text-rose-600" label="Breached" value={String(report.breached)} />
+            <Kpi icon={Timer} accent="bg-amber-50 text-amber-600" label="Avg Resolution" value={fmtMinutes(report.avgResolutionMinutes)} />
+            <Kpi icon={Gauge} accent="bg-primary/10 text-primary" label="Compliance" value={`${report.compliancePct}%`} />
+            <Kpi icon={Clock} accent="bg-blue-50 text-blue-600" label="Open (Run/Due)" value={String(report.running + report.dueSoon)} />
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
-            <BreakdownTable title="By Workflow" rows={data.byWorkflow} />
-            <BreakdownTable title="By Department" rows={data.byDepartment} />
-            <BreakdownTable title="By Role" rows={data.byRole} />
-            <BreakdownTable title="By User" rows={data.byUser} />
+            <BreakdownTable title="By Workflow" rows={report.byWorkflow} />
+            <BreakdownTable title="By Role" rows={report.byRole} />
+            <BreakdownTable title="By Priority" rows={report.byPriority} />
+            <BreakdownTable title="By Status" rows={report.byStatus} />
           </div>
         </>
       )}
     </div>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  children,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="text-sm">
+      <span className="mb-1 block font-medium text-neutral-600">{label}</span>
+      <select
+        className="input-field"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {children}
+      </select>
+    </label>
   );
 }
 

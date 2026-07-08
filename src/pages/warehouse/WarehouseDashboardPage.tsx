@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import toast from "react-hot-toast";
 import type { LucideIcon } from "lucide-react";
 import {
   Activity,
@@ -18,24 +19,22 @@ import {
 } from "lucide-react";
 
 import {
+  forwardToProcurement,
   getInventorySummary,
   getIssuedMaterials,
   getPendingMaterialRequests,
-  type WarehouseMaterialRequest,
+  getWarehouseProcurementRequiredRequests,
+  invalidateForwardCaches,
+  selectProcurementRequiredRows,
+  selectReadyToIssueRows,
 } from "../../services/warehouseService";
 import { getIncomingPurchaseOrders, getPurchaseReceipts } from "../../api/purchasing";
-import {
-  fetchProcurementQueue,
-  getMaterialRequestProcurementType,
-  getMaterialRequestWorkflowStatus,
-} from "../../api/materialRequestWorkflow";
-import { computeRequestFulfillment } from "../../utils/materialRequestFulfillment";
-import type { MaterialRequestProcurementType } from "../../types/materialRequestWorkflow";
+import { fetchProcurementQueue } from "../../api/materialRequestWorkflow";
 import { syncMaterialRequestSlaBatch } from "../../api/slaIntegration";
+import { useSlaVisible } from "../../hooks/useSlaVisible";
 import SlaCountdownWidget from "../../components/sla/SlaCountdownWidget";
 import ErrorState from "../../components/ErrorState";
 import PageHeader from "../../components/PageHeader";
-import ProcurementTypeBadge from "../../components/ProcurementTypeBadge";
 import { useAuthStore } from "../../store/authStore";
 import { formatDate, formatDateTime } from "../../utils/format";
 
@@ -55,59 +54,14 @@ interface ActivityEntry {
   ts: string;
 }
 
-interface ReadyToIssueRow {
-  name: string;
-  department: string;
-  requestedBy: string;
-  totalItems: number;
-  requestedQty: number;
-  availableQty: number;
-  uom: string;
-  requiredDate: string;
-  priority: string;
-  procurementType: MaterialRequestProcurementType;
-}
-
-interface ProcurementRow {
-  name: string;
-  procurementType: MaterialRequestProcurementType;
-  department: string;
-  itemCount: number;
-  /** Shortage (forward) qty — only meaningful for Direct procurement. */
-  shortageQty: number;
-  priority: string;
-  forwardDate: string;
-  status: string;
-  rfqId: string | null;
-}
-
-/** Reshape a ready-to-issue Material Request into a Ready-to-Issue table row. */
-function buildReadyRow(mr: WarehouseMaterialRequest): ReadyToIssueRow {
-  const items = mr.items ?? [];
-  const requestedQty = items.reduce((acc, i) => acc + (i.required_qty || 0), 0);
-  const availableQty = items.reduce(
-    (acc, i) => acc + Math.min(i.available_qty, i.required_qty),
-    0
-  );
-  const uom = items[0]?.uom || "Nos";
-  return {
-    name: mr.name,
-    department: mr.department || "—",
-    requestedBy: mr.requested_by || "—",
-    totalItems: mr.items_count || items.length,
-    requestedQty,
-    availableQty,
-    uom,
-    requiredDate: mr.required_date || "",
-    priority: mr.priority || "Medium",
-    procurementType: mr.procurement_type,
-  };
-}
-
 export default function WarehouseDashboardPage() {
   const navigate = useNavigate();
-  const role = useAuthStore((s) => s.user?.role);
+  const queryClient = useQueryClient();
+  const user = useAuthStore((s) => s.user);
+  const role = user?.role;
   const canLoad = role === "warehouse" || role === "admin";
+  const slaVisible = useSlaVisible();
+  const [forwardingMr, setForwardingMr] = useState<string | null>(null);
 
   // All widgets fetch in parallel and share query keys with their detail pages
   // (React Query dedupes + caches — no duplicate ERPNext calls). Every query
@@ -116,6 +70,16 @@ export default function WarehouseDashboardPage() {
   const pendingQuery = useQuery({
     queryKey: ["warehouse", "pending-requests"],
     queryFn: getPendingMaterialRequests,
+    enabled: canLoad,
+    retry: false,
+    refetchOnWindowFocus: true,
+  });
+  // Genuinely-persisted "Procurement Required" MRs (recorded via the detailed
+  // review page) — concatenated with `pending` below so the queue covers both
+  // the quick-action-inferred AND the detail-review-recorded shortages.
+  const procurementRequiredPersistedQuery = useQuery({
+    queryKey: ["warehouse", "procurement-required-persisted"],
+    queryFn: getWarehouseProcurementRequiredRequests,
     enabled: canLoad,
     retry: false,
     refetchOnWindowFocus: true,
@@ -153,9 +117,10 @@ export default function WarehouseDashboardPage() {
 
   // Ensure SLA timers track the procurement-facing queue the warehouse manages.
   useEffect(() => {
+    if (!slaVisible) return;
     const queue = procurementQueueQuery.data;
     if (queue && queue.length > 0) void syncMaterialRequestSlaBatch(queue);
-  }, [procurementQueueQuery.data]);
+  }, [procurementQueueQuery.data, slaVisible]);
   const recentGrnQuery = useQuery({
     queryKey: ["warehouse", "recent-grn"],
     queryFn: () =>
@@ -170,6 +135,37 @@ export default function WarehouseDashboardPage() {
     refetchOnWindowFocus: true,
   });
 
+  // "Send to Procurement" — forwards a shortage MR, then invalidates every
+  // dependent cache so the request disappears from the warehouse queue and
+  // appears instantly in the Procurement queue/dashboard (single round-trip).
+  const forwardMutation = useMutation({
+    mutationFn: (mrName: string) =>
+      forwardToProcurement(mrName, user?.email || user?.name),
+    onMutate: (mrName: string) => setForwardingMr(mrName),
+    onSettled: () => setForwardingMr(null),
+    onSuccess: async (_res, mrName) => {
+      toast.success(`${mrName} sent to Procurement.`);
+      // Single source of truth = ERPNext. Invalidate every dependent cache,
+      // then await refetch of the two queues this dashboard renders so the
+      // forwarded MR leaves "Procurement Required" and the queue count updates
+      // immediately — no page reload.
+      // eslint-disable-next-line no-console
+      console.log("[Warehouse] Refreshing list", { mr: mrName });
+      invalidateForwardCaches(queryClient);
+      await Promise.all([
+        pendingQuery.refetch(),
+        procurementRequiredPersistedQuery.refetch(),
+        procurementQueueQuery.refetch(),
+      ]);
+    },
+    onError: (err: unknown, mrName) =>
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : `Could not send ${mrName} to Procurement.`
+      ),
+  });
+
   const allFailed =
     canLoad &&
     pendingQuery.isError &&
@@ -179,12 +175,21 @@ export default function WarehouseDashboardPage() {
 
   const handleRetry = useCallback(() => {
     void pendingQuery.refetch();
+    void procurementRequiredPersistedQuery.refetch();
     void inventoryQuery.refetch();
     void issuedQuery.refetch();
     void procurementQueueQuery.refetch();
     void incomingQuery.refetch();
     void recentGrnQuery.refetch();
-  }, [pendingQuery, inventoryQuery, issuedQuery, procurementQueueQuery, incomingQuery, recentGrnQuery]);
+  }, [
+    pendingQuery,
+    procurementRequiredPersistedQuery,
+    inventoryQuery,
+    issuedQuery,
+    procurementQueueQuery,
+    incomingQuery,
+    recentGrnQuery,
+  ]);
 
   /* ─── Derived data (live ERPNext) ─── */
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -193,67 +198,25 @@ export default function WarehouseDashboardPage() {
   const issued = issuedQuery.data ?? [];
   const incoming = incomingQuery.data ?? [];
 
-  // READY TO ISSUE — Direct Material Requests whose warehouse review is done and
-  // every requested line is fully in stock (available_qty ≥ required_qty), that
-  // haven't been issued yet. `pending` already excludes issued/completed MRs
-  // (WAREHOUSE_PENDING_STATUSES) and is Direct-only, but we assert both here so
-  // the widget and its KPI count are derived from ONE dataset.
-  const readyToIssueMRs = useMemo<ReadyToIssueRow[]>(() => {
-    return pending
-      .filter((mr) => {
-        if (mr.procurement_type !== "Direct") return false;
-        const items = mr.items ?? [];
-        if (items.length === 0) return false;
-        const hasDemand = items.some((i) => i.required_qty > 0);
-        const allInStock = items.every((i) => i.available_qty >= i.required_qty);
-        return hasDemand && allInStock;
-      })
-      .map((mr) => buildReadyRow(mr));
-  }, [pending]);
+  // Both queues are derived from the SAME `pending` dataset through the SAME
+  // shared selectors used by the "View All" pages — so a card and its list page
+  // can never show different records.
+  const readyToIssueMRs = useMemo(
+    () => selectReadyToIssueRows(pending),
+    [pending]
+  );
+  const procurementRequiredMRs = useMemo(
+    () =>
+      selectProcurementRequiredRows([
+        ...pending,
+        ...(procurementRequiredPersistedQuery.data ?? []),
+      ]),
+    [pending, procurementRequiredPersistedQuery.data]
+  );
 
-  // PROCUREMENT REQUIRED — the union of:
-  //   • DIRECT   MRs whose warehouse review found a shortage (Available <
-  //              Requested), now in "Procurement Required" / "RFQ Created".
-  //   • INDIRECT MRs approved by Admin, now waiting for Procurement (same
-  //              statuses — no warehouse stock step). Shortage isn't applicable.
-  // Both come from the SAME `fetchProcurementQueue` fetch, so the widget rows
-  // and the KPI count can never disagree.
-  const procurementRows = useMemo<ProcurementRow[]>(() => {
-    const queue = procurementQueueQuery.data ?? [];
-    const rows: ProcurementRow[] = [];
-    for (const mr of queue) {
-      const procurementType = getMaterialRequestProcurementType(mr);
-      const fulfillment = computeRequestFulfillment(mr);
-      const shortageLines = fulfillment.items.filter((i) => i.procurement > 0);
-      const shortageQty = fulfillment.totals.procurement;
-
-      // Direct requests must have a genuine shortage to require procurement.
-      // Indirect requests are admin-approved and always proceed to procurement,
-      // regardless of any (usually absent) warehouse shortage snapshot.
-      if (procurementType === "Direct" && shortageQty <= 0) continue;
-
-      const rec = mr as unknown as Record<string, unknown>;
-      rows.push({
-        name: mr.name,
-        procurementType,
-        department:
-          (rec.custom_department as string) ||
-          (rec.department as string) ||
-          "General",
-        itemCount:
-          shortageLines.length || fulfillment.items.length || 0,
-        shortageQty,
-        priority: (rec.custom_priority as string) || "Medium",
-        forwardDate:
-          (rec.modified as string)?.split("T")[0] ||
-          (rec.transaction_date as string) ||
-          "",
-        status: getMaterialRequestWorkflowStatus(mr),
-        rfqId: (rec.custom_linked_rfq as string) || null,
-      });
-    }
-    return rows.sort((a, b) => b.forwardDate.localeCompare(a.forwardDate));
-  }, [procurementQueueQuery.data]);
+  // Already-forwarded queue — kept only for the "MR Forwarded to Procurement"
+  // activity feed and SLA sync (the widget above now shows pre-forward MRs).
+  const forwardedQueue = procurementQueueQuery.data ?? [];
 
   const kpis = useMemo(() => {
     const partiallyIssued = pending.filter((mr) => {
@@ -268,11 +231,11 @@ export default function WarehouseDashboardPage() {
       // KPIs are the length of the EXACT arrays rendered by the widgets below.
       readyToIssue: readyToIssueMRs.length,
       issuedToday: issued.filter((s) => s.issue_date === todayIso).length,
-      procurementRequired: procurementRows.length,
+      procurementRequired: procurementRequiredMRs.length,
       partiallyIssued,
       lowStock: inventory.filter((i) => i.status !== "In Stock").length,
     };
-  }, [pending, issued, readyToIssueMRs, procurementRows, inventory, todayIso]);
+  }, [pending, issued, readyToIssueMRs, procurementRequiredMRs, inventory, todayIso]);
 
   const lowStockItems = useMemo(
     () => inventory.filter((i) => i.status !== "In Stock"),
@@ -301,21 +264,28 @@ export default function WarehouseDashboardPage() {
         ts: (g as { creation?: string }).creation ?? g.posting_date ?? "",
       });
     }
-    for (const r of procurementRows) {
+    for (const mr of forwardedQueue) {
+      const rec = mr as unknown as Record<string, unknown>;
       entries.push({
-        id: `fwd-${r.name}`,
+        id: `fwd-${mr.name}`,
         kind: "forwarded",
         label: "MR Forwarded to Procurement",
-        subject: r.name,
-        user: r.department,
-        ts: r.forwardDate,
+        subject: mr.name,
+        user:
+          (rec.custom_department as string) ||
+          (rec.department as string) ||
+          "Procurement",
+        ts:
+          (rec.modified as string)?.split("T")[0] ||
+          (rec.transaction_date as string) ||
+          "",
       });
     }
     return entries
       .filter((e) => e.ts)
       .sort((a, b) => b.ts.localeCompare(a.ts))
       .slice(0, 8);
-  }, [issued, recentGrnQuery.data, procurementRows]);
+  }, [issued, recentGrnQuery.data, forwardedQueue]);
 
   if (allFailed) {
     return (
@@ -405,8 +375,8 @@ export default function WarehouseDashboardPage() {
           accent="bg-indigo-50 text-indigo-600"
           label="Procurement Required"
           value={kpis.procurementRequired}
-          desc="Direct shortages + indirect"
-          loading={procurementQueueQuery.isLoading}
+          desc="Shortages to send"
+          loading={pendingQuery.isLoading || procurementRequiredPersistedQuery.isLoading}
           to="/warehouse/material-requests/forwarded"
         />
         <KpiCard
@@ -484,12 +454,11 @@ export default function WarehouseDashboardPage() {
             head={[
               "MR Number",
               "Department",
-              "Requested By",
-              "Items",
-              "Requested",
-              "Available",
-              "Required",
+              "Warehouse",
+              "Required Date",
               "Priority",
+              "Items",
+              "Ready Qty",
               "",
             ]}
           >
@@ -497,16 +466,7 @@ export default function WarehouseDashboardPage() {
               <tr key={mr.name} className="hover:bg-slate-50/60">
                 <td className="py-2 pr-2 font-semibold text-slate-800">{mr.name}</td>
                 <td className="py-2 px-2 text-slate-600">{mr.department}</td>
-                <td className="py-2 px-2 text-slate-600">{mr.requestedBy}</td>
-                <td className="py-2 px-2 tabular-nums text-slate-600">
-                  {mr.totalItems}
-                </td>
-                <td className="py-2 px-2 tabular-nums text-slate-600">
-                  {mr.requestedQty} {mr.uom}
-                </td>
-                <td className="py-2 px-2 tabular-nums font-semibold text-emerald-700">
-                  {mr.availableQty} {mr.uom}
-                </td>
+                <td className="py-2 px-2 text-slate-600">{mr.warehouse}</td>
                 <td className="py-2 px-2 text-slate-500">
                   {mr.requiredDate ? formatDate(mr.requiredDate) : "—"}
                 </td>
@@ -519,6 +479,12 @@ export default function WarehouseDashboardPage() {
                     {mr.priority}
                   </span>
                 </td>
+                <td className="py-2 px-2 tabular-nums text-slate-600">
+                  {mr.totalItems}
+                </td>
+                <td className="py-2 px-2 tabular-nums font-semibold text-emerald-700">
+                  {mr.readyQty} {mr.uom}
+                </td>
                 <td className="py-2 pl-2 text-right">
                   <RowButton
                     tone="primary"
@@ -528,7 +494,7 @@ export default function WarehouseDashboardPage() {
                       )
                     }
                   >
-                    Issue Material
+                    Issue Now
                   </RowButton>
                 </td>
               </tr>
@@ -577,30 +543,27 @@ export default function WarehouseDashboardPage() {
           icon={Truck}
           title="Procurement Required"
           to="/warehouse/material-requests/forwarded"
-          loading={procurementQueueQuery.isLoading}
-          empty={procurementRows.length === 0}
+          loading={pendingQuery.isLoading || procurementRequiredPersistedQuery.isLoading}
+          empty={procurementRequiredMRs.length === 0}
           emptyText="No material requests awaiting procurement."
         >
           <MiniTable
             head={[
               "MR Number",
-              "Type",
               "Department",
-              "Shortage",
+              "Required Date",
               "Priority",
-              "Status",
+              "Missing Items",
+              "Required Qty",
               "",
             ]}
           >
-            {procurementRows.slice(0, 5).map((r) => (
+            {procurementRequiredMRs.slice(0, 5).map((r) => (
               <tr key={r.name} className="hover:bg-slate-50/60">
                 <td className="py-2 pr-2 font-semibold text-slate-800">{r.name}</td>
-                <td className="py-2 px-2">
-                  <ProcurementTypeBadge type={r.procurementType} />
-                </td>
                 <td className="py-2 px-2 text-slate-600">{r.department}</td>
-                <td className="py-2 px-2 tabular-nums font-semibold text-orange-700">
-                  {r.procurementType === "Direct" ? r.shortageQty : "—"}
+                <td className="py-2 px-2 text-slate-500">
+                  {r.requiredDate ? formatDate(r.requiredDate) : "—"}
                 </td>
                 <td className="py-2 px-2">
                   <span
@@ -611,32 +574,22 @@ export default function WarehouseDashboardPage() {
                     {r.priority}
                   </span>
                 </td>
-                <td className="py-2 px-2">
-                  <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
-                    {r.status}
-                  </span>
+                <td className="py-2 px-2 tabular-nums text-slate-600">
+                  {r.missingItems}
+                </td>
+                <td className="py-2 px-2 tabular-nums font-semibold text-orange-700">
+                  {r.requiredQty} {r.uom}
                 </td>
                 <td className="py-2 pl-2 text-right">
-                  {r.rfqId ? (
-                    <RowButton
-                      onClick={() =>
-                        navigate(`/sourcing/rfq/${encodeURIComponent(r.rfqId as string)}`)
-                      }
-                    >
-                      View RFQ
-                    </RowButton>
-                  ) : (
-                    <RowButton
-                      tone="primary"
-                      onClick={() =>
-                        navigate(
-                          `/sourcing/rfq/new?mr=${encodeURIComponent(r.name)}`
-                        )
-                      }
-                    >
-                      Create RFQ
-                    </RowButton>
-                  )}
+                  <RowButton
+                    tone="primary"
+                    disabled={forwardMutation.isPending && forwardingMr === r.name}
+                    onClick={() => forwardMutation.mutate(r.name)}
+                  >
+                    {forwardMutation.isPending && forwardingMr === r.name
+                      ? "Sending…"
+                      : "Send to Procurement"}
+                  </RowButton>
                 </td>
               </tr>
             ))}
@@ -913,19 +866,23 @@ function RowButton({
   children,
   onClick,
   tone = "default",
+  disabled = false,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   tone?: "default" | "primary";
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       className={
-        tone === "primary"
+        (tone === "primary"
           ? "rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-primary-700"
-          : "rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+          : "rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50") +
+        (disabled ? " cursor-not-allowed opacity-60" : "")
       }
     >
       {children}

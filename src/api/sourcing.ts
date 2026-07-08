@@ -25,7 +25,10 @@ import {
   buildResourceUrl,
   buildListConfig,
   erpnext,
+  getExactCount,
   COMPANY as DEFAULT_COMPANY,
+  type Filter,
+  type PagedListResult,
 } from "./erpnext";
 import type { RFQ, RFQItem, SupplierQuotation } from "../types/erpnext";
 import { assertSuppliersActive } from "./supplier";
@@ -191,6 +194,42 @@ export async function getRFQs(): Promise<RFQListRow[]> {
     order_by: "modified desc, name desc",
     limit_page_length: 50,
   });
+}
+
+/**
+ * Server-side paginated RFQ list (`limit_start`/`limit_page_length`) plus the
+ * exact total record count, for the "All RFQs" page's pagination bar.
+ */
+export async function getRFQsPaged(options: {
+  page: number;
+  pageSize: number;
+  order_by?: string;
+  filters?: Filter[];
+}): Promise<PagedListResult<RFQListRow>> {
+  const { page, pageSize, order_by = "modified desc, name desc", filters } = options;
+  const safePage = Math.max(1, Math.floor(page) || 1);
+  const safePageSize = Math.max(1, Math.floor(pageSize) || 10);
+  const limit_start = (safePage - 1) * safePageSize;
+
+  const [data, total_records] = await Promise.all([
+    getList<RFQListRow>(RFQ_DOCTYPE, {
+      fields: [...SAFE_RFQ_FIELDS],
+      filters,
+      order_by,
+      limit_start,
+      limit_page_length: safePageSize,
+    }),
+    getExactCount(RFQ_DOCTYPE, filters),
+  ]);
+
+  const total_pages = Math.max(1, Math.ceil(total_records / safePageSize));
+  return {
+    data,
+    total_records,
+    total_pages,
+    current_page: Math.min(safePage, total_pages),
+    page_size: safePageSize,
+  };
 }
 
 /** Fetch a single RFQ (with `items` and `suppliers` child tables included). */
@@ -1283,12 +1322,22 @@ export interface ItemSearchResult {
 export interface ItemGroupOption {
   name: string;
   item_group_name?: string;
+  /** ERPNext tree flag: 1 = parent/group node, 0 = leaf. */
+  is_group?: number;
+  /** Parent node in the Item Group tree (empty for the root). */
+  parent_item_group?: string;
 }
 
 /** Filters for inventory item lookups (extensible for warehouse scoping). */
 export interface GetItemsOptions {
   search?: string;
   itemGroup?: string;
+  /**
+   * Multiple item groups (e.g. a parent group plus all its descendant groups).
+   * Takes precedence over `itemGroup` when non-empty — items are matched with an
+   * `in` filter so a parent selection surfaces items from every child group.
+   */
+  itemGroups?: string[];
   limit?: number;
 }
 
@@ -1312,20 +1361,63 @@ function normalizeGetItemsArgs(
   return { limit: 20, ...searchOrOptions };
 }
 
-/** Leaf item groups from the Inventory master. */
-export async function getItemGroups(): Promise<ItemGroupOption[]> {
-  const raw = await apiGet<MaybeEnveloped<ItemGroupOption[]>>(
+export interface GetItemGroupsOptions {
+  /**
+   * Return the entire Item Group tree (parents + leaves) so callers can work
+   * with the hierarchy (parent-only dropdowns, descendant resolution). When
+   * false (default) only leaf groups are returned — the groups that directly
+   * hold items — preserving the classic single-level picker behaviour.
+   */
+  includeTree?: boolean;
+}
+
+/**
+ * Item Groups from the Inventory master. By default returns leaf groups only
+ * (the groups that hold items). Pass `{ includeTree: true }` to get the whole
+ * tree with `is_group` / `parent_item_group` so a caller can show only parent
+ * groups and resolve a parent's descendant groups for item lookups.
+ */
+interface RawItemGroupRow {
+  name: string;
+  item_group_name?: string;
+  is_group?: number | string;
+  parent_item_group?: string;
+}
+
+export async function getItemGroups(
+  options?: GetItemGroupsOptions
+): Promise<ItemGroupOption[]> {
+  const includeTree = options?.includeTree ?? false;
+  const params: Record<string, string | number> = {
+    fields: JSON.stringify([
+      "name",
+      "item_group_name",
+      "is_group",
+      "parent_item_group",
+    ]),
+    limit_page_length: 500,
+    order_by: "item_group_name asc",
+  };
+  if (!includeTree) {
+    params.filters = JSON.stringify([["is_group", "=", 0]]);
+  }
+  const raw = await apiGet<MaybeEnveloped<RawItemGroupRow[]>>(
     buildResourceUrl("Item Group"),
-    {
-      params: {
-        filters: JSON.stringify([["is_group", "=", 0]]),
-        fields: JSON.stringify(["name", "item_group_name"]),
-        limit_page_length: 200,
-        order_by: "item_group_name asc",
-      },
-    }
+    { params }
   );
-  return unwrap<ItemGroupOption[]>(raw, []);
+  const rows = unwrap<RawItemGroupRow[]>(raw, []);
+
+  // Coerce `is_group` to a reliable number — some ERPNext responses return it
+  // as a string ("1"/"0"), which would break strict `=== 1` parent checks.
+  return rows.map<ItemGroupOption>((g) => ({
+    name: g.name,
+    item_group_name: g.item_group_name,
+    is_group:
+      g.is_group === undefined || g.is_group === null
+        ? undefined
+        : Number(g.is_group),
+    parent_item_group: g.parent_item_group || undefined,
+  }));
 }
 
 /**
@@ -1339,13 +1431,16 @@ export async function getItems(
   const opts = normalizeGetItemsArgs(searchOrOptions, limit);
   const trimmed = (opts.search ?? "").trim();
 
-  const filters: Array<[string, string, string | number]> = [
+  const filters: Array<[string, string, string | number | string[]]> = [
     ["disabled", "=", 0],
   ];
   if (trimmed) {
     filters.push(["item_name", "like", `%${trimmed}%`]);
   }
-  if (opts.itemGroup) {
+  // Multiple groups (parent + descendants) take precedence over a single group.
+  if (opts.itemGroups && opts.itemGroups.length > 0) {
+    filters.push(["item_group", "in", opts.itemGroups]);
+  } else if (opts.itemGroup) {
     filters.push(["item_group", "=", opts.itemGroup]);
   }
 

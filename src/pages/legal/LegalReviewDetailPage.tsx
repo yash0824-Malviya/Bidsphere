@@ -43,6 +43,7 @@ import { getLatestAnalysisSnapshot } from "../../api/supplierScoringResults";
 import { useAuthStore } from "../../store/authStore";
 import { formatCurrency, formatDate } from "../../utils/format";
 import { Skeleton } from "../../components/Skeleton";
+import SlaStageBadge from "../../components/sla/SlaStageBadge";
 import type { RFQ, SupplierQuotation, AIRecommendation } from "../../types/erpnext";
 
 /**
@@ -476,7 +477,15 @@ export default function LegalReviewDetailPage() {
               </p>
             </div>
           </div>
-          <LegalStatusBadge status={currentLegalStatus} />
+          <div className="flex items-center gap-2">
+            <SlaStageBadge
+              workflow="Legal Review"
+              referenceDoctype="Request for Quotation"
+              referenceName={rfq.name}
+              open={currentLegalStatus === "Pending"}
+            />
+            <LegalStatusBadge status={currentLegalStatus} />
+          </div>
         </div>
       </div>
 

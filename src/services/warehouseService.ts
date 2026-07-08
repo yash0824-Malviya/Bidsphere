@@ -1,3 +1,5 @@
+import type { QueryClient } from "@tanstack/react-query";
+
 import {
   normalizeWorkflowStatus,
   resolveProcurementType,
@@ -108,6 +110,9 @@ import {
   forwardMaterialRequestToProcurement,
   rejectMaterialRequest as rejectMaterialRequestWorkflow,
   listMaterialRequestsWorkflow,
+  getMaterialRequestProcurementType,
+  parseForwardedItemsFromMr,
+  WAREHOUSE_PENDING_STATUSES,
 } from "../api/materialRequestWorkflow";
 import { fetchWarehouseStockSummary } from "../api/warehouseStock";
 import { getMaterialRequest } from "../api/purchasing";
@@ -156,13 +161,12 @@ function workflowStatusFromStandardFields(mr: any): MaterialRequestWorkflowStatu
       ? "Material Issued"
       : "Completed";
   }
-  if (mr.material_request_type === "Purchase") {
-    return "Procurement Required";
-  }
-  if (docstatus === 1 && mr.material_request_type === "Material Issue") {
-    return "Under Warehouse Review";
-  }
-  if (docstatus === 1) return "Submitted";
+  // This fallback only runs when `custom_bidsphere_status` is entirely
+  // unavailable/unset, so it has no visibility into whether Warehouse has
+  // reviewed the request yet. A submitted MR must therefore default to
+  // "Under Warehouse Review" — "Procurement Required" is only ever written by
+  // the explicit warehouse "no stock" / "Send to Procurement" actions.
+  if (docstatus === 1) return "Under Warehouse Review";
   return "Draft";
 }
 
@@ -185,9 +189,37 @@ export async function getPendingMaterialRequests(): Promise<WarehouseMaterialReq
   const detailResults = await Promise.allSettled(
     rawList.map((row) => getMaterialRequest(row.name))
   );
-  const details = detailResults.map((result, idx) =>
+  const detailsRaw = detailResults.map((result, idx) =>
     result.status === "fulfilled" ? result.value : rawList[idx]
   );
+
+  // Exclude anything already forwarded to Procurement (or otherwise past the
+  // warehouse stage). The single-doc detail carries custom_bidsphere_status,
+  // custom_forwarded_to_procurement and the remarks tag reliably (unlike the
+  // list query, whose custom-field inclusion is best-effort), so a forwarded MR
+  // can never leak back into the warehouse "Ready to Issue" / "Procurement
+  // Required" queues. This is the warehouse side of "forwarded_to_procurement
+  // == 0 OR procurement_status != Forwarded".
+  const details = detailsRaw.filter((mr: any) => {
+    const status =
+      normalizeWorkflowStatus(mr.custom_bidsphere_status) ||
+      workflowStatusFromStandardFields(mr);
+    const forwardedFlag = Number(mr.custom_forwarded_to_procurement) === 1;
+    const forwardedTag = /\[BidSphere:Forwarded:/.test(
+      String(mr.custom_warehouse_remarks ?? mr.remarks ?? "")
+    );
+    const keep =
+      WAREHOUSE_PENDING_STATUSES.includes(status) &&
+      !forwardedFlag &&
+      !forwardedTag;
+    if (!keep) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[Warehouse] Excluding ${mr.name} from pending queue (status=${status}, forwarded=${forwardedFlag || forwardedTag}).`
+      );
+    }
+    return keep;
+  });
 
   const mappedResults = await Promise.allSettled(
     details.map(async (mr: any) => {
@@ -240,6 +272,88 @@ export async function getPendingMaterialRequests(): Promise<WarehouseMaterialReq
         r.status === "fulfilled"
     )
     .map((r) => r.value);
+}
+
+/**
+ * Genuinely-persisted "Procurement Required" Material Requests — the
+ * warehouse has already reviewed these and ERPNext records a real shortage
+ * (`custom_bidsphere_status = "Procurement Required"`), but nobody has
+ * clicked "Send to Procurement" yet (`custom_forwarded_to_procurement` is
+ * unset). Item lines come from the `[BidSphere:ForwardedItems:...]` snapshot
+ * captured at review time — NOT a fresh live stock check — since the review
+ * decision is frozen. Concatenate this with `getPendingMaterialRequests()`
+ * before calling `selectProcurementRequiredRows` so BOTH the dashboard
+ * quick-action-inferred shortages AND the detailed-review-recorded ones show
+ * up in the same "Procurement Required" queue. Never throws.
+ */
+export async function getWarehouseProcurementRequiredRequests(): Promise<
+  WarehouseMaterialRequest[]
+> {
+  let rows: Awaited<ReturnType<typeof listMaterialRequestsWorkflow>>;
+  try {
+    rows = await listMaterialRequestsWorkflow({
+      docstatus: 1,
+      materialRequestType: "Material Issue",
+      workflowStatus: "Procurement Required",
+      limit: 200,
+    });
+  } catch (err) {
+    logWidgetFailure("Procurement Required (persisted)", err);
+    return [];
+  }
+
+  const notForwarded = rows
+    .filter((mr) => getMaterialRequestProcurementType(mr) === "Direct")
+    // Defensive: never surface an already-forwarded record even if the
+    // status field momentarily lags behind the forwarded flag.
+    .filter((mr) => Number(mr.custom_forwarded_to_procurement) !== 1);
+
+  return notForwarded.map((mr) => {
+    const forwardedItems = parseForwardedItemsFromMr(mr);
+    const items: WarehouseMaterialRequestItem[] =
+      forwardedItems.length > 0
+        ? forwardedItems.map((fi) => {
+            const required = fi.requested_qty ?? fi.forward_qty ?? 0;
+            const available =
+              fi.issued_qty ?? Math.max(0, required - (fi.forward_qty ?? 0));
+            return {
+              item_code: fi.item_code,
+              description: fi.item_name ?? fi.item_code,
+              required_qty: required,
+              available_qty: available,
+              uom: fi.uom ?? "Nos",
+              warehouse: fi.warehouse || undefined,
+              status:
+                available >= required
+                  ? ("Available" as const)
+                  : available > 0
+                    ? ("Partial Stock" as const)
+                    : ("Out of Stock" as const),
+            };
+          })
+        : (mr.items || []).map((item: any) => ({
+            item_code: item.item_code,
+            description: item.description || item.item_name || item.item_code,
+            required_qty: item.qty || 0,
+            available_qty: 0,
+            uom: item.uom || "Nos",
+            warehouse: item.warehouse || undefined,
+            status: "Out of Stock" as const,
+          }));
+
+    return {
+      name: mr.name,
+      department: mr.custom_department || mr.department || "General",
+      requested_by: mr.custom_requested_by || mr.owner || "System",
+      request_date: mr.transaction_date || mr.modified?.split("T")[0] || "",
+      required_date: mr.schedule_date || "",
+      priority: mr.custom_priority || "Medium",
+      status: "Procurement Required",
+      procurement_type: getMaterialRequestProcurementType(mr),
+      items_count: items.length,
+      items,
+    };
+  });
 }
 
 export async function getMaterialRequestDetail(
@@ -633,7 +747,7 @@ export async function getMaterialIssueDetail(
 export async function getForwardedRequests(): Promise<WarehouseForwardedRequest[]> {
   try {
     const forwarded = await listMaterialRequestsWorkflow({
-      workflowStatus: "Procurement Required",
+      workflowStatus: "Forwarded to Procurement",
       limit: 100,
     });
 
@@ -664,10 +778,39 @@ export async function issueMaterial(
 }
 
 export async function forwardToProcurement(
-  mrNumber: string
+  mrNumber: string,
+  forwardedBy?: string
 ): Promise<{ success: boolean }> {
-  await forwardMaterialRequestToProcurement(mrNumber);
+  // eslint-disable-next-line no-console
+  console.log(`[Warehouse] Forwarding MR ${mrNumber}`, { forwardedBy });
+  // Persist to ERPNext (single source of truth) — no local/mock state.
+  await forwardMaterialRequestToProcurement(mrNumber, undefined, {
+    forwardedBy,
+  });
+  // eslint-disable-next-line no-console
+  console.log("[Warehouse] ERP Update Success", { mr: mrNumber });
   return { success: true };
+}
+
+/**
+ * Invalidate every cache a forward-to-procurement affects so the request leaves
+ * the warehouse queue and appears in the Procurement queue/dashboard without a
+ * manual refresh. Prefixes cover the warehouse dashboard + View All
+ * (["warehouse", …]), the shared procurement queue (["mr-procurement-queue"]),
+ * the procurement/admin dashboards (["dashboard-counts"], ["dashboard-analytics"]),
+ * and the MR workflow lists (["material-requests-workflow"]).
+ */
+export function invalidateForwardCaches(queryClient: QueryClient): void {
+  for (const key of [
+    ["warehouse"],
+    ["mr-procurement-queue"],
+    ["mr-forwarded-history"],
+    ["dashboard-counts"],
+    ["dashboard-analytics"],
+    ["material-requests-workflow"],
+  ]) {
+    void queryClient.invalidateQueries({ queryKey: key });
+  }
 }
 
 export async function rejectMaterialRequest(
@@ -676,6 +819,135 @@ export async function rejectMaterialRequest(
 ): Promise<{ success: boolean }> {
   await rejectMaterialRequestWorkflow(mrNumber, remarks);
   return { success: true };
+}
+
+/* ─── Shared dashboard/list selectors (single source of truth) ───────────────
+ * The Warehouse Dashboard "Ready to Issue" / "Procurement Required" cards AND
+ * their "View All" pages derive from the SAME `getPendingMaterialRequests`
+ * dataset (query key ["warehouse","pending-requests"]) through these selectors,
+ * so a card and its list page can never disagree.
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+export interface ReadyToIssueRow {
+  name: string;
+  department: string;
+  warehouse: string;
+  totalItems: number;
+  /** Total quantity fully in stock and ready to issue. */
+  readyQty: number;
+  uom: string;
+  requiredDate: string;
+  priority: string;
+  procurementType: MaterialRequestProcurementType;
+}
+
+export interface ProcurementRequiredRow {
+  name: string;
+  department: string;
+  requiredDate: string;
+  priority: string;
+  /** Number of item lines that are short (partial or out of stock). */
+  missingItems: number;
+  /** Total quantity to procure (Σ required − available). */
+  requiredQty: number;
+  uom: string;
+  procurementType: MaterialRequestProcurementType;
+}
+
+/**
+ * READY TO ISSUE — Direct MRs whose warehouse review is done and EVERY line is
+ * fully in stock (available ≥ required), not yet issued.
+ */
+export function selectReadyToIssueRows(
+  pending: WarehouseMaterialRequest[]
+): ReadyToIssueRow[] {
+  return pending
+    .filter((mr) => {
+      if (mr.procurement_type !== "Direct") return false;
+      // A frozen shortage decision (or an already-forwarded MR) must never
+      // show up as "ready to issue", even if a stale computation looks clean.
+      if (
+        mr.status === "Procurement Required" ||
+        mr.status === "Forwarded to Procurement" ||
+        mr.status === "RFQ Created"
+      ) {
+        return false;
+      }
+      const items = mr.items ?? [];
+      if (items.length === 0) return false;
+      const hasDemand = items.some((i) => i.required_qty > 0);
+      const allInStock = items.every((i) => i.available_qty >= i.required_qty);
+      return hasDemand && allInStock;
+    })
+    .map((mr) => {
+      const items = mr.items ?? [];
+      const readyQty = items.reduce(
+        (acc, i) => acc + Math.min(i.available_qty, i.required_qty),
+        0
+      );
+      return {
+        name: mr.name,
+        department: mr.department || "—",
+        warehouse: items.find((i) => i.warehouse)?.warehouse || "—",
+        totalItems: mr.items_count || items.length,
+        readyQty,
+        uom: items[0]?.uom || "Nos",
+        requiredDate: mr.required_date || "",
+        priority: mr.priority || "Medium",
+        procurementType: mr.procurement_type,
+      };
+    });
+}
+
+/**
+ * PROCUREMENT REQUIRED — Direct MRs the warehouse has reviewed whose stock is
+ * insufficient (≥1 short line) and that have NOT yet been forwarded. Feed this
+ * BOTH `getPendingMaterialRequests()` (live-inferred shortages on MRs still
+ * "Under Warehouse Review") AND `getWarehouseProcurementRequiredRequests()`
+ * (genuinely-persisted "Procurement Required" records) concatenated together
+ * — this is the warehouse's actionable "Send to Procurement" queue.
+ */
+export function selectProcurementRequiredRows(
+  pending: WarehouseMaterialRequest[]
+): ProcurementRequiredRow[] {
+  return pending
+    .filter((mr) => {
+      if (mr.procurement_type !== "Direct") return false;
+      // Defensive: an ALREADY-forwarded MR must never show in the warehouse
+      // queue. "Procurement Required" is the expected PRE-forward state and
+      // must stay included — only "Forwarded to Procurement" / "RFQ Created"
+      // mean Procurement already has it.
+      if (
+        mr.status === "Forwarded to Procurement" ||
+        mr.status === "RFQ Created"
+      ) {
+        return false;
+      }
+      const items = mr.items ?? [];
+      if (items.length === 0) return false;
+      const hasDemand = items.some((i) => i.required_qty > 0);
+      const anyShort = items.some((i) => i.available_qty < i.required_qty);
+      return hasDemand && anyShort;
+    })
+    .map((mr) => {
+      const items = mr.items ?? [];
+      const shortLines = items.filter((i) => i.available_qty < i.required_qty);
+      const requiredQty = shortLines.reduce(
+        (acc, i) => acc + Math.max(0, i.required_qty - i.available_qty),
+        0
+      );
+      return {
+        name: mr.name,
+        department: mr.department || "—",
+        requiredDate: mr.required_date || "",
+        priority: mr.priority || "Medium",
+        missingItems: shortLines.length,
+        requiredQty,
+        uom: items[0]?.uom || "Nos",
+        procurementType: mr.procurement_type,
+      };
+    })
+    .sort((a, b) => a.requiredDate.localeCompare(b.requiredDate));
 }
 
 // Keep stubs for local testing controls so we don't break anything expecting them

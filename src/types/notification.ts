@@ -69,6 +69,9 @@ export const ROLE_ALLOWED_MODULES: Record<
   Exclude<NotificationTargetRole, "supplier">,
   ReadonlySet<NotificationModule>
 > = {
+  // SLA is temporarily Admin-only. SLA notifications stay in the admin allow-list
+  // and are removed from every non-admin role below (UI/role-based hide only —
+  // no notification data is deleted).
   admin: new Set(["System", "Audit", "Users", "Workflow", "SLA"]),
   procurement: new Set([
     "RFQ",
@@ -78,20 +81,19 @@ export const ROLE_ALLOWED_MODULES: Record<
     "Finance Approval",
     "Purchase Order",
     "Budget",
-    "SLA",
   ]),
-  legal: new Set(["Legal Review", "Supplier Documents", "Compliance", "SLA"]),
+  legal: new Set(["Legal Review", "Supplier Documents", "Compliance"]),
   finance: new Set([
     "Voucher",
     "Invoice",
     "Payment",
     "Budget",
     "Outstanding Payables",
-    "SLA",
   ]),
-  finance_executive: new Set(["Budget", "SLA"]),
-  warehouse: new Set(["PO Ready for GRN", "GRN", "Inventory", "SLA"]),
-  department: new Set(["Purchase Order", "SLA"]),
+  finance_executive: new Set(["Budget"]),
+  warehouse: new Set(["PO Ready for GRN", "GRN", "Inventory"]),
+  department: new Set(["Purchase Order"]),
+  manufacturing: new Set(["Inventory"]),
 };
 
 export const SUPPLIER_ALLOWED_MODULES = new Set<NotificationModule>([
@@ -100,7 +102,6 @@ export const SUPPLIER_ALLOWED_MODULES = new Set<NotificationModule>([
   "Purchase Order",
   "Invoice Status",
   "Payment Status",
-  "SLA",
 ]);
 
 export const FINANCE_MODULES = new Set<NotificationModule>([

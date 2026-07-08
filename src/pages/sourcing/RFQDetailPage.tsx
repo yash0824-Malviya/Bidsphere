@@ -13,6 +13,7 @@ import toast from "react-hot-toast";
 import {
   Activity,
   ArrowLeft,
+  Ban,
   Bot,
   Building2,
   Check,
@@ -38,6 +39,10 @@ import {
   lookupDefaultWarehouse,
   submitRFQ,
 } from "../../api/sourcing";
+import {
+  getRfqResponses,
+  type SupplierRfqResponse,
+} from "../../api/supplierRfqResponse";
 import { COMPANY } from "../../api/erpnext";
 import {
   assertNoPOForRFQ,
@@ -48,10 +53,15 @@ import type { LinkedPORow } from "../../api/purchasing";
 import {
   AI_FALLBACK_NOTICE,
   buildLocalProcurementRecommendation,
+  computeConfidenceScore,
   resolveAIRecommendation,
 } from "../../api/ai";
 import type { AIQuotation, AIQuotationLine, AnalysisWeights } from "../../api/ai";
-import type { AIRecommendation, RFQApprovalState } from "../../types/erpnext";
+import type {
+  AIRecommendation,
+  RFQApprovalState,
+  SupplierAnalysisRow,
+} from "../../types/erpnext";
 import { getScoringConfig } from "../../api/supplierScoring";
 import { getSupplierPerformance } from "../../api/supplierPerformance";
 import { scoreSuppliers } from "../../api/supplierScoringEngine";
@@ -92,6 +102,10 @@ import type { RFQ, RFQSupplier, SupplierQuotation } from "../../types/erpnext";
 import { formatCurrency, formatDate } from "../../utils/format";
 import RejectedReviewActions from "../../components/sourcing/RejectedReviewActions";
 import CheckBudgetModal from "../../components/sourcing/CheckBudgetModal";
+import ViewQuotationModal from "../../components/sourcing/ViewQuotationModal";
+import CompareQuotationsModal, {
+  type ComparisonQuote,
+} from "../../components/sourcing/CompareQuotationsModal";
 import {
   formatERPNextDate,
   formatUsDisplayDate,
@@ -109,6 +123,39 @@ const HAS_ANTHROPIC_KEY = !!(
 
 function clampScore(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+type RiskLevel = "Low" | "Medium" | "High";
+
+/** Mirrors the risk heuristic used across the AI analysis UI (modal + summary). */
+function supplierRiskLevel(s: SupplierAnalysisRow): RiskLevel {
+  if (s.verdict === "AVOID") return "High";
+  if (s.verdict === "EXPENSIVE") return "Medium";
+  const rel = s.score?.reliability ?? 50;
+  if (rel < 40 || s.weaknesses.length >= 3) return "High";
+  if (rel < 65 || s.verdict === "GOOD OPTION") return "Medium";
+  return "Low";
+}
+
+/** Savings of the recommended supplier vs the highest bid among all quotes. */
+function getSavingsPotential(analysis: AIRecommendation): {
+  amount: number;
+  pct: number;
+} {
+  const rows = analysis.supplier_analysis ?? [];
+  const recommended = rows.find(
+    (s) =>
+      s.name.toLowerCase() === (analysis.recommended_supplier ?? "").trim().toLowerCase()
+  );
+  const totals = rows.map((s) => s.grand_total).filter((t) => t > 0);
+  const highest = totals.length ? Math.max(...totals) : 0;
+  const recommendedTotal = recommended?.grand_total ?? 0;
+  const amount = highest > recommendedTotal ? highest - recommendedTotal : 0;
+  const pct =
+    highest > 0
+      ? Math.round((amount / highest) * 100)
+      : (analysis.cost_analysis?.savings_percentage ?? 0);
+  return { amount, pct };
 }
 
 /** Persisted AI analysis result for an RFQ — restored on revisit. */
@@ -213,6 +260,8 @@ function validateCachedAnalysis(
 }
 
 interface SubmittedQuote {
+  /** Supplier Quotation docname — needed to open the "View Quotation" modal. */
+  sqName: string;
   supplier: string;
   supplier_name: string;
   total: number;
@@ -308,10 +357,11 @@ function quoteForSupplier(
 function resolveSupplierStatus(
   row: RFQSupplier,
   hasQuote: boolean,
-  validTill?: string
+  validTill?: string,
+  declined?: boolean
 ): SupplierQuoteStatus {
   if (hasQuote || row.quote_status === "Received") return "Quotation Received";
-  if (row.quote_status === "No Quote") return "Declined";
+  if (declined || row.quote_status === "No Quote") return "Declined";
   if (validTill) {
     const deadline = parseERPNextDateInput(validTill);
     if (deadline?.isValid()) {
@@ -356,8 +406,13 @@ export default function RFQDetailPage() {
     new Map()
   );
   const [aiModalOpen, setAiModalOpen] = useState(false);
+  const [reasonPopup, setReasonPopup] = useState<SupplierRfqResponse | null>(
+    null
+  );
   const [summaryModalOpen, setSummaryModalOpen] = useState(false);
   const [checkBudgetOpen, setCheckBudgetOpen] = useState(false);
+  const [viewQuotationSq, setViewQuotationSq] = useState<string | null>(null);
+  const [compareModalOpen, setCompareModalOpen] = useState(false);
   const [aiResult, setAiResult] = useState<AIRecommendation | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiLoadingStep, setAiLoadingStep] = useState(0);
@@ -410,6 +465,23 @@ export default function RFQDetailPage() {
     enabled: !!rfqName,
     queryFn: () => getSupplierQuotations(rfqName),
   });
+
+  // Explicit supplier "No Quote" declines (first-class responses).
+  const declinesQuery = useQuery<SupplierRfqResponse[]>({
+    queryKey: ["rfq-declines", rfqName],
+    enabled: !!rfqName,
+    queryFn: () => getRfqResponses(rfqName),
+  });
+
+  const declineBySupplier = useMemo(() => {
+    const map = new Map<string, SupplierRfqResponse>();
+    for (const d of declinesQuery.data ?? []) {
+      map.set((d.supplier ?? "").toLowerCase(), d);
+    }
+    return map;
+  }, [declinesQuery.data]);
+
+  const declinedCount = declineBySupplier.size;
 
   const rfq = rfqQuery.data;
   const parsedMessage = useMemo(
@@ -565,6 +637,7 @@ export default function RFQDetailPage() {
           });
         }
         next.set(supplierName, {
+          sqName: sq.name,
           supplier: sq.supplier,
           supplier_name: supplierName,
           total: sq.grand_total ?? sq.total ?? sumQuotation(sq),
@@ -896,15 +969,19 @@ export default function RFQDetailPage() {
     // eslint-disable-next-line no-console
     console.log("[AI] Current RFQ ID:", rfq.name);
 
+    // Suppliers who explicitly declined ("No Quote") are excluded from the
+    // comparison / AI recommendation — only quoting suppliers are evaluated.
     const invitedSuppliers = new Set(
-      (rfq.suppliers ?? []).map(
-        (s: { supplier?: string; supplier_name?: string }) =>
-          (s.supplier ?? s.supplier_name ?? "").trim().toLowerCase()
-      )
+      (rfq.suppliers ?? [])
+        .map(
+          (s: { supplier?: string; supplier_name?: string }) =>
+            (s.supplier ?? s.supplier_name ?? "").trim().toLowerCase()
+        )
+        .filter((key) => !declineBySupplier.has(key))
     );
 
     // eslint-disable-next-line no-console
-    console.log("[AI] Invited suppliers:", [...invitedSuppliers]);
+    console.log("[AI] Invited suppliers (excluding declines):", [...invitedSuppliers]);
 
     /* ── Filter quotations: only invited + submitted ────────────────── */
 
@@ -1086,6 +1163,25 @@ export default function RFQDetailPage() {
         }
       }
 
+      // Confidence Score (AI Procurement Copilot card) — always the fixed
+      // Price 35% / Delivery 25% / Reliability 30% / Completeness 10%
+      // formula applied to the recommended supplier's dimension scores, so
+      // it never depends on whether the cloud AI provider echoed a usable
+      // top-level confidence figure.
+      const recommendedScored = engineResult.suppliers.find(
+        (s) =>
+          s.supplier.trim().toLowerCase() ===
+          recommendation.recommended_supplier.trim().toLowerCase()
+      );
+      if (recommendedScored) {
+        recommendation.confidence_score = computeConfidenceScore({
+          price_score: recommendedScored.dimensions.price_score,
+          delivery_score: recommendedScored.dimensions.delivery_score,
+          reliability_score: recommendedScored.dimensions.reliability_score,
+          completeness_score: recommendedScored.dimensions.quality_score,
+        });
+      }
+
       setAiResult(recommendation);
       const analysisRecord = saveAnalysis(rfq.name, recommendation);
       setAiLoadingStep(ANALYSIS_STEPS.length - 1);
@@ -1113,6 +1209,19 @@ export default function RFQDetailPage() {
           }
         );
         const localRec = buildLocalProcurementRecommendation(aiRequest, engineResult);
+        const recommendedScored = engineResult.suppliers.find(
+          (s) =>
+            s.supplier.trim().toLowerCase() ===
+            localRec.recommended_supplier.trim().toLowerCase()
+        );
+        if (recommendedScored) {
+          localRec.confidence_score = computeConfidenceScore({
+            price_score: recommendedScored.dimensions.price_score,
+            delivery_score: recommendedScored.dimensions.delivery_score,
+            reliability_score: recommendedScored.dimensions.reliability_score,
+            completeness_score: recommendedScored.dimensions.quality_score,
+          });
+        }
         setAiResult(localRec);
         setAiError(null);
         saveAnalysis(rfq.name, localRec);
@@ -1472,6 +1581,9 @@ export default function RFQDetailPage() {
       setAiResult(null);
       // Re-run the live ERPNext lookup so completion reflects the real PO.
       void queryClient.invalidateQueries({ queryKey: ["rfq-linked-pos", rfqName] });
+      void queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
+      // Refresh the dashboard's Procurement Cycle Time (and other analytics).
+      void queryClient.invalidateQueries({ queryKey: ["procurement-analytics"] });
 
       setTimeout(() => {
         navigate(`/p2p/purchase-orders/${encodeURIComponent(po.name)}`);
@@ -1585,8 +1697,12 @@ export default function RFQDetailPage() {
   }
 
   /* ── Command Center derived metrics ── */
+  // A "No Quote" decline is an intentional response — it counts as Responded,
+  // never as Pending. Quoted and declined suppliers are disjoint (a supplier
+  // who declines never also submits a quotation).
   const supplierCount = (rfq.suppliers ?? []).length;
-  const respondedCount = submittedQuoteCount;
+  const quotedCount = submittedQuoteCount;
+  const respondedCount = Math.min(supplierCount, quotedCount + declinedCount);
   const awaitingCount = Math.max(0, supplierCount - respondedCount);
   const responseRate = supplierCount
     ? Math.round((respondedCount / supplierCount) * 100)
@@ -1605,6 +1721,18 @@ export default function RFQDetailPage() {
   const copilotHasAnalysis = !!savedAnalysis && hasQuotations;
   const canReAnalyze = hasSelectedSupplier && !isCompleted;
 
+  /**
+   * "View Quotation" must stay hidden through RFQ Created → Suppliers
+   * Responded → AI Analysis, and only appear once the RFQ workflow has
+   * actually reached Supplier Selected or Purchase Order Created. Both
+   * signals are backend-driven, not frontend-only: `hasSelectedSupplier`
+   * reflects the RFQ's `custom_selected_supplier` field in ERPNext (synced
+   * via `syncStateToErpNext`, restored on refresh via `getApprovalStateFromErp`),
+   * and `procurementFinalized` is derived from a live Purchase Order query
+   * against ERPNext (`getPOsForRFQ`) plus the RFQ's own `status` field.
+   */
+  const canViewQuotations = hasSelectedSupplier || procurementFinalized;
+
   const handlePerformAnalysis = () => {
     if (isReadOnly) return;
     openAIAnalysis();
@@ -1619,6 +1747,15 @@ export default function RFQDetailPage() {
     openAIAnalysis();
   };
 
+  // If a supplier has been selected, AI analysis is necessarily complete.
+  // This is the single workflow-stage gate used by every visibility rule.
+  const aiAnalysisDone = hasSelectedSupplier || copilotHasAnalysis;
+  const aiConfidence = savedAnalysis?.confidence_score;
+
+  /** Quotation comparison is ONLY allowed after AI analysis completes. */
+  const canCompareQuotations =
+    submittedQuoteCount > 0 && (aiAnalysisDone || procurementFinalized);
+
   // Sourced from the REAL Legal Document Review record — see the comment
   // on `legalDocQuery` above for why `approvalState` can never reflect an
   // actual review decision.
@@ -1626,9 +1763,23 @@ export default function RFQDetailPage() {
   const financeApproved = legalDoc?.finance_status === "Approved";
   const fullyApproved = legalApproved && financeApproved;
 
-  // If a supplier has been selected, AI analysis is necessarily complete
-  const aiAnalysisDone = hasSelectedSupplier || copilotHasAnalysis;
-  const aiConfidence = savedAnalysis?.confidence_score;
+  /* ── AI Procurement Copilot card derived values ──
+   * These read straight from the saved analysis (persists across refresh —
+   * see `saveAnalysis` / `getLatestAnalysisSnapshot`) so the card never has
+   * to wait on `hasSelectedSupplier` to show what the analysis produced. */
+  const copilotRecommendedRow = copilotHasAnalysis
+    ? savedAnalysis!.analysis.supplier_analysis.find(
+        (s) =>
+          s.name.toLowerCase() ===
+          (savedAnalysis!.recommended_supplier ?? "").trim().toLowerCase()
+      )
+    : undefined;
+  const copilotRiskLevel = copilotRecommendedRow
+    ? supplierRiskLevel(copilotRecommendedRow)
+    : null;
+  const copilotSavings = copilotHasAnalysis
+    ? getSavingsPotential(savedAnalysis!.analysis)
+    : null;
 
   const timeline: { label: string; meta: string; done: boolean; active: boolean }[] = [
     {
@@ -1926,8 +2077,10 @@ export default function RFQDetailPage() {
               </div>
             )}
             <div className="grid grid-cols-2 gap-2">
+              <MiniStat value={quotedCount} label="Quoted" />
+              <MiniStat value={declinedCount} label="No Quote" />
+              <MiniStat value={awaitingCount} label="Pending" />
               <MiniStat value={respondedCount} label="Responded" />
-              <MiniStat value={awaitingCount} label="Awaiting" />
             </div>
             <div>
               <div className="mb-1 flex items-center justify-between text-[11px] text-neutral-500">
@@ -1970,18 +2123,22 @@ export default function RFQDetailPage() {
             <div className="flex items-center justify-between gap-2">
               <span className="text-sm text-neutral-500">Confidence Score</span>
               <span className="text-sm font-bold text-neutral-900">
-                {hasSelectedSupplier && copilotHasAnalysis
-                  ? `${savedAnalysis!.confidence_score}%`
-                  : "—"}
+                {copilotHasAnalysis
+                  ? `${clampScore(savedAnalysis!.confidence_score)}%`
+                  : "Not analyzed"}
               </span>
             </div>
-            {hasSelectedSupplier && copilotHasAnalysis && (
+            {copilotHasAnalysis ? (
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-neutral-100">
                 <div
                   className="h-full rounded-full bg-[#0ea5e9]"
-                  style={{ width: `${savedAnalysis!.confidence_score}%` }}
+                  style={{ width: `${clampScore(savedAnalysis!.confidence_score)}%` }}
                 />
               </div>
+            ) : (
+              <p className="text-xs text-neutral-400">
+                Run AI Analysis to generate confidence score.
+              </p>
             )}
             <div className="flex items-center justify-between gap-2">
               <span className="text-sm text-neutral-500">Supplier Coverage</span>
@@ -1990,19 +2147,51 @@ export default function RFQDetailPage() {
               </span>
             </div>
             <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-500">Recommendation</span>
+              <span className="text-sm text-neutral-500">Recommended Supplier</span>
               <Pill
                 tone={
-                  hasSelectedSupplier ? "success" : hasQuotations && aiReady ? "brand" : "amber"
+                  hasSelectedSupplier
+                    ? "success"
+                    : copilotHasAnalysis
+                    ? "brand"
+                    : hasQuotations && aiReady
+                    ? "brand"
+                    : "amber"
                 }
               >
                 {hasSelectedSupplier
                   ? approvalState!.selected_supplier
+                  : copilotHasAnalysis
+                  ? savedAnalysis!.recommended_supplier
                   : hasQuotations && aiReady
                   ? "Ready to analyze"
                   : "Not Available"}
               </Pill>
             </div>
+            {copilotHasAnalysis && copilotRiskLevel && (
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm text-neutral-500">Risk Level</span>
+                <Pill
+                  tone={
+                    copilotRiskLevel === "Low"
+                      ? "success"
+                      : copilotRiskLevel === "Medium"
+                      ? "amber"
+                      : "danger"
+                  }
+                >
+                  {copilotRiskLevel}
+                </Pill>
+              </div>
+            )}
+            {copilotHasAnalysis && copilotSavings && copilotSavings.amount > 0 && (
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm text-neutral-500">Savings Potential</span>
+                <span className="text-sm font-bold text-success-700">
+                  {copilotSavings.pct}% · {formatCurrency(copilotSavings.amount)}
+                </span>
+              </div>
+            )}
 
             {/* ── AI Action Buttons ── */}
             {procurementFinalized ? (
@@ -2095,6 +2284,7 @@ export default function RFQDetailPage() {
       {!procurementFinalized &&
         hasQuotations &&
         aiReady &&
+        aiAnalysisDone &&
         savedAnalysis &&
         canManageReverseBidding(userRole) && (
           <ReverseBiddingCTA
@@ -2103,6 +2293,7 @@ export default function RFQDetailPage() {
               .filter((r) => r.verdict !== "AVOID")
               .map((r) => r.name)}
             procurementManager={user?.email}
+            allowCreate={!hasSelectedSupplier}
           />
         )}
 
@@ -2205,9 +2396,21 @@ export default function RFQDetailPage() {
               </p>
             </div>
           </div>
-          <span className="flex-shrink-0 rounded-full bg-white px-2.5 py-0.5 text-xs font-semibold text-[#0ea5e9] ring-1 ring-inset ring-[#0ea5e9]/20">
-            {(rfq.suppliers ?? []).length} invited
-          </span>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            {canCompareQuotations && (
+              <button
+                type="button"
+                onClick={() => setCompareModalOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[#0ea5e9]/30 bg-white px-3 py-1.5 text-xs font-semibold text-[#0ea5e9] shadow-sm hover:bg-[#0ea5e9]/5"
+              >
+                <Scale className="h-3.5 w-3.5" />
+                Compare Quotations
+              </button>
+            )}
+            <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-semibold text-[#0ea5e9] ring-1 ring-inset ring-[#0ea5e9]/20">
+              {(rfq.suppliers ?? []).length} invited
+            </span>
+          </div>
         </div>
 
         {!isCompleted && (
@@ -2225,7 +2428,15 @@ export default function RFQDetailPage() {
             const quote = quoteForSupplier(localQuotes, s.supplier);
             const validTill =
               rfq.valid_till ?? parsedMessage.validTill ?? undefined;
-            const status = resolveSupplierStatus(s, !!quote, validTill);
+            const decline = declineBySupplier.get(
+              (s.supplier ?? "").toLowerCase()
+            );
+            const status = resolveSupplierStatus(
+              s,
+              !!quote,
+              validTill,
+              !!decline
+            );
             const itemsQuoted = quote
               ? (rfq.items ?? []).filter((it) => {
                   const cell = quote.byItem.get(it.item_code);
@@ -2254,6 +2465,11 @@ export default function RFQDetailPage() {
                             <FileText className="h-3 w-3" />
                             {itemsQuoted} item{itemsQuoted === 1 ? "" : "s"} submitted
                           </>
+                        ) : decline ? (
+                          <>
+                            <Ban className="h-3 w-3" />
+                            {decline.decline_reason || "Declined to quote"}
+                          </>
                         ) : (
                           "Awaiting quotation"
                         )}
@@ -2262,12 +2478,39 @@ export default function RFQDetailPage() {
                   </div>
 
                   {/* Neutral submission status — no ranking, no amounts */}
-                  <div className="flex items-center sm:justify-end">
+                  <div className="flex items-center gap-2 sm:justify-end">
                     {quote ? (
-                      <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-success-50 px-2.5 py-0.5 text-xs font-semibold text-success-600 ring-1 ring-inset ring-success-100">
-                        <CheckCircle2 className="h-3 w-3" />
-                        Quotation Submitted
-                      </span>
+                      <>
+                        <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-success-50 px-2.5 py-0.5 text-xs font-semibold text-success-600 ring-1 ring-inset ring-success-100">
+                          <CheckCircle2 className="h-3 w-3" />
+                          Quotation Submitted
+                        </span>
+                        {canViewQuotations && (
+                          <button
+                            type="button"
+                            onClick={() => setViewQuotationSq(quote.sqName)}
+                            disabled={!quote.sqName}
+                            className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <FileText className="h-3 w-3" />
+                            View Quotation
+                          </button>
+                        )}
+                      </>
+                    ) : decline ? (
+                      <>
+                        <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-warning-50 px-2.5 py-0.5 text-xs font-semibold text-warning-700 ring-1 ring-inset ring-warning-200">
+                          <Ban className="h-3 w-3" />
+                          No Quote
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setReasonPopup(decline)}
+                          className="whitespace-nowrap rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+                        >
+                          View Reason
+                        </button>
+                      </>
                     ) : (
                       <StatusBadge
                         status={status}
@@ -2283,6 +2526,111 @@ export default function RFQDetailPage() {
       </div>
 
       {aiModals}
+
+      {reasonPopup && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="modal-overlay"
+          onClick={() => setReasonPopup(null)}
+        >
+          <div
+            className="modal-panel relative max-w-md p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-warning-50 text-warning-600">
+                <Ban className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-base font-semibold text-neutral-900">
+                  Supplier Declined RFQ
+                </h2>
+                <p className="text-sm text-neutral-500">
+                  {reasonPopup.supplier_name || reasonPopup.supplier}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 divide-y divide-neutral-100 rounded-lg border border-neutral-200">
+              <Row label="Supplier" value={reasonPopup.supplier_name || reasonPopup.supplier} />
+              <Row label="Reason" value={reasonPopup.decline_reason || "—"} />
+              {reasonPopup.reason_details ? (
+                <Row label="Details" value={reasonPopup.reason_details} />
+              ) : null}
+              <Row label="Comment" value={reasonPopup.comment || "—"} />
+              <Row
+                label="Submitted On"
+                value={
+                  reasonPopup.response_date
+                    ? formatDate(reasonPopup.response_date)
+                    : "—"
+                }
+              />
+            </div>
+
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setReasonPopup(null)}
+                className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {viewQuotationSq && (
+        <ViewQuotationModal
+          sqName={viewQuotationSq}
+          rfqName={rfqName}
+          onClose={() => setViewQuotationSq(null)}
+        />
+      )}
+
+      {compareModalOpen && (
+        <CompareQuotationsModal
+          rfqName={rfqName}
+          items={(rfq?.items ?? []).map((it) => ({
+            item_code: it.item_code,
+            item_name: it.item_name,
+            qty: it.qty,
+            uom: it.uom,
+          }))}
+          quotes={Array.from(localQuotes.values())
+            .filter((q) => q.sqName)
+            .map<ComparisonQuote>((q) => ({
+              sqName: q.sqName,
+              supplier: q.supplier,
+              supplierName: q.supplier_name,
+              total: q.total,
+              paymentTerms: q.payment_terms,
+              notes: q.notes,
+              byItem: q.byItem,
+            }))}
+          onViewQuotation={(sqName) => {
+            setCompareModalOpen(false);
+            setViewQuotationSq(sqName);
+          }}
+          canViewQuotation={canViewQuotations}
+          onClose={() => setCompareModalOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-4 px-4 py-2.5">
+      <span className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+        {label}
+      </span>
+      <span className="max-w-[65%] text-right text-sm text-neutral-800">
+        {value}
+      </span>
     </div>
   );
 }
@@ -2646,6 +2994,7 @@ const PILL_TONES = {
   brand: "bg-[#0ea5e9]/10 text-[#0ea5e9] ring-[#0ea5e9]/20",
   success: "bg-success-50 text-success-600 ring-success-100",
   amber: "bg-warning-50 text-warning-600 ring-warning-100",
+  danger: "bg-danger-50 text-danger-600 ring-danger-100",
   neutral: "bg-neutral-100 text-neutral-600 ring-neutral-200",
 } as const;
 
@@ -2831,10 +3180,13 @@ function ReverseBiddingCTA({
   rfqName,
   approvedSuppliers,
   procurementManager,
+  allowCreate,
 }: {
   rfqName: string;
   approvedSuppliers: string[];
   procurementManager?: string;
+  /** Once a supplier is selected, new auctions can no longer be created. */
+  allowCreate: boolean;
 }) {
   const navigate = useNavigate();
 
@@ -2844,6 +3196,10 @@ function ReverseBiddingCTA({
     staleTime: 30_000,
   });
   const existing = existingQuery.data;
+
+  // After supplier selection, reverse bidding is locked. Keep the auction
+  // visible for reference if it already exists; otherwise hide the section.
+  if (!allowCreate && !existing) return null;
 
   const createMutation = useMutation({
     mutationFn: () =>
@@ -2895,7 +3251,7 @@ function ReverseBiddingCTA({
         <button
           type="button"
           onClick={() => createMutation.mutate()}
-          disabled={createMutation.isPending}
+          disabled={createMutation.isPending || !allowCreate}
           className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#0ea5e9] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Sparkles className="h-4 w-4" />

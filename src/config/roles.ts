@@ -3,13 +3,13 @@ import {
   Boxes,
   ClipboardCheck,
   ClipboardList,
+  Factory,
   FileSearch,
   LayoutDashboard,
   PackageCheck,
   PackagePlus,
   Shield,
   ShoppingCart,
-  Truck,
   Users,
   Wallet,
 } from "lucide-react";
@@ -27,7 +27,8 @@ export type AppRole =
   | "finance_executive"
   | "warehouse"
   | "legal"
-  | "department";
+  | "department"
+  | "manufacturing";
 
 export const ROLE_LABELS: Record<AppRole, string> = {
   admin: "Administrator",
@@ -37,6 +38,7 @@ export const ROLE_LABELS: Record<AppRole, string> = {
   warehouse: "Warehouse Manager",
   legal: "Legal Reviewer",
   department: "Department User",
+  manufacturing: "Manufacturing Manager",
 };
 
 /** Default landing route after login per role. */
@@ -52,6 +54,8 @@ export const ROLE_HOME: Record<AppRole, string> = {
   // page, which reads RFQ workflow custom fields instead.
   legal: "/dashboard",
   department: "/dashboard",
+  // Manufacturing / Production Manager — BOM Management is the primary workspace.
+  manufacturing: "/manufacturing/boms",
 };
 
 /** Known role users (email → role). Comparison is case-insensitive. */
@@ -63,6 +67,8 @@ export const ROLE_USER_EMAILS: Record<string, AppRole> = {
   "warehouse@netlink.com": "warehouse",
   "legal@netlink.com": "legal",
   "department@netlink.com": "department",
+  "manufacturing@netlink.com": "manufacturing",
+  "production@netlink.com": "manufacturing",
 };
 
 /**
@@ -84,6 +90,9 @@ export const ERPNEXT_ROLE_MAP: Record<string, AppRole> = {
   "Warehouse Manager": "warehouse",
   "Legal Reviewer": "legal",
   "Department User": "department",
+  "Manufacturing Manager": "manufacturing",
+  "Manufacturing User": "manufacturing",
+  "Production Manager": "manufacturing",
 };
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -214,9 +223,10 @@ const WAREHOUSE_MR_CHILDREN: NavChild[] = [
   { label: "Issued Materials", to: "/material-requests/issued" },
 ];
 
-/** Procurement — forwarded MRs only (no create). */
+/** Procurement — forwarded MRs (active queue) + full forwarded history. */
 const PROCUREMENT_MR_CHILDREN: NavChild[] = [
   { label: "Forwarded Material Requests", to: "/material-requests/procurement" },
+  { label: "Forwarded History", to: "/material-requests/history" },
 ];
 
 interface RoleNavConfig {
@@ -262,6 +272,13 @@ const ROLE_NAV_CONFIG: Record<AppRole, RoleNavConfig> = {
   },
   department: {
     modules: ["dashboard", "material_requests"],
+    p2pChildren: [],
+  },
+  // Manufacturing / Production Manager — Manufacturing (BOM) workspace. The
+  // sidebar is produced by a dedicated branch in getNavGroupsForRole; access is
+  // granted to the "/manufacturing" prefix in canAccessPath.
+  manufacturing: {
+    modules: ["dashboard"],
     p2pChildren: [],
   },
 };
@@ -319,6 +336,7 @@ export function resolveFromErpNextRoles(erpRoles: string[]): AppRole | null {
     "legal",
     "finance",
     "finance_executive",
+    "manufacturing",
     "warehouse",
     "procurement",
     "department",
@@ -465,6 +483,7 @@ function buildNavItem(id: NavModuleId, role: AppRole): NavItem {
           { label: "Inventory", to: "/admin/inventory" },
           { label: "Budget", to: "/admin/budget" },
           { label: "Reports", to: "/admin/reports" },
+          { label: "SLA Dashboard", to: "/admin/sla-dashboard" },
           { label: "SLA Configuration", to: "/admin/sla-configuration" },
           { label: "SLA Reports", to: "/admin/sla-reports" },
           { label: "Security Settings", to: "/admin/security-settings" },
@@ -505,6 +524,14 @@ export function getNavGroupsForRole(role: AppRole): NavGroup[] {
             icon: ClipboardList,
             children: [
               { label: "Pending Review", to: "/warehouse/material-requests/pending" },
+              {
+                label: "Procurement Required",
+                to: "/warehouse/material-requests/forwarded",
+              },
+              {
+                label: "Forwarded History",
+                to: "/warehouse/material-requests/history",
+              },
             ],
           },
           // Issue Items — a separate module for physically issuing available stock.
@@ -516,11 +543,6 @@ export function getNavGroupsForRole(role: AppRole): NavGroup[] {
               { label: "Ready to Issue", to: "/warehouse/issue-items" },
               { label: "Issued History", to: "/warehouse/material-requests/issued" },
             ],
-          },
-          {
-            label: "Procurement Required",
-            to: "/warehouse/material-requests/forwarded",
-            icon: Truck,
           },
           {
             label: "Inventory",
@@ -560,6 +582,35 @@ export function getNavGroupsForRole(role: AppRole): NavGroup[] {
             icon: PackageCheck,
             children: [
               { label: "Received Items", to: "/material-requests/list?f=received" },
+            ],
+          },
+          { label: "Notifications", to: "/notifications", icon: Bell },
+        ],
+      },
+      ...(supportGroup ? [supportGroup] : []),
+    ];
+  }
+
+  // Manufacturing / Production Manager — a focused BOM (Bill of Materials)
+  // workspace. Department Users never see this module.
+  if (role === "manufacturing") {
+    return [
+      {
+        label: "",
+        items: [
+          { label: "Dashboard", to: "/dashboard", icon: LayoutDashboard },
+          {
+            label: "Manufacturing",
+            to: "/manufacturing/boms",
+            icon: Factory,
+            children: [
+              { label: "BOM Management", to: "/manufacturing/boms" },
+              { label: "BOM List", to: "/manufacturing/boms/list" },
+              { label: "Create BOM", to: "/manufacturing/boms/new" },
+              {
+                label: "Finished Products",
+                to: "/manufacturing/finished-products",
+              },
             ],
           },
           { label: "Notifications", to: "/notifications", icon: Bell },
@@ -718,6 +769,7 @@ export function canAccessPath(role: AppRole, pathname: string): boolean {
       "/warehouse/material-requests/review",
       "/warehouse/material-requests/issued",
       "/warehouse/material-requests/forwarded",
+      "/warehouse/material-requests/history",
       "/warehouse/issue-items",
       "/warehouse/inventory/stock",
       "/warehouse/inventory/stock-overview",
@@ -730,6 +782,23 @@ export function canAccessPath(role: AppRole, pathname: string): boolean {
     ];
     if (allowed.some((p) => path === p || path.startsWith(`${p}/`))) return true;
     if (path.startsWith("/support") || path.startsWith("/notifications")) return true;
+    return false;
+  }
+
+  // Manufacturing / Production Manager — dashboard + the Manufacturing (BOM)
+  // workspace only. Department Users and every other non-admin role are blocked
+  // from "/manufacturing".
+  if (role === "manufacturing") {
+    if (
+      path === "/dashboard" ||
+      path.startsWith("/support") ||
+      path.startsWith("/notifications")
+    ) {
+      return true;
+    }
+    if (path === "/manufacturing" || path.startsWith("/manufacturing/")) {
+      return true;
+    }
     return false;
   }
 
@@ -859,6 +928,17 @@ export function canAccessPath(role: AppRole, pathname: string): boolean {
  */
 export function canManageRFQs(role: AppRole | undefined): boolean {
   return role === "admin" || role === "procurement";
+}
+
+/**
+ * BOM (Bill of Materials) management — the Manufacturing module.
+ *
+ * Business rule: only the Manufacturing / Production Manager (mapped to the
+ * `manufacturing` role) and the System Administrator may create, edit, delete
+ * or activate BOMs. Department Users and every other role have no access.
+ */
+export function canManageBom(role: AppRole | undefined): boolean {
+  return role === "manufacturing" || role === "admin";
 }
 
 /**

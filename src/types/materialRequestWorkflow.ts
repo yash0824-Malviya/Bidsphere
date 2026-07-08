@@ -28,11 +28,23 @@ export const MATERIAL_REQUEST_PROCUREMENT_TYPES: MaterialRequestProcurementType[
  *   Draft (pre-submission only)
  *     ├▶ DIRECT ──▶ Under Warehouse Review
  *     │              ├─ stock ok ─▶ Stock Available ─▶ Material Issued ─▶ Completed
- *     │              └─ no stock ─▶ Procurement Required ─▶ RFQ Created ─▶ Completed
+ *     │              └─ no stock ─▶ Procurement Required
+ *     │                              └─ warehouse clicks "Send to Procurement"
+ *     │                                 ─▶ Forwarded to Procurement ─▶ RFQ Created ─▶ Completed
  *     └▶ INDIRECT ─▶ Admin Review
- *                    ├─ approved  ─▶ Procurement Required ─▶ RFQ Created ─▶ Completed
+ *                    ├─ approved  ─▶ Forwarded to Procurement ─▶ RFQ Created ─▶ Completed
  *                    └─ rejected  ─▶ Cancelled
  *   Cancelled (terminal)
+ *
+ * NOTE: "Procurement Required" and "Forwarded to Procurement" are DISTINCT,
+ * genuinely-persisted statuses (both are real ERPNext Select options — see
+ * scripts/setup-material-request-workflow.mjs). "Procurement Required" means
+ * the warehouse review found a shortage but nobody has clicked "Send to
+ * Procurement" yet — it is still a WAREHOUSE-owned item and must never be
+ * visible to Procurement. "Forwarded to Procurement" means the explicit send
+ * action has run (`forwardMaterialRequestToProcurement`) — the MR now belongs
+ * to Procurement's active queue. Collapsing these two into one value was the
+ * root cause of the "already forwarded" false-positive bug; keep them separate.
  */
 export type MaterialRequestWorkflowStatus =
   | "Draft"
@@ -42,6 +54,7 @@ export type MaterialRequestWorkflowStatus =
   | "Stock Available"
   | "Material Issued"
   | "Procurement Required"
+  | "Forwarded to Procurement"
   | "RFQ Created"
   | "Completed"
   | "Cancelled";
@@ -57,6 +70,7 @@ export const MR_DASHBOARD_STATUSES: MaterialRequestWorkflowStatus[] = [
   "Stock Available",
   "Material Issued",
   "Procurement Required",
+  "Forwarded to Procurement",
   "RFQ Created",
   "Completed",
   "Cancelled",
@@ -73,26 +87,37 @@ export const ADMIN_REVIEW_STATUSES: MaterialRequestWorkflowStatus[] = [
  * Legacy → canonical status mapping. Older records (and any not-yet-migrated
  * writers) may still carry the previous names in ERPNext; we normalize them on
  * every read so existing Material Requests keep working across refresh/devices
- * without a data migration.
+ * without a data migration. "Forwarded to Procurement" is now a canonical
+ * value in its own right (see `MaterialRequestWorkflowStatus`) — it is
+ * intentionally NOT aliased to "Procurement Required" anymore.
  */
 const LEGACY_STATUS_ALIASES: Record<string, MaterialRequestWorkflowStatus> = {
-  "Forwarded to Procurement": "Procurement Required",
-  "Procurement Review": "Procurement Required",
-  "Procurement Pending": "Procurement Required",
-  "RFQ Pending": "Procurement Required",
-  "RFQ Requested": "Procurement Required",
+  "Procurement Review": "Forwarded to Procurement",
+  "Procurement Pending": "Forwarded to Procurement",
+  "RFQ Pending": "Forwarded to Procurement",
+  "RFQ Requested": "Forwarded to Procurement",
   Rejected: "Cancelled",
   Stopped: "Cancelled",
 };
 
 /**
  * Statuses that make a Material Request eligible for the Procurement Queue —
- * everything from the moment Warehouse forwards shortage items up to (but not
- * including) completion. Draft / Submitted / warehouse-review / stock-path /
- * Completed / Cancelled are intentionally excluded.
+ * everything from the moment Warehouse records a shortage up to (but not
+ * including) completion.
+ *
+ * REGRESSION NOTE: this previously excluded "Procurement Required", requiring
+ * a separate, explicit "Send to Procurement" click (on top of the Warehouse
+ * review decision that already records the shortage) before a request became
+ * visible to Procurement. That extra manual gate did not exist in the
+ * original working workflow — Warehouse's shortage decision was ALWAYS the
+ * single action that forwarded a request — and its introduction is what
+ * caused genuinely-forwarded requests to silently disappear from Procurement's
+ * queue. "Procurement Required" is included again so a request is visible the
+ * moment Warehouse identifies the shortage, matching the original behaviour.
  */
 export const PROCUREMENT_QUEUE_STATUSES: MaterialRequestWorkflowStatus[] = [
   "Procurement Required",
+  "Forwarded to Procurement",
   "RFQ Created",
 ];
 
@@ -120,17 +145,18 @@ export function normalizeWorkflowStatus(
  *   • READ  — `normalizeWorkflowStatus` maps the stored value back to the label
  *             (via LEGACY_STATUS_ALIASES), so the UI is unchanged.
  *
- *   UI label               ERPNext stored value
- *   ─────────────────────  ────────────────────────
- *   Draft                  Draft
- *   Submitted              Submitted
- *   Under Warehouse Review  Under Warehouse Review
- *   Stock Available        Under Warehouse Review   (no ERP option — kept valid)
- *   Material Issued        Material Issued
- *   Procurement Required   Forwarded to Procurement
- *   RFQ Created            RFQ Created
- *   Completed              Completed
- *   Cancelled              Rejected
+ *   UI label                 ERPNext stored value
+ *   ───────────────────────  ────────────────────────
+ *   Draft                    Draft
+ *   Submitted                Submitted
+ *   Under Warehouse Review   Under Warehouse Review
+ *   Stock Available          Under Warehouse Review   (no ERP option — kept valid)
+ *   Material Issued          Material Issued
+ *   Procurement Required     Procurement Required     (shortage found, NOT yet sent)
+ *   Forwarded to Procurement Forwarded to Procurement (warehouse clicked "Send")
+ *   RFQ Created              RFQ Created
+ *   Completed                Completed
+ *   Cancelled                Rejected
  * ────────────────────────────────────────────────────────────────────────── */
 const UI_TO_ERP_STATUS: Record<MaterialRequestWorkflowStatus, string> = {
   Draft: "Draft",
@@ -141,7 +167,8 @@ const UI_TO_ERP_STATUS: Record<MaterialRequestWorkflowStatus, string> = {
   // state so the write never fails. Read-back shows "Under Warehouse Review".
   "Stock Available": "Under Warehouse Review",
   "Material Issued": "Material Issued",
-  "Procurement Required": "Forwarded to Procurement",
+  "Procurement Required": "Procurement Required",
+  "Forwarded to Procurement": "Forwarded to Procurement",
   "RFQ Created": "RFQ Created",
   Completed: "Completed",
   Cancelled: "Rejected",
@@ -173,6 +200,16 @@ export interface MaterialRequestWorkflowFields {
   custom_linked_rfq?: string;
   custom_requested_by?: string;
   custom_admin_remarks?: string;
+  /**
+   * Forward-to-procurement audit fields. Optional/best-effort — persisted only
+   * when provisioned in ERPNext. The canonical marker for "forwarded" remains
+   * the workflow status ("Procurement Required"); these add who/when metadata.
+   */
+  custom_forwarded_to_procurement?: 0 | 1;
+  custom_forwarded_by?: string;
+  custom_forwarded_on?: string;
+  /** Best-effort — when Procurement creates the RFQ (optional field). */
+  custom_rfq_created_at?: string;
 }
 
 /**

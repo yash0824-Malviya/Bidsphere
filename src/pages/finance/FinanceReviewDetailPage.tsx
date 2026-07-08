@@ -35,12 +35,22 @@ import {
   FINANCE_DASHBOARD_METRICS_KEY,
 } from "../../api/financeWorkflow";
 import { updateFinanceReviewStatus } from "../../api/financeReviews";
-import { getRfqBudgetCheckByCostCenter, BUDGET_EXCEEDED_WARNING } from "../../api/budget";
+import {
+  getRfqBudgetCheckByCostCenter,
+  getActiveBudgetsForFiscalYear,
+  BUDGET_EXCEEDED_WARNING,
+} from "../../api/budget";
+import { assignBudgetToRfq } from "../../api/rfqBudgetAssignment";
 import { getLatestAnalysisSnapshot } from "../../api/supplierScoringResults";
-import type { RfqCostCenterBudgetCheck, BudgetForecastStatus } from "../../api/budget";
+import type {
+  RfqCostCenterBudgetCheck,
+  BudgetForecastStatus,
+  AssignableBudgetOption,
+} from "../../api/budget";
 import { useAuthStore } from "../../store/authStore";
 import { formatCurrency, formatDate } from "../../utils/format";
 import { Skeleton } from "../../components/Skeleton";
+import SlaStageBadge from "../../components/sla/SlaStageBadge";
 import type {
   RFQ,
   SupplierQuotation,
@@ -257,6 +267,10 @@ export default function FinanceReviewDetailPage() {
     queryKey: ["rfq-budget-check-by-cost-center", decodedId, rfqValueForBudget],
     queryFn: () => getRfqBudgetCheckByCostCenter(rfq!, rfqValueForBudget),
     enabled: !!rfq,
+    // Re-run automatically when the reviewer returns after creating/assigning a
+    // budget, so the checklist and validations appear without a manual reload.
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
   });
 
   /* ── Checklist ── */
@@ -289,6 +303,13 @@ export default function FinanceReviewDetailPage() {
   const checklistComplete = autoComplete && manualComplete;
   const checklistDoneCount = CHECKLIST_ITEMS.filter(isChecklistItemDone).length;
 
+  // Whether an active ERPNext budget is linked to this RFQ. Until one exists the
+  // Finance Review Checklist is hidden entirely (its budget validations are not
+  // applicable yet) and approval stays disabled.
+  const hasBudget = !!budgetCheckData?.found;
+  const budgetResolved = !budgetCheckQuery.isLoading;
+  const budgetMissing = budgetResolved && !hasBudget;
+
   /* ── Notes ── */
   const [reviewNotes, setReviewNotes] = useState("");
   const [actionReason, setActionReason] = useState("");
@@ -314,6 +335,9 @@ export default function FinanceReviewDetailPage() {
   const [submitting, setSubmitting] = useState<FinanceReviewStatus | null>(null);
   const [submitted, setSubmitted] = useState(false);
 
+  /* ── Manual budget assignment modal ── */
+  const [assignOpen, setAssignOpen] = useState(false);
+
   const currentFinanceStatus = approvalState?.finance_status ?? "Pending Finance Review";
 
   useEffect(() => {
@@ -331,7 +355,9 @@ export default function FinanceReviewDetailPage() {
     // A rejection is always allowed (e.g. over-budget) as long as a reason is
     // given; approval requires every checklist item — auto + manual — to pass.
     if (action === "reject") return actionReason.trim().length >= 10;
-    return checklistComplete;
+    // Approval requires an assigned budget plus every checklist item (auto +
+    // manual). Without a budget the auto validations are not applicable.
+    return hasBudget && checklistComplete;
   };
 
   const handleAction = useCallback(
@@ -445,7 +471,15 @@ export default function FinanceReviewDetailPage() {
               <p className="text-sm font-semibold text-neutral-700">{decodedId}</p>
             </div>
           </div>
-          <FinanceStatusBadge status={currentFinanceStatus} />
+          <div className="flex items-center gap-2">
+            <SlaStageBadge
+              workflow="Finance Review"
+              referenceDoctype="Request for Quotation"
+              referenceName={rfq.name}
+              open={currentFinanceStatus === "Pending Finance Review"}
+            />
+            <FinanceStatusBadge status={currentFinanceStatus} />
+          </div>
         </div>
       </div>
 
@@ -698,12 +732,23 @@ export default function FinanceReviewDetailPage() {
               check={budgetCheckQuery.data}
               rfqValue={rfqValue}
               onCreateBudget={() => navigate(buildBudgetCreatePath(budgetCheckQuery.data))}
-              onAssignBudget={() => navigate("/budget/plans")}
+              onAssignBudget={() => setAssignOpen(true)}
             />
           )}
         </CollapsibleSection>
 
+        {/* Budget not yet linked — the Finance Review Checklist is not applicable
+            until a budget is created or assigned. */}
+        {budgetMissing && (
+          <div className="flex items-start gap-2.5 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm font-medium text-primary">
+            <Info className="mt-0.5 h-4 w-4 flex-shrink-0" />
+            Finance review will become available after a budget has been created
+            or assigned.
+          </div>
+        )}
+
         {/* ═══════════════ Section: Finance Checklist ═══════════════ */}
+        {!budgetMissing && (
         <CollapsibleSection
           id="checklist"
           icon={ShieldCheck}
@@ -820,6 +865,7 @@ export default function FinanceReviewDetailPage() {
             </div>
           )}
         </CollapsibleSection>
+        )}
 
         {/* ═══════════════ Section: Review Notes ═══════════════ */}
         <CollapsibleSection
@@ -1018,6 +1064,19 @@ export default function FinanceReviewDetailPage() {
           )}
         </CollapsibleSection>
       </div>
+
+      <AssignBudgetModal
+        open={assignOpen}
+        onClose={() => setAssignOpen(false)}
+        rfqName={decodedId}
+        fiscalYear={budgetCheck?.fiscalYear}
+        company={budgetCheck?.company ?? rfq.company}
+        assignedBy={user?.email}
+        onAssigned={() => {
+          setAssignOpen(false);
+          void budgetCheckQuery.refetch();
+        }}
+      />
     </div>
   );
 }
@@ -1187,6 +1246,154 @@ function NoActiveBudget({
         >
           <Building2 className="h-4 w-4" /> Assign Budget
         </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Manual "Assign Budget" picker — lists every Active ERPNext Budget for the
+ * RFQ's fiscal year, lets the Finance Manager choose one, persists the choice
+ * on the RFQ (live ERPNext), then triggers an automatic refresh so the assigned
+ * budget loads immediately. Live data only — no mock records.
+ */
+function AssignBudgetModal({
+  open,
+  onClose,
+  rfqName,
+  fiscalYear,
+  company,
+  assignedBy,
+  onAssigned,
+}: {
+  open: boolean;
+  onClose: () => void;
+  rfqName: string;
+  fiscalYear?: string;
+  company?: string;
+  assignedBy?: string;
+  onAssigned: () => void;
+}) {
+  const [selected, setSelected] = useState<string>("");
+  const [saving, setSaving] = useState(false);
+
+  const optionsQuery = useQuery<AssignableBudgetOption[]>({
+    queryKey: ["assignable-budgets", fiscalYear, company],
+    queryFn: () => getActiveBudgetsForFiscalYear(fiscalYear, company),
+    enabled: open,
+    staleTime: 30_000,
+  });
+
+  useEffect(() => {
+    if (!open) setSelected("");
+  }, [open]);
+
+  if (!open) return null;
+
+  const options = optionsQuery.data ?? [];
+
+  const handleAssign = async () => {
+    if (!selected) return;
+    setSaving(true);
+    try {
+      await assignBudgetToRfq(rfqName, selected, assignedBy);
+      toast.success("Budget assigned — loading availability…");
+      onAssigned();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not assign budget");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-neutral-100 px-5 py-4">
+          <div className="flex items-center gap-2">
+            <Building2 className="h-4 w-4 text-primary" />
+            <h3 className="text-sm font-bold text-neutral-900">Assign Active Budget</h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
+          >
+            <XCircle className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="px-5 py-4">
+          <p className="mb-3 text-xs text-neutral-500">
+            Showing Active budgets{fiscalYear ? ` for fiscal year ${fiscalYear}` : ""}.
+            Select one to govern this RFQ.
+          </p>
+
+          {optionsQuery.isLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-14 rounded-lg" />
+              <Skeleton className="h-14 rounded-lg" />
+            </div>
+          ) : options.length === 0 ? (
+            <div className="flex items-center gap-2 rounded-lg border border-warning-200 bg-warning-50 px-4 py-3 text-sm text-warning-800">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+              No Active budgets found{fiscalYear ? ` for ${fiscalYear}` : ""}. Create a
+              budget first.
+            </div>
+          ) : (
+            <div className="max-h-72 space-y-2 overflow-auto">
+              {options.map((b) => (
+                <label
+                  key={b.name}
+                  className={`flex cursor-pointer items-center justify-between gap-3 rounded-lg border px-4 py-3 transition ${
+                    selected === b.name
+                      ? "border-primary bg-primary/5"
+                      : "border-neutral-200 hover:border-neutral-300"
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="radio"
+                      name="assign-budget"
+                      checked={selected === b.name}
+                      onChange={() => setSelected(b.name)}
+                      className="h-4 w-4 text-primary focus:ring-primary"
+                    />
+                    <div>
+                      <p className="text-sm font-semibold text-neutral-900">{b.name}</p>
+                      <p className="text-xs text-neutral-500">
+                        {b.costCenter || "—"} · {b.fiscalYear}
+                        {b.status === "Active" ? " · Active" : ` · ${b.status}`}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-sm font-bold tabular-nums text-neutral-700">
+                    {formatCurrency(b.budgetAmount)}
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-3 border-t border-neutral-100 px-5 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-semibold text-neutral-700 hover:bg-neutral-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleAssign}
+            disabled={!selected || saving}
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            Assign Budget
+          </button>
+        </div>
       </div>
     </div>
   );

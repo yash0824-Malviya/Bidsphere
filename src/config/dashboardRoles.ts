@@ -221,6 +221,12 @@ export const DASHBOARD_BY_ROLE: Record<AppRole, RoleDashboardConfig> = {
     roleLabel: ROLE_LABELS.department,
     statusLabel: "Department User",
   },
+  manufacturing: {
+    title: "Manufacturing Dashboard",
+    subtitle: "Manage Bills of Materials and finished products",
+    roleLabel: ROLE_LABELS.manufacturing,
+    statusLabel: "Manufacturing",
+  },
 };
 
 /** Supplier portal dashboard copy (separate auth surface). */
@@ -232,7 +238,7 @@ export const SUPPLIER_DASHBOARD_CONFIG: RoleDashboardConfig = {
 };
 
 const EXECUTIVE_LAYOUT_BY_ROLE: Record<
-  Exclude<AppRole, "warehouse" | "legal" | "department">,
+  Exclude<AppRole, "warehouse" | "legal" | "department" | "manufacturing">,
   ExecutiveDashboardLayout
 > = {
   admin: {
@@ -289,14 +295,14 @@ export function getDashboardConfig(role: AppRole): RoleDashboardConfig {
 }
 
 export function getExecutiveDashboardLayout(
-  role: Exclude<AppRole, "warehouse" | "legal" | "department">
+  role: Exclude<AppRole, "warehouse" | "legal" | "department" | "manufacturing">
 ): ExecutiveDashboardLayout {
   return EXECUTIVE_LAYOUT_BY_ROLE[role] ?? EXECUTIVE_LAYOUT_BY_ROLE.admin;
 }
 
 export function filterActivityByRole(
   items: ActivityFeedItem[],
-  role: Exclude<AppRole, "warehouse" | "legal" | "department">
+  role: Exclude<AppRole, "warehouse" | "legal" | "department" | "manufacturing">
 ): ActivityFeedItem[] {
   const { activityTypes } = getExecutiveDashboardLayout(role);
   if (activityTypes === "all") return items;

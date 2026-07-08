@@ -22,10 +22,15 @@ import {
   type ItemBidInput,
 } from "../../api/reverseBidding";
 import AuctionStatusBadge from "../../components/reverse-bidding/AuctionStatusBadge";
+import AuctionCountdownAlert, {
+  countdownPhaseClass,
+} from "../../components/reverse-bidding/AuctionCountdownAlert";
 import { TableSkeleton } from "../../components/Skeleton";
 import SupplierPortalLayout from "./SupplierPortalLayout";
 import SupplierAccessDenied from "../../components/supplier-portal/SupplierAccessDenied";
 import { useCountdown } from "../../hooks/useCountdown";
+import { useServerTimeOffset } from "../../hooks/useServerTimeOffset";
+import { useAuctionCountdownAlerts } from "../../hooks/useAuctionCountdownAlerts";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
 import { formatCurrencyIn, formatDateTime } from "../../utils/format";
 
@@ -92,13 +97,23 @@ export default function SupplierAuctionPage() {
     }
   }, [lowest, auction]);
 
+  const serverOffset = useServerTimeOffset();
   const countdownTarget = useMemo(() => {
     if (!auction) return null;
     if (status === "Live") return parseErpDateTime(auction.end_date_time);
     if (status === "Scheduled") return parseErpDateTime(auction.start_date_time);
     return null;
   }, [auction, status]);
-  const countdown = useCountdown(countdownTarget);
+  const countdown = useCountdown(countdownTarget, serverOffset);
+
+  // Enterprise countdown alerts (beeps + red/pulse/scale) only while live.
+  const alerts = useAuctionCountdownAlerts({
+    msRemaining: countdown.msRemaining,
+    active: status === "Live",
+  });
+  // Freeze bidding the instant the clock hits zero, even before the status
+  // flip / next refetch lands (belt-and-suspenders with the Live gate).
+  const biddingFrozen = status !== "Live" || countdown.msRemaining <= 0;
 
   const invalidateAuction = () => {
     queryClient.invalidateQueries({ queryKey: ["supplier-auction", name] });
@@ -196,9 +211,19 @@ export default function SupplierAuctionPage() {
     return !v.ok;
   });
 
+  const winnerPending =
+    status === "Completed" &&
+    !auction.winning_supplier &&
+    !(auction.winner_price ?? auction.lowest_bid);
+
   return (
     <SupplierPortalLayout supplierName={supplierName}>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <AuctionCountdownAlert
+          phase={alerts.phase}
+          secondsLeft={alerts.secondsLeft}
+          closed={status === "Completed"}
+        />
         <div>
           <h1 className="flex items-center gap-2 text-lg font-bold text-neutral-900">
             <Gavel className="h-5 w-5 text-primary" />
@@ -236,7 +261,11 @@ export default function SupplierAuctionPage() {
                   ? t("reverseBidding.auctionLabel")
                   : t("reverseBidding.statusLabel")}
           </p>
-          <p className="mt-1 text-2xl font-bold tabular-nums text-neutral-900">
+          <p
+            className={`mt-1 inline-block text-2xl font-bold tabular-nums text-neutral-900 ${
+              status === "Live" ? countdownPhaseClass(alerts.phase) : ""
+            }`}
+          >
             {status === "Live" || status === "Scheduled"
               ? countdown.label
               : status === "Completed"
@@ -359,10 +388,11 @@ export default function SupplierAuctionPage() {
                             min={0}
                             step="0.01"
                             value={value}
+                            disabled={biddingFrozen}
                             onChange={(e) =>
                               setItemBid(it.item_code, e.target.value)
                             }
-                            className="input-field w-28 text-right"
+                            className="input-field w-28 text-right disabled:cursor-not-allowed disabled:bg-neutral-100"
                             placeholder={
                               decrement > 0
                                 ? String(Math.max(0, itemLowest - decrement))
@@ -395,7 +425,8 @@ export default function SupplierAuctionPage() {
                 disabled={
                   itemBid.isPending ||
                   enteredItemBids.length === 0 ||
-                  anyItemInvalid
+                  anyItemInvalid ||
+                  biddingFrozen
                 }
                 onClick={() => itemBid.mutate(enteredItemBids)}
               >
@@ -428,15 +459,16 @@ export default function SupplierAuctionPage() {
                   min={0}
                   step="0.01"
                   value={amount}
+                  disabled={biddingFrozen}
                   onChange={(e) => setAmount(e.target.value)}
-                  className="input-field w-48"
+                  className="input-field w-48 disabled:cursor-not-allowed disabled:bg-neutral-100"
                   placeholder={maxAllowed > 0 ? String(maxAllowed) : "0.00"}
                 />
               </label>
               <button
                 type="button"
                 className="btn-primary"
-                disabled={bid.isPending || (check ? !check.ok : true)}
+                disabled={bid.isPending || (check ? !check.ok : true) || biddingFrozen}
                 onClick={() => bid.mutate()}
               >
                 <Gavel className="h-4 w-4" />
@@ -461,6 +493,14 @@ export default function SupplierAuctionPage() {
         </div>
       ) : status === "Completed" ? (
         <div className="mt-4 space-y-3">
+          {winnerPending && (
+            <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-medium text-amber-800">
+              <span className="inline-block h-2 w-2 animate-ping rounded-full bg-amber-500" />
+              {t("reverseBidding.winnerCalculating", {
+                defaultValue: "Auction closed — winner is being finalized…",
+              })}
+            </div>
+          )}
           <div
             className={`rounded-xl border p-4 ${
               sameSupplier(auction.winning_supplier, supplierName)

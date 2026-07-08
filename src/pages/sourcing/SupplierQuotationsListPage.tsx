@@ -1,7 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { apiGet, buildListConfig, buildResourceUrl } from "../../api/erpnext";
+import { useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
+import { fetchPagedList } from "../../api/erpnext";
+import type { Filter } from "../../api/erpnext";
 import PageHeader from "../../components/PageHeader";
+import PaginationBar from "../../components/PaginationBar";
 import StatusBadge from "../../components/StatusBadge";
+import { usePagination } from "../../hooks/usePagination";
 import { formatDate } from "../../utils/format";
 
 interface SupplierQuotationRow {
@@ -12,19 +17,40 @@ interface SupplierQuotationRow {
   status?: string;
 }
 
+const SQ_DOCTYPE = "Supplier Quotation";
+const SQ_FIELDS = ["name", "supplier", "supplier_name", "transaction_date", "status"];
+
 export default function SupplierQuotationsListPage() {
-  const { data = [], isLoading } = useQuery({
-    queryKey: ["procurement-supplier-quotations"],
-    queryFn: () =>
-      apiGet<SupplierQuotationRow[]>(
-        buildResourceUrl("Supplier Quotation"),
-        buildListConfig({
-          fields: ["name", "supplier", "supplier_name", "transaction_date", "status"],
-          order_by: "modified desc",
-          limit_page_length: 100,
-        })
-      ),
+  const [searchParams] = useSearchParams();
+  const preset = (searchParams.get("preset") ?? "").toLowerCase();
+
+  const filters = useMemo<Filter[] | undefined>(() => {
+    if (preset === "pending") {
+      return [
+        ["status", "not in", ["Ordered", "Expired", "Lost", "Cancelled"]],
+      ] as Filter[];
+    }
+    return undefined;
+  }, [preset]);
+
+  const { page, pageSize, setPage, setPageSize } = usePagination({
+    resetKey: JSON.stringify(filters ?? []),
   });
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["procurement-supplier-quotations", filters, page, pageSize],
+    queryFn: () =>
+      fetchPagedList<SupplierQuotationRow>(SQ_DOCTYPE, {
+        fields: SQ_FIELDS,
+        filters,
+        order_by: "modified desc",
+        page,
+        pageSize,
+      }),
+    placeholderData: (prev) => prev,
+  });
+
+  const rows = data?.data ?? [];
 
   return (
     <div>
@@ -47,14 +73,14 @@ export default function SupplierQuotationsListPage() {
               <tr>
                 <td colSpan={4} className="px-4 py-8 text-center">Loading…</td>
               </tr>
-            ) : data.length === 0 ? (
+            ) : rows.length === 0 ? (
               <tr>
                 <td colSpan={4} className="px-4 py-8 text-center text-neutral-500">
                   No supplier quotations found.
                 </td>
               </tr>
             ) : (
-              data.map((sq) => (
+              rows.map((sq) => (
                 <tr key={sq.name} className="hover:bg-neutral-50">
                   <td className="px-4 py-3 font-semibold text-neutral-900">{sq.name}</td>
                   <td className="px-4 py-3">{sq.supplier_name ?? sq.supplier ?? "—"}</td>
@@ -67,6 +93,17 @@ export default function SupplierQuotationsListPage() {
             )}
           </tbody>
         </table>
+
+        {!isLoading && (
+          <PaginationBar
+            currentPage={data?.current_page ?? page}
+            totalPages={data?.total_pages ?? 1}
+            totalRecords={data?.total_records ?? 0}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+          />
+        )}
       </div>
     </div>
   );

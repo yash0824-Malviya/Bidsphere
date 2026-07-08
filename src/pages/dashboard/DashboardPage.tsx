@@ -29,6 +29,10 @@ export default function DashboardPage() {
     return <Navigate to="/warehouse/dashboard" replace />;
   }
 
+  if (role === "manufacturing") {
+    return <Navigate to="/manufacturing/boms" replace />;
+  }
+
   if (role === "finance_executive") {
     return <Navigate to="/budget" replace />;
   }

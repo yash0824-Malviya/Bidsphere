@@ -547,6 +547,23 @@ export function triggerQuotationSubmitted(
   });
 }
 
+export function triggerQuotationDeclined(
+  rfqId: string,
+  supplier: string,
+  reason: string
+) {
+  return createNotification({
+    title: "Supplier Declined RFQ",
+    description: `${supplier} declined RFQ ${rfqId}. Reason: ${reason}.`,
+    module: "Supplier Quotation",
+    event_type: "quotation_declined",
+    target_role: "procurement",
+    document_type: "Request for Quotation",
+    document_name: rfqId,
+    route_path: `/sourcing/rfq/${encodeURIComponent(rfqId)}`,
+  });
+}
+
 export function triggerLegalReviewRequired(rfqId: string, amount: number) {
   const fmt = new Intl.NumberFormat("en-IN", {
     style: "currency",

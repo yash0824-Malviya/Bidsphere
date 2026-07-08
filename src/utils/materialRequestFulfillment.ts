@@ -100,7 +100,11 @@ function classifyItem(
   if (issued >= requested && requested > 0) return "Issued";
   if (issued > 0) return "Partial";
   if (procurement > 0) return "Procurement";
-  if (workflow === "Procurement Required" || workflow === "RFQ Created") {
+  if (
+    workflow === "Procurement Required" ||
+    workflow === "Forwarded to Procurement" ||
+    workflow === "RFQ Created"
+  ) {
     return "Procurement";
   }
   return "Pending Review";
@@ -144,6 +148,7 @@ export function computeRequestFulfillment(
       available = null;
     } else if (
       workflowStatus === "Procurement Required" ||
+      workflowStatus === "Forwarded to Procurement" ||
       workflowStatus === "RFQ Created"
     ) {
       issued = 0;
@@ -208,6 +213,7 @@ function rollupStatus(
   const anyProcurement =
     totals.procurement > 0 ||
     workflow === "Procurement Required" ||
+    workflow === "Forwarded to Procurement" ||
     workflow === "RFQ Created";
   const fullyIssued =
     items.length > 0 && items.every((it) => it.remaining === 0 && it.issued > 0);

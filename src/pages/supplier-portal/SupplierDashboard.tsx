@@ -3,10 +3,12 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
+  Award,
   CheckCircle2,
   CreditCard,
   FileText,
   Inbox,
+  Percent,
   Receipt,
   ShoppingCart,
   Truck,
@@ -53,6 +55,18 @@ export default function SupplierDashboard() {
 
   const activePOsCount = useMemo(() => countActivePOs(pos), [pos]);
 
+  // Response rate = quotations submitted vs RFQs received.
+  const responseRate = useMemo(() => {
+    if (rfqs.length === 0) return null;
+    return Math.round((submittedCount / rfqs.length) * 100);
+  }, [rfqs.length, submittedCount]);
+
+  // Award rate = purchase orders won vs quotations submitted.
+  const awardRate = useMemo(() => {
+    if (submittedCount === 0) return null;
+    return Math.min(100, Math.round((pos.length / submittedCount) * 100));
+  }, [pos.length, submittedCount]);
+
   const latestModified = useMemo(
     () => (rows: Array<{ modified?: string }>) =>
       rows.reduce<string | undefined>((best, row) => {
@@ -91,20 +105,36 @@ export default function SupplierDashboard() {
       </div>
 
       {/* KPI row */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <StatCard
-          label="Open RFQs"
-          value={openRfqsCount}
-          hint="Awaiting your quotation"
+          label="RFQs Received"
+          value={rfqs.length}
+          hint={`${openRfqsCount} open`}
           icon={Inbox}
           tone="warning"
           loading={loading}
         />
         <StatCard
-          label="Submitted Quotations"
+          label="Quotations Submitted"
           value={submittedCount}
           hint="Total quotations sent"
           icon={CheckCircle2}
+          tone="success"
+          loading={loading}
+        />
+        <StatCard
+          label="Response Rate"
+          value={responseRate == null ? "No data" : `${responseRate}%`}
+          hint="Quotes vs RFQs received"
+          icon={Percent}
+          tone="info"
+          loading={loading}
+        />
+        <StatCard
+          label="Award Rate"
+          value={awardRate == null ? "No data" : `${awardRate}%`}
+          hint="Orders won vs quotes"
+          icon={Award}
           tone="success"
           loading={loading}
         />
@@ -225,7 +255,7 @@ export default function SupplierDashboard() {
 
 interface StatCardProps {
   label: string;
-  value: number;
+  value: number | string;
   hint?: string;
   icon: typeof Inbox;
   tone: "warning" | "success" | "info" | "danger";

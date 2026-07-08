@@ -7,12 +7,12 @@ import toast from "react-hot-toast";
 import {
   getIncomingPurchaseOrders,
   getPurchaseReceipt,
-  getPurchaseReceipts,
   submitPurchaseReceipt,
 } from "../../api/purchasing";
 import { invalidateFinanceDashboardMetrics } from "../../api/financeWorkflow";
 import { reconcileProcurementReadyToIssue } from "../../api/materialRequestWorkflow";
 import { invalidateWarehouseStock } from "../../api/warehouseStock";
+import { fetchPagedList } from "../../api/erpnext";
 import type { Filter } from "../../api/erpnext";
 import type {
   PurchaseReceipt,
@@ -20,6 +20,7 @@ import type {
 } from "../../types/erpnext";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
+import PaginationBar from "../../components/PaginationBar";
 import { TableSkeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
 import PdfActions from "../../components/PdfActions";
@@ -28,15 +29,39 @@ import { buildGrnPdf, grnPdfFilename } from "../../utils/pdf/grnPdf";
 import { canCreateGRN } from "../../config/roles";
 import { useAuthStore } from "../../store/authStore";
 import { FilterBar, FilterField, SearchInput, SortableTableHeader } from "../../components/ui";
-import { useListSort } from "../../hooks/useListSort";
+import { usePagination } from "../../hooks/usePagination";
 import { useDebounce } from "../../hooks/useDebounce";
 import {
   GRN_DEFAULT_SORT,
   grnComparators,
   sortNewestFirst,
+  sortRows,
 } from "../../utils/listSort";
 import { formatCurrency, formatDate } from "../../utils/format";
 import { buildUpcomingDeliveries } from "../../utils/upcomingDeliveries";
+
+const GRN_DOCTYPE = "Purchase Receipt";
+
+const GRN_FIELDS = [
+  "name",
+  "supplier",
+  "supplier_name",
+  "posting_date",
+  "creation",
+  "status",
+  "grand_total",
+  "currency",
+  "total_qty",
+];
+
+/** Sort keys that map directly to a real Purchase Receipt field. */
+const GRN_ORDER_BY_FIELD: Record<string, string> = {
+  name: "name",
+  supplier: "supplier_name",
+  date: "posting_date",
+  status: "status",
+  total: "grand_total",
+};
 
 const GRN_COMPARATORS = grnComparators<PurchaseReceipt>();
 
@@ -66,26 +91,30 @@ export default function GRNPage() {
     return f;
   }, [status, debouncedSearch]);
 
-  const { data: rows = [], isLoading, isError } = useQuery({
-    queryKey: ["purchase-receipts", filters],
-    queryFn: () =>
-      getPurchaseReceipts({
-        filters,
-        fields: [
-          "name",
-          "supplier",
-          "supplier_name",
-          "posting_date",
-          "creation",
-          "status",
-          "grand_total",
-          "currency",
-          "total_qty",
-        ],
-        order_by: "posting_date desc, creation desc, name desc",
-        limit_page_length: 100,
-      }),
+  const [sort, setSort] = useState(GRN_DEFAULT_SORT);
+  const orderByField = GRN_ORDER_BY_FIELD[sort.key];
+  const order_by = orderByField
+    ? `${orderByField} ${sort.direction}, name desc`
+    : "posting_date desc, creation desc, name desc";
+
+  const { page, pageSize, setPage, setPageSize } = usePagination({
+    resetKey: JSON.stringify(filters) + order_by,
   });
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["purchase-receipts", filters, page, pageSize, order_by],
+    queryFn: () =>
+      fetchPagedList<PurchaseReceipt>(GRN_DOCTYPE, {
+        filters,
+        fields: GRN_FIELDS,
+        order_by,
+        page,
+        pageSize,
+      }),
+    placeholderData: (prev) => prev,
+  });
+
+  const rows = data?.data ?? [];
 
   const incomingQuery = useQuery({
     queryKey: ["incoming-purchase-orders"],
@@ -99,21 +128,14 @@ export default function GRNPage() {
     [incomingQuery.data]
   );
 
-  const normalizedRows = useMemo(
-    () =>
-      sortNewestFirst(rows, {
-        date: (g) => g.posting_date,
-        creation: (g) => g.creation,
-        name: (g) => g.name,
-      }),
-    [rows]
-  );
-
-  const { sort, setSort, sortedRows } = useListSort(
-    normalizedRows,
-    GRN_DEFAULT_SORT,
-    GRN_COMPARATORS
-  );
+  const sortedRows = useMemo(() => {
+    const normalized = sortNewestFirst(rows, {
+      date: (g) => g.posting_date,
+      creation: (g) => g.creation,
+      name: (g) => g.name,
+    });
+    return sortRows(normalized, sort, GRN_COMPARATORS);
+  }, [rows, sort]);
 
   return (
     <div className="flex min-h-0 flex-col gap-3">
@@ -290,6 +312,17 @@ export default function GRNPage() {
                   </tbody>
                 </table>
               </div>
+            )}
+
+            {!isLoading && !isError && sortedRows.length > 0 && (
+              <PaginationBar
+                currentPage={data?.current_page ?? page}
+                totalPages={data?.total_pages ?? 1}
+                totalRecords={data?.total_records ?? 0}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                onPageSizeChange={setPageSize}
+              />
             )}
           </div>
         </section>

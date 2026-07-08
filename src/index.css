@@ -1207,6 +1207,77 @@ input[type="number"] {
   }
 }
 
+/* ── Reverse-auction countdown alerts ── */
+@keyframes auction-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 0.75;
+  }
+}
+
+@keyframes auction-pulse-strong {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.14);
+    opacity: 0.6;
+  }
+}
+
+@keyframes auction-scale {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.28);
+  }
+}
+
+@keyframes auction-banner-in {
+  from {
+    transform: translate(-50%, -12px);
+    opacity: 0;
+  }
+  to {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
+}
+
+.auction-count-warn {
+  animation: auction-pulse 1s ease-in-out infinite;
+}
+
+.auction-count-urgent {
+  animation: auction-pulse-strong 0.7s ease-in-out infinite;
+}
+
+.auction-count-critical {
+  animation: auction-scale 0.5s ease-in-out infinite;
+}
+
+.auction-alert-banner {
+  animation: auction-banner-in 0.25s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auction-count-warn,
+  .auction-count-urgent,
+  .auction-count-critical,
+  .auction-alert-banner {
+    animation: none;
+  }
+}
+
 /* ShadCN / react-day-picker calendar theme */
 .rdp-calendar.rdp-root {
   --rdp-accent-color: #0ea5e9;

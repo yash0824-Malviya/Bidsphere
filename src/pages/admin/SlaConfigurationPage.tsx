@@ -6,6 +6,7 @@ import { Pencil, Plus, ShieldAlert, Timer, Trash2 } from "lucide-react";
 import {
   createSlaConfiguration,
   deleteSlaConfiguration,
+  listErpRoles,
   listSlaConfigurations,
   setSlaConfigurationEnabled,
   updateSlaConfiguration,
@@ -15,22 +16,10 @@ import {
   SLA_PRIORITIES,
   SLA_TIME_UNITS,
   SLA_WORKFLOWS,
-  SLA_WORKFLOW_DEFAULT_ROLE,
 } from "../../config/slaWorkflows";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { Skeleton } from "../../components/Skeleton";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
-
-const ROLE_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: "department", label: "Department User" },
-  { value: "warehouse", label: "Warehouse Manager" },
-  { value: "procurement", label: "Procurement Manager" },
-  { value: "legal", label: "Legal Reviewer" },
-  { value: "finance", label: "Finance Manager" },
-  { value: "finance_executive", label: "Finance Executive" },
-  { value: "admin", label: "Admin" },
-  { value: "supplier", label: "Supplier" },
-];
 
 type Draft = Omit<SlaConfiguration, "name">;
 
@@ -39,7 +28,7 @@ function emptyDraft(): Draft {
     sla_name: "",
     workflow: "Warehouse Review",
     stage: "",
-    role: "warehouse",
+    role: "",
     priority: "All",
     duration: 4,
     time_unit: "Hours",
@@ -68,6 +57,14 @@ export default function SlaConfigurationPage() {
     staleTime: 60_000,
     retry: false,
   });
+
+  const rolesQuery = useQuery({
+    queryKey: ["erp-roles"],
+    queryFn: listErpRoles,
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const roleOptions = rolesQuery.data ?? [];
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["sla-configurations"] });
@@ -179,12 +176,7 @@ export default function SlaConfigurationPage() {
               <select
                 className="input-field"
                 value={String(draft.workflow)}
-                onChange={(e) => {
-                  const wf = e.target.value;
-                  update("workflow", wf);
-                  const def = SLA_WORKFLOW_DEFAULT_ROLE[wf as keyof typeof SLA_WORKFLOW_DEFAULT_ROLE];
-                  if (def && !editing) update("role", def);
-                }}
+                onChange={(e) => update("workflow", e.target.value)}
               >
                 {SLA_WORKFLOWS.map((w) => (
                   <option key={w} value={w}>
@@ -207,12 +199,17 @@ export default function SlaConfigurationPage() {
                 value={draft.role ?? ""}
                 onChange={(e) => update("role", e.target.value)}
               >
-                <option value="">Any</option>
-                {ROLE_OPTIONS.map((r) => (
-                  <option key={r.value} value={r.value}>
-                    {r.label}
+                <option value="">
+                  {rolesQuery.isLoading ? "Loading roles…" : "Any"}
+                </option>
+                {roleOptions.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
                   </option>
                 ))}
+                {draft.role && !roleOptions.includes(draft.role) ? (
+                  <option value={draft.role}>{draft.role}</option>
+                ) : null}
               </select>
             </Field>
             <Field label="Priority">
@@ -283,11 +280,17 @@ export default function SlaConfigurationPage() {
                 onChange={(e) => update("escalation_role", e.target.value)}
               >
                 <option value="">None</option>
-                {ROLE_OPTIONS.map((r) => (
-                  <option key={r.value} value={r.value}>
-                    {r.label}
+                {roleOptions.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
                   </option>
                 ))}
+                {draft.escalation_role &&
+                !roleOptions.includes(draft.escalation_role) ? (
+                  <option value={draft.escalation_role}>
+                    {draft.escalation_role}
+                  </option>
+                ) : null}
               </select>
             </Field>
             <Field label="Status">

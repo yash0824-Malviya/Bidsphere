@@ -6,8 +6,10 @@ import { Eye, Receipt, Search } from "lucide-react";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
 import InvoiceStatusBadge from "../../components/InvoiceStatusBadge";
+import PaginationBar from "../../components/PaginationBar";
 import PdfActions from "../../components/PdfActions";
 import { getAllInvoices, getVoucherById } from "../../api/vouchers";
+import { usePagination } from "../../hooks/usePagination";
 import { useVoucherSyncStore } from "../../store/voucherSyncStore";
 import { useAuthStore } from "../../store/authStore";
 import { formatCurrency, formatDate } from "../../utils/format";
@@ -74,6 +76,20 @@ export default function InvoiceListPage() {
     for (const inv of invoices) base[inv.status] += 1;
     return base;
   }, [invoices]);
+
+  // Invoices are a derived view built from Voucher documents (not a raw
+  // ERPNext doctype list), so the fetch stays a single bulk query —
+  // pagination is applied client-side over the already-filtered rows.
+  const { page, pageSize, setPage, setPageSize } = usePagination({
+    resetKey: `${statusFilter}|${q}`,
+  });
+  const totalRecords = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedInvoices = useMemo(
+    () => filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [filtered, currentPage, pageSize]
+  );
 
   return (
     <div>
@@ -146,7 +162,7 @@ export default function InvoiceListPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-200">
-                {filtered.map((inv) => (
+                {pagedInvoices.map((inv) => (
                   <tr
                     key={inv.voucher_id}
                     onClick={() =>
@@ -205,6 +221,15 @@ export default function InvoiceListPage() {
               </tbody>
             </table>
           </div>
+
+          <PaginationBar
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={totalRecords}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+          />
         </div>
       )}
     </div>

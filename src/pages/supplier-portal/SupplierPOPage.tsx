@@ -23,6 +23,7 @@ import {
   CalendarDays,
   CheckCircle2,
   ChevronRight,
+  Download,
   FileText,
   Loader2,
   Package,
@@ -122,6 +123,9 @@ export default function SupplierPOPage() {
   const [deliveryState, setDeliveryState] = useState<PODeliveryState | null>(
     null
   );
+
+  /* ── PO PDF download ──────────────────────────────────────────────────── */
+  const [pdfDownloading, setPdfDownloading] = useState(false);
 
   /* ── Data fetch ───────────────────────────────────────────────────────── */
   const {
@@ -265,6 +269,52 @@ export default function SupplierPOPage() {
     }
   }
 
+  /**
+   * Downloads the official Purchase Order PDF using ERPNext's own "Standard"
+   * Print Format for the Purchase Order doctype (`frappe.utils.print_format
+   * .download_pdf`) — the exact same endpoint the buyer-side PO detail page
+   * uses. No custom PDF template is generated; the document, layout, company
+   * letterhead, and signature come entirely from ERPNext's print format.
+   *
+   * The request is fetched (rather than a bare `window.open`) so a failed
+   * generation never surfaces a raw Frappe traceback / wkhtmltopdf error in
+   * a blank tab — only a friendly toast is shown, and only a verified PDF
+   * blob is ever opened.
+   */
+  async function handleDownloadPoPdf() {
+    if (pdfDownloading) return;
+    setPdfDownloading(true);
+    try {
+      const url = `/api/method/frappe.utils.print_format.download_pdf?doctype=${encodeURIComponent(
+        "Purchase Order"
+      )}&name=${encodeURIComponent(name)}&format=${encodeURIComponent("Standard")}`;
+      const res = await fetch(url, { credentials: "include" });
+      const contentType = res.headers.get("content-type") ?? "";
+      if (!res.ok || !contentType.toLowerCase().includes("pdf")) {
+        throw new Error(
+          `PDF generation failed (status ${res.status}, content-type ${contentType})`
+        );
+      }
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const opened = window.open(blobUrl, "_blank");
+      if (!opened) {
+        // Popup blocked — fall back to a direct download.
+        const a = document.createElement("a");
+        a.href = blobUrl;
+        a.download = `${name}.pdf`;
+        a.click();
+      }
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[Supplier PO PDF] Download failed:", err);
+      toast.error("Unable to generate Purchase Order PDF. Please try again later.");
+    } finally {
+      setPdfDownloading(false);
+    }
+  }
+
   /* ── Loading skeleton ─────────────────────────────────────────────────── */
   if (!supplierName || isLoading) {
     return (
@@ -360,7 +410,24 @@ export default function SupplierPOPage() {
               {po.supplier_name ?? po.supplier}
             </p>
           </div>
-          <StatusBadge status={displayStatus} />
+          <div className="flex flex-shrink-0 flex-col items-end gap-2">
+            <StatusBadge status={displayStatus} />
+            {displayStatus === "Completed" && (
+              <button
+                type="button"
+                onClick={() => void handleDownloadPoPdf()}
+                disabled={pdfDownloading}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-primary-200 bg-primary-50 px-3 py-1.5 text-xs font-semibold text-primary-700 shadow-sm transition hover:bg-primary-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {pdfDownloading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Download className="h-3.5 w-3.5" />
+                )}
+                Download PO PDF
+              </button>
+            )}
+          </div>
         </div>
       </div>
 

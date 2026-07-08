@@ -8,6 +8,7 @@ import {
   getSupplierRFQs,
 } from "../../api/supplierPortal";
 import { getSupplierQuotation } from "../../api/sourcing";
+import { getDeclinedSuppliersByRfq } from "../../api/supplierRfqResponse";
 import type { SupplierQuotation } from "../../types/erpnext";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
@@ -34,10 +35,14 @@ type RfqDisplayStatus = {
 function deriveRfqStatus(
   rfqStatus: string | undefined,
   alreadyQuoted: boolean,
-  isPublished: boolean
+  isPublished: boolean,
+  declined: boolean
 ): RfqDisplayStatus {
   if (alreadyQuoted) {
     return { label: "Quotation Submitted", tone: "info" };
+  }
+  if (declined) {
+    return { label: "No Quote Submitted", tone: "warning" };
   }
   if (!isPublished) {
     return { label: "Not Yet Published", tone: "neutral" };
@@ -91,6 +96,26 @@ export default function SupplierRFQsPage() {
         .map((r) => r.value);
     },
   });
+
+  const declinesQuery = useQuery({
+    queryKey: [
+      "supplier-portal-declines",
+      supplierName,
+      (rfqsQuery.data ?? []).map((r) => r.name).join("|"),
+    ],
+    enabled: !!supplierName && (rfqsQuery.data ?? []).length > 0,
+    queryFn: () =>
+      getDeclinedSuppliersByRfq((rfqsQuery.data ?? []).map((r) => r.name)),
+  });
+
+  const declinedRfqNames = useMemo(() => {
+    const set = new Set<string>();
+    const supplierKey = supplierName.toLowerCase();
+    for (const [rfq, suppliers] of declinesQuery.data ?? new Map()) {
+      if (suppliers.has(supplierKey)) set.add(rfq);
+    }
+    return set;
+  }, [declinesQuery.data, supplierName]);
 
   const quotedRfqNames = useMemo(() => {
     const set = new Set<string>();
@@ -182,7 +207,13 @@ export default function SupplierRFQsPage() {
                 {rows.map((rfq) => {
                   const alreadyQuoted = quotedRfqNames.has(rfq.name);
                   const isPublished = rfq.docstatus === 1;
-                  const status = deriveRfqStatus(rfq.status, alreadyQuoted, isPublished);
+                  const declinedRfq = declinedRfqNames.has(rfq.name);
+                  const status = deriveRfqStatus(
+                    rfq.status,
+                    alreadyQuoted,
+                    isPublished,
+                    declinedRfq
+                  );
                   return (
                     <tr key={rfq.name} className="hover:bg-accent-50/40">
                       <td className="px-4 py-3 font-medium text-neutral-900">

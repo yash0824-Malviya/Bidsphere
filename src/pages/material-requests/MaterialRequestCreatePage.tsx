@@ -28,15 +28,6 @@ import {
 } from "../../api/materialRequestWorkflow";
 import { updateMaterialRequest } from "../../api/purchasing";
 import {
-  getBomComponents,
-  getBomsForItem,
-  getFinishedProducts,
-  requiredQtyForProduction,
-  type BomComponent,
-} from "../../api/bom";
-import { getItemsByCodes } from "../../api/sourcing";
-import ManufacturingDetailsSection from "../../components/material-requests/ManufacturingDetailsSection";
-import {
   MR_PROCUREMENT_TYPE_FIELD,
   MR_WORKFLOW_FIELD,
 } from "../../types/materialRequestWorkflow";
@@ -183,12 +174,6 @@ export default function MaterialRequestCreatePage() {
     newDraftItem(todayIso()),
   ]);
 
-  /* ── Manufacturing (BOM) state ── */
-  const [finishedProduct, setFinishedProduct] = useState("");
-  const [finishedProductName, setFinishedProductName] = useState("");
-  const [selectedBom, setSelectedBom] = useState("");
-  const [productionQty, setProductionQty] = useState<number>(0);
-
   // Edit mode — load the existing draft and prefill the form once.
   const editQuery = useQuery({
     queryKey: ["material-request-workflow", editName],
@@ -273,114 +258,6 @@ export default function MaterialRequestCreatePage() {
     procurementTypeTouched
       ? procurementType
       : defaultProcurementTypeForDepartment(resolvedDepartment);
-
-  // Manufacturing Details (BOM) is a Direct-procurement concept only. It shows
-  // for Direct requests from Production, or when the purpose is a manufacturing
-  // run. Indirect (office/support) requests never see the BOM section.
-  const showManufacturing =
-    resolvedProcurementType === "Direct" &&
-    (resolvedDepartment.trim().toLowerCase() === "production" ||
-      /manufactur/i.test(purpose));
-
-  const finishedProductsQuery = useQuery({
-    queryKey: ["bom-finished-products"],
-    queryFn: () => getFinishedProducts(),
-    enabled: showManufacturing,
-    staleTime: 5 * 60_000,
-  });
-
-  const bomsQuery = useQuery({
-    queryKey: ["boms-for-item", finishedProduct],
-    queryFn: () => getBomsForItem(finishedProduct),
-    enabled: showManufacturing && !!finishedProduct,
-    staleTime: 60_000,
-  });
-
-  // BOM explosion enriched with each component's Item Group / description / UOM
-  // (BOM Item child rows don't reliably carry the item group).
-  const bomComponentsQuery = useQuery({
-    queryKey: ["bom-components", selectedBom],
-    queryFn: async (): Promise<BomComponent[]> => {
-      const { components } = await getBomComponents(selectedBom);
-      const codes = components.map((c) => c.item_code);
-      const details = await getItemsByCodes(codes);
-      const byCode = new Map(details.map((d) => [d.item_code, d]));
-      return components.map((c) => {
-        const d = byCode.get(c.item_code);
-        return {
-          ...c,
-          item_group: c.item_group || d?.item_group || "",
-          description: c.description || d?.description || c.item_name,
-          uom: c.uom || d?.uom || "Nos",
-        };
-      });
-    },
-    enabled: showManufacturing && !!selectedBom,
-    staleTime: 60_000,
-  });
-
-  // Auto-select the default (or first) active BOM when the finished product's
-  // BOM list resolves and nothing valid is selected yet.
-  /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => {
-    const boms = bomsQuery.data;
-    if (!boms || boms.length === 0) return;
-    if (selectedBom && boms.some((b) => b.name === selectedBom)) return;
-    const preferred = boms.find((b) => b.is_default === 1) ?? boms[0];
-    setSelectedBom(preferred.name);
-  }, [bomsQuery.data, selectedBom]);
-
-  // Sync BOM-generated rows into the Items Required table. Generated rows are
-  // recomputed whenever the BOM, production quantity or component data change;
-  // manual rows are always preserved.
-  useEffect(() => {
-    const data = bomComponentsQuery.data;
-    setItems((prev) => {
-      const manual = prev.filter((l) => !l.generated);
-
-      if (!showManufacturing || !selectedBom || !data || productionQty <= 0) {
-        // No active BOM explosion — keep only manual rows (never leave empty).
-        return manual.length > 0 ? manual : [newDraftItem(requiredDate)];
-      }
-
-      const prevGenByCode = new Map(
-        prev.filter((l) => l.generated).map((l) => [l.item_code, l] as const),
-      );
-
-      const generated: MaterialRequestDraftLine[] = data.map((component) => {
-        const existing = prevGenByCode.get(component.item_code);
-        return {
-          id: existing?.id ?? generateId(),
-          item_group: component.item_group ?? "",
-          item_code: component.item_code,
-          item_name: component.item_name,
-          description: component.description ?? component.item_name,
-          qty: requiredQtyForProduction(component, productionQty),
-          uom: component.uom || "Nos",
-          schedule_date: requiredDate,
-          remarks: "",
-          generated: true,
-          bom: selectedBom,
-        };
-      });
-
-      // Drop manual rows that collide with a generated item to avoid the
-      // duplicate-item validation error on submit.
-      const generatedCodes = new Set(generated.map((g) => g.item_code));
-      const manualDeduped = manual.filter(
-        (m) => !m.item_code || !generatedCodes.has(m.item_code),
-      );
-
-      return [...generated, ...manualDeduped];
-    });
-  }, [
-    bomComponentsQuery.data,
-    productionQty,
-    selectedBom,
-    showManufacturing,
-    requiredDate,
-  ]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   const usedItemCodes = useMemo(() => {
     const set = new Set<string>();
@@ -531,27 +408,12 @@ export default function MaterialRequestCreatePage() {
     );
   }
 
-  function handleFinishedProductSelect(itemCode: string, itemName: string) {
-    setFinishedProduct(itemCode);
-    setFinishedProductName(itemName);
-    setSelectedBom(""); // default BOM auto-selects once the list resolves
-  }
-
-  function handleFinishedProductClear() {
-    setFinishedProduct("");
-    setFinishedProductName("");
-    setSelectedBom("");
-    setProductionQty(0);
-  }
-
   // Switching Procurement Type reloads the correct Item Group category, so every
-  // selected Item Group / Item (and its auto-filled Description / UOM) is
-  // cleared, and any BOM explosion is reset (BOM is a Direct-only concept).
+  // selected Item Group / Item (and its auto-filled Description / UOM) is cleared.
   function handleProcurementTypeChange(next: MaterialRequestProcurementType) {
     setProcurementTypeTouched(true);
     setProcurementType(next);
     setItems([newDraftItem(requiredDate)]);
-    handleFinishedProductClear();
   }
 
   function handleSave(submit: boolean) {
@@ -770,30 +632,6 @@ export default function MaterialRequestCreatePage() {
             </Field>
           </div>
         </section>
-
-        <ManufacturingDetailsSection
-          visible={showManufacturing}
-          disabled={busy}
-          showStock={showStock}
-          finishedProduct={finishedProduct}
-          finishedProductLabel={finishedProductName || finishedProduct}
-          finishedProducts={finishedProductsQuery.data ?? []}
-          finishedProductsLoading={finishedProductsQuery.isLoading}
-          finishedProductsError={finishedProductsQuery.isError}
-          onFinishedProductSelect={handleFinishedProductSelect}
-          onFinishedProductClear={handleFinishedProductClear}
-          selectedBom={selectedBom}
-          boms={bomsQuery.data ?? []}
-          bomsLoading={bomsQuery.isLoading}
-          bomsError={bomsQuery.isError}
-          onBomSelect={setSelectedBom}
-          onBomClear={() => setSelectedBom("")}
-          productionQty={productionQty}
-          onProductionQtyChange={setProductionQty}
-          components={bomComponentsQuery.data}
-          componentsLoading={bomComponentsQuery.isLoading}
-          componentsError={bomComponentsQuery.isError}
-        />
 
         <section className="card">
           <div className="flex flex-wrap items-start justify-between gap-3 border-b border-neutral-200 px-5 py-3">

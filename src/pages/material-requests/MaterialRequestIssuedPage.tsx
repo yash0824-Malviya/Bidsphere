@@ -24,7 +24,7 @@ export default function MaterialRequestIssuedPage() {
     const st = getMaterialRequestWorkflowStatus(mr);
     const modifiedToday = (mr.modified ?? "").startsWith(today);
     if (tab === "forwarded") {
-      return st === "Procurement Required" && modifiedToday;
+      return st === "Forwarded to Procurement" && modifiedToday;
     }
     return (
       (st === "Completed" || st === "Material Issued") && modifiedToday

@@ -23,8 +23,10 @@ import type {
   MaterialRequestWorkflowStatus,
 } from "../../types/materialRequestWorkflow";
 import PageHeader from "../../components/PageHeader";
+import PaginationBar from "../../components/PaginationBar";
 import StatusBadge from "../../components/StatusBadge";
 import ProcurementTypeBadge from "../../components/ProcurementTypeBadge";
+import { usePagination } from "../../hooks/usePagination";
 import { useAuthStore } from "../../store/authStore";
 import { formatDate } from "../../utils/format";
 import {
@@ -151,6 +153,7 @@ export default function MaterialRequestsListPage() {
           workflow === "Under Warehouse Review" ||
           workflow === "Stock Available" ||
           workflow === "Procurement Required" ||
+          workflow === "Forwarded to Procurement" ||
           workflow === "RFQ Created" ||
           status === "Pending" ||
           status === "Submitted"
@@ -166,6 +169,21 @@ export default function MaterialRequestsListPage() {
       return workflow === statusFilter || status === statusFilter;
     });
   }, [data, statusFilter, fParam, typeFilter]);
+
+  // This queue is built from a computed workflow-status roll-up (not a raw
+  // ERPNext column), so the underlying fetch stays a single bulk query —
+  // pagination is applied client-side, over the already-filtered rows, purely
+  // to cap how many are rendered per page.
+  const { page, pageSize, setPage, setPageSize } = usePagination({
+    resetKey: `${statusFilter ?? ""}|${fParam ?? ""}|${typeFilter ?? ""}`,
+  });
+  const totalRecords = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedRows = useMemo(
+    () => rows.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [rows, currentPage, pageSize]
+  );
 
   return (
     <div>
@@ -277,7 +295,7 @@ export default function MaterialRequestsListPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-200">
-                {rows.map((mr) => (
+                {pagedRows.map((mr) => (
                   <tr key={mr.name} className="hover:bg-neutral-50">
                     <td className="px-4 py-3">
                       <Link
@@ -320,6 +338,17 @@ export default function MaterialRequestsListPage() {
               </tbody>
             </table>
           </div>
+        )}
+
+        {!isLoading && rows.length > 0 && (
+          <PaginationBar
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={totalRecords}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+          />
         )}
       </div>
     </div>

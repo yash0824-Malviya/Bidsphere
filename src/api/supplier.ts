@@ -12,8 +12,9 @@ import {
   apiPut,
   buildListConfig,
   buildResourceUrl,
+  fetchPagedList,
 } from "./erpnext";
-import type { ListParams } from "./erpnext";
+import type { Filter, FilterValue, ListParams, PagedListResult } from "./erpnext";
 import type { Supplier, SupplierGroup } from "../types/erpnext";
 
 const SUPPLIER_DOCTYPE = "Supplier";
@@ -47,6 +48,17 @@ export async function getSuppliers(filters?: ListParams): Promise<Supplier[]> {
       ...filters,
     })
   );
+}
+
+/** Server-side paginated Supplier directory for the "Suppliers" list page. */
+export async function getSuppliersPaged(options: {
+  fields: string[];
+  filters?: Filter[] | Record<string, FilterValue>;
+  order_by?: string;
+  page: number;
+  pageSize: number;
+}): Promise<PagedListResult<Supplier>> {
+  return fetchPagedList<Supplier>(SUPPLIER_DOCTYPE, options);
 }
 
 /** Fetch a single supplier by primary key (`name`). */

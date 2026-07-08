@@ -117,6 +117,7 @@ function isSubmittedRequest(
     workflow === "Under Warehouse Review" ||
     workflow === "Stock Available" ||
     workflow === "Procurement Required" ||
+    workflow === "Forwarded to Procurement" ||
     workflow === "RFQ Created"
   );
 }

@@ -218,11 +218,11 @@ export async function createRFQFromMaterialRequest(
   const mr = await fetchMaterialRequestWorkflow(input.material_request);
   const status = getMaterialRequestWorkflowStatus(mr);
   if (
-    status !== "Procurement Required" &&
+    status !== "Forwarded to Procurement" &&
     status !== "RFQ Created"
   ) {
     throw new Error(
-      `Material Request ${mr.name} must be in "Procurement Required" status before creating an RFQ.`
+      `Material Request ${mr.name} must be in "Forwarded to Procurement" status before creating an RFQ.`
     );
   }
   if (!input.suppliers?.length) {
@@ -287,5 +287,5 @@ export async function createRFQFromMaterialRequest(
 export function canCreateRfqFromMaterialRequest(
   mr: MaterialRequestWorkflowRecord
 ): boolean {
-  return getMaterialRequestWorkflowStatus(mr) === "Procurement Required";
+  return getMaterialRequestWorkflowStatus(mr) === "Forwarded to Procurement";
 }

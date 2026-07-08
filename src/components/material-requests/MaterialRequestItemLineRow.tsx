@@ -12,10 +12,15 @@ import {
 import {
   getItemGroups,
   getItems,
+  getItemsByCodes,
   type ItemGroupOption,
   type ItemSearchResult,
 } from "../../api/sourcing";
-import { filterItemGroupsByProcurementType } from "../../config/materialRequestCategories";
+import {
+  INDIRECT_CATALOG,
+  INDIRECT_ITEM_GROUPS,
+  indirectItemCodesFor,
+} from "../../config/indirectProcurementCatalog";
 import type { MaterialRequestProcurementType } from "../../types/materialRequestWorkflow";
 import SearchableSelect, {
   type SearchableOption,
@@ -110,18 +115,41 @@ export default function MaterialRequestItemLineRow({
   const itemError = showErrors && !row.item_code;
   const qtyError = showErrors && !(row.qty > 0);
 
-  // Item Groups — a single shared, cached fetch across every row.
+  // Direct and Indirect procurement are COMPLETELY isolated:
+  //   • Direct   → the live ERPNext Item Group tree, identical to the RFQ module.
+  //   • Indirect → the fixed office catalog only (Housekeeping / IT Equipment /
+  //                Stationery). It never touches the RFQ Item Group service.
+  const isIndirect = procurementType === "Indirect";
+
+  // Item Groups (Direct only) — the SAME service and cache the RFQ module uses.
   const groupsQuery = useQuery<ItemGroupOption[]>({
-    queryKey: ["mr-item-groups"],
-    queryFn: getItemGroups,
+    queryKey: ["item-groups"],
+    queryFn: () => getItemGroups(),
+    enabled: !isIndirect,
     staleTime: 5 * 60_000,
   });
 
-  // Items scoped to the selected group. Cached per group so multiple rows using
-  // the same group reuse one ERPNext call. Never runs until a group is chosen.
+  const groups = groupsQuery.data ?? EMPTY_GROUPS;
+
+  const groupOptions = useMemo<SearchableOption[]>(() => {
+    if (isIndirect) {
+      return INDIRECT_ITEM_GROUPS.map((g) => ({ value: g, label: g }));
+    }
+    return groups.map((g) => ({
+      value: g.name,
+      label: g.item_group_name || g.name,
+    }));
+  }, [isIndirect, groups]);
+
+  // Items for the selected group. Direct fetches every item in the group (RFQ
+  // parity); Indirect fetches ONLY the catalog's item codes by code, so exactly
+  // the curated office items are returned — never the RFQ list.
   const itemsQuery = useQuery<ItemSearchResult[]>({
-    queryKey: ["mr-items-by-group", row.item_group],
-    queryFn: () => getItems({ itemGroup: row.item_group, limit: 5000 }),
+    queryKey: ["mr-items", isIndirect ? "indirect" : "direct", row.item_group],
+    queryFn: () =>
+      isIndirect
+        ? getItemsByCodes(indirectItemCodesFor(row.item_group))
+        : getItems({ itemGroup: row.item_group, limit: 500 }),
     enabled: !!row.item_group,
     staleTime: 60_000,
   });
@@ -135,24 +163,27 @@ export default function MaterialRequestItemLineRow({
     staleTime: 30_000,
   });
 
-  const groups = groupsQuery.data ?? EMPTY_GROUPS;
-  const items = itemsQuery.data ?? EMPTY_ITEMS;
-
-  // Item Groups filtered to the request's Procurement Type — Direct shows
-  // manufacturing categories, Indirect shows office/support categories.
-  const visibleGroups = useMemo(
-    () => filterItemGroupsByProcurementType(groups, procurementType),
-    [groups, procurementType],
-  );
-
-  const groupOptions = useMemo<SearchableOption[]>(
-    () =>
-      visibleGroups.map((g) => ({
-        value: g.name,
-        label: g.item_group_name || g.name,
-      })),
-    [visibleGroups],
-  );
+  // For Indirect, the catalog defines the exact item list; ERPNext data (fetched
+  // by code) enriches name/description/UOM when the item exists so submission
+  // and auto-fill use real values. Missing items still show via the fallback.
+  const items = useMemo<ItemSearchResult[]>(() => {
+    if (!isIndirect) return itemsQuery.data ?? EMPTY_ITEMS;
+    const catalog = INDIRECT_CATALOG[row.item_group] ?? [];
+    const erpByCode = new Map(
+      (itemsQuery.data ?? []).map((it) => [it.item_code, it]),
+    );
+    return catalog.map((c) => {
+      const erp = erpByCode.get(c.code);
+      return {
+        name: erp?.name ?? c.code,
+        item_code: c.code,
+        item_name: erp?.item_name || c.name,
+        description: erp?.description || c.description,
+        uom: erp?.uom || c.uom,
+        item_group: row.item_group,
+      };
+    });
+  }, [isIndirect, row.item_group, itemsQuery.data]);
 
   const itemOptions = useMemo<SearchableOption[]>(
     () =>

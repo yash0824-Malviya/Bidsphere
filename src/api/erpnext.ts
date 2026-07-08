@@ -612,6 +612,30 @@ export async function fetchServerDate(): Promise<string | null> {
 }
 
 /**
+ * The ERPNext server's current epoch (ms, UTC), read from the HTTP `Date`
+ * response header of a lightweight request. Used to synchronize time-critical
+ * UI (e.g. the reverse-auction countdown) to server time rather than the
+ * browser clock, which may be skewed. Returns `null` if unavailable.
+ */
+export async function fetchServerTimeMs(): Promise<number | null> {
+  try {
+    const res = (await erpnext.get("/api/method/frappe.auth.get_logged_user", {
+      _preserveResponse: true,
+      _silent: true,
+      timeout: 5_000,
+    } as AxiosRequestConfig & SilentRequestConfig)) as unknown as AxiosResponse;
+    const header = res?.headers?.["date"] ?? res?.headers?.["Date"];
+    if (typeof header === "string") {
+      const ms = new Date(header).getTime();
+      if (Number.isFinite(ms)) return ms;
+    }
+  } catch {
+    // Silent — callers fall back to the client clock (offset 0).
+  }
+  return null;
+}
+
+/**
  * Returns the count of records in `doctype` that match `filters`, by fetching
  * names from the REST resource endpoint (avoids non-whitelisted method calls).
  */
@@ -643,6 +667,98 @@ export async function getCount(
   }
 }
 
+
+/**
+ * Result shape for `fetchPagedList` — matches what every paginated list page
+ * needs to render "Showing X–Y of Z records" + page controls without any
+ * extra client-side math.
+ */
+export interface PagedListResult<T> {
+  data: T[];
+  total_records: number;
+  total_pages: number;
+  current_page: number;
+  page_size: number;
+}
+
+/**
+ * Exact total record count for `doctype` matching `filters`, via Frappe's own
+ * `frappe.client.get_count` whitelisted method — the same call Frappe's List
+ * View uses internally. Unlike `getCount` above (which pages through the
+ * resource endpoint and caps at 500), this returns the true total regardless
+ * of dataset size, which server-side pagination needs to compute total pages.
+ */
+export async function getExactCount(
+  doctype: string,
+  filters?: Filter[] | Record<string, FilterValue>
+): Promise<number> {
+  try {
+    const params: Record<string, string> = { doctype };
+    const hasFilters =
+      filters !== undefined &&
+      (Array.isArray(filters) ? filters.length > 0 : Object.keys(filters).length > 0);
+    if (hasFilters) params.filters = JSON.stringify(filters);
+
+    const result = await apiGet<number | string>(
+      "/api/method/frappe.client.get_count",
+      { params }
+    );
+    const n = typeof result === "number" ? result : Number(result);
+    return Number.isFinite(n) ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Generic server-side pagination for any Frappe resource: fetches exactly one
+ * page of records (`limit_start`/`limit_page_length`) alongside the exact
+ * total count, and returns everything a `PaginationBar` needs to render.
+ *
+ * This is the standard way every "All <X>" list page in the Procurement
+ * System should fetch its rows — never fetch the whole doctype client-side
+ * and slice it in JS.
+ */
+export async function fetchPagedList<T = unknown>(
+  doctype: string,
+  options: {
+    fields: string[];
+    filters?: Filter[] | Record<string, FilterValue>;
+    order_by?: string;
+    page: number;
+    pageSize: number;
+  }
+): Promise<PagedListResult<T>> {
+  const { fields, filters, order_by, page, pageSize } = options;
+  const safePage = Math.max(1, Math.floor(page) || 1);
+  const safePageSize = Math.max(1, Math.floor(pageSize) || 10);
+  const limit_start = (safePage - 1) * safePageSize;
+
+  const [data, total_records] = await Promise.all([
+    apiGet<T[]>(
+      buildResourceUrl(doctype),
+      buildListConfig({
+        fields,
+        filters,
+        order_by,
+        limit_start,
+        limit_page_length: safePageSize,
+      })
+    ),
+    getExactCount(doctype, filters),
+  ]);
+
+  const total_pages = Math.max(1, Math.ceil(total_records / safePageSize));
+  const current_page = Math.min(safePage, total_pages);
+
+  return {
+    data: Array.isArray(data) ? data : [],
+    total_records,
+    total_pages,
+    current_page,
+    page_size: safePageSize,
+  };
+}
 
 interface ErpNextErrorPayload {
   message?: string;

@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Calendar, FileCheck2 } from "lucide-react";
 
-import { getPurchaseOrders } from "../../api/purchasing";
+import { fetchPagedList } from "../../api/erpnext";
 import { getSuppliers } from "../../api/supplier";
 import type { Filter } from "../../api/erpnext";
 import type {
@@ -13,6 +13,7 @@ import type {
 import ConnectionError from "../../components/ConnectionError";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
+import PaginationBar from "../../components/PaginationBar";
 import { TableSkeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
 import {
@@ -23,14 +24,42 @@ import {
   SearchInput,
   SortableTableHeader,
 } from "../../components/ui";
-import { useListSort } from "../../hooks/useListSort";
+import { usePagination } from "../../hooks/usePagination";
 import { useDebounce } from "../../hooks/useDebounce";
 import {
   PO_DEFAULT_SORT,
   purchaseOrderComparators,
   sortNewestFirst,
+  sortRows,
 } from "../../utils/listSort";
 import { formatCurrency, formatDate } from "../../utils/format";
+
+const PO_DOCTYPE = "Purchase Order";
+
+const PO_FIELDS = [
+  "name",
+  "supplier",
+  "supplier_name",
+  "transaction_date",
+  "creation",
+  "status",
+  "grand_total",
+  "per_received",
+  "per_billed",
+  "currency",
+];
+
+/** Sort keys that map directly to a real Purchase Order field, so the server
+ * can order the whole dataset rather than just the current page. */
+const PO_ORDER_BY_FIELD: Record<string, string> = {
+  name: "name",
+  supplier: "supplier_name",
+  date: "transaction_date",
+  status: "status",
+  total: "grand_total",
+  received: "per_received",
+  billed: "per_billed",
+};
 
 const PO_COMPARATORS = purchaseOrderComparators<PurchaseOrder>();
 
@@ -48,6 +77,8 @@ const STATUS_OPTIONS: Array<"" | PurchaseOrderStatus> = [
 
 export default function PurchaseOrdersPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const preset = (searchParams.get("preset") ?? "").toLowerCase();
   const [status, setStatus] = useState<"" | PurchaseOrderStatus>("");
   const [supplier, setSupplier] = useState("");
   const [from, setFrom] = useState("");
@@ -69,57 +100,56 @@ export default function PurchaseOrdersPage() {
 
   const filters = useMemo<Filter[]>(() => {
     const f: Filter[] = [];
+    if (preset === "pending") f.push(["docstatus", "=", 0]);
     if (status) f.push(["status", "=", status]);
     if (supplier) f.push(["supplier", "=", supplier]);
     if (from) f.push(["transaction_date", ">=", from]);
     if (to) f.push(["transaction_date", "<=", to]);
     if (debouncedSearch) f.push(["name", "like", `%${debouncedSearch}%`]);
     return f;
-  }, [status, supplier, from, to, debouncedSearch]);
+  }, [preset, status, supplier, from, to, debouncedSearch]);
+
+  const [sort, setSort] = useState(PO_DEFAULT_SORT);
+  const orderByField = PO_ORDER_BY_FIELD[sort.key];
+  const order_by = orderByField
+    ? `${orderByField} ${sort.direction}, name desc`
+    : "transaction_date desc, creation desc, name desc";
+
+  const { page, pageSize, setPage, setPageSize } = usePagination({
+    resetKey: JSON.stringify(filters) + order_by,
+  });
 
   const {
-    data: rows = [],
+    data,
     isLoading,
     isError,
     error,
     refetch,
   } = useQuery({
-    queryKey: ["purchase-orders", filters],
+    queryKey: ["purchase-orders", filters, page, pageSize, order_by],
     queryFn: () =>
-      getPurchaseOrders({
+      fetchPagedList<PurchaseOrder>(PO_DOCTYPE, {
         filters,
-        fields: [
-          "name",
-          "supplier",
-          "supplier_name",
-          "transaction_date",
-          "creation",
-          "status",
-          "grand_total",
-          "per_received",
-          "per_billed",
-          "currency",
-        ],
-        order_by: "transaction_date desc, creation desc, name desc",
-        limit_page_length: 100,
+        fields: PO_FIELDS,
+        order_by,
+        page,
+        pageSize,
       }),
+    placeholderData: (prev) => prev,
   });
 
-  const normalizedRows = useMemo(
-    () =>
-      sortNewestFirst(rows, {
-        date: (po) => po.transaction_date,
-        creation: (po) => po.creation,
-        name: (po) => po.name,
-      }),
-    [rows]
-  );
+  const rows = data?.data ?? [];
 
-  const { sort, setSort, sortedRows } = useListSort(
-    normalizedRows,
-    PO_DEFAULT_SORT,
-    PO_COMPARATORS
-  );
+  // `rows` is already server-ordered for every sortable column above, so
+  // this pass is just a stable tie-breaker within the current page.
+  const sortedRows = useMemo(() => {
+    const normalized = sortNewestFirst(rows, {
+      date: (po) => po.transaction_date,
+      creation: (po) => po.creation,
+      name: (po) => po.name,
+    });
+    return sortRows(normalized, sort, PO_COMPARATORS);
+  }, [rows, sort]);
 
   const allSelected = sortedRows.length > 0 && selected.size === sortedRows.length;
 
@@ -369,6 +399,17 @@ export default function PurchaseOrdersPage() {
               </tbody>
             </table>
           </ResponsiveTable>
+        )}
+
+        {!isLoading && !isError && sortedRows.length > 0 && (
+          <PaginationBar
+            currentPage={data?.current_page ?? page}
+            totalPages={data?.total_pages ?? 1}
+            totalRecords={data?.total_records ?? 0}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+          />
         )}
       </div>
     </div>

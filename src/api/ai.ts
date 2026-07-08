@@ -591,6 +591,51 @@ export interface AnalysisWeights {
   reliability: number;
 }
 
+/**
+ * Fixed weighting for the "AI Procurement Copilot" Confidence Score — this is
+ * intentionally independent of the admin-configurable ranking weights
+ * (`Supplier Scoring Config`) so the headline confidence figure always means
+ * the same thing regardless of how ranking is tuned.
+ */
+export const CONFIDENCE_SCORE_WEIGHTS = {
+  price: 35,
+  delivery: 25,
+  reliability: 30,
+  completeness: 10,
+} as const;
+
+export interface ConfidenceScoreInputs {
+  /** Price competitiveness, 0-100 (lower total = higher score). */
+  price_score: number;
+  /** Delivery time score, 0-100 (faster = higher score). */
+  delivery_score: number;
+  /** Supplier reliability / historical performance, 0-100. */
+  reliability_score: number;
+  /** Quotation completeness (item coverage, terms, delivery data), 0-100. */
+  completeness_score: number;
+}
+
+/** Insufficient-data sentinel (-1) is treated as neutral, never as zero. */
+function neutralIfMissing(value: number): number {
+  if (!Number.isFinite(value) || value < 0) return 50;
+  return Math.max(0, Math.min(100, value));
+}
+
+/**
+ * Confidence Score = weighted average of price competitiveness (35%),
+ * delivery time (25%), supplier reliability/performance (30%), and
+ * quotation completeness (10%). Always returns an integer 0-100.
+ */
+export function computeConfidenceScore(inputs: ConfidenceScoreInputs): number {
+  const w = CONFIDENCE_SCORE_WEIGHTS;
+  const weighted =
+    neutralIfMissing(inputs.price_score) * w.price +
+    neutralIfMissing(inputs.delivery_score) * w.delivery +
+    neutralIfMissing(inputs.reliability_score) * w.reliability +
+    neutralIfMissing(inputs.completeness_score) * w.completeness;
+  return Math.max(0, Math.min(100, Math.round(weighted / 100)));
+}
+
 function buildAnalysisPrompt(
   payload: AIRequest,
   weights?: AnalysisWeights

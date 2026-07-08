@@ -58,6 +58,7 @@ export const MR_WORKFLOW_STATUSES: MaterialRequestWorkflowStatus[] = [
   "Stock Available",
   "Material Issued",
   "Procurement Required",
+  "Forwarded to Procurement",
   "RFQ Created",
   "Completed",
   "Cancelled",
@@ -228,9 +229,18 @@ function workflowStatusFromStandardFields(
       : "Completed";
   }
 
+  // NOTE: this fallback only runs when `custom_bidsphere_status` is entirely
+  // unavailable/unset (see `workflowStatus` below), so it has no visibility
+  // into whether Warehouse has actually reviewed the request. A submitted MR
+  // (any material_request_type) must therefore default to "Under Warehouse
+  // Review" — the real, persisted "Procurement Required" transition is only
+  // ever written by the warehouse "no stock" / "Send to Procurement" actions
+  // (see `buildWarehouseDecisions` / `forwardMaterialRequestToProcurement`).
+  // Previously this branch jumped a freshly-submitted "Purchase" type MR
+  // straight to "Procurement Required", skipping warehouse review entirely.
   if (doc.material_request_type === "Purchase") {
     if (linkedRfqFromDoc(doc)) return "RFQ Created";
-    return "Procurement Required";
+    if (docstatus === 1) return "Under Warehouse Review";
   }
 
   if (docstatus === 1 && doc.material_request_type === "Material Issue") {
@@ -482,17 +492,29 @@ export async function listAdminReviewQueue(
 }
 
 /**
- * Admin approves an Indirect Material Request. Approval forwards it straight to
- * Procurement (status "Procurement Required"), which is where the RFQ flow
- * begins — identical to the direct path once a request is with Procurement.
+ * Admin approves an Indirect Material Request. Indirect requests have no
+ * warehouse-owned "Procurement Required" stage (there's no stock review) —
+ * approval itself IS the forward action, so this writes "Forwarded to
+ * Procurement" directly (plus the same forwarded_by/forwarded_on audit fields
+ * `forwardMaterialRequestToProcurement` writes for the Direct path), which is
+ * where the RFQ flow begins — identical to the direct path once a request is
+ * with Procurement.
  */
 export async function approveIndirectMaterialRequest(
   name: string,
   adminRemarks?: string,
 ): Promise<MaterialRequestWorkflowRecord> {
-  return updateMaterialRequestWorkflowStatus(name, "Procurement Required", {
-    custom_admin_remarks: adminRemarks,
-  });
+  const result = await updateMaterialRequestWorkflowStatus(
+    name,
+    "Forwarded to Procurement",
+    { custom_admin_remarks: adminRemarks },
+  );
+  await writeForwardMetadata(
+    name,
+    result.modified_by || result.owner || "Admin",
+    new Date().toISOString(),
+  );
+  return result;
 }
 
 /**
@@ -1022,33 +1044,226 @@ export async function completeMaterialRequest(
   });
 }
 
+export interface ForwardToProcurementOptions {
+  /** Human/email of the warehouse user performing the forward (audit). */
+  forwardedBy?: string;
+  /**
+   * Skip the stock-shortage validation. Used by the full warehouse-review flow
+   * (`processWarehouseDecisions`), which has already computed the shortage.
+   */
+  skipStockCheck?: boolean;
+}
+
+/** ERPNext datetime (`YYYY-MM-DD HH:MM:SS`) from an ISO timestamp. */
+function toErpDateTime(iso: string): string {
+  return iso.replace("T", " ").slice(0, 19);
+}
+
+/**
+ * Best-effort structured forward metadata. Persists the who/when flags on the
+ * MR only if those custom fields exist in ERPNext; a missing-field failure is
+ * swallowed because the canonical audit lives in the `[BidSphere:Forwarded:…]`
+ * remarks tag + the Warehouse Review record.
+ */
+async function writeForwardMetadata(
+  name: string,
+  forwardedBy: string,
+  forwardedOn: string,
+): Promise<void> {
+  try {
+    await apiPost(
+      "/api/method/frappe.client.set_value",
+      {
+        doctype: MR_DOCTYPE,
+        name,
+        fieldname: {
+          custom_forwarded_to_procurement: 1,
+          custom_forwarded_by: forwardedBy,
+          custom_forwarded_on: toErpDateTime(forwardedOn),
+        },
+      },
+      withSilent(),
+    );
+  } catch (err) {
+    if (import.meta.env.DEV) {
+      console.warn(
+        "[MR forward] optional forward-metadata fields not persisted:",
+        err,
+      );
+    }
+  }
+}
+
+/** Immutable Activity Log entry recording a forward-to-procurement action. */
+async function recordForwardAudit(audit: {
+  mr_name: string;
+  forwarded_by: string;
+  forwarded_on: string;
+}): Promise<void> {
+  try {
+    await apiPost(
+      "/api/method/frappe.client.insert",
+      {
+        doc: {
+          doctype: "Activity Log",
+          subject: `Material Request ${audit.mr_name} forwarded to Procurement by ${audit.forwarded_by}`,
+          content: [
+            `MR Number: ${audit.mr_name}`,
+            `Status: Procurement Required`,
+            `Forwarded By: ${audit.forwarded_by}`,
+            `Forwarded On: ${audit.forwarded_on}`,
+          ].join("\n"),
+          operation: "Update",
+          status: "Success",
+          reference_doctype: MR_DOCTYPE,
+          reference_name: audit.mr_name,
+          user: audit.forwarded_by,
+        },
+      },
+      withSilent(),
+    );
+  } catch (err) {
+    if (import.meta.env.DEV) {
+      console.warn("[MR forward] Activity Log audit insert skipped:", err);
+    }
+  }
+}
+
+/**
+ * Forward a reviewed Material Request with insufficient stock to Procurement.
+ *
+ * Backend validation (enforced regardless of the UI):
+ *   • the MR must be submitted (`docstatus = 1`);
+ *   • it must NOT already be forwarded (status Forwarded to Procurement / RFQ
+ *     Created / Completed) — prevents double-forwarding. Forwarding is valid
+ *     from "Procurement Required" (warehouse already reviewed and recorded the
+ *     shortage) OR directly from "Under Warehouse Review" (the dashboard
+ *     quick-action path, which re-verifies the shortage via a live stock
+ *     check below);
+ *   • stock review must show a genuine shortage (unless `skipStockCheck`).
+ *
+ * On success it moves the MR to "Forwarded to Procurement" (which removes it
+ * from the warehouse queue and surfaces it in the Procurement queue), sets
+ * `custom_forwarded_to_procurement = 1` + `custom_forwarded_by` +
+ * `custom_forwarded_on`, records the Warehouse Review + Activity Log audit,
+ * and returns the refreshed record.
+ */
 export async function forwardMaterialRequestToProcurement(
   name: string,
   warehouseRemarks?: string,
+  options?: ForwardToProcurementOptions,
 ): Promise<MaterialRequestWorkflowRecord> {
+  const current = await fetchMaterialRequestWorkflow(name);
+
+  // 1 — must be submitted.
+  if ((current.docstatus ?? 0) !== 1) {
+    throw new Error(
+      "This Material Request must be submitted before it can be sent to Procurement.",
+    );
+  }
+
+  // 2 — prevent double-forwarding. "Procurement Required" is the expected
+  // PRE-forward state (warehouse reviewed, shortage recorded, not yet sent) —
+  // it must NOT be treated as already-forwarded, or every genuine "Send to
+  // Procurement" click would fail with a false "already forwarded" error.
+  const currentStatus = getMaterialRequestWorkflowStatus(current);
+  if (
+    currentStatus === "Forwarded to Procurement" ||
+    currentStatus === "RFQ Created" ||
+    currentStatus === "Completed"
+  ) {
+    throw new Error(
+      `Material Request ${name} has already been forwarded to Procurement.`,
+    );
+  }
+
+  // 3 — stock review must show a real shortage.
+  if (!options?.skipStockCheck) {
+    const stock = await checkMaterialRequestStock(name);
+    if (stock.lines.length === 0) {
+      throw new Error(
+        "Stock review is incomplete. Complete the warehouse review before forwarding.",
+      );
+    }
+    if (stock.all_sufficient) {
+      throw new Error(
+        "All items are in stock — issue the material instead of forwarding to Procurement.",
+      );
+    }
+  }
+
+  const forwardedBy =
+    options?.forwardedBy?.trim() || current.owner || "Warehouse";
+  const forwardedOn = new Date().toISOString();
+
   // eslint-disable-next-line no-console
-  console.log("[Material Request Forwarded]", {
+  console.log("[Warehouse] Forwarded MR:", {
     mr: name,
-    status: "Procurement Required",
+    forwardedBy,
+    forwardedOn,
     warehouseRemarks,
-    timestamp: new Date().toISOString(),
   });
-  await updateMaterialRequestWorkflowStatus(
+
+  // Embed a machine-readable forward audit tag so who/when survives even when
+  // the dedicated custom fields aren't provisioned in ERPNext. IMPORTANT: when
+  // the caller doesn't pass fresh remarks (e.g. the dashboard/queue "Send to
+  // Procurement" quick action), fall back to the MR's EXISTING
+  // custom_warehouse_remarks rather than blanking it — that field carries the
+  // `[BidSphere:ForwardedItems:...]` shortage snapshot the warehouse recorded
+  // during review, which `parseForwardedItemsFromMr` (and the RFQ prefill)
+  // depend on. Overwriting it here previously wiped that snapshot, causing the
+  // RFQ to silently fall back to the MR's full original item quantities.
+  const baseRemarks =
+    warehouseRemarks ?? current.custom_warehouse_remarks ?? current.remarks ?? "";
+  const remarkParts: string[] = [];
+  if (baseRemarks) remarkParts.push(baseRemarks);
+  if (!/\[BidSphere:Forwarded:/.test(baseRemarks)) {
+    remarkParts.push(`[BidSphere:Forwarded:${forwardedBy}|${forwardedOn}]`);
+  }
+  const remarksBlock = remarkParts.join("\n");
+
+  const saved = await updateMaterialRequestWorkflowStatus(
     name,
-    "Procurement Required",
-    {
-      custom_warehouse_remarks: warehouseRemarks,
-    },
+    "Forwarded to Procurement",
+    { custom_warehouse_remarks: remarksBlock || undefined },
   );
+
+  // eslint-disable-next-line no-console
+  console.log("[Warehouse] Status saved:", {
+    mr: name,
+    storedStatus: saved[MR_WORKFLOW_FIELD] ?? null,
+    resolvedStatus: getMaterialRequestWorkflowStatus(saved),
+    forwarded_to_procurement: 1,
+    forwarded_at: forwardedOn,
+    forwarded_by: forwardedBy,
+  });
+
+  // Best-effort structured metadata (optional fields) — never blocks the move.
+  await writeForwardMetadata(name, forwardedBy, forwardedOn);
+
   // `decision` is the Warehouse Review audit DocType's own Select field — its
   // options are independent of the MR workflow status, so it keeps its legacy
   // label to avoid a DocType schema change.
   await createWarehouseReview({
     material_request: name,
-    warehouse_remarks: warehouseRemarks,
+    warehouse_remarks: remarksBlock,
     decision: "Forwarded to Procurement",
+    warehouse_user: forwardedBy,
   });
-  return fetchMaterialRequestWorkflow(name);
+  await recordForwardAudit({
+    mr_name: name,
+    forwarded_by: forwardedBy,
+    forwarded_on: forwardedOn,
+  });
+
+  const result = await fetchMaterialRequestWorkflow(name);
+  // eslint-disable-next-line no-console
+  console.log("[Warehouse] Response:", {
+    mr: result.name,
+    resolvedStatus: getMaterialRequestWorkflowStatus(result),
+    success: true,
+  });
+  return result;
 }
 
 export async function rejectMaterialRequest(
@@ -1071,10 +1286,27 @@ export async function markMaterialRequestRfqCreated(
   rfqName: string,
   procurementRemarks?: string,
 ): Promise<MaterialRequestWorkflowRecord> {
-  return updateMaterialRequestWorkflowStatus(name, "RFQ Created", {
+  const result = await updateMaterialRequestWorkflowStatus(name, "RFQ Created", {
     custom_linked_rfq: rfqName,
     custom_procurement_remarks: procurementRemarks,
   });
+  // Best-effort optional field — never blocks RFQ creation if unprovisioned.
+  try {
+    await apiPost(
+      "/api/method/frappe.client.set_value",
+      {
+        doctype: MR_DOCTYPE,
+        name,
+        fieldname: { custom_rfq_created_at: toErpDateTime(new Date().toISOString()) },
+      },
+      withSilent(),
+    );
+  } catch (err) {
+    if (import.meta.env.DEV) {
+      console.warn("[MR RFQ] optional custom_rfq_created_at not persisted:", err);
+    }
+  }
+  return result;
 }
 
 /* ─── Warehouse decision helpers ─────────────────────────────────────────── */
@@ -1109,7 +1341,7 @@ export interface ProcessWarehouseDecisionResult {
   forwarded_items: WarehouseItemDecision[];
   mr: MaterialRequestWorkflowRecord;
   overall_status:
-    "Material Issued" | "Partially Issued" | "Forwarded to Procurement";
+    "Material Issued" | "Partially Issued" | "Procurement Required";
 }
 
 export function buildWarehouseDecisions(
@@ -1261,7 +1493,10 @@ export async function processWarehouseDecisions(
     };
   }
 
-  // Case 3: No stock at all
+  // Case 3: No stock at all. Record the shortage as "Procurement Required"
+  // ONLY — this does NOT forward the MR to Procurement. The warehouse must
+  // still take the separate, explicit "Send to Procurement" action
+  // (`forwardMaterialRequestToProcurement`) before Procurement can see it.
   const forwardingData = JSON.stringify(
     forwarded_items.map((d) => ({
       item_code: d.item_code,
@@ -1278,15 +1513,22 @@ export async function processWarehouseDecisions(
   remarkParts.push(`[BidSphere:ForwardedItems:${forwardingData}]`);
   const remarksBlock = remarkParts.join("\n");
 
-  const forwardedMr = await forwardMaterialRequestToProcurement(
-    mrName,
-    remarksBlock,
-  );
+  await updateMaterialRequestWorkflowStatus(mrName, "Procurement Required", {
+    custom_warehouse_remarks: remarksBlock,
+  });
+  await createWarehouseReview({
+    material_request: mrName,
+    warehouse_remarks: remarksBlock,
+    decision: "Forwarded to Procurement",
+    forwarded_qty: forwarded_items.reduce((acc, d) => acc + d.requested_qty, 0),
+  });
+
+  const freshMr = await fetchMaterialRequestWorkflow(mrName);
   return {
     stock_entry: undefined,
     forwarded_items,
-    mr: forwardedMr,
-    overall_status: "Forwarded to Procurement",
+    mr: freshMr,
+    overall_status: "Procurement Required",
   };
 }
 
@@ -1305,51 +1547,121 @@ export function parseForwardedItemsFromMr(
 }
 
 /**
- * Fetches Procurement Queue records from live ERPNext data.
- * Displays ONLY Material Requests where:
- * 1. Status = "Procurement Required"
- * 2. Remaining Qty > 0
- * 3. RFQ not yet created
+ * ERPNext STORED values of `custom_bidsphere_status` that mean "this MR has been
+ * forwarded to Procurement" (through RFQ creation, up to but excluding
+ * Completed). Includes the canonical write value ("Forwarded to Procurement" —
+ * see UI_TO_ERP_STATUS) plus every legacy alias, so a targeted server-side
+ * query catches historical records too. This is the reliable forwarded marker
+ * and is queried directly (not via the generic list path, whose custom-field
+ * inclusion is gated by a session-global fallback flag).
  *
- * Includes comprehensive debug logging for query execution, returned MR IDs,
- * and exact diagnostic reasons if 0 records are returned.
+ * "Procurement Required" is intentionally EXCLUDED — it is the pre-forward
+ * state (warehouse reviewed, shortage recorded, "Send to Procurement" not yet
+ * clicked) and must never be treated as forwarded.
+ */
+const FORWARDED_ERP_STATUS_VALUES = [
+  "Forwarded to Procurement",
+  "Procurement Review",
+  "Procurement Pending",
+  "RFQ Pending",
+  "RFQ Requested",
+  "RFQ Created",
+] as const;
+
+/**
+ * Server-side query for forwarded MRs, filtered on a specific custom field.
+ * Returns [] (never throws) when the field isn't queryable so the caller can
+ * fall back to the client-side status scan. Requests full fields so downstream
+ * status resolution always has `custom_bidsphere_status` + remarks available.
+ */
+async function fetchForwardedMrsByField(
+  filter: Filter,
+): Promise<MaterialRequestWorkflowRecord[]> {
+  try {
+    const rows = await apiGet<MaterialRequestWorkflowRecord[]>(
+      buildResourceUrl(MR_DOCTYPE),
+      withSilent(
+        buildListConfig({
+          fields: MR_LIST_FIELDS_FULL,
+          filters: [["docstatus", "=", 1], filter],
+          order_by: "modified desc",
+          limit_page_length: 500,
+        }),
+      ),
+    );
+    return rows ?? [];
+  } catch (err) {
+    if (isQueryFieldError(err)) return [];
+    // A non-field error (permission/network) also degrades to the scan fallback.
+    if (import.meta.env.DEV) {
+      console.warn("[Procurement Queue] targeted forwarded query failed:", err);
+    }
+    return [];
+  }
+}
+
+/**
+ * Fetches Procurement Queue records from live ERPNext data — every Material
+ * Request that has been forwarded to Procurement (status "Procurement Required"
+ * through "RFQ Created", up to but excluding Completed/Cancelled).
+ *
+ * Eligibility is resolved from the UNION of three reliable sources so a
+ * forwarded MR can never be silently dropped:
+ *   1. Server-side query on the stored `custom_bidsphere_status` forwarded
+ *      values (the canonical marker written by the forward action).
+ *   2. Server-side query on `custom_forwarded_to_procurement = 1` (best-effort
+ *      structured flag).
+ *   3. Client-side scan of all submitted MRs whose resolved workflow status is
+ *      in PROCUREMENT_QUEUE_STATUSES (covers Purchase-type / standard-field
+ *      resolution and any legacy value).
+ *
+ * Results are de-duped by name, hydrated with full detail, item-filtered, and
+ * sorted newest-forwarded-first. Includes dev diagnostics for the query, the
+ * applied filters, and the final displayed list.
  */
 export async function fetchProcurementQueue(): Promise<MaterialRequestWorkflowRecord[]> {
-  console.log(
-    "[Procurement Queue Query] Executing query for statuses:",
-    PROCUREMENT_QUEUE_STATUSES,
-  );
-
-  const allSubmitted = await listMaterialRequestsWorkflow({
-    limit: 500,
-    docstatus: 1,
+  console.log("[Procurement] Loading forwarded requests...", {
+    filters: {
+      storedStatusValues: FORWARDED_ERP_STATUS_VALUES,
+      forwardedFlag: "custom_forwarded_to_procurement = 1",
+      resolvedStatuses: PROCUREMENT_QUEUE_STATUSES,
+    },
   });
 
-  // Eligible = forwarded-to-procurement through RFQ-created (until Completed).
-  // RFQ-created MRs are KEPT in the queue so Procurement can track them and see
-  // "View RFQ"; only Completed/Cancelled/stock-path statuses drop out (they are
-  // never in PROCUREMENT_QUEUE_STATUSES).
-  const forwardedDocs = allSubmitted.filter((doc) =>
+  // Run all three eligibility sources concurrently. Each degrades to [] on
+  // failure so one weak source never blocks the queue.
+  const [byStoredStatus, byForwardFlag, allSubmitted] = await Promise.all([
+    fetchForwardedMrsByField([
+      MR_WORKFLOW_FIELD,
+      "in",
+      [...FORWARDED_ERP_STATUS_VALUES],
+    ]),
+    fetchForwardedMrsByField(["custom_forwarded_to_procurement", "=", 1]),
+    listMaterialRequestsWorkflow({ limit: 500, docstatus: 1 }).catch(
+      () => [] as MaterialRequestWorkflowRecord[],
+    ),
+  ]);
+
+  const byResolvedStatus = allSubmitted.filter((doc) =>
     PROCUREMENT_QUEUE_STATUSES.includes(getMaterialRequestWorkflowStatus(doc)),
   );
 
-  console.log("[Procurement Queue Query] Submitted MRs retrieved:", {
-    totalSubmittedInERPNext: allSubmitted.length,
-    eligibleCount: forwardedDocs.length,
-    eligibleMRs: forwardedDocs.map((d) => ({
-      name: d.name,
-      status: getMaterialRequestWorkflowStatus(d),
-    })),
-  });
+  // Union + de-dupe by MR name (keep the richest record for each name).
+  const eligibleByName = new Map<string, MaterialRequestWorkflowRecord>();
+  for (const doc of [...byStoredStatus, ...byForwardFlag, ...byResolvedStatus]) {
+    if (doc?.name) eligibleByName.set(doc.name, doc);
+  }
+  const forwardedDocs = [...eligibleByName.values()];
 
   if (forwardedDocs.length === 0) {
     const statusesFound = Array.from(
       new Set(allSubmitted.map((d) => getMaterialRequestWorkflowStatus(d))),
     );
     console.warn(
-      "[Procurement Queue Debug] 0 records returned. No MRs match the eligible statuses.",
+      "[Procurement] Received 0 records. No MRs match any forwarded marker.",
       {
-        eligibleStatuses: PROCUREMENT_QUEUE_STATUSES,
+        forwardedStatusValues: FORWARDED_ERP_STATUS_VALUES,
+        resolvedStatuses: PROCUREMENT_QUEUE_STATUSES,
         totalSubmittedMRs: allSubmitted.length,
         statusesFoundInDB: statusesFound,
         sampleMRs: allSubmitted.slice(0, 5).map((m) => ({
@@ -1375,27 +1687,43 @@ export async function fetchProcurementQueue(): Promise<MaterialRequestWorkflowRe
     }),
   );
 
-  // Keep every eligible MR. We no longer exclude RFQ-linked records (they show
-  // "View RFQ"); we only drop the degenerate case of a forwarded MR that has
-  // no line items and no forwarded shortage qty at all — there is nothing to
-  // procure or display.
+  // A forwarded MR is ALWAYS returned. The only records dropped are truly
+  // degenerate ones with no line items AND no forwarded-items snapshot — a real
+  // MR can't hit this. NOTE: we deliberately do NOT filter on qty/shortage
+  // being > 0 here — that hardcoded filter previously hid legitimately
+  // forwarded MRs (req 4 & 8). Eligibility is decided solely by the forwarded
+  // markers above.
   const queue = detailedDocs.filter((mr) => {
-    const forwardedItems = parseForwardedItemsFromMr(mr);
-    if (forwardedItems.length > 0) {
-      return forwardedItems.some(
-        (fi) => (fi.forward_qty ?? 0) > 0 || (fi.shortage_qty ?? 0) > 0,
+    const hasForwardedItems = parseForwardedItemsFromMr(mr).length > 0;
+    const hasLineItems = (mr.items ?? []).length > 0;
+    const keep = hasForwardedItems || hasLineItems;
+    if (!keep) {
+      console.warn(
+        `[Procurement] Skipping ${mr.name} — no line items or forwarded-items snapshot.`,
       );
     }
-    return (mr.items ?? []).some((i) => (Number(i.qty) || 0) > 0);
+    return keep;
   });
 
-  console.log("[Procurement Queue Query] Query executed successfully.", {
-    eligibleStatuses: PROCUREMENT_QUEUE_STATUSES,
-    totalEligible: forwardedDocs.length,
-    returnedCount: queue.length,
-    mrIDsReturned: queue.map((mr) => ({
+  // Newest forwarded first. `custom_forwarded_on` when the optional field is
+  // provisioned; otherwise `modified` (the forward is the last write) is a
+  // reliable proxy for forwarded_at.
+  queue.sort((a, b) => {
+    const at = a.custom_forwarded_on || a.modified || "";
+    const bt = b.custom_forwarded_on || b.modified || "";
+    return bt.localeCompare(at);
+  });
+
+  console.log(`[Procurement] Received ${queue.length} records`, {
+    fromStoredStatus: byStoredStatus.length,
+    fromForwardFlag: byForwardFlag.length,
+    fromResolvedScan: byResolvedStatus.length,
+    totalSubmittedScanned: allSubmitted.length,
+    unionEligible: forwardedDocs.length,
+    records: queue.map((mr) => ({
       name: mr.name,
       status: getMaterialRequestWorkflowStatus(mr),
+      forwardedOn: mr.custom_forwarded_on ?? mr.modified ?? null,
       linkedRfq: mr.custom_linked_rfq ?? null,
     })),
   });
@@ -1814,16 +2142,16 @@ export async function fetchMaterialRequestDashboardCounts(role: {
     materialIssuedToday: all.filter((m) => {
       return isIssued(m) && (m.modified ?? "").startsWith(today);
     }).length,
-    forwardedToProcurement: byStatus("Procurement Required").length,
+    forwardedToProcurement: byStatus("Forwarded to Procurement").length,
     forwardedToday: all.filter((m) => {
       const st = statusOf(m);
       return (
-        st === "Procurement Required" &&
+        st === "Forwarded to Procurement" &&
         (m.modified ?? "").startsWith(today)
       );
     }).length,
-    pendingProcurement: byStatus("Procurement Required").length,
-    readyForRfq: byStatus("Procurement Required").length,
+    pendingProcurement: byStatus("Forwarded to Procurement").length,
+    readyForRfq: byStatus("Forwarded to Procurement").length,
     rfqCreated: byStatus("RFQ Created").length,
   };
 

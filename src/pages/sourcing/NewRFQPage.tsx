@@ -560,6 +560,7 @@ export default function NewRFQPage() {
       // Creating an RFQ (especially from a forwarded MR) moves the request out
       // of "awaiting RFQ" — keep the Warehouse & procurement dashboards live.
       void queryClient.invalidateQueries({ queryKey: ["mr-procurement-queue"] });
+      void queryClient.invalidateQueries({ queryKey: ["mr-forwarded-history"] });
       void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
       void queryClient.invalidateQueries({ queryKey: ["material-requests-workflow"] });
       navigate(`/sourcing/rfq/${encodeURIComponent(created.name)}`);
@@ -1140,7 +1141,7 @@ function Step2({
 }: Step2Props) {
   const groupsQuery = useQuery({
     queryKey: ["item-groups"],
-    queryFn: getItemGroups,
+    queryFn: () => getItemGroups(),
     staleTime: 5 * 60_000,
   });
 

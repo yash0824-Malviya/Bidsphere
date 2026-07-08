@@ -212,6 +212,9 @@ export default function RFQtoPOConversionPage() {
       setCreatedPOName(result.poName);
 
       void queryClient.invalidateQueries({ queryKey: ["rfq-linked-pos", decodedId] });
+      void queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
+      // Refresh the dashboard's Procurement Cycle Time (and other analytics).
+      void queryClient.invalidateQueries({ queryKey: ["procurement-analytics"] });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // eslint-disable-next-line no-console
@@ -240,6 +243,8 @@ export default function RFQtoPOConversionPage() {
       const submitted = await submitPurchaseOrder(poName);
       toast.success(`${submitted.name} submitted successfully!`);
       void queryClient.invalidateQueries({ queryKey: ["rfq-linked-pos", decodedId] });
+      void queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
+      void queryClient.invalidateQueries({ queryKey: ["procurement-analytics"] });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // eslint-disable-next-line no-console

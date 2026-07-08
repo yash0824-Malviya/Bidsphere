@@ -5,6 +5,7 @@ import { Timer } from "lucide-react";
 
 import { computeSla, listTimersForRole, type SlaTimer } from "../../api/sla";
 import { useSlaNow } from "../../hooks/useSlaTicker";
+import { useSlaVisible } from "../../hooks/useSlaVisible";
 import SlaBadge from "./SlaBadge";
 
 interface Props {
@@ -32,10 +33,14 @@ function routeFor(t: SlaTimer): string {
  * signed-in role's open timers from the backend.
  */
 export default function SlaCountdownWidget({ role, title = "SLA Countdown", limit = 6 }: Props) {
+  // SLA is temporarily Admin-only — non-admin users neither fetch timers nor
+  // render this widget (no DOM node, so dashboard spacing collapses cleanly).
+  const slaVisible = useSlaVisible();
   const now = useSlaNow();
   const { data, isLoading } = useQuery({
     queryKey: ["sla-timers-role", role],
     queryFn: () => listTimersForRole(role),
+    enabled: slaVisible,
     staleTime: 30_000,
     refetchInterval: 60_000,
     retry: false,
@@ -58,6 +63,8 @@ export default function SlaCountdownWidget({ role, title = "SLA Countdown", limi
       breached: withComputed.filter((x) => x.c.phase === "breached").length,
     };
   }, [data, now, limit]);
+
+  if (!slaVisible) return null;
 
   return (
     <div className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">

@@ -24,7 +24,17 @@ export const FEATURE_FLAGS = {
    * page components, and backend APIs remain fully functional when
    * this flag is false — the module is only hidden from navigation.
    */
-  showMaterialRequests: true,
+  // REGRESSION FIX: this was flipped to `true` in a later change, which
+  // surfaced the legacy P2P "Material Requests" nav link (`/p2p/requisitions`
+  // → `NewRequisitionPage`, which creates `material_request_type: "Purchase"`
+  // documents). The real Material Request workflow (Department → Warehouse →
+  // Procurement) only ever queues `material_request_type: "Material Issue"`
+  // documents, so anything created via that legacy page is permanently
+  // invisible to the Warehouse Pending Review queue even though it is
+  // correctly marked "Under Warehouse Review". Restoring `false` hides that
+  // duplicate/legacy entry point and routes everyone through the one true
+  // Material Request creation flow again.
+  showMaterialRequests: false,
   /** BidSphere MR workflow module (warehouse review → issue / RFQ). */
   showMaterialRequestWorkflow: true,
 } as const;

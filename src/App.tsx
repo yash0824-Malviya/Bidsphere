@@ -53,6 +53,9 @@ const MaterialRequestWarehousePage = lazy(
 const MaterialRequestProcurementPage = lazy(
   () => import("./pages/material-requests/MaterialRequestProcurementPage")
 );
+const MaterialRequestHistoryPage = lazy(
+  () => import("./pages/material-requests/MaterialRequestHistoryPage")
+);
 const MaterialRequestIssuedPage = lazy(
   () => import("./pages/material-requests/MaterialRequestIssuedPage")
 );
@@ -74,6 +77,9 @@ const NewGRNPage = lazy(() => import("./pages/p2p/NewGRNPage"));
 const InvoiceListPage = lazy(() => import("./pages/invoices/InvoiceListPage"));
 const InvoiceDetailRoutePage = lazy(
   () => import("./pages/invoices/InvoiceDetailRoutePage")
+);
+const TotalSpendDetailsPage = lazy(
+  () => import("./pages/p2p/TotalSpendDetailsPage")
 );
 const PaymentsPage = lazy(() => import("./pages/p2p/PaymentsPage"));
 const NewPaymentPage = lazy(() => import("./pages/p2p/NewPaymentPage"));
@@ -192,7 +198,17 @@ const InventoryOverviewPage = lazy(() => import("./pages/admin/InventoryOverview
 const BudgetControlPage = lazy(() => import("./pages/admin/BudgetControlPage"));
 const IntegrationsPage = lazy(() => import("./pages/admin/IntegrationsPage"));
 const SlaConfigurationPage = lazy(() => import("./pages/admin/SlaConfigurationPage"));
+const SlaDashboardPage = lazy(() => import("./pages/admin/SlaDashboardPage"));
 const SlaReportsPage = lazy(() => import("./pages/admin/SlaReportsPage"));
+
+const BomManagementPage = lazy(
+  () => import("./pages/manufacturing/BomManagementPage")
+);
+const BomFormPage = lazy(() => import("./pages/manufacturing/BomFormPage"));
+const BomDetailPage = lazy(() => import("./pages/manufacturing/BomDetailPage"));
+const FinishedProductsPage = lazy(
+  () => import("./pages/manufacturing/FinishedProductsPage")
+);
 
 const WarehouseDashboardPage = lazy(
   () => import("./pages/warehouse/WarehouseDashboardPage")
@@ -214,6 +230,9 @@ const WarehouseIssueItemsPage = lazy(
 );
 const WarehouseForwardedRequestsPage = lazy(
   () => import("./pages/warehouse/WarehouseForwardedRequestsPage")
+);
+const WarehouseForwardedHistoryPage = lazy(
+  () => import("./pages/warehouse/WarehouseForwardedHistoryPage")
 );
 const WarehouseStockOverviewPage = lazy(
   () => import("./pages/warehouse/WarehouseStockOverviewPage")
@@ -437,6 +456,10 @@ function App() {
               element={<MaterialRequestProcurementPage />}
             />
             <Route
+              path="/material-requests/history"
+              element={<MaterialRequestHistoryPage />}
+            />
+            <Route
               path="/material-requests/issued"
               element={<MaterialRequestIssuedPage />}
             />
@@ -479,6 +502,7 @@ function App() {
               path="/p2p/invoices/:id"
               element={<InvoiceDetailRoutePage />}
             />
+            <Route path="/p2p/total-spend" element={<TotalSpendDetailsPage />} />
 
             <Route path="/p2p/payments" element={<PaymentsPage />} />
             <Route path="/p2p/payments/new" element={<NewPaymentPage />} />
@@ -569,6 +593,10 @@ function App() {
               element={<WarehouseForwardedRequestsPage />}
             />
             <Route
+              path="/warehouse/material-requests/history"
+              element={<WarehouseForwardedHistoryPage />}
+            />
+            <Route
               path="/warehouse/issue-items"
               element={<WarehouseIssueItemsPage />}
             />
@@ -612,8 +640,21 @@ function App() {
             <Route path="/admin/security-settings" element={<SecuritySettingsPage />} />
             <Route path="/admin/settings" element={<SystemSettingsPage />} />
             <Route path="/admin/sla-configuration" element={<SlaConfigurationPage />} />
+            <Route path="/admin/sla-dashboard" element={<SlaDashboardPage />} />
             <Route path="/admin/sla-reports" element={<SlaReportsPage />} />
             <Route path="/admin/integrations" element={<IntegrationsPage />} />
+
+            {/* Manufacturing — BOM (Bill of Materials) workspace */}
+            <Route path="/manufacturing" element={<Navigate to="/manufacturing/boms" replace />} />
+            <Route path="/manufacturing/boms" element={<BomManagementPage />} />
+            <Route path="/manufacturing/boms/list" element={<BomManagementPage />} />
+            <Route path="/manufacturing/boms/new" element={<BomFormPage />} />
+            <Route path="/manufacturing/boms/:name/edit" element={<BomFormPage />} />
+            <Route path="/manufacturing/boms/:name" element={<BomDetailPage />} />
+            <Route
+              path="/manufacturing/finished-products"
+              element={<FinishedProductsPage />}
+            />
 
             {/* Inventory */}
             <Route path="/inventory" element={<InventoryPage />} />

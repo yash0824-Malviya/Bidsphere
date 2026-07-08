@@ -12,6 +12,7 @@ import {
 import ActionCenter from "./ActionCenter";
 import DashboardHeader from "./DashboardHeader";
 import FinanceKpiRow from "./FinanceKpiRow";
+import ProcurementAnalyticsSection from "./ProcurementAnalyticsSection";
 import SlaCountdownWidget from "../sla/SlaCountdownWidget";
 import FinanceReviewHistoryTable from "../finance/FinanceReviewHistoryTable";
 import InvoicesAwaitingCreationTable from "../finance/InvoicesAwaitingCreationTable";
@@ -47,6 +48,13 @@ export default function FinanceDashboard({ greetingName }: Props) {
       <FinanceKpiRow
         kpis={metricsQuery.data ?? null}
         loading={metricsQuery.isLoading}
+      />
+
+      <ProcurementAnalyticsSection
+        title="Financial Analytics"
+        subtitle="Budget & savings from ERPNext"
+        kpis={["budgetUtilisation", "costSavings"]}
+        charts={["budgetVsActual", "monthlySpend", "costSavings"]}
       />
 
       <SlaCountdownWidget role="finance" title="Finance SLA Countdown" />

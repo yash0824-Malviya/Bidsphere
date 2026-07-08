@@ -62,9 +62,20 @@ const MANUFACTURING_KEYWORDS = [
   "consumable",
   "spare",
   "component",
+  "part", // "Auto Parts", "Spare Parts", "Engine Parts"
+  "auto",
+  "electrical",
+  "assembly",
   "sub assembly",
   "sub-assembly",
   "subassembly",
+  "mechanical",
+  "machine",
+  "machining",
+  "wiring",
+  "pipe",
+  "valve",
+  "gear",
   "semi finished",
   "semi-finished",
   "finished good",
@@ -76,7 +87,6 @@ const MANUFACTURING_KEYWORDS = [
   "hardware",
   "chemical",
   "fabrication",
-  "machining",
   "tooling",
   "casting",
   "fastener",
@@ -84,6 +94,10 @@ const MANUFACTURING_KEYWORDS = [
   "production",
 ];
 
+// Office / admin (indirect) indicators. Deliberately excludes ambiguous terms
+// like "maintenance", "supplies" and "safety" — in this taxonomy groups such as
+// "Maintenance Supplies" / "Maintenance Services" belong to Direct procurement,
+// so they must NOT be pulled into the Indirect office list.
 const OFFICE_KEYWORDS = [
   "stationery",
   "stationary",
@@ -91,22 +105,21 @@ const OFFICE_KEYWORDS = [
   "it equipment",
   "computer",
   "laptop",
+  "desktop",
+  "keyboard",
+  "mouse",
   "printer",
   "peripheral",
   "housekeeping",
   "furniture",
   "pantry",
-  "safety",
-  "ppe",
-  "maintenance",
   "cleaning",
   "software",
   "license",
   "licence",
-  "electronic",
-  "mobile",
-  "network",
-  "supplies",
+  "toner",
+  "cartridge",
+  "admin",
 ];
 
 function matchesAny(haystack: string, keywords: string[]): boolean {
@@ -126,19 +139,20 @@ export function classifyItemGroup(
 }
 
 /**
- * Filter Item Groups for the given Procurement Type. Direct shows manufacturing
- * groups, Indirect shows office/support groups, and unclassified groups remain
- * visible under both so nothing legitimate is hidden.
+ * Filter Item Groups for the given Procurement Type.
+ *
+ * • Direct   → every ERPNext Item Group, exactly like the Procurement RFQ
+ *              module (no category filtering, nothing hidden).
+ * • Indirect → only office/admin groups (Housekeeping, IT Equipment,
+ *              Stationery, …), resolved by keyword classification of the live
+ *              group names — never a hardcoded list.
  */
 export function filterItemGroupsByProcurementType<T extends ItemGroupLike>(
   groups: T[],
   procurementType: "Direct" | "Indirect"
 ): T[] {
-  return groups.filter((g) => {
-    const kind = classifyItemGroup(g.item_group_name || g.name);
-    if (kind === null) return true;
-    return procurementType === "Direct"
-      ? kind === "manufacturing"
-      : kind === "office";
-  });
+  if (procurementType === "Direct") return groups;
+  return groups.filter(
+    (g) => classifyItemGroup(g.item_group_name || g.name) === "office"
+  );
 }

@@ -34,6 +34,7 @@ const NAV_LABEL_KEYS: Record<string, string> = {
   "Warehouse Review": "sidebar.warehouseReview",
   "Issued Materials": "sidebar.issuedMaterials",
   "Forwarded Material Requests": "sidebar.forwardedMaterialRequests",
+  "Forwarded History": "sidebar.forwardedHistory",
   "P2P Core": "sidebar.p2pCore",
   Suppliers: "sidebar.suppliers",
   Inventory: "sidebar.inventory",

@@ -24,8 +24,15 @@ function format(ms: number): string {
 /**
  * Live countdown to a target epoch (ms). Ticks every second. Pass `null` to
  * disable (returns an expired, empty state).
+ *
+ * `offsetMs` corrects for browser clock skew: pass the (server − client) offset
+ * from `useServerTimeOffset()` so the countdown tracks server time. Defaults to
+ * 0 (client clock).
  */
-export function useCountdown(targetMs: number | null): CountdownState {
+export function useCountdown(
+  targetMs: number | null,
+  offsetMs = 0
+): CountdownState {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -37,7 +44,7 @@ export function useCountdown(targetMs: number | null): CountdownState {
   if (targetMs == null) {
     return { msRemaining: 0, isExpired: true, label: "—" };
   }
-  const msRemaining = Math.max(0, targetMs - now);
+  const msRemaining = Math.max(0, targetMs - (now + offsetMs));
   return {
     msRemaining,
     isExpired: msRemaining <= 0,

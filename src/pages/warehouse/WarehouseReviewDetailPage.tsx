@@ -233,6 +233,8 @@ function MrStatusBadge({ status }: { status: string }) {
     "Stock Available": "border-teal-200 bg-teal-50 text-teal-800",
     "Material Issued": "border-emerald-200 bg-emerald-50 text-emerald-800",
     "Procurement Required":
+      "border-orange-200 bg-orange-50 text-orange-800",
+    "Forwarded to Procurement":
       "border-indigo-200 bg-indigo-50 text-indigo-800",
     Completed: "border-emerald-200 bg-emerald-50 text-emerald-800",
     Cancelled: "border-rose-200 bg-rose-50 text-rose-800",
@@ -719,9 +721,18 @@ export default function WarehouseReviewDetailPage() {
           ].filter(Boolean);
           const remarksText = remarksLines.length > 0 ? remarksLines.join("\n") : undefined;
 
+          // Write "Forwarded to Procurement" directly (not the intermediate
+          // "Procurement Required" state) — this action IS the warehouse's
+          // single "Forward to Procurement" decision (see the dropdown option
+          // of the same name above), so it must make the request visible in
+          // Procurement's queue immediately. `fetchProcurementQueue` /
+          // `PROCUREMENT_QUEUE_STATUSES` only include "Forwarded to
+          // Procurement" and later stages — leaving this at "Procurement
+          // Required" silently stranded the request in a warehouse-only state
+          // that Procurement's page never queries for.
           await updateMaterialRequestWorkflowStatus(
             mrNumber,
-            "Procurement Required",
+            "Forwarded to Procurement",
             {
               custom_warehouse_remarks: remarksText,
             },
@@ -1380,7 +1391,7 @@ export default function WarehouseReviewDetailPage() {
             </div>
           ) : mr.status === "Procurement Required" ? (
             <div className="flex items-start gap-4">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-orange-100 text-orange-600">
                 <Truck className="h-5 w-5" />
               </div>
               <div>
@@ -1388,8 +1399,24 @@ export default function WarehouseReviewDetailPage() {
                   Procurement Required
                 </h3>
                 <p className="mt-1 text-sm text-slate-500">
-                  A Purchase Material Request was created for items with
-                  insufficient stock. Procurement will handle sourcing.
+                  Items with insufficient stock were recorded for procurement.
+                  Click "Send to Procurement" from the Procurement Required
+                  queue to forward this request.
+                </p>
+              </div>
+            </div>
+          ) : mr.status === "Forwarded to Procurement" ? (
+            <div className="flex items-start gap-4">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600">
+                <Truck className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-800">
+                  Forwarded to Procurement
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  This request has been sent to Procurement, which will handle
+                  sourcing.
                 </p>
               </div>
             </div>
