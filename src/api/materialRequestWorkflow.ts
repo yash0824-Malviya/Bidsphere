@@ -583,8 +583,9 @@ export async function createMaterialRequestWorkflow(
   }
 
   const createPromise = (async () => {
+    const company = (input.company ?? COMPANY).trim() || COMPANY;
     const payload: MaterialRequestPayload = {
-      company: input.company ?? COMPANY,
+      company,
       material_request_type: "Material Issue",
       transaction_date: input.transaction_date,
       schedule_date: input.schedule_date,
@@ -603,9 +604,16 @@ export async function createMaterialRequestWorkflow(
     logMrApi("request", {
       action: "create",
       deduped: false,
+      company,
       itemCount: payload.items.length,
       department: input.department,
       procurement_type: input.procurement_type ?? "Direct",
+      items: payload.items.map((row) => ({
+        item_code: row.item_code,
+        warehouse: row.warehouse ?? "(resolve in createMaterialRequest)",
+        qty: row.qty,
+        uom: row.uom,
+      })),
     });
 
     const created = await createMaterialRequest(payload);

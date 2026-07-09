@@ -19,14 +19,17 @@ import {
 } from "lucide-react";
 
 import { fetchUserDepartment } from "../../api/auth";
-import { ENV_DEFAULTS } from "../../api/erpnext";
+import { COMPANY } from "../../api/erpnext";
 
 import {
   createMaterialRequestWorkflow,
   fetchMaterialRequestWorkflow,
   submitMaterialRequestWorkflow,
 } from "../../api/materialRequestWorkflow";
-import { updateMaterialRequest } from "../../api/purchasing";
+import {
+  ensureMaterialRequestItemWarehouses,
+  updateMaterialRequest,
+} from "../../api/purchasing";
 import {
   MR_PROCUREMENT_TYPE_FIELD,
   MR_WORKFLOW_FIELD,
@@ -299,25 +302,29 @@ export default function MaterialRequestCreatePage() {
 
       const scheduleIso = assertERPNextDate(requiredDate, "schedule_date");
 
-      const payloadItems = items
+      // Always use the resolved app company (VITE_COMPANY or Netlink branding
+      // fallback). Never omit company — ERP item_defaults only auto-fill
+      // warehouse for the matching company (SRM005 → Netlink / Stores - NSGAI).
+      const company = COMPANY;
 
-        .filter((line) => line.item_code && line.qty > 0)
-
-        .map((line) => ({
-          item_code: line.item_code,
-
-          item_name: line.item_name,
-
-          description: line.description,
-
-          qty: line.qty,
-
-          uom: line.uom || "Nos",
-
-          schedule_date: line.schedule_date
-            ? assertERPNextDate(line.schedule_date, "schedule_date")
-            : scheduleIso,
-        }));
+      // Resolve warehouse dynamically before create/update so stock items never
+      // hit ERPNext without a warehouse (e.g. company=Bidsphere has warehouses
+      // but SRM005 has no Bidsphere item_defaults → ValidationError).
+      const payloadItems = await ensureMaterialRequestItemWarehouses(
+        company,
+        items
+          .filter((line) => line.item_code && line.qty > 0)
+          .map((line) => ({
+            item_code: line.item_code,
+            item_name: line.item_name,
+            description: line.description,
+            qty: line.qty,
+            uom: line.uom || "Nos",
+            schedule_date: line.schedule_date
+              ? assertERPNextDate(line.schedule_date, "schedule_date")
+              : scheduleIso,
+          })),
+      );
 
       const transactionIso = assertERPNextDate(
         requestDate,
@@ -333,9 +340,15 @@ export default function MaterialRequestCreatePage() {
           console.log("[MR Create] updating existing draft", {
             name: existingDraft,
             reusedSessionDraft: !editName && !!createdDraftNameRef.current,
+            company,
+            warehouses: payloadItems.map((it) => ({
+              item_code: it.item_code,
+              warehouse: it.warehouse,
+            })),
           });
         }
         await updateMaterialRequest(existingDraft, {
+          company,
           transaction_date: transactionIso,
           schedule_date: scheduleIso,
           custom_department: resolvedDepartment,
@@ -358,7 +371,7 @@ export default function MaterialRequestCreatePage() {
       }
 
       const created = await createMaterialRequestWorkflow({
-        company: ENV_DEFAULTS.company,
+        company,
 
         transaction_date: transactionIso,
 

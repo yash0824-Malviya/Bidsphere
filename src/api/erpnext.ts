@@ -8,12 +8,19 @@ import toast from "react-hot-toast";
 
 import { handleSessionExpired } from "../store/sessionExpiry";
 
+import { COMPANY_NAME } from "../config/branding";
+
 export const ENV_DEFAULTS = {
   company: (import.meta.env.VITE_COMPANY as string | undefined) ?? "",
 };
 
-/** Convenience re-export of the company name used throughout the app. */
-export const COMPANY = ENV_DEFAULTS.company.trim() || "Inteva";
+/**
+ * Company used on every ERPNext write. Prefer `VITE_COMPANY` at build time;
+ * fall back to the branded Netlink company — never a stale "Inteva" default
+ * (that company has no warehouses on this site, so stock-item MRs fail with
+ * "Warehouse is mandatory for stock Item …").
+ */
+export const COMPANY = ENV_DEFAULTS.company.trim() || COMPANY_NAME;
 
 const API_KEY = import.meta.env.VITE_API_KEY as string | undefined;
 const API_SECRET = import.meta.env.VITE_API_SECRET as string | undefined;

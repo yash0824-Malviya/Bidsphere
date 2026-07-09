@@ -307,38 +307,51 @@ export async function submitRFQ(name: string): Promise<RFQ> {
 /* ── Shared warehouse helper ────────────────────────────────────────────── */
 
 /**
- * Look up the first non-group warehouse that belongs to `company`.
+ * Look up a non-group warehouse that belongs to `company`.
  *
  * ERPNext's `validate_stock_item_warehouse` (erpnext/buying/utils.py) raises
  * "Warehouse is mandatory for stock Item <X>" for every stock-item row that
- * has an empty warehouse, regardless of whether the doctype is a Supplier
- * Quotation or a Request for Quotation. This helper is shared by both
- * `createRFQ` and `createSupplierQuotation`.
+ * has an empty warehouse. Shared by RFQ / SQ / Material Request / PO helpers.
  *
- * Fallback: `"Stores - I"` — a name that works on most fresh ERPNext installs.
+ * Resolution order (all scoped to `company` — never hardcodes a warehouse):
+ *   1. Prefer a warehouse whose name starts with "Stores"
+ *   2. Otherwise the first non-group warehouse for the company
+ *   3. Empty string if none exist (callers must fail before posting to ERP)
+ *
+ * Never falls back to another company's warehouse (e.g. "Stores - I").
  */
 export async function lookupDefaultWarehouse(company: string): Promise<string> {
-  const FALLBACK = "Stores - I";
+  if (!company?.trim()) return "";
   try {
-    const result = await apiGet<{ data?: { name: string }[] } | { name: string }[]>(
-      "/api/resource/Warehouse",
-      {
-        params: {
-          filters: JSON.stringify([
-            ["company", "=", company],
-            ["is_group", "=", 0],
-          ]),
-          fields: JSON.stringify(["name"]),
-          limit_page_length: 1,
-        },
-      }
-    );
+    const result = await apiGet<
+      { data?: { name: string }[] } | { name: string }[]
+    >("/api/resource/Warehouse", {
+      params: {
+        filters: JSON.stringify([
+          ["company", "=", company],
+          ["is_group", "=", 0],
+        ]),
+        fields: JSON.stringify(["name"]),
+        // Fetch a small page so we can prefer "Stores …" when present.
+        limit_page_length: 20,
+        order_by: "name asc",
+      },
+    });
     const list: { name: string }[] = Array.isArray(result)
       ? result
       : ((result as { data?: { name: string }[] }).data ?? []);
-    return list[0]?.name ?? FALLBACK;
-  } catch {
-    return FALLBACK;
+    if (list.length === 0) return "";
+    const stores = list.find((w) =>
+      w.name.toLowerCase().startsWith("stores"),
+    );
+    return (stores ?? list[0]).name;
+  } catch (err) {
+    console.error(
+      "[lookupDefaultWarehouse] failed for company",
+      company,
+      err instanceof Error ? err.message : err,
+    );
+    return "";
   }
 }
 
@@ -409,6 +422,11 @@ export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
   // pass ERPNext's validate_stock_item_warehouse check. An empty string
   // here always triggers "Warehouse is mandatory for stock Item <X>".
   const warehouse = await lookupDefaultWarehouse(company);
+  if (!warehouse) {
+    throw new Error(
+      `No warehouse found for company "${company}". Configure a warehouse in ERPNext before creating an RFQ.`,
+    );
+  }
   // eslint-disable-next-line no-console
   console.log("[RFQ] Using warehouse:", warehouse);
 
@@ -650,9 +668,14 @@ async function createSupplierQuotationInternal(
   }
 
   const today = todayERPNextDate();
-  const company = import.meta.env.VITE_COMPANY || "Inteva";
+  const company = data.company || DEFAULT_COMPANY;
 
   const warehouse = await lookupDefaultWarehouse(company);
+  if (!warehouse) {
+    throw new Error(
+      `No warehouse found for company "${company}". Configure a warehouse in ERPNext before submitting quotations.`,
+    );
+  }
   // eslint-disable-next-line no-console
   console.log("[SQ] Using warehouse:", warehouse);
 

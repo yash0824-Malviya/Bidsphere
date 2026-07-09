@@ -142,6 +142,27 @@ export interface MaterialRequestPayload {
 }
 
 /**
+ * Ensure every MR item row has a warehouse for `company`.
+ * Looks up the company warehouse dynamically — never hardcodes a name.
+ */
+export async function ensureMaterialRequestItemWarehouses<
+  T extends { item_code: string; warehouse?: string | null },
+>(company: string, items: T[]): Promise<Array<T & { warehouse: string }>> {
+  const resolvedCompany = (company?.trim() || COMPANY).trim();
+  const defaultWarehouse = await lookupDefaultWarehouse(resolvedCompany);
+  return items.map((item) => {
+    const warehouse = (item.warehouse?.trim() || defaultWarehouse).trim();
+    if (!warehouse) {
+      throw new Error(
+        `Warehouse missing for item ${item.item_code}. ` +
+          `No warehouse found for company "${resolvedCompany}".`,
+      );
+    }
+    return { ...item, warehouse };
+  });
+}
+
+/**
  * List Material Requests filtered by `material_request_type = "Purchase"`
  * by default (i.e. the buying-side requisitions). Pass `filters` to
  * narrow further; the type filter is always applied unless you override
@@ -208,7 +229,18 @@ export async function createMaterialRequest(
     ? assertERPNextDate(data.schedule_date, "schedule_date")
     : transactionDate;
 
-  const items = data.items.map((item, idx) => {
+  // Always resolve company + warehouse before posting. Department UI does not
+  // collect a warehouse; ERPNext still requires one on every stock-item row.
+  // Looking it up dynamically (by company) keeps Localhost / Vercel / VM
+  // payloads identical even when VITE_COMPANY was omitted from a VM build.
+  const company = (data.company?.trim() || COMPANY).trim();
+  const withWarehouses = await ensureMaterialRequestItemWarehouses(
+    company,
+    data.items,
+  );
+  const defaultWarehouse = withWarehouses[0]?.warehouse ?? "";
+
+  const items = withWarehouses.map((item, idx) => {
     const qty =
       typeof item.qty === "string" ? parseFloat(item.qty) || 1 : item.qty || 1;
     const uom = item.uom || "Nos";
@@ -226,8 +258,8 @@ export async function createMaterialRequest(
       schedule_date: item.schedule_date
         ? assertERPNextDate(item.schedule_date, "schedule_date")
         : scheduleDate,
+      warehouse: item.warehouse,
     };
-    if (item.warehouse) row.warehouse = item.warehouse;
     if (item.rate !== undefined) row.rate = item.rate;
     if (item.amount !== undefined) row.amount = item.amount;
     if (item.cost_center) row.cost_center = item.cost_center;
@@ -239,28 +271,44 @@ export async function createMaterialRequest(
     material_request_type: data.material_request_type || "Purchase",
     transaction_date: transactionDate,
     schedule_date: scheduleDate,
+    company,
     items,
   };
   if (data.title) doc.title = data.title;
-  if (data.company) doc.company = data.company;
   if (data.cost_center) doc.cost_center = data.cost_center;
   if (data.remarks) doc.remarks = data.remarks;
 
-  if (import.meta.env.DEV) {
-    console.log("[Material Request] create POST /api/method/frappe.client.save", doc);
-  }
+  // Always log the ERP payload (all environments) so VM vs Localhost diffs
+  // are visible in browser / reverse-proxy logs without a DEV-only gate.
+  // eslint-disable-next-line no-console
+  console.log("[Material Request] Creating Material Request", {
+    company,
+    defaultWarehouse,
+    itemCount: items.length,
+    items: items.map((it) => ({
+      item_code: it.item_code,
+      warehouse: it.warehouse,
+      qty: it.qty,
+      uom: it.uom,
+      company,
+    })),
+  });
+  // eslint-disable-next-line no-console
+  console.log(
+    "[Material Request] create POST /api/method/frappe.client.save",
+    JSON.stringify(doc, null, 2),
+  );
 
   const created = await apiPost<MaterialRequest>(
     "/api/method/frappe.client.save",
     { doc },
   );
 
-  if (import.meta.env.DEV) {
-    console.log("[Material Request] create response", {
-      name: created?.name,
-      docstatus: created?.docstatus,
-    });
-  }
+  // eslint-disable-next-line no-console
+  console.log("[Material Request] create response", {
+    name: created?.name,
+    docstatus: created?.docstatus,
+  });
 
   return created;
 }
