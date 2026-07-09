@@ -1860,11 +1860,8 @@ export default function RFQDetailPage() {
   const rfqExtra = rfq as {
     department?: string;
     custom_department?: string;
-    priority?: string;
-    custom_priority?: string;
   };
   const departmentLabel = rfqExtra.department || rfqExtra.custom_department || "—";
-  const priorityLabel = rfqExtra.priority || rfqExtra.custom_priority || "—";
   const ownerLabel = rfq.owner || "—";
   const companyLabel = rfq.company || COMPANY;
 
@@ -1892,7 +1889,6 @@ export default function RFQDetailPage() {
         rfqName={rfq.name}
         isCompleted={isCompleted}
         status={rfq.status ?? "Draft"}
-        priority={priorityLabel}
         materialRequest={materialRequestLabel}
         department={departmentLabel}
         company={companyLabel}
@@ -2660,7 +2656,6 @@ function RfqDetailHeader({
   rfqName,
   isCompleted,
   status,
-  priority,
   materialRequest,
   department,
   company,
@@ -2673,7 +2668,6 @@ function RfqDetailHeader({
   rfqName: string;
   isCompleted: boolean;
   status: string;
-  priority: string;
   materialRequest: string;
   department: string;
   company: string;
@@ -2699,7 +2693,7 @@ function RfqDetailHeader({
       <BackLink />
 
       <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
-        {/* Toolbar — document reference + status/priority + actions (no page title) */}
+        {/* Toolbar — document reference + status + actions (no page title) */}
         <div className="flex flex-col gap-2.5 border-b border-neutral-100 px-5 py-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
@@ -2715,7 +2709,6 @@ function RfqDetailHeader({
               ) : (
                 <StatusBadge status={status} />
               )}
-              <PriorityPill value={priority} />
             </div>
           </div>
           {actions && (
@@ -2730,15 +2723,14 @@ function RfqDetailHeader({
           <dl className="divide-y divide-neutral-100/70">
             <OverviewRow label={t("rfq.rfqNumber")} value={rfqName} mono />
             <OverviewRow label={t("rfq.materialRequest")} value={materialRequest} mono={materialRequest !== "—"} />
+            <OverviewRow label={t("rfq.createdDate")} value={createdDate} />
+            <OverviewRow label={t("rfq.validTill")} value={validTill} />
+          </dl>
+          <dl className="divide-y divide-neutral-100/70">
             <OverviewRow label={t("rfq.department")} value={department} />
             <OverviewRow label={t("common.company")} value={company} />
             <OverviewRow label={t("rfq.procurementOwner")} value={owner} />
-          </dl>
-          <dl className="divide-y divide-neutral-100/70">
-            <OverviewRow label={t("rfq.createdDate")} value={createdDate} />
-            <OverviewRow label={t("rfq.validTill")} value={validTill} />
             <OverviewRow label={t("rfq.currentStatus")} node={<StatusBadge status={status} />} />
-            <OverviewRow label={t("rfq.priority")} node={<PriorityPill value={priority} />} />
           </dl>
         </div>
 
@@ -2780,26 +2772,6 @@ function OverviewRow({
         )}
       </dd>
     </div>
-  );
-}
-
-const PRIORITY_STYLES: Record<string, string> = {
-  high: "bg-red-50 text-red-700 ring-red-200",
-  urgent: "bg-red-50 text-red-700 ring-red-200",
-  medium: "bg-amber-50 text-amber-700 ring-amber-200",
-  normal: "bg-blue-50 text-blue-700 ring-blue-200",
-  low: "bg-neutral-100 text-neutral-500 ring-neutral-200",
-};
-
-function PriorityPill({ value }: { value: string }) {
-  if (!value || value === "—") return null;
-  const tone = PRIORITY_STYLES[value.toLowerCase()] ?? "bg-neutral-100 text-neutral-600 ring-neutral-200";
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${tone}`}
-    >
-      {value}
-    </span>
   );
 }
 

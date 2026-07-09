@@ -301,7 +301,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
           ? "—"
           : pendingQuotations.toLocaleString(),
         icon: FileText,
-        to: "/sourcing/supplier-quotations?preset=pending",
+        to: "/sourcing/rfq?preset=open",
         accent: "bg-amber-50 text-amber-600",
       },
       {
@@ -423,7 +423,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
             label="Quotations waiting for review"
             value={quotationsCountQuery.isPending ? null : pendingQuotations}
             icon={FileText}
-            to="/sourcing/supplier-quotations?preset=pending"
+            to="/sourcing/rfq?preset=open"
             accent="text-amber-700 bg-amber-50"
           />
           <AttentionTile
@@ -439,7 +439,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
           <QuickAction label="Create RFQ" to="/sourcing/rfq/new" icon={FileSearch} />
           <QuickAction
             label="Review Quotations"
-            to="/sourcing/supplier-quotations?preset=pending"
+            to="/sourcing/rfq?preset=open"
             icon={FileText}
           />
           <QuickAction

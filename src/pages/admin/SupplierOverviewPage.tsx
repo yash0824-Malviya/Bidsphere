@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Building2,
@@ -9,9 +9,10 @@ import {
   XCircle,
 } from "lucide-react";
 
-import { apiGet, buildResourceUrl, buildListConfig, withSilent } from "../../api/erpnext";
+import { apiGet, buildResourceUrl, withSilent } from "../../api/erpnext";
 import { Skeleton } from "../../components/Skeleton";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
+import { SUPPLIER_CATEGORIES, isSupplierCategory } from "../../config/supplierCategories";
 
 interface SupplierRow {
   name: string;
@@ -21,34 +22,44 @@ interface SupplierRow {
   disabled: number;
 }
 
-async function fetchSuppliers(search?: string): Promise<{ suppliers: SupplierRow[]; total: number; active: number; disabled: number; groups: Record<string, number> }> {
+type CategoryCounts = Record<(typeof SUPPLIER_CATEGORIES)[number], number>;
+
+function emptyCategoryCounts(): CategoryCounts {
+  return Object.fromEntries(SUPPLIER_CATEGORIES.map((c) => [c, 0])) as CategoryCounts;
+}
+
+async function fetchSuppliers(search?: string): Promise<{ suppliers: SupplierRow[] }> {
   try {
-    const filters = search ? [["supplier_name", "like", `%${search}%`]] : undefined;
+    const term = (search ?? "").trim();
+    const fields = ["name", "supplier_name", "supplier_group", "country", "disabled"];
+    const baseParams = {
+      fields: JSON.stringify(fields),
+      order_by: "creation desc",
+      limit_page_length: 500,
+    } as Record<string, string | number>;
+
+    if (term) {
+      const like = `%${term}%`;
+      // Multi-field search: Supplier Name, Supplier Code, Category, Country.
+      // Frappe supports `or_filters` as a JSON list of filter tuples.
+      baseParams.or_filters = JSON.stringify([
+        ["supplier_name", "like", like],
+        ["name", "like", like],
+        ["supplier_group", "like", like],
+        ["country", "like", like],
+      ]);
+    }
+
     const rows = await apiGet<SupplierRow[]>(
       buildResourceUrl("Supplier"),
       {
-        ...buildListConfig({
-          fields: ["name", "supplier_name", "supplier_group", "country", "disabled"],
-          filters: filters as never,
-          order_by: "creation desc",
-          limit_page_length: 200,
-        }),
+        params: baseParams,
         ...withSilent(),
       }
     );
-    const data = rows ?? [];
-    const groups: Record<string, number> = {};
-    let active = 0;
-    let disabled = 0;
-    for (const s of data) {
-      if (s.disabled) disabled++;
-      else active++;
-      const g = s.supplier_group || "Uncategorized";
-      groups[g] = (groups[g] ?? 0) + 1;
-    }
-    return { suppliers: data, total: data.length, active, disabled, groups };
+    return { suppliers: rows ?? [] };
   } catch {
-    return { suppliers: [], total: 0, active: 0, disabled: 0, groups: {} };
+    return { suppliers: [] };
   }
 }
 
@@ -61,6 +72,7 @@ export default function SupplierOverviewPage() {
 
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
+  const [category, setCategory] = useState("");
 
   const { data, isLoading } = useQuery({
     queryKey: ["admin-supplier-overview", search],
@@ -68,7 +80,31 @@ export default function SupplierOverviewPage() {
     staleTime: 60_000,
   });
 
-  const groups = data?.groups ?? {};
+  const suppliers = data?.suppliers ?? [];
+
+  const categoryCounts = useMemo(() => {
+    const counts = emptyCategoryCounts();
+    for (const s of suppliers) {
+      if (!isSupplierCategory(s.supplier_group)) continue;
+      counts[s.supplier_group] += 1;
+    }
+    return counts;
+  }, [suppliers]);
+
+  const filteredSuppliers = useMemo(() => {
+    if (!category) return suppliers;
+    return suppliers.filter((s) => s.supplier_group === category);
+  }, [suppliers, category]);
+
+  const kpis = useMemo(() => {
+    let active = 0;
+    let disabled = 0;
+    for (const s of filteredSuppliers) {
+      if (s.disabled) disabled += 1;
+      else active += 1;
+    }
+    return { total: filteredSuppliers.length, active, disabled };
+  }, [filteredSuppliers]);
 
   return (
     <div>
@@ -84,9 +120,9 @@ export default function SupplierOverviewPage() {
 
       {/* KPIs */}
       <div className="mb-3 grid grid-cols-3 gap-2">
-        <MiniKpi label="Total Suppliers" value={data?.total ?? 0} color="text-violet-600" bg="bg-violet-50" />
-        <MiniKpi label="Active" value={data?.active ?? 0} color="text-emerald-600" bg="bg-emerald-50" />
-        <MiniKpi label="Disabled" value={data?.disabled ?? 0} color="text-red-600" bg="bg-red-50" />
+        <MiniKpi label="Total Suppliers" value={kpis.total} color="text-violet-600" bg="bg-violet-50" />
+        <MiniKpi label="Active" value={kpis.active} color="text-emerald-600" bg="bg-emerald-50" />
+        <MiniKpi label="Disabled" value={kpis.disabled} color="text-red-600" bg="bg-red-50" />
       </div>
 
       <div className="grid gap-3 lg:grid-cols-[1fr_250px]">
@@ -100,10 +136,22 @@ export default function SupplierOverviewPage() {
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && setSearch(searchInput.trim())}
-                placeholder="Search suppliers..."
+                placeholder="Search by supplier, code, category, or country..."
                 className="w-full rounded-md border border-neutral-200 bg-white py-1.5 pl-8 pr-3 text-xs text-neutral-800 placeholder:text-neutral-400 focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200"
               />
             </div>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="rounded-md border border-neutral-200 bg-white px-2 py-1.5 text-xs text-neutral-800 focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200"
+            >
+              <option value="">All categories</option>
+              {SUPPLIER_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
             <button
               type="button"
               onClick={() => setSearch(searchInput.trim())}
@@ -115,7 +163,7 @@ export default function SupplierOverviewPage() {
 
           {isLoading ? (
             <div className="space-y-1">{[1, 2, 3, 4, 5].map((i) => <Skeleton key={i} className="h-10 rounded" />)}</div>
-          ) : (data?.suppliers ?? []).length === 0 ? (
+          ) : filteredSuppliers.length === 0 ? (
             <div className="rounded-lg border border-neutral-200 bg-white py-12 text-center shadow-sm">
               <Truck className="mx-auto mb-2 h-8 w-8 text-neutral-300" />
               <p className="text-sm font-medium text-neutral-700">No suppliers found</p>
@@ -126,13 +174,13 @@ export default function SupplierOverviewPage() {
                 <thead className="bg-neutral-50">
                   <tr className="border-b border-neutral-200">
                     <th className="px-3 py-2 text-left font-semibold text-neutral-500">Supplier</th>
-                    <th className="px-3 py-2 text-left font-semibold text-neutral-500">Group</th>
+                    <th className="px-3 py-2 text-left font-semibold text-neutral-500">Category</th>
                     <th className="px-3 py-2 text-left font-semibold text-neutral-500">Country</th>
                     <th className="px-3 py-2 text-left font-semibold text-neutral-500">Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(data?.suppliers ?? []).map((s) => (
+                  {filteredSuppliers.map((s) => (
                     <tr key={s.name} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50/60 transition-colors">
                       <td className="px-3 py-2">
                         <div className="flex items-center gap-2">
@@ -166,7 +214,7 @@ export default function SupplierOverviewPage() {
                 </tbody>
               </table>
               <div className="border-t border-neutral-200 px-3 py-2">
-                <p className="text-[11px] text-neutral-500">{data?.total ?? 0} suppliers</p>
+                <p className="text-[11px] text-neutral-500">{filteredSuppliers.length} suppliers</p>
               </div>
             </div>
           )}
@@ -175,22 +223,31 @@ export default function SupplierOverviewPage() {
         {/* Right: breakdown */}
         <div className="rounded-lg border border-neutral-200 bg-white p-3 shadow-sm">
           <h3 className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-neutral-400">
-            <Building2 className="h-3 w-3" /> By Group
+            <Building2 className="h-3 w-3" /> By Category
           </h3>
-          {Object.keys(groups).length === 0 ? (
-            <p className="text-[11px] text-neutral-500">No data</p>
-          ) : (
-            <div className="space-y-1.5">
-              {Object.entries(groups)
-                .sort((a, b) => b[1] - a[1])
-                .map(([group, count]) => (
-                  <div key={group} className="flex items-center justify-between text-xs">
-                    <span className="text-neutral-700 truncate">{group}</span>
-                    <span className="rounded bg-neutral-100 px-1.5 py-px text-[10px] font-semibold text-neutral-600 tabular-nums">{count}</span>
-                  </div>
-                ))}
-            </div>
-          )}
+          <div className="space-y-1.5">
+            {SUPPLIER_CATEGORIES.map((c) => {
+              const count = categoryCounts[c] ?? 0;
+              const active = category === c;
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCategory((prev) => (prev === c ? "" : c))}
+                  className={`flex w-full items-center justify-between rounded px-1.5 py-1 text-left text-xs transition-colors ${
+                    active ? "bg-primary-50 text-primary-700" : "hover:bg-neutral-50 text-neutral-700"
+                  }`}
+                >
+                  <span className="truncate">{c}</span>
+                  <span className={`rounded px-1.5 py-px text-[10px] font-semibold tabular-nums ${
+                    active ? "bg-primary-100 text-primary-700" : "bg-neutral-100 text-neutral-600"
+                  }`}>
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>

@@ -19,7 +19,6 @@ const NAV_LABEL_KEYS: Record<string, string> = {
   "New RFQ": "sidebar.newRfq",
   "RFQ Template Library": "sidebar.rfqTemplateLibrary",
   "Legal Reviews": "sidebar.legalReviews",
-  "Supplier Quotations": "sidebar.supplierQuotations",
   "Reverse Bidding": "sidebar.reverseBidding",
   "Budget Dashboard": "sidebar.budgetDashboard",
   "Budget Approval": "sidebar.budgetApproval",

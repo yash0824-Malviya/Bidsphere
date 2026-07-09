@@ -160,12 +160,11 @@ const SOURCING_CHILDREN_FULL: NavChild[] = [
   { label: "Legal Reviews", to: "/sourcing/legal-reviews" },
 ];
 
-/** Procurement — full RFx workspace plus supplier quotations (no Legal Reviews). */
+/** Procurement — full RFx workspace (no standalone quotations module). */
 const PROCUREMENT_SOURCING_CHILDREN: NavChild[] = [
   { label: "All RFQs", to: "/sourcing/rfq" },
   { label: "New RFQ", to: "/sourcing/rfq/new" },
   { label: "RFQ Template Library", to: "/sourcing/rfq-templates" },
-  { label: "Supplier Quotations", to: "/sourcing/supplier-quotations" },
   { label: "Reverse Bidding", to: "/sourcing/reverse-bidding" },
 ];
 

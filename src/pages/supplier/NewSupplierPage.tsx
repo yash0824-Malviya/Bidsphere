@@ -17,10 +17,10 @@ import {
 import { apiGet, apiPost } from "../../api/erpnext";
 import {
   createSupplier,
-  getSupplierGroups,
 } from "../../api/supplier";
 import PageHeader from "../../components/PageHeader";
 import type { Supplier, SupplierType } from "../../types/erpnext";
+import { SUPPLIER_CATEGORIES } from "../../config/supplierCategories";
 
 interface CountryRow {
   name: string;
@@ -81,7 +81,7 @@ export default function NewSupplierPage() {
 
   // Identity
   const [supplierName, setSupplierName] = useState("");
-  const [supplierGroup, setSupplierGroup] = useState("");
+  const [category, setCategory] = useState("");
   const [supplierType, setSupplierType] = useState<SupplierType>("Company");
   const [country, setCountry] = useState("");
   const [taxId, setTaxId] = useState("");
@@ -139,18 +139,6 @@ export default function NewSupplierPage() {
     }
   }
 
-  const { data: groups = [] } = useQuery({
-    queryKey: ["supplier-groups"],
-    queryFn: () =>
-      getSupplierGroups({
-        filters: [["is_group", "=", 0]],
-        fields: ["name", "supplier_group_name"],
-        limit_page_length: 200,
-        order_by: "supplier_group_name asc",
-      }),
-    staleTime: 5 * 60_000,
-  });
-
   const { data: countries = [] } = useQuery<CountryRow[]>({
     queryKey: ["countries"],
     queryFn: () =>
@@ -180,7 +168,7 @@ export default function NewSupplierPage() {
   function buildSupplierPayload(): Partial<Supplier> {
     return {
       supplier_name: supplierName.trim(),
-      supplier_group: supplierGroup || undefined,
+      supplier_group: category || undefined,
       supplier_type: supplierType,
       country: country || undefined,
       tax_id: taxId || undefined,
@@ -234,7 +222,7 @@ export default function NewSupplierPage() {
 
   function validate(): string | null {
     if (!supplierName.trim()) return "Supplier name is required.";
-    if (!supplierGroup) return "Supplier group is required.";
+    if (!category) return "Category is required.";
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
       return "Email address looks invalid.";
     return null;
@@ -293,16 +281,16 @@ export default function NewSupplierPage() {
                 placeholder="Acme Corporation"
               />
             </Field>
-            <Field label="Supplier Group" required>
+            <Field label="Category" required>
               <select
-                value={supplierGroup}
-                onChange={(e) => setSupplierGroup(e.target.value)}
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
                 className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
               >
-                <option value="">Select group…</option>
-                {groups.map((g) => (
-                  <option key={g.name} value={g.name}>
-                    {g.supplier_group_name ?? g.name}
+                <option value="">Select category…</option>
+                {SUPPLIER_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
                   </option>
                 ))}
               </select>

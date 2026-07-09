@@ -455,16 +455,20 @@ export async function listMaterialRequestsWorkflow(params?: {
 }
 
 /**
- * Warehouse review queue — submitted Material Issue MRs pending warehouse action.
+ * Warehouse review queue — submitted Material Requests pending warehouse action.
  * Only DIRECT procurement requests reach the warehouse; Indirect requests are
  * gated by Admin approval and never appear here.
+ *
+ * IMPORTANT: do NOT hard-filter by `material_request_type`. Legacy/ERP-created
+ * requests may be `"Purchase"` while still legitimately entering the warehouse
+ * stage ("Under Warehouse Review"). Filtering to `"Material Issue"` causes
+ * Department dashboards to show the request while Warehouse queues return none.
  */
 export async function listWarehouseMaterialRequestQueue(
   limit = 100,
 ): Promise<MaterialRequestWorkflowRecord[]> {
   const rows = await listMaterialRequestsWorkflow({
     docstatus: 1,
-    materialRequestType: "Material Issue",
     workflowStatus: WAREHOUSE_PENDING_STATUSES,
     limit,
   });

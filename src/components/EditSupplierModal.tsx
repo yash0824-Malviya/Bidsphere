@@ -6,6 +6,7 @@ import { Loader2, X } from "lucide-react";
 import { apiGet, apiPost, apiPut } from "../api/erpnext";
 import { updateSupplier } from "../api/supplier";
 import type { Supplier } from "../types/erpnext";
+import { SUPPLIER_CATEGORIES } from "../config/supplierCategories";
 
 interface AddressSnapshot {
   name?: string;
@@ -29,6 +30,7 @@ export type SupplierStatus = "Active" | "Inactive";
 
 export interface EditSupplierFormValues {
   supplierName: string;
+  category: string;
   email: string;
   phone: string;
   website: string;
@@ -66,6 +68,7 @@ export function buildEditFormValues(
 ): EditSupplierFormValues {
   return {
     supplierName: supplier.supplier_name ?? supplier.name ?? "",
+    category: supplier.supplier_group ?? "",
     email: supplier.email_id ?? "",
     phone: supplier.mobile_no ?? "",
     website: supplier.website ?? "",
@@ -136,6 +139,9 @@ export default function EditSupplierModal({
       if (!values.supplierName.trim()) {
         throw new Error("Supplier name is required.");
       }
+      if (!values.category) {
+        throw new Error("Category is required.");
+      }
       if (
         values.email &&
         !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email.trim())
@@ -145,6 +151,7 @@ export default function EditSupplierModal({
 
       await updateSupplier(supplier.name, {
         supplier_name: values.supplierName.trim(),
+        supplier_group: values.category || undefined,
         email_id: values.email.trim() || undefined,
         mobile_no: values.phone.trim() || undefined,
         website: values.website.trim() || undefined,
@@ -243,6 +250,21 @@ export default function EditSupplierModal({
                 className={inputClass}
                 placeholder="Acme Corporation"
               />
+            </Field>
+
+            <Field label="Category" required>
+              <select
+                value={form.category}
+                onChange={(e) => setField("category", e.target.value)}
+                className={inputClass}
+              >
+                <option value="">Select category…</option>
+                {SUPPLIER_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
             </Field>
 
             <Field label="Email">

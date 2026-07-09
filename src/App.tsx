@@ -59,9 +59,6 @@ const MaterialRequestHistoryPage = lazy(
 const MaterialRequestIssuedPage = lazy(
   () => import("./pages/material-requests/MaterialRequestIssuedPage")
 );
-const SupplierQuotationsListPage = lazy(
-  () => import("./pages/sourcing/SupplierQuotationsListPage")
-);
 const PurchaseOrdersPage = lazy(() => import("./pages/p2p/PurchaseOrdersPage"));
 const NewPOQueuePage = lazy(() => import("./pages/p2p/NewPOQueuePage"));
 const RFQtoPOConversionPage = lazy(() => import("./pages/p2p/RFQtoPOConversionPage"));
@@ -532,10 +529,6 @@ function App() {
             <Route
               path="/sourcing/reverse-bidding/:id"
               element={<ReverseBiddingDetailPage />}
-            />
-            <Route
-              path="/sourcing/supplier-quotations"
-              element={<SupplierQuotationsListPage />}
             />
             <Route path="/sourcing/rfq-templates" element={<RFQTemplatesPage />} />
             {/* Legacy RFQ-custom-field-backed Legal Reviews page — superseded by

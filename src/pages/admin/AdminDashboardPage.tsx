@@ -286,7 +286,8 @@ export default function AdminDashboardPage() {
     { label: t("adminDashboard.pipeline.warehouseReview"), count: mrCounts?.pendingWarehouseReview ?? 0, to: "/warehouse/material-requests/pending" },
     { label: t("adminDashboard.pipeline.procurementReview"), count: mrCounts?.pendingProcurement ?? 0, to: "/material-requests/procurement" },
     { label: t("adminDashboard.pipeline.rfqCreated"), count: counts?.openRfqs ?? 0, to: "/admin/procurement" },
-    { label: t("adminDashboard.pipeline.supplierQuotations"), count: sqCountQ.data ?? 0, to: "/sourcing/supplier-quotations" },
+    // Standalone Supplier Quotations module removed — access quotations via RFQ workflow.
+    { label: t("adminDashboard.pipeline.supplierQuotations"), count: sqCountQ.data ?? 0, to: "/sourcing/rfq?preset=open" },
     { label: t("adminDashboard.pipeline.legalReview"), count: legalPendingQ.data?.length ?? 0, to: "/legal/reviews" },
     { label: t("adminDashboard.pipeline.financeReview"), count: financePendingQ.data?.items.length ?? 0, to: "/budget/pending-reviews" },
     { label: t("adminDashboard.pipeline.purchaseOrder"), count: counts?.activePos ?? 0, to: "/p2p/purchase-orders" },

@@ -107,7 +107,6 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/material-requests/issued": "Issued Materials",
   "/material-requests/procurement": "Forwarded Material Requests",
   "/material-requests/history": "Forwarded History",
-  "/sourcing/supplier-quotations": "Supplier Quotations",
   "/p2p/purchase-orders": "Purchase Orders",
   "/p2p/purchase-orders/create": "New PO",
   "/p2p/purchase-orders/convert": "Create Purchase Order",
