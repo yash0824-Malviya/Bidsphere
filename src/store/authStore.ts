@@ -8,6 +8,8 @@ import {
   type AuthUserProfile,
 } from "../api/auth";
 import { isMfaRequired, logMfaEnvDiagnostics } from "../config/mfaConfig";
+
+declare const __DEMO_MFA_ENABLED__: boolean;
 import { resolveRoleFromUser } from "../config/roles";
 import {
   AUTH_STORAGE_KEY,
@@ -146,18 +148,55 @@ export const useAuthStore = create<AuthState>()(
 
       login: async (username, password, rememberMe) => {
         authLog("login start", { username });
+        // Always log on VM/production too (authLog is DEV-only).
+        // eslint-disable-next-line no-console
+        console.log("[MFA:login] Login request sent", { username });
         logMfaEnvDiagnostics("login");
         set({ isLoading: true, sessionRestoreError: null });
         try {
           const user = await loginWithPassword(username, password);
 
+          // eslint-disable-next-line no-console
+          console.log("[MFA:login] Login response received (password OK)", {
+            user: {
+              name: user.name,
+              email: user.email,
+              full_name: user.full_name,
+              role: user.role,
+            },
+          });
+
           const mfaRequired = isMfaRequired();
+          const demoMFA = isMfaRequired(); // same gate — Demo MFA is the only MFA
+          const destination = mfaRequired ? "/verify-otp" : "dashboard (complete)";
+
+          // eslint-disable-next-line no-console
+          console.log("[MFA:login] Decision point (authStore.login)", {
+            requiresMFA: mfaRequired,
+            demoMFA,
+            VITE_DEMO_MFA: import.meta.env.VITE_DEMO_MFA,
+            DEMO_MFA: (import.meta.env as { DEMO_MFA?: string }).DEMO_MFA,
+            __DEMO_MFA_ENABLED__:
+              typeof __DEMO_MFA_ENABLED__ !== "undefined"
+                ? __DEMO_MFA_ENABLED__
+                : "(undefined)",
+            MODE: import.meta.env.MODE,
+            PROD: import.meta.env.PROD,
+            DEV: import.meta.env.DEV,
+            destination,
+          });
+
           authLog("mfa gate", {
             mfaRequired,
             VITE_DEMO_MFA: import.meta.env.VITE_DEMO_MFA,
           });
 
           if (!mfaRequired) {
+            // eslint-disable-next-line no-console
+            console.warn(
+              "[MFA:login] SKIPPING Demo MFA → finalize session → Dashboard",
+              "Cause: isMfaRequired() === false (build-time Demo MFA disabled)",
+            );
             finalizeAuthenticatedUser(user, rememberMe);
             return "complete";
           }
@@ -173,6 +212,8 @@ export const useAuthStore = create<AuthState>()(
             rememberMe: false,
             sessionProof: null,
           });
+          // eslint-disable-next-line no-console
+          console.log("[MFA:login] REQUIRING Demo MFA → /verify-otp");
           return "mfa";
         } finally {
           set({ isLoading: false });
