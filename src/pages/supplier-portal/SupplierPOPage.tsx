@@ -270,43 +270,18 @@ export default function SupplierPOPage() {
   }
 
   /**
-   * Downloads the official Purchase Order PDF using ERPNext's own "Standard"
-   * Print Format for the Purchase Order doctype (`frappe.utils.print_format
-   * .download_pdf`) — the exact same endpoint the buyer-side PO detail page
-   * uses. No custom PDF template is generated; the document, layout, company
-   * letterhead, and signature come entirely from ERPNext's print format.
+   * Client-side PO PDF (jsPDF) — same path as buyer PO detail.
    *
-   * The request is fetched (rather than a bare `window.open`) so a failed
-   * generation never surfaces a raw Frappe traceback / wkhtmltopdf error in
-   * a blank tab — only a friendly toast is shown, and only a verified PDF
-   * blob is ever opened.
+   * ERPNext `download_pdf` fails on this host: wkhtmltopdf cannot fetch print
+   * CSS/assets (ContentNotFoundError → "broken image links"). Do not call that
+   * endpoint from the browser.
    */
   async function handleDownloadPoPdf() {
-    if (pdfDownloading) return;
+    if (pdfDownloading || !po) return;
     setPdfDownloading(true);
     try {
-      const url = `/api/method/frappe.utils.print_format.download_pdf?doctype=${encodeURIComponent(
-        "Purchase Order"
-      )}&name=${encodeURIComponent(name)}&format=${encodeURIComponent("Standard")}`;
-      // Token auth via same-origin proxy; never send Desk session cookies.
-      const res = await fetch(url, { credentials: "omit" });
-      const contentType = res.headers.get("content-type") ?? "";
-      if (!res.ok || !contentType.toLowerCase().includes("pdf")) {
-        throw new Error(
-          `PDF generation failed (status ${res.status}, content-type ${contentType})`
-        );
-      }
-      const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const opened = window.open(blobUrl, "_blank");
-      if (!opened) {
-        // Popup blocked — fall back to a direct download.
-        const a = document.createElement("a");
-        a.href = blobUrl;
-        a.download = `${name}.pdf`;
-        a.click();
-      }
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+      const { downloadPurchaseOrderPdf } = await import("../../utils/pdf");
+      await downloadPurchaseOrderPdf(po);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error("[Supplier PO PDF] Download failed:", err);

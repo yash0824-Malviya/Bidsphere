@@ -54,6 +54,10 @@ import {
   formatDisplayDateTime,
   formatPercent,
 } from "../../utils/format";
+import {
+  downloadPurchaseOrderPdf,
+  printPurchaseOrderPdf,
+} from "../../utils/pdf";
 
 type TabKey = "items" | "grn" | "invoices" | "audit";
 
@@ -295,7 +299,12 @@ export default function PurchaseOrderDetailPage() {
           <ActionBtn
             icon={Download}
             label="PDF"
-            onClick={() => window.open(`/api/method/frappe.utils.print_format.download_pdf?doctype=Purchase Order&name=${encodeURIComponent(po.name)}&format=Standard`, "_blank")}
+            onClick={() => {
+              void downloadPurchaseOrderPdf(po).catch((err) => {
+                console.error("[PO PDF]", err);
+                toast.error("Unable to generate Purchase Order PDF.");
+              });
+            }}
             variant="ghost"
           />
         </div>
@@ -399,12 +408,23 @@ export default function PurchaseOrderDetailPage() {
               <SideActionBtn
                 icon={Download}
                 label="Download PDF"
-                onClick={() =>
-                  window.open(
-                    `/api/method/frappe.utils.print_format.download_pdf?doctype=Purchase Order&name=${encodeURIComponent(po.name)}&format=Standard`,
-                    "_blank"
-                  )
-                }
+                onClick={() => {
+                  void downloadPurchaseOrderPdf(po).catch((err) => {
+                    console.error("[PO PDF]", err);
+                    toast.error("Unable to generate Purchase Order PDF.");
+                  });
+                }}
+                tone="neutral"
+              />
+              <SideActionBtn
+                icon={FileText}
+                label="Print PDF"
+                onClick={() => {
+                  void printPurchaseOrderPdf(po).catch((err) => {
+                    console.error("[PO PDF]", err);
+                    toast.error("Unable to print Purchase Order PDF.");
+                  });
+                }}
                 tone="neutral"
               />
             </div>
