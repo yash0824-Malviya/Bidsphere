@@ -301,6 +301,20 @@ export default defineConfig(({ mode }) => {
     env.DEMO_MFA === "true" ||
     env.VITE_DEMO_MFA === "true";
 
+  // Build-time visibility: Demo MFA is compiled into the bundle here.
+  // Runtime PM2/Docker env cannot enable it after `vite build`.
+  console.log(
+    `[vite] mode=${mode} Demo MFA ${demoMfaEnabled ? "ENABLED" : "DISABLED"}`,
+    {
+      APP_ENV: env.APP_ENV ?? "(unset)",
+      DEMO_MFA: env.DEMO_MFA ?? "(unset)",
+      VITE_DEMO_MFA: env.VITE_DEMO_MFA ?? "(unset)",
+      tip: demoMfaEnabled
+        ? "OTP 121212 will be baked into the bundle"
+        : "Use `npm run build:demo` or set VITE_DEMO_MFA=true before building",
+    },
+  );
+
   return {
     plugins: [
       react(),

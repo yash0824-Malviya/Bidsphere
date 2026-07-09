@@ -18,6 +18,7 @@ import {
 import AuthShell from "../../components/auth/AuthShell";
 import BrandLogo from "../../components/BrandLogo";
 import { getRoleHome } from "../../config/roles";
+import { logMfaEnvDiagnostics } from "../../config/mfaConfig";
 import { prefetchDashboardForRole } from "../../api/prefetchDashboard";
 import { useAuthStore, setMfaRedirectPath } from "../../store/authStore";
 
@@ -38,6 +39,15 @@ export default function LoginPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
+
+  useEffect(() => {
+    // Temporary diagnostics — confirms whether Demo MFA was baked into this bundle.
+    // eslint-disable-next-line no-console
+    console.log("VITE_DEMO_MFA =", import.meta.env.VITE_DEMO_MFA);
+    // eslint-disable-next-line no-console
+    console.log("DEMO_MFA =", (import.meta.env as { DEMO_MFA?: string }).DEMO_MFA);
+    logMfaEnvDiagnostics("LoginPage");
+  }, []);
 
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const isVerifying = useAuthStore((s) => s.isVerifying);

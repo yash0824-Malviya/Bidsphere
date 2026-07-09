@@ -7,7 +7,7 @@ import {
   validateUserAccount,
   type AuthUserProfile,
 } from "../api/auth";
-import { isMfaRequired } from "../config/mfaConfig";
+import { isMfaRequired, logMfaEnvDiagnostics } from "../config/mfaConfig";
 import { resolveRoleFromUser } from "../config/roles";
 import {
   AUTH_STORAGE_KEY,
@@ -146,11 +146,18 @@ export const useAuthStore = create<AuthState>()(
 
       login: async (username, password, rememberMe) => {
         authLog("login start", { username });
+        logMfaEnvDiagnostics("login");
         set({ isLoading: true, sessionRestoreError: null });
         try {
           const user = await loginWithPassword(username, password);
 
-          if (!isMfaRequired()) {
+          const mfaRequired = isMfaRequired();
+          authLog("mfa gate", {
+            mfaRequired,
+            VITE_DEMO_MFA: import.meta.env.VITE_DEMO_MFA,
+          });
+
+          if (!mfaRequired) {
             finalizeAuthenticatedUser(user, rememberMe);
             return "complete";
           }

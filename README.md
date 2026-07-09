@@ -106,6 +106,34 @@ npm run build      # type-checks then builds to dist/
 npm run preview    # serves the production build locally
 ```
 
+### Demo MFA (OTP `121212`)
+
+Demo MFA is a **build-time** feature. Vite reads `VITE_DEMO_MFA` / `DEMO_MFA` /
+`APP_ENV=demo` when the bundle is compiled and injects `__DEMO_MFA_ENABLED__`.
+Setting those variables only in PM2/Docker/nginx **after** `vite build` has no
+effect — the login page will skip OTP.
+
+| Environment | How to enable |
+| --- | --- |
+| Localhost (`npm run dev`) | Put `VITE_DEMO_MFA=true` and `DEMO_MFA=true` in gitignored `.env` |
+| Demo VM / staging | `npm run build:demo` (uses committed `.env.demo`) |
+| Production (real MFA later) | `npm run build` with Demo MFA unset |
+
+After a demo build, confirm the OTP is in the bundle:
+
+```bash
+grep -R "121212" dist/ || echo "Demo MFA OTP missing — rebuild with build:demo"
+```
+
+On the login page, DevTools should log:
+
+```
+VITE_DEMO_MFA = true
+[MFA:LoginPage] … isDemoMfaEnabled: true
+```
+
+Flow: Login → `/verify-otp` → enter `121212` → Dashboard.
+
 ---
 
 ## Configuring for Frappe Cloud (or any hosted instance)
