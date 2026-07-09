@@ -106,8 +106,16 @@ export async function loginWithPassword(
     }
 
     if (!status || status >= 500) {
+      // Prefer the serverless function's JSON error (misconfigured ERPNEXT_URL,
+      // unreachable ERPNext from Vercel, etc.) over a generic message.
+      const serverMsg =
+        (typeof (data as { error?: unknown } | undefined)?.error === "string"
+          ? (data as { error: string }).error
+          : undefined) ||
+        (typeof data?.message === "string" ? data.message : undefined);
       throw new Error(
-        "ERPNext is temporarily unavailable. Please try again in a few moments.",
+        serverMsg ||
+          "ERPNext is temporarily unavailable. Please try again in a few moments.",
       );
     }
 

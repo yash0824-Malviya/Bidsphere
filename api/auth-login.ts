@@ -4,13 +4,19 @@ import {
   AuthSessionError,
   authenticateWithPassword,
   logoutLocalOnly,
-} from "./authSession";
+} from "./authSession.js";
 
 /**
  * POST /api/auth/login  — validate credentials server-side (no Set-Cookie).
  * POST /api/auth/logout — clear SPA session only (never touches ERP Desk).
  *
  * Routed via vercel.json rewrite from `/api/auth/(.*)`.
+ *
+ * IMPORTANT (Vercel):
+ * - Import sibling modules with the `.js` extension (package is `"type":"module"`).
+ * - Never call `res.removeHeader(...)` here — on some Vercel Node runtimes it
+ *   throws after a successful ERP login and surfaces as a bare HTTP 500.
+ *   This handler never sets cookies; stripping is unnecessary.
  */
 export default async function handler(
   req: VercelRequest,
@@ -21,12 +27,7 @@ export default async function handler(
     return;
   }
 
-  const action =
-    typeof req.query.action === "string"
-      ? req.query.action
-      : Array.isArray(req.query.action)
-        ? String(req.query.action[0])
-        : "";
+  const action = normalizeAction(req.query.action);
 
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method Not Allowed" });
@@ -40,30 +41,62 @@ export default async function handler(
     }
 
     if (action === "login") {
-      const body =
-        typeof req.body === "string"
-          ? (JSON.parse(req.body) as { usr?: string; pwd?: string })
-          : ((req.body ?? {}) as { usr?: string; pwd?: string });
-
+      const body = parseBody(req.body);
       const result = await authenticateWithPassword(body);
-      // Explicitly ensure no session cookies leak to the browser.
-      res.removeHeader("Set-Cookie");
       res.status(200).json(result);
       return;
     }
 
-    res.status(404).json({ error: `Unknown auth action: ${action}` });
+    res.status(404).json({
+      error: `Unknown auth action: ${action || "(empty)"}`,
+    });
   } catch (err) {
-    if (err instanceof AuthSessionError) {
-      res.removeHeader("Set-Cookie");
-      res.status(err.status).json({
-        message: err.message,
-        ...err.payload,
+    const isAuthErr =
+      err instanceof AuthSessionError ||
+      (err instanceof Error && err.name === "AuthSessionError");
+
+    if (isAuthErr) {
+      const authErr = err as AuthSessionError;
+      const status =
+        Number.isInteger(authErr.status) &&
+        authErr.status >= 400 &&
+        authErr.status < 600
+          ? authErr.status
+          : 401;
+      res.status(status).json({
+        message: authErr.message,
+        ...(authErr.payload ?? {}),
       });
       return;
     }
-    const message = err instanceof Error ? err.message : "Authentication failed.";
-    console.error("[auth-login]", message);
+
+    const message =
+      err instanceof Error ? err.message : "Authentication failed.";
+    console.error("[auth-login] unhandled:", message, err);
     res.status(500).json({ error: message });
   }
+}
+
+function normalizeAction(raw: string | string[] | undefined): string {
+  if (Array.isArray(raw)) return String(raw[0] ?? "").trim();
+  if (typeof raw === "string") return raw.trim();
+  return "";
+}
+
+function parseBody(raw: unknown): { usr?: string; pwd?: string } {
+  if (raw == null) return {};
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return parsed && typeof parsed === "object"
+        ? (parsed as { usr?: string; pwd?: string })
+        : {};
+    } catch {
+      return {};
+    }
+  }
+  if (typeof raw === "object") {
+    return raw as { usr?: string; pwd?: string };
+  }
+  return {};
 }

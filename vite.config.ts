@@ -59,8 +59,6 @@ function authSessionDevMiddleware(): Plugin {
         )();
         res.statusCode = 200;
         res.setHeader("Content-Type", "application/json");
-        // Belt-and-suspenders: never emit session cookies from auth routes.
-        res.removeHeader("Set-Cookie");
         res.end(JSON.stringify(payload));
         return;
       }
@@ -74,7 +72,6 @@ function authSessionDevMiddleware(): Plugin {
       )(body);
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json");
-      res.removeHeader("Set-Cookie");
       res.end(JSON.stringify(result));
     } catch (err) {
       const status =
@@ -87,7 +84,6 @@ function authSessionDevMiddleware(): Plugin {
       console.error(`[auth-session-dev] ${match[1]} FAILED:`, message);
       res.statusCode = status >= 400 && status < 600 ? status : 500;
       res.setHeader("Content-Type", "application/json");
-      res.removeHeader("Set-Cookie");
       res.end(JSON.stringify({ message, error: message }));
     }
   };

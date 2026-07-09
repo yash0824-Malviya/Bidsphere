@@ -123,6 +123,22 @@ VITE_PROXY_TARGET=https://your-site.frappe.cloud
 
 Restart `npm run dev`. The browser still hits `http://localhost:5175/api/...`; Vite forwards each call to `https://your-site.frappe.cloud/api/...`. No CORS, no preflight, no `allow_cors` configuration needed on the ERPNext side.
 
+### Vercel environment variables (required for production login)
+
+In **Vercel → Project → Settings → Environment Variables**, set for
+Production (and Preview if used):
+
+| Variable | Example | Notes |
+| --- | --- | --- |
+| `ERPNEXT_URL` | `http://80.225.204.210:8090` | Must be reachable from Vercel’s servers (public). Not `localhost`. |
+| `ERP_API_KEY` | *(from ERPNext User → API Access)* | Server-only; used by `/api/proxy`. |
+| `ERP_API_SECRET` | *(same)* | Server-only. |
+
+Login hits `POST /api/auth/login` (serverless `api/auth-login.ts`), which
+validates the password against ERPNext **without** forwarding `Set-Cookie`.
+If `ERPNEXT_URL` is missing or unreachable, login returns 500/502 with a JSON
+error body.
+
 ### Production
 
 You have two clean options for production deployments:

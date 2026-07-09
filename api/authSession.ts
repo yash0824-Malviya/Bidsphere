@@ -18,6 +18,22 @@ export interface ErpAuthConfig {
   secret: string;
 }
 
+export class AuthSessionError extends Error {
+  status: number;
+  payload: Record<string, unknown>;
+
+  constructor(
+    message: string,
+    status = 401,
+    payload: Record<string, unknown> = {},
+  ) {
+    super(message);
+    this.name = "AuthSessionError";
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
 export function readErpAuthConfig(): ErpAuthConfig {
   const baseUrl = (
     process.env.ERPNEXT_URL ??
@@ -33,28 +49,14 @@ export function readErpAuthConfig(): ErpAuthConfig {
   const secret = process.env.ERP_API_SECRET ?? process.env.VITE_API_SECRET ?? "";
 
   if (!baseUrl) {
-    throw new Error(
-      "Auth backend misconfigured: missing ERPNEXT_URL / VITE_PROXY_TARGET.",
+    // AuthSessionError so Vercel returns a clear JSON body (not a bare 500).
+    throw new AuthSessionError(
+      "Auth backend misconfigured: missing ERPNEXT_URL (set it in Vercel → Settings → Environment Variables).",
+      500,
     );
   }
 
   return { baseUrl, key, secret };
-}
-
-export class AuthSessionError extends Error {
-  status: number;
-  payload: Record<string, unknown>;
-
-  constructor(
-    message: string,
-    status = 401,
-    payload: Record<string, unknown> = {},
-  ) {
-    super(message);
-    this.name = "AuthSessionError";
-    this.status = status;
-    this.payload = payload;
-  }
 }
 
 interface LoginBody {
@@ -133,9 +135,10 @@ export async function authenticateWithPassword(
 
   const { baseUrl } = readErpAuthConfig();
 
+  const loginUrl = `${baseUrl}/api/method/login`;
   let upstream: Response;
   try {
-    upstream = await fetch(`${baseUrl}/api/method/login`, {
+    upstream = await fetch(loginUrl, {
       method: "POST",
       headers: {
         Accept: "application/json",
@@ -145,10 +148,12 @@ export async function authenticateWithPassword(
       body: JSON.stringify({ usr, pwd }),
     });
   } catch (err) {
+    const cause = err instanceof Error ? err.message : String(err);
+    console.error("[authSession] ERPNext login fetch failed:", loginUrl, cause);
     throw new AuthSessionError(
       "ERPNext is temporarily unavailable. Please try again in a few moments.",
       502,
-      { cause: err instanceof Error ? err.message : String(err) },
+      { cause, erpnext_url: baseUrl },
     );
   }
 

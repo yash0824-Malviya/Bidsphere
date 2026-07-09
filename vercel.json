@@ -5,8 +5,8 @@
 
   "rewrites": [
     {
-      "source": "/api/auth/(.*)",
-      "destination": "/api/auth-login?action=$1"
+      "source": "/api/auth/:action",
+      "destination": "/api/auth-login?action=:action"
     },
     {
       "source": "/api/legal-review/(.*)",
