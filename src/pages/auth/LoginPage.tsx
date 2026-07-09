@@ -109,6 +109,27 @@ export default function LoginPage() {
 
     try {
       const outcome = await login(username.trim(), password, rememberMe);
+      const requiresMFA = outcome === "mfa";
+      const destination = requiresMFA
+        ? "/verify-otp"
+        : savedFromPath ??
+          getRoleHome(useAuthStore.getState().user?.role ?? "procurement");
+
+      // Temporary diagnostics — compare localhost vs VM redirect decisions.
+      // eslint-disable-next-line no-console
+      console.log("Login Success");
+      // eslint-disable-next-line no-console
+      console.log("VITE_DEMO_MFA =", import.meta.env.VITE_DEMO_MFA);
+      // eslint-disable-next-line no-console
+      console.log(
+        "DEMO_MFA =",
+        (import.meta.env as { DEMO_MFA?: string }).DEMO_MFA,
+      );
+      // eslint-disable-next-line no-console
+      console.log("requiresMFA =", requiresMFA);
+      // eslint-disable-next-line no-console
+      console.log("Redirecting to =", destination);
+
       if (outcome === "mfa") {
         setMfaRedirectPath(
           savedFromPath ??
@@ -125,9 +146,7 @@ export default function LoginPage() {
           // Warm the dashboard cache during the login→redirect transition so
           // it paints from cache instead of hitting the network on mount.
           prefetchDashboardForRole(signedInUser.role);
-          navigate(savedFromPath ?? getRoleHome(signedInUser.role), {
-            replace: true,
-          });
+          navigate(destination, { replace: true });
         }
       }
     } catch (err) {

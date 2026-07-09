@@ -115,9 +115,11 @@ effect — the login page will skip OTP.
 
 | Environment | How to enable |
 | --- | --- |
-| Localhost (`npm run dev`) | Put `VITE_DEMO_MFA=true` and `DEMO_MFA=true` in gitignored `.env` |
-| Demo VM / staging | `npm run build:demo` (uses committed `.env.demo`) |
-| Production (real MFA later) | `npm run build` with Demo MFA unset |
+| Localhost (`npm run dev`) | Put `VITE_DEMO_MFA=true` in gitignored `.env` |
+| Demo VM (`npm run build`) | Committed `.env.production` sets `VITE_DEMO_MFA=true` automatically |
+| Explicit demo mode | `npm run build:demo` (uses committed `.env.demo`) |
+
+**Critical:** Demo MFA is baked in at `vite build` time. Putting `DEMO_MFA=true` only in PM2/Docker/nginx after the build does nothing.
 
 After a demo build, confirm the OTP is in the bundle:
 
