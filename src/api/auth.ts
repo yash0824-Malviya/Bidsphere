@@ -28,13 +28,17 @@ interface ErpNextUserProfile {
 }
 
 /**
- * Authenticate a user against ERPNext's login API.
+ * Authenticate a user against ERPNext without touching the browser cookie jar.
  *
  * Flow:
- * 1. POST /api/method/login with { usr, pwd }
+ * 1. POST /api/auth/login (server-side password check — no Set-Cookie)
  * 2. Validate the response indicates successful login
- * 3. Fetch the user's ERPNext roles from /api/resource/User
+ * 3. Fetch the user's ERPNext roles from /api/resource/User (API key token)
  * 4. Resolve BidSphere AppRole from ERPNext roles
+ *
+ * NEVER call `/api/method/login` from the browser: Frappe sets `sid` and
+ * related cookies, and browsers share cookies across ports on the same host,
+ * which invalidates an open ERP Desk session.
  */
 export async function loginWithPassword(
   username: string,
@@ -54,9 +58,16 @@ export async function loginWithPassword(
 
   let response: AxiosResponse<LoginResponse>;
   try {
-    response = (await erpnext.post("/api/method/login", { usr, pwd }, {
-      _preserveResponse: true,
-    } as Parameters<typeof erpnext.post>[2])) as AxiosResponse<LoginResponse>;
+    // Same-origin auth endpoint — credentials stay on the server; the
+    // browser never receives ERPNext session cookies.
+    response = (await erpnext.post(
+      "/api/auth/login",
+      { usr, pwd },
+      {
+        _preserveResponse: true,
+        withCredentials: false,
+      } as Parameters<typeof erpnext.post>[2],
+    )) as AxiosResponse<LoginResponse>;
   } catch (err) {
     const axErr = err as AxiosError<LoginResponse>;
     const status = axErr.response?.status;
@@ -261,13 +272,23 @@ async function fetchUserRoles(username: string): Promise<string[]> {
   }
 }
 
-/** End the ERPNext session (best-effort). */
+/**
+ * Clear the SPA auth session only.
+ *
+ * Intentionally does NOT call `/api/method/logout` — that would Set-Cookie /
+ * clear `sid` on the shared host and invalidate ERP Desk in the same browser.
+ */
 export async function logoutFromServer(): Promise<void> {
   try {
-    await erpnext.post("/api/method/logout", {}, {
-      _preserveResponse: true,
-      _silent: true,
-    } as Parameters<typeof erpnext.post>[2]);
+    await erpnext.post(
+      "/api/auth/logout",
+      {},
+      {
+        _preserveResponse: true,
+        _silent: true,
+        withCredentials: false,
+      } as Parameters<typeof erpnext.post>[2],
+    );
   } catch {
     /* ignore — local session is cleared regardless */
   }

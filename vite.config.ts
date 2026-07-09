@@ -3,6 +3,106 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import react from "@vitejs/plugin-react";
 
 /**
+ * Server-side login/logout that never forwards ERPNext `Set-Cookie` to the
+ * browser. Prevents the SPA from overwriting the Desk `sid` cookie when both
+ * share a host (cookies are port-agnostic).
+ */
+function authSessionDevMiddleware(): Plugin {
+  const handle = async (
+    req: IncomingMessage,
+    res: ServerResponse,
+    next: (err?: unknown) => void,
+    ssrLoadModule: (url: string) => Promise<Record<string, unknown>>,
+  ) => {
+    const url = req.url ?? "";
+    const pathOnly = url.split("?")[0];
+
+    // Block browser → ERPNext session login/logout through the generic
+    // /api proxy. Those responses Set-Cookie sid and collide with Desk.
+    if (
+      pathOnly === "/api/method/login" ||
+      pathOnly === "/api/method/logout"
+    ) {
+      res.statusCode = 410;
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({
+          error:
+            "Browser session login is disabled. Use /api/auth/login instead.",
+        }),
+      );
+      return;
+    }
+
+    const match = /^\/api\/auth\/(login|logout)(?:\?|$)/.exec(url);
+    if (!match) {
+      next();
+      return;
+    }
+    if (req.method === "OPTIONS") {
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+    if (req.method !== "POST") {
+      res.statusCode = 405;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "Method Not Allowed" }));
+      return;
+    }
+
+    try {
+      const core = await ssrLoadModule("/api/authSession.ts");
+      if (match[1] === "logout") {
+        const payload = (
+          core.logoutLocalOnly as () => { message: string }
+        )();
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "application/json");
+        // Belt-and-suspenders: never emit session cookies from auth routes.
+        res.removeHeader("Set-Cookie");
+        res.end(JSON.stringify(payload));
+        return;
+      }
+
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(chunk as Buffer);
+      const raw = Buffer.concat(chunks).toString("utf8");
+      const body = raw ? JSON.parse(raw) : {};
+      const result = await (
+        core.authenticateWithPassword as (b: unknown) => Promise<unknown>
+      )(body);
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json");
+      res.removeHeader("Set-Cookie");
+      res.end(JSON.stringify(result));
+    } catch (err) {
+      const status =
+        (err as { status?: number })?.status &&
+        Number.isInteger((err as { status?: number }).status)
+          ? (err as { status: number }).status
+          : 500;
+      const message =
+        err instanceof Error ? err.message : "Authentication failed.";
+      console.error(`[auth-session-dev] ${match[1]} FAILED:`, message);
+      res.statusCode = status >= 400 && status < 600 ? status : 500;
+      res.setHeader("Content-Type", "application/json");
+      res.removeHeader("Set-Cookie");
+      res.end(JSON.stringify({ message, error: message }));
+    }
+  };
+
+  return {
+    name: "auth-session-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        void handle(req, res, next, (id) => server.ssrLoadModule(id));
+      });
+    },
+  };
+}
+
+/**
  * Dev-server parity for `api/legal-review.ts` (the Vercel serverless
  * function used in production). `npm run dev` never runs the real Vercel
  * functions — the built-in `/api` proxy below forwards straight to
@@ -208,6 +308,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       react(),
+      authSessionDevMiddleware(),
       legalReviewDevMiddleware(),
       fileProxyDevMiddleware(proxyTarget, erpApiKey, erpApiSecret),
     ],
@@ -269,25 +370,23 @@ export default defineConfig(({ mode }) => {
           timeout: 30_000,
           proxyTimeout: 30_000,
           configure: (proxy) => {
-            proxy.on("proxyReq", (proxyReq, req) => {
-              const isLoginEndpoint =
-                req.url === "/api/method/login" ||
-                req.url === "/api/method/logout";
-
-              if (isLoginEndpoint) {
-                // Login/logout must use the submitted user's credentials —
-                // NOT the API key. Pass cookies through so Frappe can
-                // establish a session for the actual user.
-                proxyReq.removeHeader("Authorization");
-              } else {
-                // All other API calls use token auth.
-                if (erpApiKey && erpApiSecret) {
-                  proxyReq.setHeader(
-                    "Authorization",
-                    `token ${erpApiKey}:${erpApiSecret}`
-                  );
-                }
-                proxyReq.removeHeader("cookie");
+            proxy.on("proxyReq", (proxyReq) => {
+              // Token auth only. Never forward the browser's Cookie jar —
+              // it may contain Desk's sid from the same host (port-agnostic).
+              if (erpApiKey && erpApiSecret) {
+                proxyReq.setHeader(
+                  "Authorization",
+                  `token ${erpApiKey}:${erpApiSecret}`,
+                );
+              }
+              proxyReq.removeHeader("cookie");
+              proxyReq.removeHeader("Cookie");
+            });
+            proxy.on("proxyRes", (proxyRes) => {
+              // Permanent isolation: ERPNext session cookies must never
+              // reach the SPA browser (shared host ⇒ shared sid with Desk).
+              if (proxyRes.headers["set-cookie"]) {
+                delete proxyRes.headers["set-cookie"];
               }
             });
             proxy.on("error", (err) => {

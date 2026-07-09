@@ -14,6 +14,10 @@ export const DASHBOARD_QUERY_OPTIONS = {
   staleTime: 5 * 60_000,
   gcTime: 10 * 60_000,
   refetchOnWindowFocus: false,
+  refetchOnReconnect: false,
+  // Mounted dashboards that already have warm cache should not re-hit the
+  // network on every remount during the stale window.
+  refetchOnMount: false,
   placeholderData: keepPreviousData,
   // One retry for transient network failures; most dashboard fetches use
   // Promise.allSettled internally and never throw, so this rarely triggers.

@@ -830,7 +830,15 @@ async function fetchUpcomingDeliveries(): Promise<DashboardPoLite[]> {
 }
 
 export async function fetchDashboardCounts(): Promise<DashboardCounts> {
-  return fetchCounts();
+  const t0 = performance.now();
+  const counts = await fetchCounts();
+  if (import.meta.env.DEV) {
+    console.log(
+      `[Dashboard] counts ${Math.round(performance.now() - t0)}ms`,
+      counts,
+    );
+  }
+  return counts;
 }
 
 export interface DashboardSpendSummary {
@@ -846,39 +854,62 @@ export interface DashboardSpendSummary {
  * invoices from the start of the year with just `grand_total` + `currency`, so
  * the "Total Spend" card can paint in well under the full-analytics window.
  */
+async function sumInvoicePage(
+  filters: Filter[],
+  page: number,
+  pageSize: number,
+): Promise<{ spend: number; currency?: string; totalPages: number }> {
+  const res = await fetchPagedList<{ grand_total?: number; currency?: string }>(
+    "Purchase Invoice",
+    {
+      fields: ["grand_total", "currency"],
+      filters,
+      order_by: "posting_date desc",
+      page,
+      pageSize,
+    },
+  );
+  let spend = 0;
+  for (const row of res.data) spend += row.grand_total ?? 0;
+  return {
+    spend,
+    currency: res.data.find((r) => r.currency)?.currency,
+    totalPages: res.total_pages,
+  };
+}
+
 export async function fetchDashboardSpendSummary(): Promise<DashboardSpendSummary> {
+  const t0 = performance.now();
   const since = dashboardYtdStart();
   try {
     const filters = buildTotalSpendInvoiceFilters(since);
 
-    // Keep the backend query identical to the detail page: same doctype, same
-    // filter JSON, and a full sum across all matching invoices (not a single
-    // capped list call).
+    // Same doctype + filters as the Total Spend detail page, but page 2..N
+    // are fetched in parallel after page 1 reveals total_pages (was sequential).
     const pageSize = 500;
-    let page = 1;
-    let ytdSpend = 0;
-    let currency = "USD";
+    const first = await sumInvoicePage(filters, 1, pageSize);
+    let ytdSpend = first.spend;
+    let currency = first.currency ?? "USD";
 
-    while (true) {
-      const res = await fetchPagedList<{ grand_total?: number; currency?: string }>(
-        "Purchase Invoice",
-        {
-          fields: ["grand_total", "currency"],
-          filters,
-          order_by: "posting_date desc",
-          page,
-          pageSize,
-        }
+    if (first.totalPages > 1) {
+      const rest = await Promise.all(
+        Array.from({ length: first.totalPages - 1 }, (_, i) =>
+          sumInvoicePage(filters, i + 2, pageSize),
+        ),
       );
-
-      if (page === 1) {
-        currency = res.data.find((r) => r.currency)?.currency ?? currency;
+      for (const page of rest) {
+        ytdSpend += page.spend;
+        if (!currency || currency === "USD") {
+          currency = page.currency ?? currency;
+        }
       }
+    }
 
-      for (const row of res.data) ytdSpend += row.grand_total ?? 0;
-
-      if (page >= res.total_pages) break;
-      page += 1;
+    if (import.meta.env.DEV) {
+      console.log(
+        `[Dashboard] spend summary ${Math.round(performance.now() - t0)}ms`,
+        { ytdSpend, pages: first.totalPages },
+      );
     }
 
     return { ytdSpend, currency };
@@ -891,9 +922,86 @@ export async function fetchDashboardSpendSummary(): Promise<DashboardSpendSummar
   }
 }
 
+/**
+ * Single parallel snapshot for Procurement Dashboard KPI cards.
+ * Replaces 4 separate React Query mounts (counts + spend + 2 getExactCount)
+ * with one Promise.all — fewer round-trips and one cache entry.
+ */
+export interface ProcurementDashboardKpis {
+  openRfqs: number;
+  activeSuppliers: number;
+  pendingQuotations: number;
+  pendingPurchaseOrders: number;
+  ytdSpend: number;
+  currency: string;
+}
+
+export async function fetchProcurementDashboardKpis(): Promise<ProcurementDashboardKpis> {
+  const t0 = performance.now();
+  const timed = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+    const start = performance.now();
+    try {
+      return await fn();
+    } finally {
+      if (import.meta.env.DEV) {
+        console.log(
+          `[Dashboard] API ${label} ${Math.round(performance.now() - start)}ms`,
+        );
+      }
+    }
+  };
+
+  // All KPI sources start together — never await one before the next.
+  const results = await Promise.allSettled([
+    timed("open RFQs count", () =>
+      getExactCount("Request for Quotation", [
+        ["status", "in", ["Submitted", "Open"]],
+      ]),
+    ),
+    timed("active suppliers count", () =>
+      getExactCount("Supplier", [["disabled", "=", 0]]),
+    ),
+    timed("pending quotations count", () =>
+      getExactCount("Supplier Quotation", [
+        ["status", "not in", ["Ordered", "Expired", "Lost", "Cancelled"]],
+      ]),
+    ),
+    timed("pending POs count", () =>
+      getExactCount("Purchase Order", [["docstatus", "=", 0]]),
+    ),
+    timed("YTD spend summary", () => fetchDashboardSpendSummary()),
+  ]);
+
+  const num = (i: number) =>
+    results[i].status === "fulfilled" ? (results[i] as PromiseFulfilledResult<number>).value : 0;
+  const spend =
+    results[4].status === "fulfilled"
+      ? (results[4] as PromiseFulfilledResult<DashboardSpendSummary>).value
+      : { ytdSpend: 0, currency: "USD" };
+
+  const snapshot: ProcurementDashboardKpis = {
+    openRfqs: num(0),
+    activeSuppliers: num(1),
+    pendingQuotations: num(2),
+    pendingPurchaseOrders: num(3),
+    ytdSpend: spend.ytdSpend,
+    currency: spend.currency,
+  };
+
+  if (import.meta.env.DEV) {
+    console.log(
+      `[Dashboard] procurement KPIs total ${Math.round(performance.now() - t0)}ms`,
+      snapshot,
+    );
+  }
+
+  return snapshot;
+}
+
 export async function fetchDashboardAnalytics(): Promise<
   Omit<DashboardFetchResult, "counts">
 > {
+  const t0 = performance.now();
   const trendStart = twelveMonthsAgo();
   const ytd = dashboardYtdStart();
 
@@ -965,6 +1073,12 @@ export async function fetchDashboardAnalytics(): Promise<
       limit_page_length: 10,
     }),
   ]);
+
+  if (import.meta.env.DEV) {
+    console.log(
+      `[Dashboard] analytics bundle ${Math.round(performance.now() - t0)}ms`,
+    );
+  }
 
   return {
     invoices: settled(results[0], [] as DashboardInvoiceLite[]),

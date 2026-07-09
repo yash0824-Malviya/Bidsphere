@@ -22,19 +22,21 @@ const API_SECRET = import.meta.env.VITE_API_SECRET as string | undefined;
  * Same-origin `/api/*` requests — proxied to ERPNext in every environment:
  *
  * - **Development:** Vite dev server proxy (`vite.config.ts` → `VITE_PROXY_TARGET`)
- * - **Production (Vercel):** Serverless proxy (`api/[...path].ts` → `ERPNEXT_URL`)
+ * - **Production (Vercel):** Serverless proxy (`api/proxy.ts` → `ERPNEXT_URL`)
  *
- * Token auth and CSRF are sent from the browser via `VITE_API_KEY` /
- * `VITE_API_SECRET` and the `csrf_token` cookie (when present).
+ * Authentication is API-key token only (`Authorization: token key:secret`).
+ * `withCredentials` is intentionally false so the browser never sends or
+ * stores ERPNext session cookies (`sid`, `csrf_token`, …). Those cookies are
+ * host-scoped (not port-scoped); sharing them with ERP Desk on the same host
+ * would invalidate Desk after SPA login.
  */
 export const erpnext = axios.create({
   baseURL: "",
   timeout: 20_000,
-  withCredentials: true,
+  withCredentials: false,
   headers: {
     "Content-Type": "application/json",
     Authorization: `token ${API_KEY}:${API_SECRET}`,
-    "X-Frappe-CSRF-Token": "fetch",
   },
 });
 
@@ -122,22 +124,23 @@ erpnext.interceptors.request.use(
       console.log(`Querying ${loggedDocType}...`);
     }
 
-    // Login/logout use session auth (usr/pwd in body), NOT token auth.
-    // Remove the Authorization header so Frappe authenticates the submitted
-    // user's credentials instead of the API key owner.
+    // SPA auth endpoints are handled by our server (`/api/auth/*`), not by
+    // Frappe session login. Strip token auth — the server validates passwords.
+    const urlPath = (config.url ?? "").split("?")[0];
     const isAuthEndpoint =
-      config.url === "/api/method/login" ||
-      config.url === "/api/method/logout";
+      urlPath === "/api/auth/login" ||
+      urlPath === "/api/auth/logout" ||
+      // Legacy paths — blocked by proxy; never send credentials either.
+      urlPath === "/api/method/login" ||
+      urlPath === "/api/method/logout";
     if (isAuthEndpoint) {
       config.headers.delete("Authorization");
+      config.withCredentials = false;
     }
 
-    if (typeof document !== "undefined") {
-      const csrf = document.cookie.match(/csrf_token=([^;]+)/)?.[1];
-      if (csrf) {
-        config.headers.set("X-Frappe-CSRF-Token", decodeURIComponent(csrf));
-      }
-    }
+    // Do NOT read csrf_token from document.cookie. On a shared host that
+    // cookie belongs to ERP Desk; attaching it here couples the SPA to Desk
+    // and can break Desk CSRF after SPA traffic. API-key auth does not need it.
 
     const isMutation =
       method === "post" ||
@@ -238,9 +241,12 @@ erpnext.interceptors.response.use(
     const status = error.response?.status;
     const data = error.response?.data;
 
+    const errPath = (error.config?.url ?? "").split("?")[0];
     const isAuthEndpoint =
-      error.config?.url === "/api/method/login" ||
-      error.config?.url === "/api/method/logout";
+      errPath === "/api/auth/login" ||
+      errPath === "/api/auth/logout" ||
+      errPath === "/api/method/login" ||
+      errPath === "/api/method/logout";
     if (status === 401 && !isAuthEndpoint && !silentFromConfig && !silentFromError) {
       handleSessionExpired();
     }

@@ -324,7 +324,6 @@ function RFQSchemaBootstrap() {
     if (ranRef.current) return;
     ranRef.current = true;
     getRFQSchema().catch((err) => {
-      // eslint-disable-next-line no-console
       console.warn("[RFQSchema] Schema fetch failed (non-fatal):", err);
     });
   }, []);

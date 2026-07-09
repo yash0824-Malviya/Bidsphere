@@ -167,8 +167,15 @@ export default function MaterialRequestCreatePage() {
   // Synchronous re-entrancy lock. `saveMutation.isPending` only flips after a
   // re-render, so two fast clicks (or a click + Enter) can both call
   // `.mutate()` before the button is disabled — creating duplicate Material
-  // Requests in ERPNext. This ref blocks the second call immediately.
+  // Requests in ERPNext. This ref is set with a check-and-set BEFORE any other
+  // work so the second click is rejected immediately.
   const submittingRef = useRef(false);
+  // Local busy flag so the buttons disable on the same click that starts the
+  // mutation (React Query's isPending lags by one render).
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  // If create succeeded but a later step failed, reuse this draft on retry
+  // instead of inserting a second Material Request.
+  const createdDraftNameRef = useRef<string | null>(null);
 
   const [items, setItems] = useState<MaterialRequestDraftLine[]>([
     newDraftItem(todayIso()),
@@ -270,7 +277,18 @@ export default function MaterialRequestCreatePage() {
   }, [items]);
 
   const saveMutation = useMutation({
+    // Never auto-retry creates — a retry after a slow/ambiguous network
+    // response would insert a second Material Request in ERPNext.
+    retry: false,
     mutationFn: async (submit: boolean) => {
+      if (import.meta.env.DEV) {
+        console.log("[MR Create] mutation start", {
+          submit,
+          editName: editName ?? null,
+          itemCount: items.filter((l) => l.item_code && l.qty > 0).length,
+        });
+      }
+
       const validationError = validateMaterialRequestForm(
         purpose,
         resolvedDepartment,
@@ -306,9 +324,18 @@ export default function MaterialRequestCreatePage() {
         "transaction_date",
       );
 
-      // Edit mode — update the existing draft in place (never create a new one).
-      if (editName) {
-        await updateMaterialRequest(editName, {
+      // Prefer an already-created draft (edit URL, or a previous attempt in this
+      // page session) so retries never insert a second Material Request.
+      const existingDraft = editName || createdDraftNameRef.current;
+
+      if (existingDraft) {
+        if (import.meta.env.DEV) {
+          console.log("[MR Create] updating existing draft", {
+            name: existingDraft,
+            reusedSessionDraft: !editName && !!createdDraftNameRef.current,
+          });
+        }
+        await updateMaterialRequest(existingDraft, {
           transaction_date: transactionIso,
           schedule_date: scheduleIso,
           custom_department: resolvedDepartment,
@@ -324,10 +351,10 @@ export default function MaterialRequestCreatePage() {
         } as never);
 
         if (submit) {
-          return submitMaterialRequestWorkflow(editName);
+          return submitMaterialRequestWorkflow(existingDraft);
         }
 
-        return fetchMaterialRequestWorkflow(editName);
+        return fetchMaterialRequestWorkflow(existingDraft);
       }
 
       const created = await createMaterialRequestWorkflow({
@@ -351,6 +378,12 @@ export default function MaterialRequestCreatePage() {
 
         items: payloadItems,
       });
+
+      createdDraftNameRef.current = created.name;
+
+      if (import.meta.env.DEV) {
+        console.log("[MR Create] document created", { name: created.name });
+      }
 
       if (submit) {
         return submitMaterialRequestWorkflow(created.name);
@@ -399,6 +432,7 @@ export default function MaterialRequestCreatePage() {
     // error) so the user can retry after a genuine failure.
     onSettled: () => {
       submittingRef.current = false;
+      setIsSubmitting(false);
     },
   });
 
@@ -417,12 +451,21 @@ export default function MaterialRequestCreatePage() {
   }
 
   function handleSave(submit: boolean) {
-    // GUARD: block re-entry immediately — before React re-renders and disables
-    // the buttons — so a double-click can never create duplicate MRs.
-    if (submittingRef.current || saveMutation.isPending) {
+    // Atomic check-and-set: claim the lock BEFORE validation / mutate so two
+    // near-simultaneous clicks cannot both pass the guard and create two MRs.
+    if (submittingRef.current || saveMutation.isPending || isSubmitting) {
+      if (import.meta.env.DEV) {
+        console.warn("[MR Create] blocked duplicate submit", {
+          submit,
+          submittingRef: submittingRef.current,
+          isPending: saveMutation.isPending,
+          isSubmitting,
+        });
+      }
       return;
     }
-
+    submittingRef.current = true;
+    setIsSubmitting(true);
     setShowErrors(true);
 
     const validationError = validateMaterialRequestForm(
@@ -432,16 +475,19 @@ export default function MaterialRequestCreatePage() {
     );
 
     if (validationError) {
+      submittingRef.current = false;
+      setIsSubmitting(false);
       toast.error(validationError);
-
       return;
     }
 
-    submittingRef.current = true;
+    if (import.meta.env.DEV) {
+      console.log("[MR Create] submitting once", { submit, editMode: isEditMode });
+    }
     saveMutation.mutate(submit);
   }
 
-  const busy = saveMutation.isPending;
+  const busy = isSubmitting || saveMutation.isPending;
 
   const purposeError = showErrors && !purpose;
 

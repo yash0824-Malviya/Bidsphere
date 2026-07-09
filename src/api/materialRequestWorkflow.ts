@@ -534,45 +534,113 @@ export async function rejectIndirectMaterialRequest(
   });
 }
 
+/**
+ * In-flight create dedupe. If the same create payload is requested while a
+ * previous create is still pending (double-click / double mutate), reuse the
+ * same Promise instead of POSTing a second Material Request to ERPNext.
+ */
+const inflightCreates = new Map<string, Promise<MaterialRequestWorkflowRecord>>();
+
+function buildCreateDedupeKey(input: CreateMaterialRequestWorkflowInput): string {
+  const itemsKey = (input.items ?? [])
+    .map((row) =>
+      [
+        row.item_code,
+        String(row.qty),
+        row.uom ?? "",
+        row.warehouse ?? "",
+        row.schedule_date ?? "",
+      ].join(":"),
+    )
+    .sort()
+    .join("|");
+  return [
+    input.company ?? COMPANY,
+    input.transaction_date ?? "",
+    input.schedule_date ?? "",
+    input.department ?? "",
+    input.procurement_type ?? "Direct",
+    input.priority ?? "",
+    input.purpose ?? "",
+    input.requested_by ?? "",
+    input.remarks ?? "",
+    itemsKey,
+  ].join("::");
+}
+
 export async function createMaterialRequestWorkflow(
   input: CreateMaterialRequestWorkflowInput,
 ): Promise<MaterialRequestWorkflowRecord> {
-  const payload: MaterialRequestPayload = {
-    company: input.company ?? COMPANY,
-    material_request_type: "Material Issue",
-    transaction_date: input.transaction_date,
-    schedule_date: input.schedule_date,
-    remarks: input.remarks ?? input.purpose,
-    items: input.items.map((row) => ({
-      item_code: row.item_code,
-      item_name: row.item_name,
-      description: row.description,
-      qty: row.qty,
-      uom: row.uom,
-      warehouse: row.warehouse,
-      schedule_date: row.schedule_date ?? input.schedule_date,
-    })),
-  };
-
-  const created = await createMaterialRequest(payload);
-  const updates: Record<string, unknown> = {
-    [MR_WORKFLOW_FIELD]: toErpBidsphereStatus("Draft"),
-    // Every MR is classified at creation. Defaults to Direct when the caller
-    // doesn't supply a type, preserving the legacy warehouse-first behaviour.
-    [MR_PROCUREMENT_TYPE_FIELD]: input.procurement_type ?? "Direct",
-  };
-  if (input.department) updates.custom_department = input.department;
-  if (input.priority) updates.custom_priority = input.priority;
-  if (input.purpose) updates.custom_purpose = input.purpose;
-  if (input.requested_by) updates.custom_requested_by = input.requested_by;
-
-  try {
-    await updateMaterialRequest(created.name, updates);
-  } catch (err) {
-    if (!isCustomFieldUnavailableError(err)) throw err;
+  const dedupeKey = buildCreateDedupeKey(input);
+  const existing = inflightCreates.get(dedupeKey);
+  if (existing) {
+    logMrApi("request", {
+      action: "create",
+      deduped: true,
+      message: "Reusing in-flight create — blocked duplicate POST",
+    });
+    return existing;
   }
 
-  return fetchMaterialRequestWorkflow(created.name);
+  const createPromise = (async () => {
+    const payload: MaterialRequestPayload = {
+      company: input.company ?? COMPANY,
+      material_request_type: "Material Issue",
+      transaction_date: input.transaction_date,
+      schedule_date: input.schedule_date,
+      remarks: input.remarks ?? input.purpose,
+      items: input.items.map((row) => ({
+        item_code: row.item_code,
+        item_name: row.item_name,
+        description: row.description,
+        qty: row.qty,
+        uom: row.uom,
+        warehouse: row.warehouse,
+        schedule_date: row.schedule_date ?? input.schedule_date,
+      })),
+    };
+
+    logMrApi("request", {
+      action: "create",
+      deduped: false,
+      itemCount: payload.items.length,
+      department: input.department,
+      procurement_type: input.procurement_type ?? "Direct",
+    });
+
+    const created = await createMaterialRequest(payload);
+    const updates: Record<string, unknown> = {
+      [MR_WORKFLOW_FIELD]: toErpBidsphereStatus("Draft"),
+      // Every MR is classified at creation. Defaults to Direct when the caller
+      // doesn't supply a type, preserving the legacy warehouse-first behaviour.
+      [MR_PROCUREMENT_TYPE_FIELD]: input.procurement_type ?? "Direct",
+    };
+    if (input.department) updates.custom_department = input.department;
+    if (input.priority) updates.custom_priority = input.priority;
+    if (input.purpose) updates.custom_purpose = input.purpose;
+    if (input.requested_by) updates.custom_requested_by = input.requested_by;
+
+    try {
+      await updateMaterialRequest(created.name, updates);
+    } catch (err) {
+      if (!isCustomFieldUnavailableError(err)) throw err;
+    }
+
+    const result = await fetchMaterialRequestWorkflow(created.name);
+    logMrApi("processed", {
+      action: "create",
+      name: result.name,
+      workflowStatus: getMaterialRequestWorkflowStatus(result),
+    });
+    return result;
+  })();
+
+  inflightCreates.set(dedupeKey, createPromise);
+  try {
+    return await createPromise;
+  } finally {
+    inflightCreates.delete(dedupeKey);
+  }
 }
 
 /**
@@ -948,7 +1016,7 @@ export async function issueMaterialRequest(
     draft.items = adjustedItems;
   }
 
-  const saved = await apiPost<any>(
+  const saved = await apiPost<{ name?: string } & Record<string, unknown>>(
     "/api/method/frappe.client.save",
     { doc: draft },
   );
@@ -989,7 +1057,7 @@ export async function createWarehouseReview(
   review: WarehouseReviewRecord,
 ): Promise<WarehouseReviewRecord | null> {
   try {
-    // eslint-disable-next-line no-console
+     
     console.log("[Warehouse Review Saved]", {
       material_request: review.material_request,
       decision: review.decision,
@@ -1012,7 +1080,7 @@ export async function createWarehouseReview(
     return res;
   } catch (err) {
     if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
+       
       console.warn("[createWarehouseReview] Note: Warehouse Review post skipped:", err);
     }
     return null;
@@ -1200,7 +1268,7 @@ export async function forwardMaterialRequestToProcurement(
     options?.forwardedBy?.trim() || current.owner || "Warehouse";
   const forwardedOn = new Date().toISOString();
 
-  // eslint-disable-next-line no-console
+   
   console.log("[Warehouse] Forwarded MR:", {
     mr: name,
     forwardedBy,
@@ -1232,7 +1300,7 @@ export async function forwardMaterialRequestToProcurement(
     { custom_warehouse_remarks: remarksBlock || undefined },
   );
 
-  // eslint-disable-next-line no-console
+   
   console.log("[Warehouse] Status saved:", {
     mr: name,
     storedStatus: saved[MR_WORKFLOW_FIELD] ?? null,
@@ -1261,7 +1329,7 @@ export async function forwardMaterialRequestToProcurement(
   });
 
   const result = await fetchMaterialRequestWorkflow(name);
-  // eslint-disable-next-line no-console
+   
   console.log("[Warehouse] Response:", {
     mr: result.name,
     resolvedStatus: getMaterialRequestWorkflowStatus(result),
@@ -1447,7 +1515,7 @@ export async function processWarehouseDecisions(
         .filter((item): item is Record<string, unknown> => item !== null);
     }
 
-    const saved = await apiPost<any>(
+    const saved = await apiPost<{ name?: string } & Record<string, unknown>>(
       "/api/method/frappe.client.save",
       { doc: draft },
     );
@@ -1777,7 +1845,7 @@ async function fetchCompanyStockByItem(
   const filters: Filter[] = [["item_code", "in", codes]];
   if (warehouseNames.length > 0) filters.push(["warehouse", "in", warehouseNames]);
 
-  let bins: Array<{ item_code?: string; actual_qty?: number }> = [];
+  let bins: Array<{ item_code?: string; actual_qty?: number }>;
   try {
     bins = await apiGet<Array<{ item_code?: string; actual_qty?: number }>>(
       buildResourceUrl("Bin"),
@@ -1885,7 +1953,7 @@ export async function reconcileProcurementReadyToIssue(): Promise<string[]> {
       // preserved by not overwriting it.
       await updateMaterialRequestWorkflowStatus(mr.name, "Stock Available");
       advanced.push(mr.name);
-      // eslint-disable-next-line no-console
+       
       console.log(
         "[MR reconcile] Forwarded quantity received in full — moved to Ready to Issue",
         {

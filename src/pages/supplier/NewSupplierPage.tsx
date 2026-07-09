@@ -133,7 +133,6 @@ export default function NewSupplierPage() {
         });
       } catch {
         // Best-effort; the interceptor already surfaced any server error.
-        // eslint-disable-next-line no-console
         console.warn("Document upload failed:", doc.type);
       }
     }

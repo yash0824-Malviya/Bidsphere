@@ -11,13 +11,12 @@ export const uploadFileToERPNext = async (
   formData.append("doctype", docType);
   formData.append("docname", docName);
 
-  const csrf = document.cookie.match(/csrf_token=([^;]+)/)?.[1];
-
+  // Token auth only — never attach Desk's csrf_token cookie (shared host).
   const response = await axios.post("/api/method/upload_file", formData, {
+    withCredentials: false,
     headers: {
       Authorization: `token ${import.meta.env.VITE_API_KEY}:${import.meta.env.VITE_API_SECRET}`,
       "Content-Type": "multipart/form-data",
-      ...(csrf ? { "X-Frappe-CSRF-Token": decodeURIComponent(csrf) } : {}),
     },
   });
 

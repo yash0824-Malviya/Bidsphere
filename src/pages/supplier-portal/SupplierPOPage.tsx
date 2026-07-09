@@ -288,7 +288,8 @@ export default function SupplierPOPage() {
       const url = `/api/method/frappe.utils.print_format.download_pdf?doctype=${encodeURIComponent(
         "Purchase Order"
       )}&name=${encodeURIComponent(name)}&format=${encodeURIComponent("Standard")}`;
-      const res = await fetch(url, { credentials: "include" });
+      // Token auth via same-origin proxy; never send Desk session cookies.
+      const res = await fetch(url, { credentials: "omit" });
       const contentType = res.headers.get("content-type") ?? "";
       if (!res.ok || !contentType.toLowerCase().includes("pdf")) {
         throw new Error(

@@ -16,10 +16,8 @@ import {
 
 import {
   fetchDashboardAnalytics,
-  fetchDashboardCounts,
-  fetchDashboardSpendSummary,
+  fetchProcurementDashboardKpis,
 } from "../../api/dashboard";
-import { getExactCount } from "../../api/erpnext";
 import { DASHBOARD_QUERY_OPTIONS } from "../../api/queryPresets";
 import {
   fetchProcurementQueue,
@@ -35,8 +33,6 @@ import {
 } from "../../api/forwardedMaterialRequests";
 import { syncMaterialRequestSlaBatch } from "../../api/slaIntegration";
 import { useSlaVisible } from "../../hooks/useSlaVisible";
-import SlaCountdownWidget from "../sla/SlaCountdownWidget";
-import ProcurementAnalyticsSection from "./ProcurementAnalyticsSection";
 import type { MaterialRequestProcurementType } from "../../types/materialRequestWorkflow";
 import ProcurementTypeBadge from "../ProcurementTypeBadge";
 import { getDashboardConfig } from "../../config/dashboardRoles";
@@ -52,24 +48,32 @@ import CompactActivityFeed from "./CompactActivityFeed";
 import TopSuppliersPanel from "./TopSuppliersPanel";
 
 const AdminSpendCharts = lazy(() => import("./AdminSpendCharts"));
+const ProcurementAnalyticsSection = lazy(
+  () => import("./ProcurementAnalyticsSection"),
+);
+const SlaCountdownWidgetLazy = lazy(() => import("../sla/SlaCountdownWidget"));
 
 /**
- * Stages secondary content so KPI cards paint first. Charts/analytics fetch a
- * beat after mount; heavy tables a beat after that. This keeps the KPI network
- * requests uncontended for a fast first meaningful paint.
+ * Defer heavy secondary sections until after the first paint so KPI cards
+ * (and their network) are never blocked by charts / analytics / tables.
+ * Uses rAF (no artificial setTimeout delay).
  */
-function useStagedReady() {
-  const [chartsReady, setChartsReady] = useState(false);
-  const [tablesReady, setTablesReady] = useState(false);
+function useAfterFirstPaint(enabled = true): boolean {
+  const [ready, setReady] = useState(false);
   useEffect(() => {
-    const c = setTimeout(() => setChartsReady(true), 150);
-    const t = setTimeout(() => setTablesReady(true), 450);
+    if (!enabled) return;
+    let cancelled = false;
+    const id = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!cancelled) setReady(true);
+      });
+    });
     return () => {
-      clearTimeout(c);
-      clearTimeout(t);
+      cancelled = true;
+      cancelAnimationFrame(id);
     };
-  }, []);
-  return { chartsReady, tablesReady };
+  }, [enabled]);
+  return ready;
 }
 
 interface Props {
@@ -155,43 +159,39 @@ function buildForwardedRows(
 
 export default function ProcurementDashboard({ greetingName }: Props) {
   const config = getDashboardConfig("procurement");
-  const { chartsReady, tablesReady } = useStagedReady();
+  const secondaryReady = useAfterFirstPaint(true);
   const slaVisible = useSlaVisible();
 
-  // ── KPI-critical queries: fire immediately for a fast first paint ──────────
-  const countsQuery = useQuery({
-    queryKey: ["dashboard-counts"],
-    queryFn: fetchDashboardCounts,
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      console.log("[Dashboard] ProcurementDashboard mount", {
+        t: Math.round(performance.now()),
+      });
+    }
+  }, []);
+
+  // ── KPI-critical: one parallel snapshot (counts + spend) ───────────────────
+  const kpisQuery = useQuery({
+    queryKey: ["procurement-dashboard-kpis"],
+    queryFn: fetchProcurementDashboardKpis,
     ...DASHBOARD_QUERY_OPTIONS,
   });
 
-  const spendQuery = useQuery({
-    queryKey: ["dashboard-spend-summary"],
-    queryFn: fetchDashboardSpendSummary,
-    ...DASHBOARD_QUERY_OPTIONS,
-  });
-
-  // Count-only queries — no full documents loaded, just server-side COUNT.
-  const quotationsCountQuery = useQuery({
-    queryKey: ["procurement-pending-quotations-count"],
-    queryFn: () =>
-      getExactCount("Supplier Quotation", [
-        ["status", "not in", ["Ordered", "Expired", "Lost", "Cancelled"]],
-      ]),
-    ...DASHBOARD_QUERY_OPTIONS,
-  });
-
-  const pendingPoCountQuery = useQuery({
-    queryKey: ["procurement-pending-pos-count"],
-    queryFn: () => getExactCount("Purchase Order", [["docstatus", "=", 0]]),
-    ...DASHBOARD_QUERY_OPTIONS,
-  });
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    if (kpisQuery.isSuccess && kpisQuery.dataUpdatedAt) {
+      console.log("[Dashboard] KPI cards ready (interactive)", {
+        t: Math.round(performance.now()),
+        fromCache: kpisQuery.isFetched && !kpisQuery.isFetching,
+      });
+    }
+  }, [kpisQuery.isSuccess, kpisQuery.dataUpdatedAt, kpisQuery.isFetched, kpisQuery.isFetching]);
 
   // ── Deferred analytics — charts / top suppliers / activity feed ────────────
   const analyticsQuery = useQuery({
     queryKey: ["dashboard-analytics"],
     queryFn: fetchDashboardAnalytics,
-    enabled: chartsReady,
+    enabled: secondaryReady,
     ...DASHBOARD_QUERY_OPTIONS,
   });
 
@@ -199,7 +199,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
   const queueQuery = useQuery({
     queryKey: ["mr-procurement-queue"],
     queryFn: fetchProcurementQueue,
-    enabled: tablesReady,
+    enabled: secondaryReady,
     ...DASHBOARD_QUERY_OPTIONS,
   });
 
@@ -207,7 +207,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
   const historyQuery = useQuery({
     queryKey: ["mr-forwarded-history"],
     queryFn: fetchForwardedHistory,
-    enabled: tablesReady,
+    enabled: secondaryReady,
     ...DASHBOARD_QUERY_OPTIONS,
   });
 
@@ -217,20 +217,21 @@ export default function ProcurementDashboard({ greetingName }: Props) {
   );
 
   useEffect(() => {
-    if (!slaVisible) return;
+    if (!slaVisible || !secondaryReady) return;
     const queue = queueQuery.data;
     if (queue && queue.length > 0) void syncMaterialRequestSlaBatch(queue);
-  }, [queueQuery.data, slaVisible]);
+  }, [queueQuery.data, slaVisible, secondaryReady]);
 
-  const counts = countsQuery.data ?? null;
+  const kpis = kpisQuery.data;
   const analytics = analyticsQuery.data;
 
-  // KPI grid only waits on its own lightweight queries — never the heavy
-  // analytics fetch. Analytics panels keep their own skeletons.
-  const loading = countsQuery.isLoading || spendQuery.isLoading;
+  // KPI grid only waits on the lightweight snapshot — never heavy analytics.
+  const loading = kpisQuery.isLoading && !kpisQuery.data;
   const analyticsLoading = analyticsQuery.isPending;
 
-  const ytdSpend = spendQuery.data?.ytdSpend ?? 0;
+  const ytdSpend = kpis?.ytdSpend ?? 0;
+  const pendingQuotations = kpis?.pendingQuotations ?? 0;
+  const pendingPos = kpis?.pendingPurchaseOrders ?? 0;
 
   const monthlySpend = useMemo(
     () => computeMonthlySpendTrend(analytics?.invoices ?? []),
@@ -262,10 +263,10 @@ export default function ProcurementDashboard({ greetingName }: Props) {
     [queueQuery.data],
   );
 
-  const mrWaitingForRfq = forwardedRows.filter((r) => !r.hasRfq).length;
-
-  const pendingQuotations = quotationsCountQuery.data ?? 0;
-  const pendingPos = pendingPoCountQuery.data ?? 0;
+  const mrWaitingForRfq = useMemo(
+    () => forwardedRows.filter((r) => !r.hasRfq).length,
+    [forwardedRows],
+  );
 
   const kpiCards = useMemo<
     Array<{
@@ -281,7 +282,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
       {
         key: "spend",
         label: "Total Spend",
-        value: spendQuery.data ? formatCurrencyCompact(ytdSpend) : "—",
+        value: kpis ? formatCurrencyCompact(ytdSpend) : "—",
         icon: DollarSign,
         to: "/p2p/total-spend",
         accent: "bg-primary-50 text-primary-600",
@@ -289,7 +290,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
       {
         key: "rfqs",
         label: "Open RFQs",
-        value: counts ? counts.openRfqs.toLocaleString() : "—",
+        value: kpis ? kpis.openRfqs.toLocaleString() : "—",
         icon: FileSearch,
         to: "/sourcing/rfq?preset=open",
         accent: "bg-primary-50 text-primary-600",
@@ -297,9 +298,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
       {
         key: "quotes",
         label: "Pending Quotations",
-        value: quotationsCountQuery.isPending
-          ? "—"
-          : pendingQuotations.toLocaleString(),
+        value: kpis ? pendingQuotations.toLocaleString() : "—",
         icon: FileText,
         to: "/sourcing/rfq?preset=open",
         accent: "bg-amber-50 text-amber-600",
@@ -307,9 +306,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
       {
         key: "pos",
         label: "Pending Purchase Orders",
-        value: pendingPoCountQuery.isPending
-          ? "—"
-          : pendingPos.toLocaleString(),
+        value: kpis ? pendingPos.toLocaleString() : "—",
         icon: ShoppingCart,
         to: "/p2p/purchase-orders?preset=pending",
         accent: "bg-amber-50 text-amber-600",
@@ -317,21 +314,13 @@ export default function ProcurementDashboard({ greetingName }: Props) {
       {
         key: "suppliers",
         label: "Active Suppliers",
-        value: counts ? counts.activeSuppliers.toLocaleString() : "—",
+        value: kpis ? kpis.activeSuppliers.toLocaleString() : "—",
         icon: Users,
         to: "/suppliers?status=active",
         accent: "bg-primary-50 text-primary-600",
       },
     ],
-    [
-      spendQuery.data,
-      ytdSpend,
-      counts,
-      quotationsCountQuery.isPending,
-      pendingQuotations,
-      pendingPoCountQuery.isPending,
-      pendingPos,
-    ],
+    [kpis, ytdSpend, pendingQuotations, pendingPos],
   );
 
   return (
@@ -394,11 +383,36 @@ export default function ProcurementDashboard({ greetingName }: Props) {
         </div>
       )}
 
-      {/* ── Procurement Analytics: live KPIs + trend charts ────────────── */}
-      <ProcurementAnalyticsSection enabled={chartsReady} />
+      {/* ── Procurement Analytics: live KPIs + trend charts (lazy) ─────── */}
+      {secondaryReady ? (
+        <Suspense
+          fallback={
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-24 rounded-xl" />
+              ))}
+            </div>
+          }
+        >
+          <ProcurementAnalyticsSection enabled />
+        </Suspense>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-24 rounded-xl" />
+          ))}
+        </div>
+      )}
 
-      {/* ── SLA countdowns for procurement-owned stages ────────────────── */}
-      <SlaCountdownWidget role="procurement" title="Procurement SLA Countdown" />
+      {/* ── SLA countdowns for procurement-owned stages (lazy) ─────────── */}
+      {slaVisible && secondaryReady ? (
+        <Suspense fallback={<Skeleton className="h-28 rounded-xl" />}>
+          <SlaCountdownWidgetLazy
+            role="procurement"
+            title="Procurement SLA Countdown"
+          />
+        </Suspense>
+      ) : null}
 
       {/* ── Section 2: Action Center ───────────────────────────────────── */}
       <section className="card p-4 sm:p-5">
@@ -414,21 +428,21 @@ export default function ProcurementDashboard({ greetingName }: Props) {
         <div className="grid gap-3 sm:grid-cols-3">
           <AttentionTile
             label="Material Requests waiting for RFQ"
-            value={queueQuery.isPending ? null : mrWaitingForRfq}
+            value={!secondaryReady || queueQuery.isPending ? null : mrWaitingForRfq}
             icon={Package}
             to="/material-requests/procurement"
             accent="text-blue-700 bg-blue-50"
           />
           <AttentionTile
             label="Quotations waiting for review"
-            value={quotationsCountQuery.isPending ? null : pendingQuotations}
+            value={kpis ? pendingQuotations : null}
             icon={FileText}
             to="/sourcing/rfq?preset=open"
             accent="text-amber-700 bg-amber-50"
           />
           <AttentionTile
             label="Purchase Orders waiting for approval"
-            value={pendingPoCountQuery.isPending ? null : pendingPos}
+            value={kpis ? pendingPos : null}
             icon={ClipboardCheck}
             to="/p2p/purchase-orders?preset=pending"
             accent="text-emerald-700 bg-emerald-50"

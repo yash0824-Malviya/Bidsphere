@@ -136,9 +136,19 @@ server {
   root /var/www/inteva-p2p/dist;
   index index.html;
 
+  # SPA auth — Node gateway that validates passwords WITHOUT forwarding Set-Cookie.
+  #   ERPNEXT_URL=https://your-site.frappe.cloud node scripts/auth-gateway.mjs
+  location /api/auth/ {
+    proxy_pass http://127.0.0.1:8091/api/auth/;
+  }
+
   location /api/ {
     proxy_pass https://your-site.frappe.cloud;
     proxy_set_header Host your-site.frappe.cloud;
+    # Isolate from ERP Desk: never exchange session cookies with the SPA.
+    proxy_set_header Cookie "";
+    proxy_hide_header Set-Cookie;
+    proxy_set_header Authorization "token YOUR_API_KEY:YOUR_API_SECRET";
   }
 
   location / {
@@ -148,6 +158,8 @@ server {
 ```
 
 The browser still talks to `app.example.com`. CORS never enters the picture.
+Never proxy browser `/api/method/login` — cookies are host-scoped (not port-scoped)
+and would overwrite ERP Desk's `sid` on the same host.
 
 **B. Serve from inside ERPNext.** Build the SPA, drop `dist/` into a custom Frappe app's `public/` folder, and serve it from the same hostname as ERPNext. The `/api/*` calls hit ERPNext directly because they're same-origin.
 
@@ -340,5 +352,6 @@ inteva-p2p/
 **`frappe.client.get_count` returns `0` for everything** — the user lacks read permission on those doctypes. Either grant the role or use a service account with **System Manager** / **Purchase Manager** roles.
 
 **The `Contract` doctype doesn't exist** — some ERPNext deployments disable it. The contracts pages will surface an error state with a retry button; everything else continues to work.
-#   N e t l i n k  
+#   N e t l i n k 
+ 
  

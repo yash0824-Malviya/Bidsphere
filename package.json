@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
+    "auth-gateway": "node scripts/auth-gateway.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },

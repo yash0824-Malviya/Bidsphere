@@ -301,6 +301,7 @@ export async function createPurchaseInvoice(
   void queryClient.invalidateQueries({ queryKey: ["dashboard-category-spend"] });
   void queryClient.invalidateQueries({ queryKey: ["dashboard-analytics"] });
   void queryClient.invalidateQueries({ queryKey: ["dashboard-counts"] });
+  void queryClient.invalidateQueries({ queryKey: ["procurement-dashboard-kpis"] });
   return created;
 }
 

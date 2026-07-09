@@ -376,6 +376,7 @@ function computeSavings(
 /* ── Orchestration ────────────────────────────────────────────────────── */
 
 export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics> {
+  const t0 = typeof performance !== "undefined" ? performance.now() : 0;
   const monthKeys = last12MonthKeys();
 
   // Kick off the independent list queries in parallel.
@@ -800,6 +801,12 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
         { label: "Received", value: String(received) },
       ],
     };
+  }
+
+  if (import.meta.env.DEV && t0) {
+    console.log(
+      `[Dashboard] procurement analytics ${Math.round(performance.now() - t0)}ms`,
+    );
   }
 
   return {

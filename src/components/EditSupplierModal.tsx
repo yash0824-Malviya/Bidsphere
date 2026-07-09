@@ -62,7 +62,7 @@ function buildAddressText(address?: AddressSnapshot): string {
     .join("\n");
 }
 
-export function buildEditFormValues(
+function buildEditFormValues(
   supplier: Supplier,
   address?: AddressSnapshot
 ): EditSupplierFormValues {
@@ -90,11 +90,16 @@ export default function EditSupplierModal({
   const [form, setForm] = useState<EditSupplierFormValues>(() =>
     buildEditFormValues(supplier, primaryAddress)
   );
-
-  useEffect(() => {
-    if (!open) return;
+  // Reset form when the modal opens for a (possibly different) supplier.
+  // Adjusting state during render avoids a cascading setState-in-effect.
+  const formSourceKey = open
+    ? `${supplier.name}|${primaryAddress?.name ?? ""}|${supplier.modified ?? ""}`
+    : "";
+  const [loadedKey, setLoadedKey] = useState(formSourceKey);
+  if (open && formSourceKey !== loadedKey) {
+    setLoadedKey(formSourceKey);
     setForm(buildEditFormValues(supplier, primaryAddress));
-  }, [open, supplier, primaryAddress]);
+  }
 
   useEffect(() => {
     if (!open) return;

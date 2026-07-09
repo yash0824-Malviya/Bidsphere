@@ -107,7 +107,12 @@ function serializeBody(req: VercelRequest, method: string): string | undefined {
 function responseHeaders(upstream: Response): Record<string, string> {
   const out: Record<string, string> = {};
   upstream.headers.forEach((value, key) => {
-    if (HOP_BY_HOP.has(key.toLowerCase())) return;
+    const lower = key.toLowerCase();
+    if (HOP_BY_HOP.has(lower)) return;
+    // Never forward ERPNext session cookies to the SPA browser. Cookies are
+    // host-scoped (not port-scoped), so a Set-Cookie for `sid` on the app
+    // origin would overwrite ERP Desk's session on the same host.
+    if (lower === "set-cookie") return;
     out[key] = value;
   });
   return out;
@@ -132,6 +137,17 @@ export default async function handler(
   // function. GET /api/method/ping → {message:"pong"}
   if (apiPath === "method/ping") {
     res.status(200).json({ message: "pong" });
+    return;
+  }
+
+  // Browser session login/logout must never go through this proxy — Frappe
+  // would Set-Cookie `sid` and collide with ERP Desk on the same host.
+  // Use /api/auth/login and /api/auth/logout instead.
+  if (apiPath === "method/login" || apiPath === "method/logout") {
+    res.status(410).json({
+      error:
+        "Browser session login is disabled. Use /api/auth/login instead.",
+    });
     return;
   }
 

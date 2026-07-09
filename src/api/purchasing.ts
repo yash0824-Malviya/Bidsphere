@@ -62,6 +62,7 @@ function invalidateSpendDashboards(): void {
   void queryClient.invalidateQueries({ queryKey: ["dashboard-category-spend"] });
   void queryClient.invalidateQueries({ queryKey: ["dashboard-analytics"] });
   void queryClient.invalidateQueries({ queryKey: ["dashboard-counts"] });
+  void queryClient.invalidateQueries({ queryKey: ["procurement-dashboard-kpis"] });
 }
 
 /**
@@ -246,11 +247,22 @@ export async function createMaterialRequest(
   if (data.remarks) doc.remarks = data.remarks;
 
   if (import.meta.env.DEV) {
-    // eslint-disable-next-line no-console
-    console.log("Final API Payload", doc);
+    console.log("[Material Request] create POST /api/method/frappe.client.save", doc);
   }
 
-  return apiPost<MaterialRequest>("/api/method/frappe.client.save", { doc });
+  const created = await apiPost<MaterialRequest>(
+    "/api/method/frappe.client.save",
+    { doc },
+  );
+
+  if (import.meta.env.DEV) {
+    console.log("[Material Request] create response", {
+      name: created?.name,
+      docstatus: created?.docstatus,
+    });
+  }
+
+  return created;
 }
 
 /** Update an existing Material Request. */

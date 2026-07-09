@@ -28,32 +28,22 @@ function emptyCategoryCounts(): CategoryCounts {
   return Object.fromEntries(SUPPLIER_CATEGORIES.map((c) => [c, 0])) as CategoryCounts;
 }
 
-async function fetchSuppliers(search?: string): Promise<{ suppliers: SupplierRow[] }> {
+async function fetchSuppliers(): Promise<{ suppliers: SupplierRow[] }> {
   try {
-    const term = (search ?? "").trim();
-    const fields = ["name", "supplier_name", "supplier_group", "country", "disabled"];
-    const baseParams = {
-      fields: JSON.stringify(fields),
-      order_by: "creation desc",
-      limit_page_length: 500,
-    } as Record<string, string | number>;
-
-    if (term) {
-      const like = `%${term}%`;
-      // Multi-field search: Supplier Name, Supplier Code, Category, Country.
-      // Frappe supports `or_filters` as a JSON list of filter tuples.
-      baseParams.or_filters = JSON.stringify([
-        ["supplier_name", "like", like],
-        ["name", "like", like],
-        ["supplier_group", "like", like],
-        ["country", "like", like],
-      ]);
-    }
-
     const rows = await apiGet<SupplierRow[]>(
       buildResourceUrl("Supplier"),
       {
-        params: baseParams,
+        params: {
+          fields: JSON.stringify([
+            "name",
+            "supplier_name",
+            "supplier_group",
+            "country",
+            "disabled",
+          ]),
+          order_by: "creation desc",
+          limit_page_length: 500,
+        },
         ...withSilent(),
       }
     );
@@ -61,6 +51,17 @@ async function fetchSuppliers(search?: string): Promise<{ suppliers: SupplierRow
   } catch {
     return { suppliers: [] };
   }
+}
+
+function matchesSupplierSearch(s: SupplierRow, term: string): boolean {
+  if (!term) return true;
+  const q = term.toLowerCase();
+  return (
+    (s.supplier_name ?? "").toLowerCase().includes(q) ||
+    (s.name ?? "").toLowerCase().includes(q) ||
+    (s.supplier_group ?? "").toLowerCase().includes(q) ||
+    (s.country ?? "").toLowerCase().includes(q)
+  );
 }
 
 export default function SupplierOverviewPage() {
@@ -75,13 +76,14 @@ export default function SupplierOverviewPage() {
   const [category, setCategory] = useState("");
 
   const { data, isLoading } = useQuery({
-    queryKey: ["admin-supplier-overview", search],
-    queryFn: () => fetchSuppliers(search || undefined),
+    queryKey: ["admin-supplier-overview"],
+    queryFn: () => fetchSuppliers(),
     staleTime: 60_000,
   });
 
-  const suppliers = data?.suppliers ?? [];
+  const suppliers = useMemo(() => data?.suppliers ?? [], [data?.suppliers]);
 
+  // Category sidebar counts always reflect the full supplier base (not search).
   const categoryCounts = useMemo(() => {
     const counts = emptyCategoryCounts();
     for (const s of suppliers) {
@@ -91,20 +93,24 @@ export default function SupplierOverviewPage() {
     return counts;
   }, [suppliers]);
 
-  const filteredSuppliers = useMemo(() => {
-    if (!category) return suppliers;
-    return suppliers.filter((s) => s.supplier_group === category);
-  }, [suppliers, category]);
-
+  // Dashboard KPIs always reflect the full supplier base.
   const kpis = useMemo(() => {
     let active = 0;
     let disabled = 0;
-    for (const s of filteredSuppliers) {
+    for (const s of suppliers) {
       if (s.disabled) disabled += 1;
       else active += 1;
     }
-    return { total: filteredSuppliers.length, active, disabled };
-  }, [filteredSuppliers]);
+    return { total: suppliers.length, active, disabled };
+  }, [suppliers]);
+
+  // Table applies search (name/code/category/country) + category filter.
+  const filteredSuppliers = useMemo(() => {
+    return suppliers.filter((s) => {
+      if (category && s.supplier_group !== category) return false;
+      return matchesSupplierSearch(s, search);
+    });
+  }, [suppliers, category, search]);
 
   return (
     <div>
@@ -120,9 +126,9 @@ export default function SupplierOverviewPage() {
 
       {/* KPIs */}
       <div className="mb-3 grid grid-cols-3 gap-2">
-        <MiniKpi label="Total Suppliers" value={kpis.total} color="text-violet-600" bg="bg-violet-50" />
-        <MiniKpi label="Active" value={kpis.active} color="text-emerald-600" bg="bg-emerald-50" />
-        <MiniKpi label="Disabled" value={kpis.disabled} color="text-red-600" bg="bg-red-50" />
+        <MiniKpi label="Total Suppliers" value={kpis.total} color="text-violet-600" />
+        <MiniKpi label="Active" value={kpis.active} color="text-emerald-600" />
+        <MiniKpi label="Disabled" value={kpis.disabled} color="text-red-600" />
       </div>
 
       <div className="grid gap-3 lg:grid-cols-[1fr_250px]">
@@ -254,7 +260,15 @@ export default function SupplierOverviewPage() {
   );
 }
 
-function MiniKpi({ label, value, color, bg: _bg }: { label: string; value: number; color: string; bg: string }) {
+function MiniKpi({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: number;
+  color: string;
+}) {
   return (
     <div className="rounded-lg border border-neutral-200 bg-white p-3 shadow-sm">
       <p className={`text-lg font-bold tabular-nums ${color}`}>{value}</p>
