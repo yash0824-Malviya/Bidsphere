@@ -132,7 +132,8 @@ export default async function handler(
     method: req.method === "HEAD" ? "HEAD" : "GET",
   });
 
-  if (!result.ok) {
+  // Narrow FileProxyFailure before reading `.body`.
+  if ("body" in result) {
     res.status(result.status).json(result.body);
     return;
   }

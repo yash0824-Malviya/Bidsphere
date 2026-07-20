@@ -3,7 +3,8 @@ import * as XLSX from "xlsx";
 import {
   normalizeHeader,
   parseBomExcelBuffer,
-} from "./bomCore";
+  type BomParsedRow,
+} from "./bomCore.js";
 
 function makeWorkbookBuffer(rows: unknown[][]): Buffer {
   const sheet = XLSX.utils.aoa_to_sheet(rows);
@@ -101,7 +102,7 @@ describe("parseBomExcelBuffer", () => {
       ["Bolt", -2, "Nos"],
     ]);
     const { rows } = parseBomExcelBuffer(buf, "bad.xlsx", new Set());
-    expect(rows.every((r) => r.status === "invalid")).toBe(true);
+    expect(rows.every((r: BomParsedRow) => r.status === "invalid")).toBe(true);
   });
 
   it("detects duplicate rows", () => {

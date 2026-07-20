@@ -4,7 +4,7 @@ import {
   contentTypeFromFilePath,
   isValidErpFilePath,
   resolveFileContentType,
-} from "./fileProxyCore";
+} from "./fileProxyCore.js";
 
 describe("classifyNonPdfResponse", () => {
   it("detects login HTML as expired session", () => {
