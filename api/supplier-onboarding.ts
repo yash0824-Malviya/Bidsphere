@@ -96,6 +96,37 @@ async function readJsonBody(req: VercelRequest): Promise<Record<string, unknown>
   }
 }
 
+/** Narrow unknown JSON values to a plain object before spreading. */
+function asPlainObject(value: unknown): Record<string, unknown> {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function readStringField(
+  body: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const v = body[key];
+  return typeof v === "string" ? v : v != null ? String(v) : undefined;
+}
+
+function asDocumentUploads(
+  value: unknown,
+): Array<{ document_type: string; file_url: string; file_name?: string }> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.map((item) => {
+    const row = asPlainObject(item);
+    return {
+      document_type: String(row.document_type ?? ""),
+      file_url: String(row.file_url ?? ""),
+      file_name:
+        row.file_name != null ? String(row.file_name) : undefined,
+    };
+  });
+}
+
 export default async function handler(
   req: VercelRequest,
   res: VercelResponse,
@@ -218,9 +249,10 @@ export default async function handler(
         String(req.headers["x-real-ip"] || "") ||
         "";
       const result = await portalLogin({
-        ...(body as never),
+        username: String(body.username ?? ""),
+        password: String(body.password ?? ""),
         client: {
-          ...((body.client as object) || {}),
+          ...asPlainObject(body.client),
           ip: ip || undefined,
           user_agent: String(req.headers["user-agent"] || ""),
         },
@@ -247,10 +279,7 @@ export default async function handler(
 
     if (action === "portal-access-token" && req.method === "POST") {
       const body = await readJsonBody(req);
-      const session_token = extractPortalSessionToken(
-        body,
-        req.headers as Record<string, unknown>,
-      );
+      const session_token = extractPortalSessionToken(body, req.headers);
       if (!session_token) {
         res.status(401).json({
           success: false,
@@ -308,7 +337,7 @@ export default async function handler(
         supplier_name: supplier,
         pin,
         client: {
-          ...((body.client as object) || {}),
+          ...asPlainObject(body.client),
           ip: ip || undefined,
           user_agent: String(req.headers["user-agent"] || ""),
         },
@@ -335,8 +364,9 @@ export default async function handler(
     if (action === "portal-change-password" && req.method === "POST") {
       const body = await readJsonBody(req);
       const result = await portalChangePassword({
-        ...(body as never),
         session_token: extractPortalSessionToken(body, req.headers),
+        current_password: String(body.current_password ?? ""),
+        new_password: String(body.new_password ?? ""),
       });
       res.status(200).json(result);
       return;
@@ -371,9 +401,10 @@ export default async function handler(
         }
       }
       const result = await portalChangePin({
-        ...(body as never),
         session_token,
         supplier_name,
+        current_pin: String(body.current_pin ?? ""),
+        new_pin: String(body.new_pin ?? ""),
       });
       res.status(200).json(result);
       return;
@@ -399,7 +430,12 @@ export default async function handler(
     if (action === "portal-save-draft" && req.method === "POST") {
       const body = await readJsonBody(req);
       const session_token = extractPortalSessionToken(body, req.headers);
-      const result = await portalSaveDraft({ ...(body as never), session_token });
+      const result = await portalSaveDraft({
+        session_token,
+        values: asPlainObject(body.values),
+        form_data_fields: asPlainObject(body.form_data_fields),
+        documents: asDocumentUploads(body.documents),
+      });
       res.status(200).json(result);
       return;
     }
@@ -407,7 +443,11 @@ export default async function handler(
     if (action === "portal-submit" && req.method === "POST") {
       const body = await readJsonBody(req);
       const session_token = extractPortalSessionToken(body, req.headers);
-      const result = await portalSubmit({ ...(body as never), session_token });
+      const result = await portalSubmit({
+        session_token,
+        values: asPlainObject(body.values),
+        form_data_fields: asPlainObject(body.form_data_fields),
+      });
       res.status(200).json(result);
       return;
     }
@@ -416,8 +456,11 @@ export default async function handler(
       const body = await readJsonBody(req);
       const session_token = extractPortalSessionToken(body, req.headers);
       const result = await portalAddComment({
-        ...(body as { text?: string }),
         session_token,
+        text: String(body.text ?? ""),
+        file_url: readStringField(body, "file_url"),
+        file_name: readStringField(body, "file_name"),
+        section_tag: readStringField(body, "section_tag"),
       });
       res.status(200).json(result);
       return;
@@ -439,9 +482,15 @@ export default async function handler(
       const body = await readJsonBody(req);
       const session_token = extractPortalSessionToken(body, req.headers);
       const result = await addDiscussionMessage({
-        ...(body as never),
-        session_token: session_token || (body.session_token as string | undefined),
-        viewer: (body.viewer as "supplier" | "procurement") || "procurement",
+        name: readStringField(body, "name"),
+        session_token:
+          session_token || readStringField(body, "session_token"),
+        viewer: body.viewer === "supplier" ? "supplier" : "procurement",
+        text: String(body.text ?? ""),
+        actor: readStringField(body, "actor"),
+        section_tag: readStringField(body, "section_tag"),
+        file_url: readStringField(body, "file_url"),
+        file_name: readStringField(body, "file_name"),
       });
       res.status(200).json(result);
       return;

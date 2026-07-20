@@ -2779,7 +2779,7 @@ export async function portalChangePassword(input: {
     pushTimeline(fresh, "Password Changed", email || "Supplier");
   });
 
-  return { success: true as const, ...buildPortalProfile(saved), first_login: false };
+  return { ...buildPortalProfile(saved), first_login: false };
 }
 
 export async function portalGetSecurity(input: {
@@ -2922,7 +2922,6 @@ export async function portalLogoutOtherSessions(input: { session_token: string }
   });
 
   return {
-    success: true as const,
     message: "All other devices have been signed out.",
     ...(await portalGetSecurity({ session_token: sessionToken })),
   };
@@ -3039,7 +3038,6 @@ export async function portalSaveDraft(input: {
     }).catch(() => undefined);
     const fresh = await getDoc(cfg, existing.name);
     return {
-      success: true as const,
       ...(await buildPortalProfileWithSupplierFields(cfg, fresh)),
       unchanged: false,
     };
@@ -3060,7 +3058,6 @@ export async function portalSaveDraft(input: {
   ) {
     const fresh = linked ? await getDoc(cfg, existing.name) : existing;
     return {
-      success: true as const,
       ...(await buildPortalProfileWithSupplierFields(cfg, fresh)),
       unchanged: true,
     };
@@ -3127,7 +3124,6 @@ export async function portalSaveDraft(input: {
   });
 
   return {
-    success: true as const,
     ...(await buildPortalProfileWithSupplierFields(cfg, saved)),
     unchanged: false,
   };
@@ -3174,7 +3170,7 @@ export async function portalSubmit(input: {
     pushTimeline(doc, "Procurement Review", "System");
   });
 
-  return { success: true as const, ...buildPortalProfile(saved) };
+  return { ...buildPortalProfile(saved) };
 }
 
 export async function portalAddComment(input: {

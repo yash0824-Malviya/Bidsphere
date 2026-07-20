@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeSupplierKey,
   voucherBelongsToSupplierIdentity,
-} from "./supplierVoucherCore";
+} from "./supplierVoucherCore.js";
 
 describe("supplierVoucherCore ownership", () => {
   it("normalizes keys", () => {
