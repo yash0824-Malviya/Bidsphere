@@ -54,13 +54,15 @@ function DeliveryBadge({ status }: { status: PODeliveryStatus }) {
 }
 
 export default function SupplierPOListPage() {
-  const { supplierName, isReady } = useSupplierSession();
+  const { supplierName, erpSupplierName, isReady } = useSupplierSession();
   const [activeTab, setActiveTab] = useState<FilterTab>("All");
 
+  // Always filter by ERP Supplier.name (Link id). Display company name
+  // must never be used — PO.supplier stores the Link, not supplier_name.
   const posQuery = useQuery({
-    queryKey: ["supplier-portal-pos", supplierName],
-    enabled: !!supplierName,
-    queryFn: () => getSupplierPurchaseOrders(supplierName),
+    queryKey: ["supplier-portal-pos", erpSupplierName],
+    enabled: !!erpSupplierName,
+    queryFn: () => getSupplierPurchaseOrders(erpSupplierName),
   });
 
   const rawRows = posQuery.data ?? [];
@@ -69,9 +71,9 @@ export default function SupplierPOListPage() {
     () =>
       rawRows.map((po) => ({
         ...po,
-        deliveryState: ensureDeliveryState(po.name),
+        deliveryState: ensureDeliveryState(po.name, erpSupplierName),
       })),
-    [rawRows],
+    [rawRows, erpSupplierName],
   );
 
   const filteredRows = useMemo(() => {
@@ -88,6 +90,22 @@ export default function SupplierPOListPage() {
         <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
           Loading…
         </div>
+      </SupplierPortalLayout>
+    );
+  }
+
+  if (!erpSupplierName) {
+    return (
+      <SupplierPortalLayout supplierName={supplierName}>
+        <PageHeader
+          title="Purchase Orders"
+          description="Purchase orders issued to your company by Netlink procurement."
+        />
+        <EmptyState
+          icon={ShoppingCart}
+          title="Supplier account not linked"
+          description="Your portal login is not linked to an ERPNext Supplier record yet, so purchase orders cannot be loaded. Contact procurement after onboarding is approved."
+        />
       </SupplierPortalLayout>
     );
   }

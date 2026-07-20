@@ -6,8 +6,10 @@ import type { Filter } from "../../api/erpnext";
 import PageHeader from "../../components/PageHeader";
 import PaginationBar from "../../components/PaginationBar";
 import StatusBadge from "../../components/StatusBadge";
+import ExportButton from "../../components/export/ExportButton";
 import { usePagination } from "../../hooks/usePagination";
 import { formatDate } from "../../utils/format";
+import type { ExportColumn } from "../../utils/export";
 
 interface SupplierQuotationRow {
   name: string;
@@ -52,11 +54,43 @@ export default function SupplierQuotationsListPage() {
 
   const rows = data?.data ?? [];
 
+  const exportColumns = useMemo<ExportColumn<SupplierQuotationRow>[]>(
+    () => [
+      { id: "name", label: "Quotation", accessor: (r) => r.name },
+      {
+        id: "supplier",
+        label: "Supplier",
+        accessor: (r) => r.supplier_name || r.supplier,
+      },
+      {
+        id: "transaction_date",
+        label: "Date",
+        type: "date",
+        accessor: (r) => r.transaction_date,
+      },
+      {
+        id: "status",
+        label: "Status",
+        type: "status",
+        accessor: (r) => r.status,
+      },
+    ],
+    [],
+  );
+
   return (
     <div>
       <PageHeader
         title="Supplier Quotations"
         description="Review supplier responses to RFQs."
+        actions={
+          <ExportButton
+            module="Supplier Quotation"
+            filenamePrefix="Supplier_Quotation"
+            columns={exportColumns}
+            rows={rows}
+          />
+        }
       />
       <div className="card overflow-hidden">
         <table className="min-w-full text-sm">

@@ -6,7 +6,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
-  Download,
   FileText,
   Filter,
   RefreshCw,
@@ -18,9 +17,11 @@ import {
 
 import { getAuditTrail, getAuditUsers } from "../../api/auditTrail";
 import type { AuditEntry, AuditFilters } from "../../api/auditTrail";
+import ExportButton from "../../components/export/ExportButton";
 import { Skeleton } from "../../components/Skeleton";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
 import { formatDateTime } from "../../utils/format";
+import type { ExportColumn } from "../../utils/export";
 
 const MODULES = ["All", "Sourcing", "P2P", "Warehouse", "Finance", "Auth", "Admin", "System"];
 const ACTIONS = ["All", "Created", "Updated", "Submitted", "Cancelled", "Deleted", "Login", "Logout"];
@@ -73,21 +74,29 @@ export default function AuditTrailPage() {
     setSearchInput("");
   }
 
-  function exportCSV() {
-    if (entries.length === 0) return;
-    const header = "Timestamp,User Name,Email,Role,Module,Action";
-    const rows = entries.map((e) =>
-      [e.timestamp, `"${e.fullName}"`, `"${e.email}"`, `"${e.role}"`, e.module, `"${e.action.replace(/"/g, '""')}"`].join(",")
-    );
-    const csv = [header, ...rows].join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `audit-trail-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
+  const exportColumns = useMemo<ExportColumn<AuditEntry>[]>(
+    () => [
+      {
+        id: "timestamp",
+        label: "Timestamp",
+        type: "date",
+        accessor: (e) => e.timestamp,
+      },
+      { id: "fullName", label: "User Name", accessor: (e) => e.fullName },
+      { id: "email", label: "Email", accessor: (e) => e.email },
+      { id: "role", label: "Role", accessor: (e) => e.role },
+      { id: "module", label: "Module", accessor: (e) => e.module },
+      {
+        id: "action",
+        label: "Action",
+        type: "status",
+        accessor: (e) => e.action,
+      },
+      { id: "documentId", label: "Document", accessor: (e) => e.documentId },
+      { id: "remarks", label: "Remarks", accessor: (e) => e.remarks },
+    ],
+    [],
+  );
 
   return (
     <div>
@@ -111,14 +120,12 @@ export default function AuditTrailPage() {
           >
             <RefreshCw className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`} /> Refresh
           </button>
-          <button
-            type="button"
-            onClick={exportCSV}
-            disabled={entries.length === 0}
-            className="inline-flex items-center gap-1 rounded-md bg-white px-2.5 py-1.5 text-[11px] font-semibold text-neutral-600 ring-1 ring-neutral-200 transition hover:bg-neutral-50 disabled:opacity-50 cursor-pointer border-none"
-          >
-            <Download className="h-3 w-3" /> Export CSV
-          </button>
+          <ExportButton
+            module="Audit Logs"
+            filenamePrefix="Audit_Logs"
+            columns={exportColumns}
+            rows={entries}
+          />
         </div>
       </div>
 

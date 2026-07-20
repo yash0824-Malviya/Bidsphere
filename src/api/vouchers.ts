@@ -5,11 +5,18 @@
  * UI notifications remain localStorage-based (see notifications.ts).
  */
 
-import erpnextClient, { buildResourceUrl, isDocNotFoundError } from "./erpnext";
+import erpnextClient, {
+  buildResourceUrl,
+  isDocNotFoundError,
+  withSilent,
+} from "./erpnext";
 import { useAuthStore } from "../store/authStore";
 import { useVoucherSyncStore } from "../store/voucherSyncStore";
 import { canManageVouchers } from "../config/roles";
 import { notifyVoucherEvent } from "./notifications";
+import { nowERPDateTime } from "../utils/erpDate";
+import { readSupplierSession } from "../hooks/useSupplierSession";
+import { ensureSupplierAccessToken } from "../utils/supplierAccessAuth";
 import type {
   InvoiceRecord,
   InvoiceStatus,
@@ -371,7 +378,9 @@ export function paymentStatus(v: Voucher): PaymentStatus {
 function assertCanManageVouchers(): void {
   const role = useAuthStore.getState().user?.role;
   if (!canManageVouchers(role)) {
-    throw new Error("Only the Finance team can create or manage vouchers.");
+    throw new Error(
+      "Access denied. Only Finance Manager, Accounts Payable, or Finance Admin can manage vouchers, review supplier invoices, or release payments.",
+    );
   }
 }
 
@@ -393,16 +402,172 @@ function generatePaymentID(): string {
   return `PAY-${year}-${seq}`;
 }
 
+/** Supplier portal identity for voucher list/detail (same rules both sides). */
+export interface SupplierVoucherIdentity {
+  /** ERPNext Supplier.name (Supplier Master link). */
+  erpSupplierId: string;
+  /** Company display label — matched only to voucher.supplier_name. */
+  displayName?: string;
+}
+
+export function normalizeSupplierKey(value: string | null | undefined): string {
+  let s = String(value ?? "").trim();
+  if (
+    (s.startsWith('"') && s.endsWith('"')) ||
+    (s.startsWith("'") && s.endsWith("'"))
+  ) {
+    s = s.slice(1, -1).trim();
+  }
+  return s.toLowerCase();
+}
+
+export function toSupplierVoucherIdentity(
+  identifier: string | SupplierVoucherIdentity,
+): SupplierVoucherIdentity {
+  if (typeof identifier === "string") {
+    const key = identifier.trim();
+    return { erpSupplierId: key, displayName: key };
+  }
+  return {
+    erpSupplierId: String(identifier.erpSupplierId || "").trim(),
+    displayName: String(identifier.displayName || "").trim() || undefined,
+  };
+}
+
+/**
+ * Ownership check shared by list + detail.
+ * - ID ↔ ID (erpSupplierId vs voucher.supplier)
+ * - Name ↔ Name (displayName vs voucher.supplier_name)
+ * Never compares a display name to a Supplier ID.
+ */
 export function voucherBelongsToSupplier(
-  voucher: Voucher,
-  identifier: string
+  voucher: Pick<Voucher, "supplier" | "supplier_name">,
+  identifier: string | SupplierVoucherIdentity,
 ): boolean {
-  const target = identifier.trim().toLowerCase();
-  if (!target) return false;
-  return (
-    (voucher.supplier ?? "").trim().toLowerCase() === target ||
-    (voucher.supplier_name ?? "").trim().toLowerCase() === target
-  );
+  const identity = toSupplierVoucherIdentity(identifier);
+  const erpId = normalizeSupplierKey(identity.erpSupplierId);
+  const display = normalizeSupplierKey(identity.displayName);
+  const voucherId = normalizeSupplierKey(voucher.supplier);
+  const voucherName = normalizeSupplierKey(voucher.supplier_name);
+
+  if (erpId && voucherId && erpId === voucherId) return true;
+  if (display && voucherName && display === voucherName) return true;
+
+  // Legacy single-string callers: allow the same key against either field
+  // only when erp + display were set to the identical value.
+  if (
+    erpId &&
+    display &&
+    erpId === display &&
+    (erpId === voucherId || erpId === voucherName)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+export class SupplierVoucherAccessError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "SupplierVoucherAccessError";
+    this.status = status;
+  }
+}
+
+async function requireSupplierJwt(): Promise<string> {
+  const result = await ensureSupplierAccessToken();
+  if (!result.ok) {
+    throw new SupplierVoucherAccessError(result.message, 401);
+  }
+  return result.token;
+}
+
+/**
+ * Supplier voucher APIs — always attach a supplier JWT (same auth for
+ * list/get/raise-invoice). Never call these endpoints anonymously.
+ */
+async function callSupplierVoucherApi<T>(
+  action: "list" | "get" | "raise-invoice",
+  body: Record<string, unknown>,
+): Promise<T> {
+  const token = await requireSupplierJwt();
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    "X-Bidsphere-Access-Token": token,
+    Authorization: `Bearer ${token}`,
+  };
+
+  const res = await fetch(`/api/supplier-voucher/${action}`, {
+    method: "POST",
+    headers,
+    credentials: "same-origin",
+    body: JSON.stringify({
+      ...body,
+      access_token: token,
+    }),
+  });
+
+  let json: { success?: boolean; error?: string } & Record<string, unknown> = {};
+  try {
+    json = (await res.json()) as typeof json;
+  } catch {
+    /* ignore */
+  }
+
+  if (!res.ok || json.success === false) {
+    const message =
+      json.error || `Supplier voucher request failed (${res.status}).`;
+    throw new SupplierVoucherAccessError(message, res.status || 500);
+  }
+  return json as T;
+}
+
+function supplierIdentityFromSession(): SupplierVoucherIdentity {
+  const session = readSupplierSession();
+  const linked = String(session?.linkedSupplier || "").trim();
+  const stored = String(session?.supplierName || "").trim();
+  const company = String(session?.companyName || "").trim();
+  return {
+    erpSupplierId: linked || stored,
+    displayName: company || stored || undefined,
+  };
+}
+
+function mapApiVoucherToVoucher(raw: Record<string, unknown>): Voucher {
+  const invoice = raw.invoice as Voucher["invoice"] | undefined;
+  let status = String(raw.status || "sent") as VoucherStatus;
+  if (invoice && typeof invoice === "object") {
+    const invStatus = String(
+      (invoice as { status?: string }).status || "",
+    ).toLowerCase();
+    if (invStatus === "approved") status = "invoice_approved";
+    else if (invStatus === "rejected") status = "invoice_rejected";
+  }
+  return {
+    id: String(raw.id || ""),
+    po_reference: String(raw.po_reference || ""),
+    grn_reference: String(raw.grn_reference || ""),
+    supplier: String(raw.supplier || ""),
+    supplier_name: String(raw.supplier_name || raw.supplier || ""),
+    created_by: String(raw.created_by || "Finance Team"),
+    created_at: String(raw.created_at || new Date().toISOString()),
+    amount: Number(raw.amount) || 0,
+    currency: String(raw.currency || "USD"),
+    items: Array.isArray(raw.items) ? (raw.items as VoucherItem[]) : [],
+    status,
+    payment_terms: raw.payment_terms
+      ? String(raw.payment_terms)
+      : undefined,
+    due_date: raw.due_date ? String(raw.due_date) : undefined,
+    notes: raw.notes ? String(raw.notes) : undefined,
+    invoice,
+    payment: raw.payment as Voucher["payment"] | undefined,
+    history: [],
+  };
 }
 
 function voucherToInvoiceRecord(v: Voucher): InvoiceRecord | null {
@@ -557,20 +722,107 @@ export async function excludeVoucheredGRNs<T extends { name: string }>(
   return grns.filter((g) => !vouchered.has(g.name));
 }
 
-export async function getVouchersForSupplier(supplier: string): Promise<Voucher[]> {
-  const all = await getAllVouchers();
-  return all.filter(
-    (v) => v.status !== "draft" && voucherBelongsToSupplier(v, supplier)
-  );
+export async function getVouchersForSupplier(
+  supplier: string | SupplierVoucherIdentity,
+): Promise<Voucher[]> {
+  const identity = toSupplierVoucherIdentity(supplier);
+  try {
+    const res = await callSupplierVoucherApi<{
+      vouchers?: Record<string, unknown>[];
+    }>("list", {
+      erp_supplier_id: identity.erpSupplierId,
+      display_name: identity.displayName || "",
+    });
+    return (res.vouchers ?? []).map((row) => mapApiVoucherToVoucher(row));
+  } catch (err) {
+    if (err instanceof SupplierVoucherAccessError && err.status === 401) {
+      throw err;
+    }
+    // Fallback: transport/5xx only — never mask missing supplier JWT.
+    // eslint-disable-next-line no-console
+    console.warn("[Vouchers] supplier list API unavailable, using client filter:", err);
+    const all = await getAllVouchers();
+    return all.filter(
+      (v) => v.status !== "draft" && voucherBelongsToSupplier(v, identity),
+    );
+  }
 }
 
+/**
+ * Detail fetch using the same ownership rules as {@link getVouchersForSupplier}.
+ * Throws {@link SupplierVoucherAccessError} with status 403/404 when denied.
+ */
 export async function getVoucherForSupplier(
   id: string,
-  supplier: string
+  supplier: string | SupplierVoucherIdentity,
 ): Promise<Voucher | null> {
-  const v = await getVoucherById(id);
-  if (!v || v.status === "draft") return null;
-  return voucherBelongsToSupplier(v, supplier) ? v : null;
+  const voucherId = String(id || "").trim();
+  const identity = toSupplierVoucherIdentity(supplier);
+  if (!voucherId) {
+    throw new SupplierVoucherAccessError("Voucher id is required.", 400);
+  }
+
+  try {
+    const res = await callSupplierVoucherApi<{
+      voucher?: Record<string, unknown>;
+    }>("get", {
+      voucher_id: voucherId,
+      erp_supplier_id: identity.erpSupplierId,
+      display_name: identity.displayName || "",
+    });
+    if (!res.voucher) {
+      throw new SupplierVoucherAccessError("Voucher not found.", 404);
+    }
+    return mapApiVoucherToVoucher(res.voucher);
+  } catch (err) {
+    if (err instanceof SupplierVoucherAccessError) {
+      // Do not fall back on auth failures — that masked missing JWTs and made
+      // voucher view succeed while Create Invoice failed.
+      if (
+        err.status === 401 ||
+        err.status === 403 ||
+        err.status === 404 ||
+        err.status === 400
+      ) {
+        throw err;
+      }
+    }
+
+    // Transport/5xx only: identical ownership rules against ERP list.
+    let v: Voucher | null = null;
+    try {
+      v = await getVoucherById(voucherId);
+    } catch {
+      const all = await getAllVouchers();
+      v = all.find((row) => row.id === voucherId) ?? null;
+    }
+
+    // eslint-disable-next-line no-console
+    console.info("[Vouchers] detail permission check", {
+      requested_voucher_id: voucherId,
+      supplier_mapped_from_session: identity,
+      voucher_supplier: v?.supplier ?? "",
+      voucher_supplier_name: v?.supplier_name ?? "",
+      permission_decision: !v
+        ? "deny_not_found"
+        : v.status === "draft"
+          ? "deny_draft"
+          : voucherBelongsToSupplier(v, identity)
+            ? "allow"
+            : "deny_forbidden",
+    });
+
+    if (!v || v.status === "draft") {
+      throw new SupplierVoucherAccessError("Voucher not found.", 404);
+    }
+    if (!voucherBelongsToSupplier(v, identity)) {
+      throw new SupplierVoucherAccessError(
+        "You do not have access to this voucher.",
+        403,
+      );
+    }
+    return v;
+  }
 }
 
 export async function getAllInvoices(): Promise<InvoiceRecord[]> {
@@ -581,11 +833,12 @@ export async function getAllInvoices(): Promise<InvoiceRecord[]> {
 }
 
 export async function getInvoicesForSupplier(
-  supplier: string
+  supplier: string | SupplierVoucherIdentity,
 ): Promise<InvoiceRecord[]> {
-  const vouchers = await getAllVouchers();
+  const identity = toSupplierVoucherIdentity(supplier);
+  const vouchers = await getVouchersForSupplier(identity);
   return vouchers
-    .filter((v) => v.invoice && voucherBelongsToSupplier(v, supplier))
+    .filter((v) => v.invoice && voucherBelongsToSupplier(v, identity))
     .map(voucherToInvoiceRecord)
     .filter((r): r is InvoiceRecord => r !== null);
 }
@@ -598,11 +851,12 @@ export async function getAllPayments(): Promise<PaymentRecord[]> {
 }
 
 export async function getPaymentsForSupplier(
-  supplier: string
+  supplier: string | SupplierVoucherIdentity,
 ): Promise<PaymentRecord[]> {
-  const vouchers = await getAllVouchers();
+  const identity = toSupplierVoucherIdentity(supplier);
+  const vouchers = await getVouchersForSupplier(identity);
   return vouchers
-    .filter((v) => v.payment && voucherBelongsToSupplier(v, supplier))
+    .filter((v) => v.payment && voucherBelongsToSupplier(v, identity))
     .map(voucherToPaymentRecord)
     .filter((r): r is PaymentRecord => r !== null);
 }
@@ -673,7 +927,11 @@ export async function createVoucher(
 
   if (data.grn_reference) {
     const existing = await getVoucherByGRN(data.grn_reference);
-    if (existing) return existing;
+    if (existing) {
+      // eslint-disable-next-line no-console
+      console.log("[createVoucher] existing voucher for GRN", existing.id);
+      return existing;
+    }
   }
 
   const itemsPayload: ItemsJsonPayload = {
@@ -686,7 +944,7 @@ export async function createVoucher(
     },
   };
 
-  const created = (await erpnextClient.post(resourceBase(), {
+  const body = {
     doctype: DOCTYPE,
     po_reference: data.po_reference || "",
     grn_reference: data.grn_reference || "",
@@ -696,7 +954,33 @@ export async function createVoucher(
     currency: data.currency || "USD",
     status: "Draft",
     items_json: JSON.stringify(itemsPayload),
-  })) as ErpVoucherRecord;
+  };
+
+  // eslint-disable-next-line no-console
+  console.log("Calling voucher API", body);
+
+  let created: ErpVoucherRecord;
+  try {
+    created = (await erpnextClient.post(
+      resourceBase(),
+      body,
+    )) as ErpVoucherRecord;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[createVoucher] ERPNext POST failed:", err);
+    throw err instanceof Error
+      ? err
+      : new Error("Voucher create request failed.");
+  }
+
+  // eslint-disable-next-line no-console
+  console.log("Voucher API response", created);
+
+  if (!created?.name) {
+    throw new Error(
+      "Voucher was created but ERPNext did not return a document name.",
+    );
+  }
 
   await addVoucherHistoryComment(created.name, "Voucher created by Finance");
   const voucher = await erpRecordToVoucher(created);
@@ -708,12 +992,18 @@ async function updateVoucherStatus(
   name: string,
   status: ErpVoucherStatus,
   historyNote: string,
-  extra?: Record<string, unknown>
+  extra?: Record<string, unknown>,
+  opts?: { silent?: boolean },
 ): Promise<Voucher> {
-  await erpnextClient.put(`${resourceBase()}/${encodeURIComponent(name)}`, {
-    status,
-    ...extra,
-  });
+  const config = opts?.silent ? withSilent() : undefined;
+  await erpnextClient.put(
+    `${resourceBase()}/${encodeURIComponent(name)}`,
+    {
+      status,
+      ...extra,
+    },
+    config,
+  );
   await addVoucherHistoryComment(name, historyNote);
   const updated = await getVoucherById(name);
   if (!updated) throw new Error("Voucher not found after update");
@@ -738,42 +1028,133 @@ export async function sendVoucherToSupplier(id: string): Promise<Voucher | null>
 export async function markVoucherViewed(id: string): Promise<Voucher | null> {
   const v = await getVoucherById(id);
   if (!v || v.status !== "sent") return v;
-  return updateVoucherStatus(id, "Viewed", "Supplier viewed the voucher");
+  try {
+    // Ensure supplier JWT is present (dedicated key) before the payables PUT.
+    // Finance logout clears the mirrored shared key; without a principal the
+    // interceptor omits X-Bidsphere-Access-Token → 401 → /login.
+    const token = await ensureSupplierAccessToken();
+    if (!token.ok) {
+      // eslint-disable-next-line no-console
+      console.warn("[Vouchers] markVoucherViewed skipped:", token.message);
+      return v;
+    }
+    return await updateVoucherStatus(
+      id,
+      "Viewed",
+      "Supplier viewed the voucher",
+      undefined,
+      // Non-blocking UX: never treat a view-mark failure as global session expiry.
+      { silent: true },
+    );
+  } catch (err) {
+    // Viewing must remain available even if the status write is denied.
+    // eslint-disable-next-line no-console
+    console.warn("[Vouchers] markVoucherViewed failed (non-blocking):", err);
+    return v;
+  }
 }
 
+/**
+ * Supplier Portal invoice creation — uses `/api/supplier-voucher/raise-invoice`
+ * (supplier JWT required). Never uses Finance/Admin voucher mutation helpers.
+ */
 export async function supplierRaiseInvoice(
   voucherId: string,
-  invoice: SupplierInvoice
-): Promise<Voucher | null> {
-  const v = await getVoucherById(voucherId);
-  if (!v) return null;
+  invoice: SupplierInvoice,
+): Promise<Voucher> {
+  const id = String(voucherId || "").trim();
+  if (!id) {
+    throw new SupplierVoucherAccessError("Voucher id is required.", 400);
+  }
 
-  const invoicePayload: SupplierInvoice = {
+  const token = await requireSupplierJwt();
+
+  const identity = supplierIdentityFromSession();
+
+  const payload: SupplierInvoice = {
     ...invoice,
+    invoice_number: String(invoice.invoice_number || "").trim(),
+    due_date: String(invoice.due_date || "").trim(),
+    payment_terms: String(invoice.payment_terms || "").trim(),
+    notes: String(invoice.notes || ""),
     status: "submitted",
     rejection_reason: undefined,
     reviewed_by: undefined,
     reviewed_at: undefined,
   };
 
-  const updated = await updateVoucherStatus(
-    voucherId,
-    "Invoice Raised",
-    `Supplier submitted invoice ${invoice.invoice_number} for $${invoice.total.toFixed(2)}`,
-    { invoice_json: JSON.stringify(invoicePayload) }
-  );
+  if (import.meta.env.DEV) {
+    // eslint-disable-next-line no-console
+    console.info("[supplierRaiseInvoice] portal raise-invoice request", {
+      voucher_id: id,
+      erp_supplier_id: identity.erpSupplierId,
+      display_name: identity.displayName,
+      invoice: payload,
+      has_access_token: Boolean(token),
+    });
+  }
 
-  voucherNotify(
-    updated,
-    "finance",
-    `Supplier submitted an invoice for Voucher ${voucherId}. Total: $${invoice.total.toFixed(2)}`
-  );
-  voucherNotify(
-    updated,
-    "procurement",
-    `Invoice received from ${updated.supplier_name} for Voucher ${voucherId}`
-  );
-  return updated;
+  try {
+    const res = await callSupplierVoucherApi<{
+      voucher?: Record<string, unknown>;
+    }>("raise-invoice", {
+      voucher_id: id,
+      erp_supplier_id: identity.erpSupplierId,
+      display_name: identity.displayName || "",
+      invoice: payload,
+    });
+
+    if (!res.voucher) {
+      throw new SupplierVoucherAccessError(
+        "Invoice was not returned by the server.",
+        502,
+      );
+    }
+
+    const updated = mapApiVoucherToVoucher(res.voucher);
+    // Ensure app status reflects Invoice Raised / submitted invoice.
+    if (!updated.status || updated.status === "draft") {
+      updated.status = "invoice_raised";
+    }
+
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.info("[supplierRaiseInvoice] portal raise-invoice response", {
+        voucher_id: updated.id,
+        status: updated.status,
+        invoice: updated.invoice,
+      });
+    }
+
+    bumpStore();
+    voucherNotify(
+      updated,
+      "finance",
+      `Supplier submitted an invoice for Voucher ${id}. Total: $${Number(payload.total).toFixed(2)}`,
+    );
+    voucherNotify(
+      updated,
+      "procurement",
+      `Invoice received from ${updated.supplier_name} for Voucher ${id}`,
+    );
+    return updated;
+  } catch (err) {
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.error("[supplierRaiseInvoice] portal raise-invoice error", err);
+    }
+    if (err instanceof SupplierVoucherAccessError) throw err;
+    const status =
+      err && typeof err === "object" && "status" in err
+        ? Number((err as { status?: number }).status) || 500
+        : 500;
+    throw new SupplierVoucherAccessError(
+      err instanceof Error
+        ? err.message
+        : "Could not create the supplier invoice.",
+      status,
+    );
+  }
 }
 
 export async function approveInvoice(voucherId: string): Promise<Voucher | null> {
@@ -785,7 +1166,7 @@ export async function approveInvoice(voucherId: string): Promise<Voucher | null>
     ...v.invoice,
     status: "approved",
     reviewed_by: actor.name,
-    reviewed_at: new Date().toISOString(),
+    reviewed_at: nowERPDateTime(),
     rejection_reason: undefined,
   };
   const updated = await updateVoucherStatus(
@@ -815,7 +1196,7 @@ export async function rejectInvoice(
     ...v.invoice,
     status: "rejected",
     reviewed_by: actor.name,
-    reviewed_at: new Date().toISOString(),
+    reviewed_at: nowERPDateTime(),
     rejection_reason: reason,
   };
   const updated = await updateVoucherStatus(

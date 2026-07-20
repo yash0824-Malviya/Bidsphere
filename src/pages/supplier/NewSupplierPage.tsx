@@ -128,9 +128,8 @@ export default function NewSupplierPage() {
         formData.append("docname", supplier);
         formData.append("fieldname", "custom_documents");
         formData.append("is_private", "1");
-        await apiPost("/api/method/upload_file", formData, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
+        // Do NOT set Content-Type — browser must add multipart boundary.
+        await apiPost("/api/method/upload_file", formData);
       } catch {
         // Best-effort; the interceptor already surfaced any server error.
         console.warn("Document upload failed:", doc.type);

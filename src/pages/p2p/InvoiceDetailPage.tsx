@@ -1,5 +1,5 @@
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import {
   ArrowLeft,
@@ -7,39 +7,46 @@ import {
   CreditCard,
   Download,
   FileText,
-  Loader2,
   Printer,
   Receipt,
-  Send,
 } from "lucide-react";
 
-import {
-  getPurchaseInvoice,
-  InvoiceCurrencyMismatchError,
-  submitPurchaseInvoice,
-} from "../../api/accounts";
-import { invalidateFinanceDashboardMetrics } from "../../api/financeWorkflow";
+import { getPurchaseInvoice } from "../../api/accounts";
 import ReadOnlyViewBadge from "../../components/document/ReadOnlyViewBadge";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
-import { Skeleton } from "../../components/Skeleton";
+import { AppLoading, EnterpriseError } from "../../components/enterprise";
 import StatusBadge from "../../components/StatusBadge";
+import { canReleasePayment } from "../../config/roles";
 import { usePoDrillDown } from "../../hooks/usePoDrillDown";
+import { useAuthStore } from "../../store/authStore";
 import { formatCurrency, formatDate, isOverdue } from "../../utils/format";
 import { downloadInvoicePdf, printInvoicePdf } from "../../utils/pdf";
 import { primaryPOFromInvoice } from "../../utils/supplierPortalUtils";
+import LineEngineeringDocsCell from "../../components/attachments/LineEngineeringDocsCell";
 
+/**
+ * ERPNext Purchase Invoice detail (ACC-PINV-*).
+ *
+ * Supplier invoices are created only in the Supplier Portal against vouchers.
+ * Finance reviews those on InvoiceWorkflowDetailPage. This page is for viewing
+ * ERP Purchase Invoices (e.g. after approval/payment) and recording payment —
+ * not for creating or submitting supplier invoices.
+ */
 export default function InvoiceDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const { isReadOnly, backToPoPath } = usePoDrillDown();
+  const role = useAuthStore((s) => s.user?.role);
+  const canPay = canReleasePayment(role);
   const name = decodeURIComponent(id);
 
   const {
     data: invoice,
     isLoading,
     isError,
+    error,
+    refetch,
   } = useQuery({
     queryKey: ["purchase-invoice", name],
     queryFn: () => getPurchaseInvoice(name),
@@ -47,44 +54,17 @@ export default function InvoiceDetailPage() {
     staleTime: 0,
   });
 
-  const submitMutation = useMutation({
-    mutationFn: () => submitPurchaseInvoice(name),
-    onSuccess: () => {
-      toast.success("Invoice submitted — it is now payable.");
-      queryClient.invalidateQueries({ queryKey: ["purchase-invoice", name] });
-      queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
-      queryClient.invalidateQueries({ queryKey: ["payable-invoices"] });
-      invalidateFinanceDashboardMetrics(queryClient);
-    },
-    onError: (err: Error) => {
-      if (err instanceof InvoiceCurrencyMismatchError) {
-        toast.error(err.message, { duration: 10_000 });
-        return;
-      }
-      toast.error(err.message || "Could not submit invoice.");
-    },
-  });
-
   if (isLoading) {
-    return (
-      <div className="space-y-4">
-        <Skeleton className="h-6 w-48" />
-        <Skeleton className="h-32 w-full" />
-        <Skeleton className="h-64 w-full" />
-      </div>
-    );
+    return <AppLoading variant="document" />;
   }
 
   if (isError || !invoice) {
     return (
-      <div>
-        <BackLink backToPoPath={backToPoPath} />
-        <EmptyState
-          icon={FileText}
-          title="Invoice not found"
-          description={`"${name}" may have been deleted or you may not have access.`}
-        />
-      </div>
+      <EnterpriseError
+        error={error ?? new Error("not found")}
+        onRetry={() => void refetch()}
+        onBack={() => window.history.back()}
+      />
     );
   }
 
@@ -146,22 +126,7 @@ export default function InvoiceDetailPage() {
               }}
             />
             <StatusBadge status={effectiveStatus} />
-            {!isReadOnly && isDraft ? (
-              <button
-                type="button"
-                onClick={() => submitMutation.mutate()}
-                disabled={submitMutation.isPending}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-warning-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-warning-600 disabled:opacity-60"
-              >
-                {submitMutation.isPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Send className="h-4 w-4" />
-                )}
-                Submit Invoice
-              </button>
-            ) : null}
-            {!isReadOnly && !isDraft && !isPaid && hasOutstanding ? (
+            {!isReadOnly && !isDraft && !isPaid && hasOutstanding && canPay ? (
               <button
                 type="button"
                 onClick={() =>
@@ -179,33 +144,16 @@ export default function InvoiceDetailPage() {
         }
       />
 
-      {/* Draft warning — editable flow only */}
       {!isReadOnly && isDraft && (
-        <div className="mt-4 flex items-start gap-3 rounded-2xl border border-warning-300 bg-warning-50 p-4 shadow-sm">
-          <Send className="mt-0.5 h-5 w-5 flex-shrink-0 text-warning-600" />
-          <div className="flex-1">
-            <p className="text-sm font-semibold text-warning-900">
-              This invoice has not been submitted
-            </p>
-            <p className="mt-0.5 text-xs text-warning-700">
-              Draft invoices are not recorded in the accounting ledger and
-              cannot be paid. Click <strong>Submit Invoice</strong> to finalise
-              it and make it eligible for payment.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => submitMutation.mutate()}
-            disabled={submitMutation.isPending}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-warning-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-warning-600 disabled:opacity-60"
-          >
-            {submitMutation.isPending ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Send className="h-3.5 w-3.5" />
-            )}
-            Submit Invoice
-          </button>
+        <div className="mt-4 rounded-2xl border border-neutral-200 bg-neutral-50 p-4 shadow-sm">
+          <p className="text-sm font-semibold text-neutral-900">
+            Draft Purchase Invoice
+          </p>
+          <p className="mt-0.5 text-xs text-neutral-600">
+            Supplier invoices are created in the Supplier Portal. Finance reviews
+            submitted invoices from the Invoices queue. ERP Purchase Invoices are
+            created automatically after approval when payment is released.
+          </p>
         </div>
       )}
 
@@ -303,6 +251,7 @@ export default function InvoiceDetailPage() {
               <thead className="bg-neutral-50 text-left text-xs font-medium uppercase tracking-wider text-neutral-500">
                 <tr>
                   <th className="px-4 py-2">Item</th>
+                  <th className="px-4 py-2 min-w-[160px]">Attachments</th>
                   <th className="px-4 py-2">Purchase Order</th>
                   <th className="px-4 py-2">GRN</th>
                   <th className="px-4 py-2 text-right">Qty</th>
@@ -314,7 +263,7 @@ export default function InvoiceDetailPage() {
               <tbody className="divide-y divide-neutral-200">
                 {(invoice.items ?? []).map((item, idx) => (
                   <tr key={item.name ?? idx}>
-                    <td className="px-4 py-2">
+                    <td className="px-4 py-2 align-top">
                       <div className="font-medium text-neutral-900">
                         {item.item_code}
                       </div>
@@ -324,7 +273,16 @@ export default function InvoiceDetailPage() {
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-2 text-neutral-600">
+                    <td className="px-4 py-2 align-top">
+                      <LineEngineeringDocsCell
+                        lookup={{
+                          item_code: item.item_code,
+                          purchase_order: item.purchase_order,
+                          purchase_order_item: item.purchase_order_item,
+                        }}
+                      />
+                    </td>
+                    <td className="px-4 py-2 text-neutral-600 align-top">
                       {item.purchase_order ? (
                         <Link
                           to={`/p2p/purchase-orders/${encodeURIComponent(item.purchase_order)}`}
@@ -336,7 +294,7 @@ export default function InvoiceDetailPage() {
                         "—"
                       )}
                     </td>
-                    <td className="px-4 py-2 text-neutral-600">
+                    <td className="px-4 py-2 text-neutral-600 align-top">
                       {item.purchase_receipt ? (
                         <Link
                           to={`/p2p/grn/${encodeURIComponent(item.purchase_receipt)}`}
@@ -348,16 +306,16 @@ export default function InvoiceDetailPage() {
                         "—"
                       )}
                     </td>
-                    <td className="px-4 py-2 text-right tabular-nums">
+                    <td className="px-4 py-2 text-right tabular-nums align-top">
                       {item.qty ?? 0}
                     </td>
-                    <td className="px-4 py-2 text-neutral-600">
+                    <td className="px-4 py-2 text-neutral-600 align-top">
                       {item.uom ?? "—"}
                     </td>
-                    <td className="px-4 py-2 text-right tabular-nums">
+                    <td className="px-4 py-2 text-right tabular-nums align-top">
                       {formatCurrency(item.rate)}
                     </td>
-                    <td className="px-4 py-2 text-right font-medium tabular-nums">
+                    <td className="px-4 py-2 text-right font-medium tabular-nums align-top">
                       {formatCurrency(item.amount)}
                     </td>
                   </tr>

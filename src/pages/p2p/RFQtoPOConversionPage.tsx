@@ -33,6 +33,8 @@ import {
 } from "../../api/purchasing";
 import type { LinkedPORow } from "../../api/purchasing";
 import { getLegalDocsByRfq, type LegalDocumentSet } from "../../api/legalDocs";
+import { deriveRfqProcurementWorkflow } from "../../api/rfqProcurementWorkflow";
+import { invalidateApprovalWorkflow } from "../../api/approvalWorkflow";
 import POStatusTimeline from "../../components/p2p/POStatusTimeline";
 import { Skeleton } from "../../components/Skeleton";
 import { buildProcurementWorkflowSteps } from "../../utils/procurementStatusWorkflow";
@@ -98,7 +100,6 @@ export default function RFQtoPOConversionPage() {
   });
   const legalDoc = legalDocQuery.data ?? null;
 
-  const approved = legalDoc?.review_status === "Approved" && legalDoc?.finance_status === "Approved";
   const selectedSupplier = legalDoc?.supplier ?? "";
   const selectedQuote = quotations.find(
     (q) => q.supplier === selectedSupplier || q.supplier_name === selectedSupplier
@@ -107,6 +108,20 @@ export default function RFQtoPOConversionPage() {
   const selectedSupplierDisplay =
     selectedQuote?.supplier_name ?? selectedSupplier;
   const approvedValue = legalDoc?.grand_total ?? selectedQuote?.grand_total ?? 0;
+
+  const procurementWorkflow = deriveRfqProcurementWorkflow({
+    supplierCount: Math.max(rfqSuppliers.length, 1),
+    respondedCount: quotations.length,
+    hasQuotations: quotations.length > 0,
+    hasAnalysis: true,
+    selectedSupplier,
+    legalStatus: legalDoc?.review_status ?? "",
+    financeStatus: legalDoc?.finance_status ?? "",
+    poExists: !!linkedPO,
+    poName: linkedPO?.name ?? null,
+  });
+  const approved = procurementWorkflow.canCreatePO || procurementWorkflow.purchaseOrderStatus === "Created";
+  const canCreatePO = procurementWorkflow.canCreatePO;
 
   /* ── Adapter fields used by the audit / status UI below ── */
   const legalStatusLabel = legalDoc?.review_status ?? "Pending";
@@ -202,7 +217,7 @@ export default function RFQtoPOConversionPage() {
 
   /* ── Create Draft PO ── */
   const handleCreatePO = useCallback(async () => {
-    if (!rfq || !approved || !selectedSupplier || poExists) return;
+    if (!rfq || !canCreatePO || !selectedSupplier || poExists) return;
     setCreatingPO(true);
 
     try {
@@ -215,6 +230,7 @@ export default function RFQtoPOConversionPage() {
       void queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
       // Refresh the dashboard's Procurement Cycle Time (and other analytics).
       void queryClient.invalidateQueries({ queryKey: ["procurement-analytics"] });
+      invalidateApprovalWorkflow(queryClient);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // eslint-disable-next-line no-console
@@ -233,7 +249,7 @@ export default function RFQtoPOConversionPage() {
     } finally {
       setCreatingPO(false);
     }
-  }, [rfq, approved, selectedSupplier, poExists, decodedId, queryClient]);
+  }, [rfq, canCreatePO, selectedSupplier, poExists, decodedId, queryClient]);
 
   /* ── Submit PO ── */
   const handleSubmitPO = useCallback(async () => {
@@ -553,7 +569,7 @@ export default function RFQtoPOConversionPage() {
                   <button
                     type="button"
                     onClick={handleCreatePO}
-                    disabled={creatingPO || !selectedSupplier}
+                    disabled={creatingPO || !canCreatePO}
                     className="flex w-full items-center justify-center gap-2 rounded-xl bg-success-600 px-6 py-3.5 text-sm font-bold text-white shadow-sm transition hover:bg-success-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {creatingPO ? (

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 
 import { getPurchaseOrders } from "../../api/purchasing";
-import { getSupplierGroups, getSuppliers, getSuppliersPaged } from "../../api/supplier";
+import { getSupplierGroups, getSuppliers } from "../../api/supplier";
 import type { Filter } from "../../api/erpnext";
 import ConnectionError from "../../components/ConnectionError";
 import EmptyState from "../../components/EmptyState";
@@ -19,7 +19,9 @@ import PageHeader from "../../components/PageHeader";
 import PaginationBar from "../../components/PaginationBar";
 import { Skeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
+import ExportButton from "../../components/export/ExportButton";
 import { FilterBar, FilterField, SearchInput, SortableTableHeader } from "../../components/ui";
+import type { ExportColumn } from "../../utils/export";
 import { useListSort } from "../../hooks/useListSort";
 import { usePagination } from "../../hooks/usePagination";
 import { useDebounce } from "../../hooks/useDebounce";
@@ -35,6 +37,9 @@ const SUPPLIER_DIRECTORY_FIELDS = [
   "tax_id",
   "email_id",
 ];
+
+/** Fetch every matching Supplier — never truncate the directory. */
+const DIRECTORY_FETCH_LIMIT = 500;
 
 type StatusFilter = "all" | "active" | "inactive";
 type SuppliersTab = "directory" | "performance";
@@ -53,6 +58,8 @@ export default function SuppliersPage() {
   const [group, setGroup] = useState("");
   const [status, setStatus] = useState<StatusFilter>(statusFromUrl);
 
+  // Only user-selected FilterBar criteria — no default status / group /
+  // sourcing / portal / onboarding exclusions.
   const filters = useMemo<Filter[]>(() => {
     const f: Filter[] = [];
     if (group) f.push(["supplier_group", "=", group]);
@@ -67,30 +74,35 @@ export default function SuppliersPage() {
     resetKey: JSON.stringify(filters),
   });
 
-  // Directory tab — server-side paginated (10/20/50/100 per page).
+  // Directory tab — full ERP Supplier list (no page-window truncation).
   const directoryQuery = useQuery({
-    queryKey: ["suppliers-directory", filters, page, pageSize],
-    queryFn: () =>
-      getSuppliersPaged({
+    queryKey: ["suppliers-directory", filters],
+    queryFn: async () => {
+      const rows = await getSuppliers({
         filters,
         fields: SUPPLIER_DIRECTORY_FIELDS,
+        limit_page_length: DIRECTORY_FETCH_LIMIT,
         order_by: "supplier_name asc",
-        page,
-        pageSize,
-      }),
+      });
+      // eslint-disable-next-line no-console
+      console.log(
+        "[Supplier Directory] Total suppliers returned from ERP:",
+        rows.length
+      );
+      return rows;
+    },
     enabled: activeTab === "directory",
     placeholderData: (prev) => prev,
   });
 
-  // Performance tab ranks EVERY matching supplier by PO volume/spend, so it
-  // needs the full filtered set rather than a single page.
+  // Performance tab ranks EVERY matching supplier by PO volume/spend.
   const performanceQuery = useQuery({
     queryKey: ["suppliers-performance", filters],
     queryFn: () =>
       getSuppliers({
         filters,
         fields: SUPPLIER_DIRECTORY_FIELDS,
-        limit_page_length: 200,
+        limit_page_length: DIRECTORY_FETCH_LIMIT,
         order_by: "supplier_name asc",
       }),
     enabled: activeTab === "performance",
@@ -98,11 +110,29 @@ export default function SuppliersPage() {
 
   const suppliers = activeTab === "performance"
     ? performanceQuery.data ?? []
-    : directoryQuery.data?.data ?? [];
+    : directoryQuery.data ?? [];
   const isLoading = activeTab === "performance" ? performanceQuery.isLoading : directoryQuery.isLoading;
   const isError = activeTab === "performance" ? performanceQuery.isError : directoryQuery.isError;
   const error = activeTab === "performance" ? performanceQuery.error : directoryQuery.error;
   const refetch = activeTab === "performance" ? performanceQuery.refetch : directoryQuery.refetch;
+
+  useEffect(() => {
+    if (activeTab !== "directory" || isLoading) return;
+    // eslint-disable-next-line no-console
+    console.log(
+      "[Supplier Directory] Total suppliers after frontend processing:",
+      suppliers.length
+    );
+  }, [activeTab, isLoading, suppliers.length]);
+
+  useEffect(() => {
+    if (activeTab !== "directory" || isLoading) return;
+    // eslint-disable-next-line no-console
+    console.log(
+      "[Supplier Directory] Total suppliers rendered:",
+      suppliers.length
+    );
+  }, [activeTab, isLoading, suppliers]);
 
   const { data: groups = [] } = useQuery({
     queryKey: ["supplier-groups"],
@@ -255,6 +285,51 @@ export default function SuppliersPage() {
     setSearchParams(next);
   }
 
+  const directoryExportColumns = useMemo<ExportColumn<Supplier>[]>(
+    () => [
+      { id: "name", label: "Supplier ID", accessor: (r) => r.name },
+      { id: "supplier_name", label: "Supplier Name", accessor: (r) => r.supplier_name },
+      { id: "supplier_group", label: "Group", accessor: (r) => r.supplier_group },
+      { id: "country", label: "Country", accessor: (r) => r.country },
+      { id: "tax_id", label: "Tax ID", accessor: (r) => r.tax_id },
+      { id: "email_id", label: "Email", accessor: (r) => r.email_id },
+      {
+        id: "status",
+        label: "Status",
+        type: "status",
+        accessor: (r) => (r.disabled ? "Inactive" : "Active"),
+      },
+    ],
+    [],
+  );
+
+  const performanceExportColumns = useMemo<
+    ExportColumn<(typeof sortedPerformanceRows)[number]>[]
+  >(
+    () => [
+      { id: "supplier", label: "Supplier", accessor: (r) => r.supplier_name || r.name },
+      {
+        id: "poCount",
+        label: "PO Count",
+        type: "number",
+        accessor: (r) => r.poCount,
+      },
+      {
+        id: "totalSpend",
+        label: "Total Spend",
+        type: "currency",
+        accessor: (r) => r.totalSpend,
+      },
+      {
+        id: "performanceScore",
+        label: "Performance Score",
+        type: "number",
+        accessor: (r) => r.performanceScore,
+      },
+    ],
+    [],
+  );
+
   return (
     <div>
       <PageHeader
@@ -265,12 +340,29 @@ export default function SuppliersPage() {
             : "Browse, search, and manage all suppliers in the directory."
         }
         actions={
-          activeTab === "directory" ? (
-            <Link to="/suppliers/new" className="btn-primary">
-              <Plus className="h-4 w-4" />
-              Add Supplier
-            </Link>
-          ) : null
+          <div className="flex flex-wrap items-center gap-2">
+            {activeTab === "directory" ? (
+              <ExportButton
+                module="Supplier Directory"
+                filenamePrefix="Supplier_Directory"
+                columns={directoryExportColumns}
+                rows={suppliers}
+              />
+            ) : (
+              <ExportButton
+                module="Supplier Performance"
+                filenamePrefix="Supplier_Performance"
+                columns={performanceExportColumns}
+                rows={sortedPerformanceRows}
+              />
+            )}
+            {activeTab === "directory" ? (
+              <Link to="/suppliers/new" className="btn-primary">
+                <Plus className="h-4 w-4" />
+                Add Supplier
+              </Link>
+            ) : null}
+          </div>
         }
       />
 
@@ -457,9 +549,9 @@ export default function SuppliersPage() {
 
           <div className="mt-4 overflow-hidden rounded-xl border border-neutral-200 bg-white">
             <PaginationBar
-              currentPage={directoryQuery.data?.current_page ?? page}
-              totalPages={directoryQuery.data?.total_pages ?? 1}
-              totalRecords={directoryQuery.data?.total_records ?? 0}
+              currentPage={page}
+              totalPages={1}
+              totalRecords={suppliers.length}
               pageSize={pageSize}
               onPageChange={setPage}
               onPageSizeChange={setPageSize}

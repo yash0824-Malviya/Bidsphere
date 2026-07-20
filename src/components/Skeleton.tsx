@@ -1,17 +1,13 @@
 import { memo } from "react";
+import { Shimmer } from "./enterprise/PageSkeleton";
 
 interface SkeletonProps {
   className?: string;
 }
 
-/** A pulsing placeholder block for loading states. */
+/** Shimmer placeholder block for loading states. */
 export const Skeleton = memo(function Skeleton({ className = "" }: SkeletonProps) {
-  return (
-    <div
-      className={`animate-pulse rounded bg-neutral-200/80 ${className}`}
-      aria-hidden
-    />
-  );
+  return <Shimmer className={className} />;
 });
 
 interface TableSkeletonProps {
@@ -19,10 +15,10 @@ interface TableSkeletonProps {
   columns?: number;
 }
 
-/** Renders pulsing rows that match a generic table layout. */
+/** Renders shimmering rows that match a generic table layout. */
 export function TableSkeleton({ rows = 6, columns = 5 }: TableSkeletonProps) {
   return (
-    <div className="divide-y divide-neutral-200">
+    <div className="divide-y divide-neutral-100" aria-busy="true" aria-label="Loading">
       {Array.from({ length: rows }).map((_, rowIdx) => (
         <div
           key={rowIdx}

@@ -21,8 +21,11 @@ import {
 } from "../../api/materialRequestWorkflow";
 import StatusBadge from "../../components/StatusBadge";
 import ProcurementTypeBadge from "../../components/ProcurementTypeBadge";
+import RequestModeBadge from "../../components/RequestModeBadge";
+import ExportButton from "../../components/export/ExportButton";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { Skeleton } from "../../components/Skeleton";
+import type { ExportColumn } from "../../utils/export";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
 import { formatDate } from "../../utils/format";
 
@@ -129,6 +132,51 @@ export default function PendingApprovalsPage() {
     fromDate !== "" ||
     toDate !== "";
 
+  const exportColumns = useMemo<ExportColumn<AdminApprovalRow>[]>(
+    () => [
+      { id: "name", label: "MR Number", accessor: (r) => r.name },
+      { id: "department", label: "Department", accessor: (r) => r.department },
+      { id: "requestedBy", label: "Requested By", accessor: (r) => r.requestedBy },
+      {
+        id: "procurementType",
+        label: "Request Type",
+        type: "status",
+        accessor: (r) => r.procurementType,
+      },
+      {
+        id: "requestMode",
+        label: "Request Mode",
+        type: "status",
+        accessor: (r) => r.requestMode,
+      },
+      {
+        id: "priority",
+        label: "Priority",
+        type: "status",
+        accessor: (r) => r.priority,
+      },
+      {
+        id: "status",
+        label: "Status",
+        type: "status",
+        accessor: (r) => r.status,
+      },
+      {
+        id: "requestDate",
+        label: "Request Date",
+        type: "date",
+        accessor: (r) => r.requestDate,
+      },
+      {
+        id: "itemCount",
+        label: "Items",
+        type: "number",
+        accessor: (r) => r.itemCount,
+      },
+    ],
+    [],
+  );
+
   return (
     <div>
       {/* Header */}
@@ -144,11 +192,19 @@ export default function PendingApprovalsPage() {
             Indirect Material Requests awaiting your review and approval.
           </p>
         </div>
-        {data.length > 0 && (
-          <span className="ml-auto flex h-7 min-w-7 items-center justify-center rounded-full bg-primary-50 px-2.5 text-sm font-bold text-primary-700">
-            {data.length}
-          </span>
-        )}
+        <div className="ml-auto flex items-center gap-2">
+          <ExportButton
+            module="Approval History"
+            filenamePrefix="Approval_History_Pending"
+            columns={exportColumns}
+            rows={rows}
+          />
+          {data.length > 0 && (
+            <span className="flex h-7 min-w-7 items-center justify-center rounded-full bg-primary-50 px-2.5 text-sm font-bold text-primary-700">
+              {data.length}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
@@ -248,7 +304,10 @@ export default function PendingApprovalsPage() {
                     <td className="px-4 py-3">{row.department || "—"}</td>
                     <td className="px-4 py-3">{row.requestedBy || "—"}</td>
                     <td className="px-4 py-3">
-                      <ProcurementTypeBadge type={row.procurementType} />
+                      <div className="flex flex-wrap items-center gap-1">
+                        <ProcurementTypeBadge type={row.procurementType} />
+                        <RequestModeBadge mode={row.requestMode} />
+                      </div>
                     </td>
                     <td className="px-4 py-3">{row.priority || "—"}</td>
                     <td className="px-4 py-3 text-right tabular-nums">

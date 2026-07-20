@@ -10,12 +10,14 @@
 
 import { apiGet, buildListConfig, buildResourceUrl, withSilent } from "./erpnext";
 import {
+  getMaterialRequestMode,
   getMaterialRequestProcurementType,
   getMaterialRequestWorkflowStatus,
   listMaterialRequestsWorkflow,
   type MaterialRequestWorkflowRecord,
 } from "./materialRequestWorkflow";
 import type {
+  MaterialRequestMode,
   MaterialRequestProcurementType,
   MaterialRequestWorkflowStatus,
 } from "../types/materialRequestWorkflow";
@@ -25,6 +27,7 @@ export interface AdminApprovalRow {
   department: string;
   requestedBy: string;
   procurementType: MaterialRequestProcurementType;
+  requestMode: MaterialRequestMode;
   priority: string;
   status: MaterialRequestWorkflowStatus;
   requestDate?: string;
@@ -79,6 +82,7 @@ function toRow(
     department: mr.custom_department ?? "",
     requestedBy: mr.custom_requested_by ?? mr.owner ?? "",
     procurementType: getMaterialRequestProcurementType(mr),
+    requestMode: getMaterialRequestMode(mr),
     priority: mr.custom_priority ?? "",
     status: getMaterialRequestWorkflowStatus(mr),
     requestDate: mr.transaction_date ?? mr.creation,

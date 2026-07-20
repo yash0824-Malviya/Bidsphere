@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ClipboardList, Search } from "lucide-react";
 import { getPendingMaterialRequests } from "../../services/warehouseService";
 import ProcurementTypeBadge from "../../components/ProcurementTypeBadge";
+import RequestModeBadge from "../../components/RequestModeBadge";
 import EmptyState from "../../components/EmptyState";
 import ErrorState from "../../components/ErrorState";
 import { TableSkeleton } from "../../components/Skeleton";
@@ -173,7 +174,10 @@ export default function WarehousePendingReviewPage() {
                         {mr.name}
                       </td>
                       <td className="py-4 px-6">
-                        <ProcurementTypeBadge type={mr.procurement_type} />
+                        <div className="flex flex-wrap items-center gap-1">
+                          <ProcurementTypeBadge type={mr.procurement_type} />
+                          <RequestModeBadge mode={mr.request_mode} />
+                        </div>
                       </td>
                       <td className="py-4 px-6 text-slate-600">{mr.department}</td>
                       <td className="py-4 px-6 text-slate-600">{mr.requested_by}</td>

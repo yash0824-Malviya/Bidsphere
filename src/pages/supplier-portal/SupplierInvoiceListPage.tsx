@@ -18,20 +18,34 @@ import { useSupplierSession } from "../../hooks/useSupplierSession";
 import SupplierPortalLayout from "./SupplierPortalLayout";
 
 export default function SupplierInvoiceListPage() {
-  const { supplierName, isReady } = useSupplierSession();
+  const { supplierName, erpSupplierName, isReady } = useSupplierSession();
   const syncVersion = useVoucherSyncStore((s) => s.version);
+  const supplierIdentity = {
+    erpSupplierId: erpSupplierName || supplierName,
+    displayName: supplierName || undefined,
+  };
 
   const { data: invoices = [] } = useQuery({
-    queryKey: ["supplier-invoices", supplierName, syncVersion],
-    queryFn: () => getInvoicesForSupplier(supplierName),
-    enabled: !!supplierName,
+    queryKey: [
+      "supplier-invoices",
+      supplierIdentity.erpSupplierId,
+      supplierIdentity.displayName,
+      syncVersion,
+    ],
+    queryFn: () => getInvoicesForSupplier(supplierIdentity),
+    enabled: !!(supplierIdentity.erpSupplierId || supplierIdentity.displayName),
     staleTime: 30_000,
   });
 
   const { data: pendingVouchers = [] } = useQuery({
-    queryKey: ["supplier-pending-vouchers", supplierName, syncVersion],
+    queryKey: [
+      "supplier-pending-vouchers",
+      supplierIdentity.erpSupplierId,
+      supplierIdentity.displayName,
+      syncVersion,
+    ],
     queryFn: async () => {
-      const vouchers = await getVouchersForSupplier(supplierName);
+      const vouchers = await getVouchersForSupplier(supplierIdentity);
       return vouchers.filter(
         (v) =>
           v.status === "sent" ||
@@ -39,7 +53,7 @@ export default function SupplierInvoiceListPage() {
           v.status === "invoice_rejected"
       );
     },
-    enabled: !!supplierName,
+    enabled: !!(supplierIdentity.erpSupplierId || supplierIdentity.displayName),
     staleTime: 30_000,
   });
 

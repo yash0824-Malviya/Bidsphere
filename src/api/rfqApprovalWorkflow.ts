@@ -21,6 +21,7 @@ import type {
   LegalReviewStatus,
   FinanceReviewStatus,
 } from "../types/erpnext";
+import { nowERPDateTime, tryERPDateTime } from "../utils/erpDate";
 
 const STORAGE_PREFIX = "rfq_approval_";
 
@@ -209,18 +210,23 @@ async function syncStateToErpNext(state: RFQApprovalState): Promise<void> {
   if (fieldSet.has("custom_submitted_by"))
     updates.custom_submitted_by = state.submitted_by ?? "";
   if (fieldSet.has("custom_submitted_at"))
-    updates.custom_submitted_at = state.submitted_at ?? "";
+    updates.custom_submitted_at =
+      tryERPDateTime(state.submitted_at) ?? state.submitted_at ?? "";
   if (fieldSet.has("custom_legal_reviewer"))
     updates.custom_legal_reviewer = state.legal_reviewer ?? "";
   if (fieldSet.has("custom_legal_review_date"))
-    updates.custom_legal_review_date = state.legal_review_date ?? "";
+    updates.custom_legal_review_date =
+      tryERPDateTime(state.legal_review_date) ?? state.legal_review_date ?? "";
   if (fieldSet.has("custom_legal_comments")) {
     updates.custom_legal_comments = latestLegalRemark(state);
   }
   if (fieldSet.has("custom_finance_reviewer"))
     updates.custom_finance_reviewer = state.finance_reviewer ?? "";
   if (fieldSet.has("custom_finance_review_date"))
-    updates.custom_finance_review_date = state.finance_review_date ?? "";
+    updates.custom_finance_review_date =
+      tryERPDateTime(state.finance_review_date) ??
+      state.finance_review_date ??
+      "";
   if (fieldSet.has("custom_finance_comments")) {
     const financeComments = state.finance_comments ?? [];
     const latest =
@@ -279,7 +285,7 @@ export async function submitForReview(params: {
     submittedBy: params.submittedBy,
   });
 
-  const now = new Date().toISOString();
+  const now = nowERPDateTime();
 
   const state: RFQApprovalState = {
     rfq: params.rfqName,
@@ -339,7 +345,7 @@ export async function resubmitLegalReview(
     throw new Error("Only legally rejected RFQs can be resubmitted for legal review.");
   }
 
-  const now = new Date().toISOString();
+  const now = nowERPDateTime();
   state.legal_status = "Pending Legal Review";
   state.workflow_step = "Pending Legal Review";
   state.finance_status = "Pending Finance Review";

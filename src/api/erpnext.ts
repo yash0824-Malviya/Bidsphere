@@ -7,6 +7,7 @@ import type {
 import toast from "react-hot-toast";
 
 import { handleSessionExpired } from "../store/sessionExpiry";
+import { readErpProxyAccessToken } from "../utils/accessToken";
 
 import { COMPANY_NAME } from "../config/branding";
 
@@ -31,7 +32,9 @@ const API_SECRET = import.meta.env.VITE_API_SECRET as string | undefined;
  * - **Development:** Vite dev server proxy (`vite.config.ts` → `VITE_PROXY_TARGET`)
  * - **Production (Vercel):** Serverless proxy (`api/proxy.ts` → `ERPNEXT_URL`)
  *
- * Authentication is API-key token only (`Authorization: token key:secret`).
+ * Upstream ERPNext auth: API-key (`Authorization: token key:secret`).
+ * SPA principal: `X-Bidsphere-Access-Token` (attached per request from
+ * session storage — required for payables mutations / production proxy).
  * `withCredentials` is intentionally false so the browser never sends or
  * stores ERPNext session cookies (`sid`, `csrf_token`, …). Those cookies are
  * host-scoped (not port-scoped); sharing them with ERP Desk on the same host
@@ -143,11 +146,41 @@ erpnext.interceptors.request.use(
     if (isAuthEndpoint) {
       config.headers.delete("Authorization");
       config.withCredentials = false;
+    } else {
+      // BidSphere RBAC principal (HMAC from staff login or supplier portal).
+      // ERPNext upstream still uses Authorization: token key:secret.
+      // Do NOT use sid cookies / withCredentials — Desk session collision.
+      // Without this header, payables mutations (Voucher / PI / PE) hit
+      // requireAnyAuth → 401 → handleSessionExpired → /login.
+      const accessToken = readErpProxyAccessToken();
+      if (accessToken) {
+        if (typeof config.headers?.set === "function") {
+          config.headers.set("X-Bidsphere-Access-Token", accessToken);
+        } else if (config.headers) {
+          (config.headers as Record<string, unknown>)[
+            "X-Bidsphere-Access-Token"
+          ] = accessToken;
+        }
+      }
     }
 
     // Do NOT read csrf_token from document.cookie. On a shared host that
     // cookie belongs to ERP Desk; attaching it here couples the SPA to Desk
     // and can break Desk CSRF after SPA traffic. API-key auth does not need it.
+
+    // FormData / multipart: the axios instance defaults to application/json.
+    // That default (or a bare multipart/form-data without boundary) makes
+    // Frappe's upload_file return HTTP 417 — MandatoryError: file_name/file_url.
+    // Delete Content-Type so the runtime sets multipart/form-data; boundary=…
+    if (typeof FormData !== "undefined" && config.data instanceof FormData) {
+      if (typeof config.headers?.delete === "function") {
+        config.headers.delete("Content-Type");
+        config.headers.delete("content-type");
+      } else if (config.headers) {
+        delete (config.headers as Record<string, unknown>)["Content-Type"];
+        delete (config.headers as Record<string, unknown>)["content-type"];
+      }
+    }
 
     const isMutation =
       method === "post" ||
@@ -159,7 +192,9 @@ erpnext.interceptors.request.use(
     // reproduce 400s with the exact payload ERPNext actually saw.
     if (import.meta.env.DEV && isMutation && method) {
       let parsed: unknown = config.data;
-      if (typeof config.data === "string") {
+      if (typeof FormData !== "undefined" && config.data instanceof FormData) {
+        parsed = "(FormData multipart — Content-Type left for boundary)";
+      } else if (typeof config.data === "string") {
         try {
           parsed = JSON.parse(config.data);
         } catch {
@@ -570,37 +605,17 @@ export async function apiDelete<T = unknown>(
 const SERVER_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
- * The ERPNext server's current date as `YYYY-MM-DD`, resolved from the most
- * authoritative source available so posting-date validation exactly matches
- * how ERPNext validates (its own `frappe.utils.nowdate()`), never the browser
- * clock. Resolution order:
+ * Optional UI hint for a calendar date (`YYYY-MM-DD`).
  *
- *   1. `bidsphere_server_date` — a whitelisted Server Script (API) that returns
- *      `frappe.utils.nowdate()` in the *site's configured time zone*. This is
- *      the only source that byte-for-byte matches ERPNext's own comparison.
- *      (Deploy with `scripts/setup-server-date-api.mjs`.)
- *   2. The HTTP `Date` response header (UTC) — server-anchored but coarser than
- *      the site time zone; a safe approximation when the script isn't deployed.
+ * Regression (commit 2893d0e): the HTTP `Date` header was converted with
+ * `getUTCFullYear/Month/Date`, which shifts the business day backward for
+ * IST (and other UTC+ timezones) — UI/payload could show 2026-07-20 while
+ * the resolved "server" day was 2026-07-19.
  *
- * Returns `null` if neither is available, in which case callers should let
- * ERPNext default the date server-side (omit `posting_date`).
+ * Use local calendar components of that instant (same basis as `todayIso()`),
+ * never UTC getters / `toISOString().slice(0, 10)`.
  */
 export async function fetchServerDate(): Promise<string | null> {
-  // 1) Preferred: the site-local server date (honours the ERPNext time zone).
-  try {
-    const res = await apiGet<{ today?: string } | undefined>(
-      "/api/method/bidsphere_server_date",
-      { ...withSilent(), timeout: 5_000 }
-    );
-    const today = (res as { today?: string } | undefined)?.today;
-    if (typeof today === "string" && SERVER_DATE_RE.test(today)) {
-      return today;
-    }
-  } catch {
-    // Endpoint not deployed / not permitted — fall through to the header.
-  }
-
-  // 2) Fallback: the HTTP `Date` header (UTC).
   try {
     const res = (await erpnext.get("/api/method/frappe.auth.get_logged_user", {
       _preserveResponse: true,
@@ -612,14 +627,16 @@ export async function fetchServerDate(): Promise<string | null> {
     if (typeof header === "string") {
       const parsed = new Date(header);
       if (!Number.isNaN(parsed.getTime())) {
-        const y = parsed.getUTCFullYear();
-        const m = String(parsed.getUTCMonth() + 1).padStart(2, "0");
-        const d = String(parsed.getUTCDate()).padStart(2, "0");
-        return `${y}-${m}-${d}`;
+        // Local calendar day — NOT getUTC* (that caused the 20 → 19 GRN regression).
+        const y = parsed.getFullYear();
+        const m = String(parsed.getMonth() + 1).padStart(2, "0");
+        const d = String(parsed.getDate()).padStart(2, "0");
+        const iso = `${y}-${m}-${d}`;
+        return SERVER_DATE_RE.test(iso) ? iso : null;
       }
     }
   } catch {
-    // Silent — caller falls back to letting ERPNext set the date.
+    // Silent — GRN create does not depend on this hint.
   }
   return null;
 }
@@ -703,7 +720,8 @@ export interface PagedListResult<T> {
  */
 export async function getExactCount(
   doctype: string,
-  filters?: Filter[] | Record<string, FilterValue>
+  filters?: Filter[] | Record<string, FilterValue>,
+  orFilters?: Filter[],
 ): Promise<number> {
   try {
     const params: Record<string, string> = { doctype };
@@ -711,6 +729,9 @@ export async function getExactCount(
       filters !== undefined &&
       (Array.isArray(filters) ? filters.length > 0 : Object.keys(filters).length > 0);
     if (hasFilters) params.filters = JSON.stringify(filters);
+    if (orFilters && orFilters.length > 0) {
+      params.or_filters = JSON.stringify(orFilters);
+    }
 
     const result = await apiGet<number | string>(
       "/api/method/frappe.client.get_count",
@@ -1062,5 +1083,12 @@ export function isDocNotFoundError(err: unknown): boolean {
   const excType = (axErr.response?.data as ErpNextErrorPayload | undefined)?.exc_type;
   return status === 404 || excType === "DoesNotExistError";
 }
+
+/**
+ * Compatibility re-export — some modules historically imported this from
+ * `erpnext.ts`. Implementation lives in `utils/permissionError` (no workflow
+ * logic). Safe to import from either path.
+ */
+export { isPermissionDeniedError } from "../utils/permissionError";
 
 export default erpnext;

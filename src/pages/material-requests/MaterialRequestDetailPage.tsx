@@ -23,10 +23,11 @@ import {
   completeMaterialRequest,
   deleteMaterialRequestWorkflow,
   fetchMaterialRequestWorkflow,
-  forwardMaterialRequestToProcurement,
+  getMaterialRequestMode,
   getMaterialRequestProcurementProgress,
   getMaterialRequestProcurementType,
   getMaterialRequestWorkflowStatus,
+  getLinkedRfqName,
   getUserFullName,
   isMaterialRequestOwnedByUser,
   issueMaterialRequest,
@@ -45,8 +46,13 @@ import { isSlaVisibleForRole } from "../../config/slaAccess";
 import SlaBadge from "../../components/sla/SlaBadge";
 import PageHeader from "../../components/PageHeader";
 import ProcurementTypeBadge from "../../components/ProcurementTypeBadge";
+import RequestModeBadge from "../../components/RequestModeBadge";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { Skeleton } from "../../components/Skeleton";
+import {
+  Drawing2dCell,
+  PartNameCell,
+} from "../../components/warehouse/EngineeringDocCells";
 import { useAuthStore } from "../../store/authStore";
 import {
   canCreateMaterialRequest,
@@ -250,8 +256,7 @@ function resolveTimeline(
         case "Under Warehouse Review":
         case "Stock Available":
           return 1;
-        // "Procurement Required" = shortage identified, Warehouse hasn't
-        // clicked "Send to Procurement" yet — still at Warehouse Review.
+        // Legacy pre-forward shortage status — still warehouse-owned.
         case "Procurement Required":
           return 1;
         case "Forwarded to Procurement":
@@ -573,20 +578,29 @@ export default function MaterialRequestDetailPage() {
     queryClient.invalidateQueries({ queryKey: ["mr-dashboard-counts"] });
     queryClient.invalidateQueries({ queryKey: ["mr-dashboard-recent"] });
     queryClient.invalidateQueries({ queryKey: ["mr-dashboard-rows"] });
-    // Forwarding from this page must surface the request in Procurement's
-    // queue immediately too — this key was previously missing here, so a
-    // "Send to Procurement" click from the MR detail page (as opposed to the
-    // Warehouse dashboard/review pages, which already invalidate it) left the
-    // Procurement page showing stale/empty data until an unrelated refetch.
     queryClient.invalidateQueries({ queryKey: ["mr-procurement-queue"] });
     queryClient.invalidateQueries({ queryKey: ["warehouse"] });
   };
 
   const submitMutation = useMutation({
-    mutationFn: () => submitMaterialRequestWorkflow(name),
-    onSuccess: () => {
-      toast.success("Submitted — assigned to Warehouse for review");
+    mutationFn: () =>
+      submitMaterialRequestWorkflow(name, {
+        email: user?.email,
+        name: user?.name,
+        full_name: user?.full_name,
+      }),
+    onSuccess: (saved) => {
+      const status = getMaterialRequestWorkflowStatus(saved);
+      toast.success(
+        status === "Admin Review"
+          ? "Submitted — assigned to Admin for review"
+          : "Submitted — assigned to Warehouse for review",
+      );
       invalidate();
+      void queryClient.invalidateQueries({
+        queryKey: ["warehouse", "pending-requests"],
+      });
+      void queryClient.refetchQueries({ queryKey: ["warehouse"] });
     },
     onError: (e) =>
       toast.error(e instanceof Error ? e.message : "Submit failed"),
@@ -640,17 +654,6 @@ export default function MaterialRequestDetailPage() {
     },
     onError: (e) =>
       toast.error(e instanceof Error ? e.message : "Complete failed"),
-  });
-
-  const forwardMutation = useMutation({
-    mutationFn: () =>
-      forwardMaterialRequestToProcurement(name, warehouseRemarks),
-    onSuccess: () => {
-      toast.success("Sent to Procurement");
-      invalidate();
-    },
-    onError: (e) =>
-      toast.error(e instanceof Error ? e.message : "Send to Procurement failed"),
   });
 
   const rejectMutation = useMutation({
@@ -808,7 +811,11 @@ export default function MaterialRequestDetailPage() {
     fulfillment.items.find((i) => i.warehouse && i.warehouse !== "—")?.warehouse ||
     "";
 
-  const isDraft = (mr.docstatus ?? 0) === 0;
+  const isDraftDoc = (mr.docstatus ?? 0) === 0;
+  const isDraftWorkflow = workflowStatus === "Draft";
+  // ERP draft document OR BidSphere Status still Draft (orphaned submit where
+  // docstatus=1 but workflow was never advanced).
+  const isDraft = isDraftDoc || isDraftWorkflow;
   // MRs are created through the shared integration token, so `owner` is the API
   // user — the real requester is tracked in custom_requested_by/requested_by.
   // Match against all three so Submit/Edit/Delete render for the requester.
@@ -817,15 +824,13 @@ export default function MaterialRequestDetailPage() {
     name: user?.name,
     fullName: user?.full_name,
   });
-  // Draft actions (Edit / Submit / Delete) are gated on ROLE, not ownership.
-  // MRs are created through the shared integration token, so `owner` is the API
-  // user and never matches a real login — an owner-based gate hid the whole
-  // action bar. Drafts only appear in the requester's own views, and every
-  // delete is audit-logged with the acting user, so role-based gating is safe.
+  // Submit when BidSphere Status is Draft — ERP docstatus may already be 1 for
+  // recovered docs; submitMaterialRequestWorkflow handles both cases.
   const canSubmit =
-    isDraft && workflowStatus === "Draft" && canCreateMaterialRequest(role);
-  const isSubmitted = (mr.docstatus ?? 0) === 1;
+    isDraftWorkflow && canCreateMaterialRequest(role);
+  const isSubmitted = (mr.docstatus ?? 0) === 1 && !isDraftWorkflow;
   const procurementType = getMaterialRequestProcurementType(mr);
+  const requestMode = getMaterialRequestMode(mr);
   const canWarehouseAct =
     canReviewMaterialRequest(role) &&
     (workflowStatus === "Under Warehouse Review" ||
@@ -851,18 +856,13 @@ export default function MaterialRequestDetailPage() {
     mr && canCreateRfqFromMR(role) && canCreateRfqFromMaterialRequest(mr);
   // Edit is available on a Draft to the roles that can author MRs (Department
   // User, Admin).
+  // Edit/Delete only while the ERP document is still an unsubmitted draft.
   const canEditDraft =
-    isDraft && workflowStatus === "Draft" && canCreateMaterialRequest(role);
-  // Delete is offered on a Draft to Department User, Procurement, or Admin. It
-  // is blocked ONLY when an RFQ has already been created from this MR. Note:
-  // `material_request_type` defaults to "Purchase" for every requisition, so it
-  // is NOT evidence of a started purchase flow and must never block deletion —
-  // that previous check disabled the button for every draft. Downstream docs
-  // (RFQ / PO / Stock Entry) are re-verified on the server before removal.
-  const hasLinkedRfq = Boolean(mr.custom_linked_rfq);
+    isDraftDoc && isDraftWorkflow && canCreateMaterialRequest(role);
+  const hasLinkedRfq = Boolean(getLinkedRfqName(mr));
   const showDelete =
-    isDraft &&
-    workflowStatus === "Draft" &&
+    isDraftDoc &&
+    isDraftWorkflow &&
     canDeleteMaterialRequest(role, true);
   const deleteBlocked = hasLinkedRfq;
   const busy =
@@ -870,7 +870,6 @@ export default function MaterialRequestDetailPage() {
     checkStockMutation.isPending ||
     issueMutation.isPending ||
     completeMutation.isPending ||
-    forwardMutation.isPending ||
     rejectMutation.isPending ||
     adminApproveMutation.isPending ||
     adminRejectMutation.isPending ||
@@ -906,14 +905,14 @@ export default function MaterialRequestDetailPage() {
                 type="button"
                 disabled={busy}
                 onClick={() => submitMutation.mutate()}
-                className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white"
+                className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 disabled:opacity-60"
               >
                 {submitMutation.isPending ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
                   <Send className="h-4 w-4" />
                 )}
-                Submit
+                Submit Request
               </button>
             ) : null}
             {canAdminReview ? (
@@ -1005,6 +1004,7 @@ export default function MaterialRequestDetailPage() {
           {mr.name}
         </span>
         <ProcurementTypeBadge type={procurementType} />
+        <RequestModeBadge mode={requestMode} />
         {mr.custom_department ? (
           <>
             <span className="text-neutral-300">•</span>
@@ -1031,6 +1031,9 @@ export default function MaterialRequestDetailPage() {
             procurementType === "Direct"
               ? "procurementType.direct"
               : "procurementType.indirect",
+          ) },
+          { label: t("requestMode.label"), value: t(
+            requestMode === "New" ? "requestMode.new" : "requestMode.existing",
           ) },
           { label: "Priority", value: mr.custom_priority },
           { label: "Company", value: mr.company },
@@ -1060,6 +1063,8 @@ export default function MaterialRequestDetailPage() {
                 <th className="px-4 py-2 text-left">Item Code</th>
                 <th className="px-4 py-2 text-left">Item Name</th>
                 <th className="px-4 py-2 text-right">Requested</th>
+                <th className="px-4 py-2 text-left">Part Name</th>
+                <th className="px-4 py-2 text-left">Attachments</th>
                 {showStock ? (
                   <th className="px-4 py-2 text-right">Available</th>
                 ) : null}
@@ -1092,6 +1097,15 @@ export default function MaterialRequestDetailPage() {
                     </td>
                     <td className="px-4 py-2 text-right tabular-nums">
                       {it.requested} {it.uom}
+                    </td>
+                    <td className="px-4 py-2">
+                      <PartNameCell value={it.part_name} />
+                    </td>
+                    <td className="px-4 py-2">
+                      <Drawing2dCell
+                        url={it.drawing_2d_url}
+                        attachments={it.attachments}
+                      />
                     </td>
                     {showStock ? (
                       <td className="px-4 py-2 text-right tabular-nums text-neutral-600">
@@ -1127,7 +1141,7 @@ export default function MaterialRequestDetailPage() {
                 <tr>
                   <td
                     colSpan={
-                      (procurementInvolved ? 8 : 7) - (showStock ? 0 : 1)
+                      (procurementInvolved ? 11 : 10) - (showStock ? 0 : 1)
                     }
                     className="px-4 py-8 text-center text-neutral-500"
                   >
@@ -1217,15 +1231,13 @@ export default function MaterialRequestDetailPage() {
               <Package className="h-4 w-4" />
               Issue Material
             </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => forwardMutation.mutate()}
-              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white"
+            <Link
+              to={`/warehouse/material-requests/review/${encodeURIComponent(name)}`}
+              className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white no-underline"
             >
               <Truck className="h-4 w-4" />
-              Send to Procurement
-            </button>
+              Open Stock Decision
+            </Link>
             <button
               type="button"
               disabled={busy}

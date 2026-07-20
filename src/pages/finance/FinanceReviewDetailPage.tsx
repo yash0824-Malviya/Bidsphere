@@ -31,9 +31,7 @@ import {
 
 import { getRFQ, getSupplierQuotations } from "../../api/sourcing";
 import { getLegalDocsByRfq, type LegalDocumentSet } from "../../api/legalDocs";
-import {
-  FINANCE_DASHBOARD_METRICS_KEY,
-} from "../../api/financeWorkflow";
+import { invalidateApprovalWorkflow } from "../../api/approvalWorkflow";
 import { updateFinanceReviewStatus } from "../../api/financeReviews";
 import {
   getRfqBudgetCheckByCostCenter,
@@ -391,10 +389,8 @@ export default function FinanceReviewDetailPage() {
           action === "reject" ? actionReason.trim() : undefined
         );
         await legalDocQuery.refetch();
-        // Keep the Finance dashboard/list/history in sync with this decision.
-        void queryClient.invalidateQueries({ queryKey: ["finance-reviews-all"] });
-        void queryClient.invalidateQueries({ queryKey: ["finance-review-history"] });
-        void queryClient.invalidateQueries({ queryKey: [FINANCE_DASHBOARD_METRICS_KEY] });
+        // Refresh Legal + Finance queues/counters from the shared workflow.
+        invalidateApprovalWorkflow(queryClient);
         const labels = { approve: "budget approved", reject: "rejected" };
         toast.success(`RFQ ${decodedId} ${labels[action]}`);
         setSubmitted(true);

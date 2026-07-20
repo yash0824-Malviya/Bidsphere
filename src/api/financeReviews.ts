@@ -1,31 +1,32 @@
 /**
  * Finance Reviews API service.
  *
- * Data source: ERPNext "Legal Document Review" DocType — the SAME record
- * created for Legal Review and updated in place with `finance_*` fields.
- * There is no separate Finance DocType and no dependency on the legacy
- * `Request for Quotation` custom fields (`custom_legal_status`,
- * `custom_finance_status`) — ERPNext's `Legal Document Review` is the
- * single source of truth for the entire Legal → Finance → PO workflow.
+ * Data source: the shared approval workflow (`approvalWorkflow.ts`), which
+ * projects ERPNext "Legal Document Review" rows — the SAME records Legal
+ * uses. There is no separate Finance DocType and no mock/demo arrays.
  *
- * The `FinanceReviewItem` shape returned here is unchanged from before this
- * migration so downstream consumers (FinanceDashboard, FinanceReviewsPage,
- * FinanceReviewHistoryTable, financeWorkflow KPIs) did not need to change.
+ * Filters are stage-based:
+ *   Pending Finance Review → Workflow Stage == Finance Review
+ *   Budget Approved        → Workflow Stage == Completed | Procurement
+ *   Rejected               → Workflow Stage == Rejected
  */
 import {
-  getAllFinanceReviews,
-  getFinancePendingReviews,
-  getLegalDocsByFinanceStatus,
+  filterByWorkflowStage,
+  filterFinancePendingQueue,
+  getApprovalWorkflowRecords,
+  type ApprovalWorkflowRecord,
+} from "./approvalWorkflow";
+import {
   getLegalDocsByRfq,
   submitFinanceReview as submitFinanceReviewApi,
   resubmitFinanceReview as resubmitFinanceReviewApi,
-  type LegalDocumentSet,
 } from "./legalDocs";
 import type {
   FinanceReviewStatus,
   FinanceReviewItem,
   FinanceComment,
   LegalReviewStatus,
+  RFQApprovalStep,
 } from "../types/erpnext";
 
 export type FinanceFilterStatus = FinanceReviewStatus | "All";
@@ -51,28 +52,41 @@ export interface FinanceReviewQueryResult {
 
 const LOG_TAG = "[FinanceReviews]";
 
-function mapLegalStatus(reviewStatus: LegalDocumentSet["review_status"]): LegalReviewStatus {
-  if (reviewStatus === "Approved") return "Approved";
-  if (reviewStatus === "Rejected") return "Rejected";
+function mapLegalStatus(status: ApprovalWorkflowRecord["legalStatus"]): LegalReviewStatus {
+  if (status === "Approved") return "Approved";
+  if (status === "Rejected") return "Rejected";
   return "Pending Legal Review";
 }
 
-function mapFinanceStatus(financeStatus?: LegalDocumentSet["finance_status"]): FinanceReviewStatus {
-  if (financeStatus === "Approved") return "Budget Approved";
-  if (financeStatus === "Rejected") return "Rejected";
+function mapFinanceStatus(record: ApprovalWorkflowRecord): FinanceReviewStatus {
+  if (record.workflowStage === "Completed" || record.workflowStage === "Procurement") {
+    return "Budget Approved";
+  }
+  if (record.workflowStage === "Rejected" && record.financeStatus === "Rejected") {
+    return "Rejected";
+  }
+  if (record.financeStatus === "Approved") return "Budget Approved";
+  if (record.financeStatus === "Rejected") return "Rejected";
   return "Pending Finance Review";
 }
 
-function deriveWorkflowStep(doc: LegalDocumentSet): FinanceReviewItem["workflow_status"] {
-  if (doc.review_status === "Rejected") return "Legal Rejected";
-  if (doc.finance_status === "Approved") return "Approved for PO";
-  if (doc.finance_status === "Rejected") return "Finance Rejected";
-  if (doc.review_status === "Approved") return "Pending Finance Review";
-  return "Pending Legal Review";
+function deriveWorkflowStep(record: ApprovalWorkflowRecord): RFQApprovalStep {
+  switch (record.workflowStage) {
+    case "Rejected":
+      return record.financeStatus === "Rejected" ? "Finance Rejected" : "Legal Rejected";
+    case "Completed":
+    case "Procurement":
+      return "Approved for PO";
+    case "Finance Review":
+      return "Pending Finance Review";
+    default:
+      return "Pending Legal Review";
+  }
 }
 
-function toFinanceItem(doc: LegalDocumentSet): FinanceReviewItem {
-  const financeStatus = mapFinanceStatus(doc.finance_status);
+function toFinanceItem(record: ApprovalWorkflowRecord): FinanceReviewItem {
+  const financeStatus = mapFinanceStatus(record);
+  const doc = record.source;
   const financeComments: FinanceComment[] = doc.finance_comments
     ? [
         {
@@ -85,17 +99,17 @@ function toFinanceItem(doc: LegalDocumentSet): FinanceReviewItem {
     : [];
 
   return {
-    rfq_name: doc.rfq_name ?? doc.name ?? "",
-    legal_document_name: doc.name,
-    supplier: doc.supplier,
-    company: doc.company ?? "",
-    rfq_value: doc.grand_total ?? 0,
-    submission_date: doc.submission_date,
-    created_date: doc.submission_date,
-    created_by: doc.procurement_manager,
-    legal_status: mapLegalStatus(doc.review_status),
+    rfq_name: record.rfqNumber,
+    legal_document_name: record.id,
+    supplier: record.supplier,
+    company: record.company ?? "",
+    rfq_value: record.grandTotal,
+    submission_date: record.createdDate,
+    created_date: record.createdDate,
+    created_by: record.procurementManager,
+    legal_status: mapLegalStatus(record.legalStatus),
     legal_review_date: doc.approved_on,
-    workflow_status: deriveWorkflowStep(doc),
+    workflow_status: deriveWorkflowStep(record),
     finance_status: financeStatus,
     finance_reviewer: doc.finance_approved_by,
     assigned_finance_manager: doc.finance_approved_by,
@@ -105,10 +119,18 @@ function toFinanceItem(doc: LegalDocumentSet): FinanceReviewItem {
   };
 }
 
+/** Records that have entered (or finished) the Finance funnel. */
+function isFinanceFunnel(record: ApprovalWorkflowRecord): boolean {
+  return (
+    record.workflowStage === "Finance Review" ||
+    record.workflowStage === "Completed" ||
+    record.workflowStage === "Procurement" ||
+    (record.workflowStage === "Rejected" && record.legalStatus === "Approved")
+  );
+}
+
 /**
- * Fetch ALL finance review records from ERPNext's Legal Document Review —
- * every record that has ever entered the Finance funnel (i.e. Legal has
- * approved it, so `finance_status` is set).
+ * Fetch ALL finance-funnel records from the shared approval workflow.
  */
 export async function fetchAllFinanceReviewRecords(): Promise<FinanceReviewQueryResult> {
   const diagnostics: FinanceReviewFetchDiagnostics = {
@@ -117,8 +139,8 @@ export async function fetchAllFinanceReviewRecords(): Promise<FinanceReviewQuery
   };
 
   try {
-    const rows = await getAllFinanceReviews(200);
-    const items = rows.map(toFinanceItem);
+    const workflow = await getApprovalWorkflowRecords();
+    const items = workflow.filter(isFinanceFunnel).map(toFinanceItem);
 
     diagnostics.recordsReturned = items.length;
     if (items.length === 0) {
@@ -127,7 +149,7 @@ export async function fetchAllFinanceReviewRecords(): Promise<FinanceReviewQuery
     }
 
     // eslint-disable-next-line no-console
-    console.log(LOG_TAG, "ERPNext response summary:", {
+    console.log(LOG_TAG, "Workflow response summary:", {
       recordsReturned: diagnostics.recordsReturned,
     });
 
@@ -140,15 +162,14 @@ export async function fetchAllFinanceReviewRecords(): Promise<FinanceReviewQuery
     }
     diagnostics.emptyReason = `Could not load Finance Reviews from ERPNext: ${msg}`;
     // eslint-disable-next-line no-console
-    console.error(LOG_TAG, "ERPNext fetch failed:", msg);
+    console.error(LOG_TAG, "Workflow fetch failed:", msg);
     return { items: [], diagnostics };
   }
 }
 
 /**
- * Returns finance review records from ERPNext, optionally filtered by
- * status. Each status uses its own dedicated ERPNext query when possible so
- * KPI counts can never drift from the records actually displayed.
+ * Returns finance review records from the shared workflow, optionally
+ * filtered by status / stage.
  */
 export async function getFinanceReviews(
   params?: FinanceReviewListParams
@@ -168,15 +189,24 @@ export async function getFinanceReviews(
   };
 
   try {
-    const rows =
-      filter === "Pending Finance Review"
-        ? await getFinancePendingReviews(params?.limit ?? 200)
-        : await getLegalDocsByFinanceStatus({
-            status: filter === "Budget Approved" ? "Approved" : "Rejected",
-            limit: params?.limit,
-          });
+    const workflow = await getApprovalWorkflowRecords();
+    let stageRecords: ApprovalWorkflowRecord[];
 
-    let items = rows.map(toFinanceItem);
+    if (filter === "Pending Finance Review") {
+      stageRecords = filterFinancePendingQueue(workflow);
+    } else if (filter === "Budget Approved") {
+      stageRecords = [
+        ...filterByWorkflowStage(workflow, "Completed"),
+        ...filterByWorkflowStage(workflow, "Procurement"),
+      ];
+    } else {
+      // Rejected — finance funnel only (legal-rejected never enters Finance)
+      stageRecords = filterByWorkflowStage(workflow, "Rejected").filter(
+        (r) => r.legalStatus === "Approved" || r.financeStatus === "Rejected",
+      );
+    }
+
+    let items = stageRecords.map(toFinanceItem);
     if (params?.limit && items.length > params.limit) items = items.slice(0, params.limit);
 
     diagnostics.recordsReturned = items.length;
@@ -185,7 +215,7 @@ export async function getFinanceReviews(
     }
 
     // eslint-disable-next-line no-console
-    console.log(LOG_TAG, "Filtered response:", { filter, count: items.length });
+    console.log(LOG_TAG, "Filtered workflow response:", { filter, count: items.length });
 
     return { items, diagnostics };
   } catch (err) {
@@ -198,12 +228,16 @@ export async function getFinanceReviews(
 
 /** Latest approved or rejected RFQs for dashboard/history. */
 export async function getFinanceReviewHistory(limit = 10): Promise<FinanceReviewItem[]> {
-  const [approved, rejected] = await Promise.all([
-    getLegalDocsByFinanceStatus({ status: "Approved", limit }),
-    getLegalDocsByFinanceStatus({ status: "Rejected", limit }),
-  ]);
+  const workflow = await getApprovalWorkflowRecords();
+  const decided = [
+    ...filterByWorkflowStage(workflow, "Completed"),
+    ...filterByWorkflowStage(workflow, "Procurement"),
+    ...filterByWorkflowStage(workflow, "Rejected").filter(
+      (r) => r.legalStatus === "Approved" || r.financeStatus === "Rejected",
+    ),
+  ];
 
-  return [...approved, ...rejected]
+  return decided
     .map(toFinanceItem)
     .sort((a, b) => (b.finance_review_date ?? "").localeCompare(a.finance_review_date ?? ""))
     .slice(0, limit);

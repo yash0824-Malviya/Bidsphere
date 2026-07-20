@@ -14,6 +14,11 @@ import {
   getExactCount,
   type Filter,
 } from "./erpnext";
+import { timedDashApi } from "./dashboardPerf";
+import {
+  fetchProcurementTruthCounts,
+  logDashboardWidget,
+} from "./procurementDashboardTruth";
 
 const AGGREGATE_LIMIT = 5000;
 
@@ -632,30 +637,27 @@ async function fetchQuotationTotals(): Promise<number[]> {
  * Never throws — each source degrades to zero via Promise.allSettled.
  */
 export async function fetchProcurementSummary(): Promise<ProcurementSummary> {
+  // Align supplier / quotation / PO counts with executive KPI truth filters.
   const [
     currencyRes,
     rfqRes,
     quoteTotalsRes,
-    quotationCountRes,
-    supplierCountRes,
-    poCountRes,
+    truthRes,
   ] = await Promise.allSettled([
     fetchDefaultCurrency(),
     fetchRfqSummaryRows(),
     fetchQuotationTotals(),
-    getExactCount("Supplier Quotation", [["docstatus", "!=", 2]]),
-    getExactCount("Supplier", [["disabled", "=", 0]]),
-    getExactCount("Purchase Order", [["docstatus", "!=", 2]]),
+    fetchProcurementTruthCounts(),
   ]);
 
   const currency = currencyRes.status === "fulfilled" ? currencyRes.value : "USD";
   const rfqRows = rfqRes.status === "fulfilled" ? rfqRes.value : [];
   const quoteTotals = quoteTotalsRes.status === "fulfilled" ? quoteTotalsRes.value : [];
-  const totalQuotations =
-    quotationCountRes.status === "fulfilled" ? quotationCountRes.value : 0;
-  const activeSuppliers =
-    supplierCountRes.status === "fulfilled" ? supplierCountRes.value : 0;
-  const totalPos = poCountRes.status === "fulfilled" ? poCountRes.value : 0;
+  const truth =
+    truthRes.status === "fulfilled" ? truthRes.value : null;
+  const totalQuotations = truth?.pendingQuotations ?? 0;
+  const activeSuppliers = truth?.activeSuppliers ?? 0;
+  const totalPos = truth?.submittedPurchaseOrders ?? 0;
 
   const funnel = { open: 0, underReview: 0, approved: 0, completed: 0 };
   let totalRfqs = 0;
@@ -938,64 +940,186 @@ export interface ProcurementDashboardKpis {
 
 export async function fetchProcurementDashboardKpis(): Promise<ProcurementDashboardKpis> {
   const t0 = performance.now();
-  const timed = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
-    const start = performance.now();
-    try {
-      return await fn();
-    } finally {
-      if (import.meta.env.DEV) {
-        console.log(
-          `[Dashboard] API ${label} ${Math.round(performance.now() - start)}ms`,
-        );
-      }
-    }
-  };
 
-  // All KPI sources start together — never await one before the next.
-  const results = await Promise.allSettled([
-    timed("open RFQs count", () =>
-      getExactCount("Request for Quotation", [
-        ["status", "in", ["Submitted", "Open"]],
-      ]),
+  // Counts come ONLY from procurementDashboardTruth (shared with analytics).
+  const [truthRes, spendRes] = await Promise.allSettled([
+    timedDashApi("Truth counts (executive KPIs)", () =>
+      fetchProcurementTruthCounts(),
     ),
-    timed("active suppliers count", () =>
-      getExactCount("Supplier", [["disabled", "=", 0]]),
-    ),
-    timed("pending quotations count", () =>
-      getExactCount("Supplier Quotation", [
-        ["status", "not in", ["Ordered", "Expired", "Lost", "Cancelled"]],
-      ]),
-    ),
-    timed("pending POs count", () =>
-      getExactCount("Purchase Order", [["docstatus", "=", 0]]),
-    ),
-    timed("YTD spend summary", () => fetchDashboardSpendSummary()),
+    timedDashApi("Spend Analytics (YTD)", () => fetchDashboardSpendSummary()),
   ]);
 
-  const num = (i: number) =>
-    results[i].status === "fulfilled" ? (results[i] as PromiseFulfilledResult<number>).value : 0;
+  const truth =
+    truthRes.status === "fulfilled"
+      ? truthRes.value
+      : {
+          openRfqs: 0,
+          activeSuppliers: 0,
+          pendingQuotations: 0,
+          pendingPurchaseOrders: 0,
+        };
   const spend =
-    results[4].status === "fulfilled"
-      ? (results[4] as PromiseFulfilledResult<DashboardSpendSummary>).value
+    spendRes.status === "fulfilled"
+      ? spendRes.value
       : { ytdSpend: 0, currency: "USD" };
 
   const snapshot: ProcurementDashboardKpis = {
-    openRfqs: num(0),
-    activeSuppliers: num(1),
-    pendingQuotations: num(2),
-    pendingPurchaseOrders: num(3),
+    openRfqs: truth.openRfqs,
+    activeSuppliers: truth.activeSuppliers,
+    pendingQuotations: truth.pendingQuotations,
+    pendingPurchaseOrders: truth.pendingPurchaseOrders,
     ytdSpend: spend.ytdSpend,
     currency: spend.currency,
   };
 
+  logDashboardWidget("1. Open RFQs", {
+    value: snapshot.openRfqs,
+    doctype: "Request for Quotation",
+    filters: [["status", "in", ["Submitted", "Open"]]],
+    api: "frappe.client.get_count",
+  });
+  logDashboardWidget("2. Pending Quotations", {
+    value: snapshot.pendingQuotations,
+    doctype: "Supplier Quotation",
+    filters: [
+      ["status", "not in", ["Ordered", "Expired", "Lost", "Cancelled"]],
+    ],
+    api: "frappe.client.get_count",
+  });
+  logDashboardWidget("3. Pending Purchase Orders", {
+    value: snapshot.pendingPurchaseOrders,
+    doctype: "Purchase Order",
+    filters: [["docstatus", "=", 0]],
+    api: "frappe.client.get_count",
+  });
+  logDashboardWidget("4. Active Suppliers", {
+    value: snapshot.activeSuppliers,
+    doctype: "Supplier",
+    filters: [["disabled", "=", 0]],
+    api: "frappe.client.get_count",
+  });
+  logDashboardWidget("Total Spend (YTD)", {
+    value: snapshot.ytdSpend,
+    currency: snapshot.currency,
+    doctype: "Purchase Invoice",
+  });
+
   if (import.meta.env.DEV) {
     console.log(
-      `[Dashboard] procurement KPIs total ${Math.round(performance.now() - t0)}ms`,
+      `[Dashboard Perf] KPI cards total ${Math.round(performance.now() - t0)}ms`,
       snapshot,
     );
   }
 
   return snapshot;
+}
+
+/** Cap for procurement chart aggregates — 12 months of trend, not full ledger. */
+const PROCUREMENT_CHART_LIMIT = 1500;
+
+/**
+ * Slim analytics bundle for the Procurement Dashboard.
+ * Skips invoice line items, upcoming deliveries, and payment history that the
+ * procurement UI never renders — those remain in `fetchDashboardAnalytics`
+ * for Admin.
+ */
+export async function fetchProcurementSecondaryAnalytics(): Promise<
+  Omit<DashboardFetchResult, "counts">
+> {
+  const t0 = performance.now();
+  const trendStart = twelveMonthsAgo();
+  const ytd = dashboardYtdStart();
+
+  const results = await Promise.allSettled([
+    timedDashApi("Charts · invoices (12mo)", () =>
+      getPurchaseInvoices({
+        filters: [
+          ["posting_date", ">=", trendStart],
+          ["docstatus", "=", 1],
+        ] as Filter[],
+        fields: [
+          "name",
+          "supplier",
+          "posting_date",
+          "grand_total",
+          "outstanding_amount",
+          "currency",
+          "status",
+        ],
+        limit_page_length: PROCUREMENT_CHART_LIMIT,
+        order_by: "posting_date desc",
+      }).then((rows) => rows as DashboardInvoiceLite[]),
+    ),
+    timedDashApi("Charts · PO samples", () =>
+      getPurchaseOrders({
+        filters: [["docstatus", "=", 1]] as Filter[],
+        fields: [
+          "name",
+          "supplier",
+          "status",
+          "transaction_date",
+          "schedule_date",
+          "grand_total",
+          "currency",
+          "per_received",
+          "per_billed",
+        ],
+        limit_page_length: PROCUREMENT_CHART_LIMIT,
+        order_by: "transaction_date desc",
+      }),
+    ),
+    timedDashApi("Recent RFQs", () =>
+      apiGet<DashboardRfqLite[]>("/api/resource/Request for Quotation", {
+        params: {
+          fields: JSON.stringify([
+            "name",
+            "status",
+            "modified",
+            "creation",
+            "owner",
+          ]),
+          limit_page_length: 10,
+          order_by: "modified desc",
+        },
+      }),
+    ),
+    timedDashApi("Recent Purchase Orders", () =>
+      getPurchaseOrders({
+        fields: [
+          "name",
+          "supplier",
+          "status",
+          "transaction_date",
+          "modified",
+          "grand_total",
+          "currency",
+          "schedule_date",
+          "per_received",
+        ],
+        limit_page_length: 10,
+        order_by: "creation desc",
+      }),
+    ),
+  ]);
+
+  if (import.meta.env.DEV) {
+    console.log(
+      `[Dashboard Perf] Charts bundle total ${Math.round(performance.now() - t0)}ms`,
+    );
+  }
+
+  return {
+    invoices: settled(results[0], [] as DashboardInvoiceLite[]),
+    invoiceItems: [],
+    poSamples: settled(results[1], [] as DashboardPoLite[]),
+    recentRfqs: settled(results[2], [] as DashboardRfqLite[]),
+    recentPos: settled(results[3], [] as DashboardPoLite[]),
+    recentInvoices: [],
+    upcomingDeliveries: [],
+    recentPayments: [],
+    ytdStart: ytd,
+    trendStart,
+  };
 }
 
 export async function fetchDashboardAnalytics(): Promise<
@@ -1006,77 +1130,91 @@ export async function fetchDashboardAnalytics(): Promise<
   const ytd = dashboardYtdStart();
 
   const results = await Promise.allSettled([
-    fetchInvoicesForAggregation(trendStart),
-    fetchInvoiceItems(),
-    getPurchaseOrders({
-      filters: [["docstatus", "=", 1]] as Filter[],
-      fields: [
-        "name",
-        "supplier",
-        "status",
-        "transaction_date",
-        "schedule_date",
-        "grand_total",
-        "currency",
-        "per_received",
-        "per_billed",
-      ],
-      limit_page_length: AGGREGATE_LIMIT,
-      order_by: "transaction_date desc",
-    }),
-    apiGet<DashboardRfqLite[]>("/api/resource/Request for Quotation", {
-      params: {
-        fields: JSON.stringify([
+    timedDashApi("Admin Charts · invoices", () =>
+      fetchInvoicesForAggregation(trendStart),
+    ),
+    timedDashApi("Admin Charts · invoice items", () => fetchInvoiceItems()),
+    timedDashApi("Admin Charts · PO samples", () =>
+      getPurchaseOrders({
+        filters: [["docstatus", "=", 1]] as Filter[],
+        fields: [
           "name",
+          "supplier",
           "status",
+          "transaction_date",
+          "schedule_date",
+          "grand_total",
+          "currency",
+          "per_received",
+          "per_billed",
+        ],
+        limit_page_length: AGGREGATE_LIMIT,
+        order_by: "transaction_date desc",
+      }),
+    ),
+    timedDashApi("Admin · Recent RFQs", () =>
+      apiGet<DashboardRfqLite[]>("/api/resource/Request for Quotation", {
+        params: {
+          fields: JSON.stringify([
+            "name",
+            "status",
+            "modified",
+            "creation",
+            "owner",
+          ]),
+          limit_page_length: 10,
+          order_by: "modified desc",
+        },
+      }),
+    ),
+    timedDashApi("Admin · Recent POs", () =>
+      getPurchaseOrders({
+        fields: [
+          "name",
+          "supplier",
+          "status",
+          "transaction_date",
           "modified",
-          "creation",
-          "owner",
-        ]),
+          "grand_total",
+          "currency",
+          "schedule_date",
+          "per_received",
+        ],
         limit_page_length: 10,
+        order_by: "creation desc",
+      }),
+    ),
+    timedDashApi("Admin · Recent invoices", () =>
+      getPurchaseInvoices({
+        filters: [["docstatus", "=", 1]] as Filter[],
+        fields: [
+          "name",
+          "supplier",
+          "posting_date",
+          "modified",
+          "grand_total",
+          "outstanding_amount",
+          "currency",
+          "status",
+        ],
+        limit_page_length: 50,
         order_by: "modified desc",
-      },
-    }),
-    getPurchaseOrders({
-      fields: [
-        "name",
-        "supplier",
-        "status",
-        "transaction_date",
-        "modified",
-        "grand_total",
-        "currency",
-        "schedule_date",
-        "per_received",
-      ],
-      limit_page_length: 10,
-      order_by: "creation desc",
-    }),
-    getPurchaseInvoices({
-      filters: [["docstatus", "=", 1]] as Filter[],
-      fields: [
-        "name",
-        "supplier",
-        "posting_date",
-        "modified",
-        "grand_total",
-        "outstanding_amount",
-        "currency",
-        "status",
-      ],
-      limit_page_length: 50,
-      order_by: "modified desc",
-    }),
-    fetchUpcomingDeliveries(),
-    getPaymentEntries({
-      filters: [["docstatus", "=", 1]] as Filter[],
-      limit_page_length: 10,
-    }),
+      }),
+    ),
+    timedDashApi("Admin · Upcoming deliveries", () =>
+      fetchUpcomingDeliveries(),
+    ),
+    timedDashApi("Admin · Recent payments", () =>
+      getPaymentEntries({
+        filters: [["docstatus", "=", 1]] as Filter[],
+        limit_page_length: 10,
+      }),
+    ),
   ]);
 
   if (import.meta.env.DEV) {
     console.log(
-      `[Dashboard] analytics bundle ${Math.round(performance.now() - t0)}ms`,
+      `[Dashboard Perf] analytics bundle ${Math.round(performance.now() - t0)}ms`,
     );
   }
 

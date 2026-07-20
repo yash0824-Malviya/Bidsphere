@@ -35,8 +35,8 @@ function ChartCard({ title, subtitle, hasData, className, children }: ChartCardP
         {hasData ? (
           children
         ) : (
-          <div className="grid h-[220px] place-items-center text-sm text-neutral-400">
-            No data available
+          <div className="grid h-[220px] place-items-center px-4 text-center text-sm text-neutral-400">
+            Waiting for completed data
           </div>
         )}
       </div>
@@ -160,18 +160,35 @@ function ProcurementAnalyticsCharts({ data, loading, only }: Props) {
       </ChartCard>
     ),
     rfqTurnaround: (cls) => (
-      <ChartCard title="RFQ Turnaround Trend" subtitle="Average days to close" hasData={turnHas} className={cls}>
+      <ChartCard
+        title="RFQ Trend"
+        subtitle="Average turnaround days · completed RFQs only"
+        hasData={turnHas}
+        className={cls}
+      >
         <div className="h-[220px]">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={c.rfqTurnaround} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
+            <LineChart
+              data={c.rfqTurnaround.filter((p) => p.days > 0)}
+              margin={{ top: 4, right: 8, left: -8, bottom: 0 }}
+            >
               <CartesianGrid stroke="#f1f5f9" vertical={false} />
               <XAxis dataKey="month" {...AXIS} interval="preserveStartEnd" />
               <YAxis {...AXIS} width={30} />
               <Tooltip
                 contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                formatter={(v) => `${typeof v === "number" ? v : 0} days`}
+                formatter={(v) =>
+                  `${typeof v === "number" && v > 0 ? v : "—"} days`
+                }
               />
-              <Line type="monotone" dataKey="days" name="Days" stroke="#f59e0b" strokeWidth={2} dot={{ r: 2 }} />
+              <Line
+                type="monotone"
+                dataKey="days"
+                name="Days"
+                stroke="#f59e0b"
+                strokeWidth={2}
+                dot={{ r: 2 }}
+              />
             </LineChart>
           </ResponsiveContainer>
         </div>

@@ -21,8 +21,10 @@ import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
 import PaginationBar from "../../components/PaginationBar";
 import { TableSkeleton } from "../../components/Skeleton";
+import ExportButton from "../../components/export/ExportButton";
 import { usePagination } from "../../hooks/usePagination";
 import { formatCurrencyIn, formatDateTime } from "../../utils/format";
+import type { ExportColumn } from "../../utils/export";
 
 const LIST_STALE = 60_000;
 
@@ -51,11 +53,62 @@ export default function ReverseBiddingListPage() {
   const rows = useMemo(() => listQuery.data?.data ?? [], [listQuery.data]);
   const stats = statsQuery.data;
 
+  const exportColumns = useMemo<ExportColumn<ReverseBidding>[]>(
+    () => [
+      { id: "name", label: "Auction ID", accessor: (r) => r.name },
+      { id: "rfq", label: "RFQ", accessor: (r) => r.rfq },
+      {
+        id: "status",
+        label: "Status",
+        type: "status",
+        accessor: (r) => deriveAuctionStatus(r),
+      },
+      {
+        id: "start",
+        label: "Start",
+        type: "date",
+        accessor: (r) => r.start_date_time,
+      },
+      {
+        id: "end",
+        label: "End",
+        type: "date",
+        accessor: (r) => r.end_date_time,
+      },
+      {
+        id: "starting_price",
+        label: "Starting Price",
+        type: "currency",
+        accessor: (r) => r.starting_price,
+      },
+      {
+        id: "lowest_bid",
+        label: "Lowest Bid",
+        type: "currency",
+        accessor: (r) => r.lowest_bid,
+      },
+      {
+        id: "winning_supplier",
+        label: "Winning Supplier",
+        accessor: (r) => r.winning_supplier,
+      },
+    ],
+    [],
+  );
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Reverse Bidding"
         description="Run live reverse auctions with AI-shortlisted suppliers."
+        actions={
+          <ExportButton
+            module="Reverse Bidding"
+            filenamePrefix="Reverse_Bidding"
+            columns={exportColumns}
+            rows={rows}
+          />
+        }
       />
 
       {/* Dashboard cards */}

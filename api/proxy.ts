@@ -1,4 +1,10 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { sanitizeErpPayloadDates } from "./erpDateSanitize.js";
+import {
+  enforcePayablesMutationRbac,
+  RbacError,
+  requireAnyAuth,
+} from "./rbacAuth.js";
 
 console.log("[erpnext-proxy] module loaded");
 
@@ -97,9 +103,18 @@ function upstreamHeaders(req: VercelRequest): Record<string, string> {
 function serializeBody(req: VercelRequest, method: string): string | undefined {
   if (method === "GET" || method === "HEAD") return undefined;
 
-  if (typeof req.body === "string") return req.body;
+  // Convert ISO-8601 date/datetime strings before they reach MariaDB
+  // (OperationalError 1292). Applies to every mutating ERP proxy write.
+  if (typeof req.body === "string") {
+    try {
+      const parsed = JSON.parse(req.body) as unknown;
+      return JSON.stringify(sanitizeErpPayloadDates(parsed));
+    } catch {
+      return req.body;
+    }
+  }
   if (req.body !== undefined && req.body !== null) {
-    return JSON.stringify(req.body);
+    return JSON.stringify(sanitizeErpPayloadDates(req.body));
   }
   return undefined;
 }
@@ -151,6 +166,47 @@ export default async function handler(
     return;
   }
 
+  // RBAC: mutating ERP proxy calls require a BidSphere access token.
+  // GET/HEAD may proceed without one so pre-login pages (e.g. supplier
+  // company picker) still work; custom APIs enforce stricter role checks.
+  const method = (req.method ?? "GET").toUpperCase();
+  const isMutation = !["GET", "HEAD", "OPTIONS"].includes(method);
+  if (isMutation) {
+    try {
+      const principal = requireAnyAuth(
+        req.headers as Record<string, unknown>,
+        typeof req.body === "object" && req.body
+          ? (req.body as Record<string, unknown>)
+          : undefined,
+        req.query as Record<string, unknown>,
+      );
+      // Finance payables: invoice / payment / voucher mutations are role-gated.
+      enforcePayablesMutationRbac(principal, apiPath, method, req.body);
+    } catch (err) {
+      if (err instanceof RbacError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      res.status(401).json({ error: "Not authenticated." });
+      return;
+    }
+  } else {
+    // Prefer validating token when present (rejects expired/forged tokens)
+    const headerToken =
+      (req.headers["x-bidsphere-access-token"] as string | undefined) ||
+      (req.headers["X-Bidsphere-Access-Token"] as string | undefined);
+    if (headerToken) {
+      try {
+        requireAnyAuth(req.headers as Record<string, unknown>);
+      } catch (err) {
+        if (err instanceof RbacError) {
+          res.status(err.status).json({ error: err.message });
+          return;
+        }
+      }
+    }
+  }
+
   let targetUrl: string;
   try {
     if (!apiPath) {
@@ -167,7 +223,6 @@ export default async function handler(
     return;
   }
 
-  const method = (req.method ?? "GET").toUpperCase();
   const body = serializeBody(req, method);
 
   if (

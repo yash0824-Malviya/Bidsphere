@@ -26,6 +26,7 @@ export type NotificationModule =
   | "Quotation Status"
   | "Invoice Status"
   | "Payment Status"
+  | "Live Auction"
   | "SLA";
 
 export type NotificationTargetRole = AppRole | "supplier";
@@ -102,6 +103,7 @@ export const SUPPLIER_ALLOWED_MODULES = new Set<NotificationModule>([
   "Purchase Order",
   "Invoice Status",
   "Payment Status",
+  "Live Auction",
 ]);
 
 export const FINANCE_MODULES = new Set<NotificationModule>([

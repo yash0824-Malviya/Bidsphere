@@ -401,7 +401,7 @@
     "awarded": "Attribué"
   },
   "procurementType": {
-    "label": "Type d'approvisionnement",
+    "label": "Type de demande",
     "direct": "Direct",
     "indirect": "Indirect",
     "all": "Tous",
@@ -409,7 +409,16 @@
     "indirectProcurement": "Approvisionnement indirect",
     "helpDirect": "Matériaux de fabrication / matières premières — acheminés vers l'entrepôt pour vérification des stocks.",
     "helpIndirect": "Articles de bureau / support — acheminés vers l'administration pour approbation.",
-    "filterLabel": "Type d'approvisionnement"
+    "filterLabel": "Type de demande"
+  },
+  "requestMode": {
+    "label": "Mode de demande",
+    "existing": "Existant",
+    "new": "Nouveau",
+    "all": "Tous",
+    "filterLabel": "Mode de demande",
+    "helpExisting": "L'article existe déjà dans le catalogue / Item Master.",
+    "helpNew": "L'article n'existe pas encore — saisie manuelle ; un article provisoire est créé à la soumission."
   },
   "adminReview": {
     "title": "Demandes indirectes en attente",

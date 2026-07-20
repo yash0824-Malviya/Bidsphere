@@ -146,6 +146,7 @@ async function getList<T>(
   options: {
     fields?: string[];
     filters?: unknown[] | Record<string, unknown>;
+    or_filters?: unknown[];
     order_by?: string;
     limit_page_length?: number;
     limit_start?: number;
@@ -157,6 +158,9 @@ async function getList<T>(
   if (options.fields) params.fields = JSON.stringify(options.fields);
   if (options.filters !== undefined)
     params.filters = JSON.stringify(options.filters);
+  if (options.or_filters !== undefined && options.or_filters.length > 0) {
+    params.or_filters = JSON.stringify(options.or_filters);
+  }
   if (options.order_by) params.order_by = options.order_by;
   if (options.limit_page_length !== undefined)
     params.limit_page_length = options.limit_page_length;
@@ -174,7 +178,10 @@ async function getList<T>(
 /*  Request for Quotation                                                     */
 /* -------------------------------------------------------------------------- */
 
-/** Fields that every ERPNext install allows in an RFQ list query. */
+/**
+ * Always-permitted RFQ list fields. Do not add custom_* here — many ERPNext
+ * sites reject them with HTTP 417 "Field not permitted in query".
+ */
 const SAFE_RFQ_FIELDS = ["name", "status", "modified", "owner"] as const;
 
 export interface RFQListRow {
@@ -205,8 +212,16 @@ export async function getRFQsPaged(options: {
   pageSize: number;
   order_by?: string;
   filters?: Filter[];
+  /** OR group (e.g. search across RFQ name / MR / supplier). */
+  or_filters?: Filter[];
 }): Promise<PagedListResult<RFQListRow>> {
-  const { page, pageSize, order_by = "modified desc, name desc", filters } = options;
+  const {
+    page,
+    pageSize,
+    order_by = "modified desc, name desc",
+    filters,
+    or_filters,
+  } = options;
   const safePage = Math.max(1, Math.floor(page) || 1);
   const safePageSize = Math.max(1, Math.floor(pageSize) || 10);
   const limit_start = (safePage - 1) * safePageSize;
@@ -215,11 +230,12 @@ export async function getRFQsPaged(options: {
     getList<RFQListRow>(RFQ_DOCTYPE, {
       fields: [...SAFE_RFQ_FIELDS],
       filters,
+      or_filters,
       order_by,
       limit_start,
       limit_page_length: safePageSize,
     }),
-    getExactCount(RFQ_DOCTYPE, filters),
+    getExactCount(RFQ_DOCTYPE, filters, or_filters),
   ]);
 
   const total_pages = Math.max(1, Math.ceil(total_records / safePageSize));
@@ -365,6 +381,10 @@ export interface CreateRFQItemInput {
   uom?: string;
   /** Optional schedule date per row. Defaults to the RFQ's transaction_date. */
   schedule_date?: string;
+  /** Optional engineering docs carried from Material Request Item. */
+  custom_part_name?: string;
+  custom_2d_drawing?: string;
+  custom_engineering_attachments?: string;
 }
 
 export interface CreateRFQSupplierInput {
@@ -439,7 +459,7 @@ export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
     items: data.items.map((item) => {
       const qty = typeof item.qty === "number" ? item.qty : parseFloat(item.qty);
       const uom = item.uom || "Nos";
-      return {
+      const row: Record<string, unknown> = {
         doctype: RFQ_ITEM_DOCTYPE,
         item_code: item.item_code,
         item_name: item.item_name || item.item_code,
@@ -453,6 +473,17 @@ export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
           ? assertERPNextDate(item.schedule_date, "schedule_date")
           : transactionDate,
       };
+      if (item.custom_part_name?.trim()) {
+        row.custom_part_name = item.custom_part_name.trim();
+      }
+      if (item.custom_2d_drawing?.trim()) {
+        row.custom_2d_drawing = item.custom_2d_drawing.trim();
+      }
+      if (item.custom_engineering_attachments?.trim()) {
+        row.custom_engineering_attachments =
+          item.custom_engineering_attachments.trim();
+      }
+      return row;
     }),
     suppliers: data.suppliers.map((s) => ({
       doctype: RFQ_SUPPLIER_DOCTYPE,
@@ -1068,6 +1099,36 @@ export async function getSupplierQuotation(
  * the `items.<field>` dot syntax — which is permitted on every Frappe
  * install.
  */
+/**
+ * Lightweight SQ list for dashboard analytics — NO per-doc hydration.
+ * Returns name + totals only (enough for cost-savings / response charts).
+ */
+export async function getSupplierQuotationSummariesForRfq(
+  rfqName: string,
+): Promise<
+  Array<{
+    name: string;
+    grand_total?: number;
+    transaction_date?: string;
+    modified?: string;
+  }>
+> {
+  const sqFilter = [["items.request_for_quotation", "=", rfqName]];
+  return apiGet(buildResourceUrl(SQ_DOCTYPE), {
+    params: {
+      fields: JSON.stringify([
+        "name",
+        "grand_total",
+        "transaction_date",
+        "modified",
+      ]),
+      filters: JSON.stringify(sqFilter),
+      order_by: "transaction_date desc, modified desc, name desc",
+      limit_page_length: 50,
+    },
+  });
+}
+
 export async function getSupplierQuotations(
   rfqName: string
 ): Promise<SupplierQuotation[]> {

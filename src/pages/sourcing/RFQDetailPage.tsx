@@ -18,7 +18,6 @@ import {
   Building2,
   Check,
   CheckCircle2,
-  ChevronRight,
   Clock,
   FileText,
   Gavel,
@@ -81,6 +80,9 @@ import {
 } from "../../api/legalDocs";
 import { getApprovalStateFromErp } from "../../api/legalReviews";
 import type { LegalDocumentItemSummary, LegalDocumentSet } from "../../api/legalDocs";
+import { deriveRfqProcurementWorkflow } from "../../api/rfqProcurementWorkflow";
+import type { RfqWorkflowStep } from "../../api/rfqProcurementWorkflow";
+import { invalidateApprovalWorkflow } from "../../api/approvalWorkflow";
 import { ANALYSIS_STEPS } from "../../components/aiAnalysisSteps";
 import AIAnalysisModal, {
   type SupplierSelectionPayload,
@@ -88,10 +90,13 @@ import AIAnalysisModal, {
 import AIInsightsErrorBoundary from "../../components/AIInsightsErrorBoundary";
 import SupplierSelectionSummary from "../../components/SupplierSelectionSummary";
 import EmptyState from "../../components/EmptyState";
-import ErrorState from "../../components/ErrorState";
+import { AppLoading, EnterpriseError } from "../../components/enterprise";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
-import { Skeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
+import {
+  PartNameCell,
+} from "../../components/warehouse/EngineeringDocCells";
+import LineEngineeringDocsCell from "../../components/attachments/LineEngineeringDocsCell";
 import { useAuthStore } from "../../store/authStore";
 import { canManageRFQs, canManageReverseBidding } from "../../config/roles";
 import {
@@ -132,7 +137,7 @@ function supplierRiskLevel(s: SupplierAnalysisRow): RiskLevel {
   if (s.verdict === "AVOID") return "High";
   if (s.verdict === "EXPENSIVE") return "Medium";
   const rel = s.score?.reliability ?? 50;
-  if (rel < 40 || s.weaknesses.length >= 3) return "High";
+  if (rel < 40 || (s.weaknesses ?? []).length >= 3) return "High";
   if (rel < 65 || s.verdict === "GOOD OPTION") return "Medium";
   return "Low";
 }
@@ -207,10 +212,19 @@ function validateCachedAnalysis(
   record: SavedAnalysisRecord | null,
   invitedSupplierIds: Set<string>
 ): SavedAnalysisRecord | null {
-  if (!record || invitedSupplierIds.size === 0) return record;
+  if (!record) return null;
+  if (!isUsableAnalysis(record)) {
+    try {
+      localStorage.removeItem(analysisStorageKey(record.rfq_name));
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+  if (invitedSupplierIds.size === 0) return record;
 
   const analysis = record.analysis;
-  if (!analysis?.supplier_analysis?.length) return record;
+  if (!analysis?.supplier_analysis?.length) return null;
 
   const beforeCount = analysis.supplier_analysis.length;
   analysis.supplier_analysis = analysis.supplier_analysis.filter((row) =>
@@ -1270,6 +1284,8 @@ export default function RFQDetailPage() {
       });
       setApprovalState(state);
       await ensureLegalReviewForWinningSupplier(rfq, supplierForApproval);
+      invalidateApprovalWorkflow(queryClient);
+      void legalDocQuery.refetch();
       toast.success("Supplier selection confirmed — sent for Legal & Finance review.");
       setAiModalOpen(false);
     } catch (err) {
@@ -1283,8 +1299,12 @@ export default function RFQDetailPage() {
 
   function createPOFromRecommendation() {
     if (!aiResult) return;
-    const existing = getApprovalState(rfqName);
-    if (existing && canCreatePOFromWorkflow(existing, poExists)) {
+    // Prefer live LDR gate (same as Generate PO) over legacy localStorage check.
+    const ldrReady =
+      legalDoc?.review_status === "Approved" &&
+      legalDoc?.finance_status === "Approved" &&
+      !poExists;
+    if (ldrReady || canCreatePOFromWorkflow(getApprovalState(rfqName), poExists)) {
       void handleCreatePO(aiResult.recommended_supplier);
     } else {
       void handleConfirmAndSendForReview();
@@ -1342,6 +1362,8 @@ export default function RFQDetailPage() {
 
       setApprovalState(state);
       await ensureLegalReviewForWinningSupplier(rfq, supplierForApproval);
+      invalidateApprovalWorkflow(queryClient);
+      void legalDocQuery.refetch();
       toast.success(
         `${payload.supplierName} selected — sent for Legal & Finance review.`
       );
@@ -1502,6 +1524,13 @@ export default function RFQDetailPage() {
           amount: rate * it.qty,
           schedule_date: scheduleDate,
           warehouse,
+          // Preserve MR lineage so engineering attachments resolve by reference.
+          ...(it.material_request
+            ? { material_request: it.material_request }
+            : {}),
+          ...(it.material_request_item
+            ? { material_request_item: it.material_request_item }
+            : {}),
           ...(winningSq?.name
             ? { supplier_quotation: winningSq.name }
             : {}),
@@ -1584,6 +1613,8 @@ export default function RFQDetailPage() {
       void queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
       // Refresh the dashboard's Procurement Cycle Time (and other analytics).
       void queryClient.invalidateQueries({ queryKey: ["procurement-analytics"] });
+      invalidateApprovalWorkflow(queryClient);
+      void legalDocQuery.refetch();
 
       setTimeout(() => {
         navigate(`/p2p/purchase-orders/${encodeURIComponent(po.name)}`);
@@ -1600,7 +1631,12 @@ export default function RFQDetailPage() {
 
   /* ─────────────── Render ─────────────── */
 
-  const hasSelectedSupplier = !!approvalState?.selected_supplier;
+  // Selection SSoT: local/ERP approval cache OR live Legal Document Review supplier.
+  const resolvedSelectedSupplier =
+    (approvalState?.selected_supplier ?? "").trim() ||
+    (legalDoc?.supplier ?? "").trim() ||
+    "";
+  const hasSelectedSupplier = resolvedSelectedSupplier.length > 0;
 
   const aiModals = (
     <>
@@ -1621,16 +1657,14 @@ export default function RFQDetailPage() {
           creatingPO={creatingPO || submittingForReview}
           hasApiKey={HAS_ANTHROPIC_KEY}
           poAlreadyExists={poExists || hasSelectedSupplier}
-          chosenSupplier={
-            hasSelectedSupplier ? approvalState?.selected_supplier ?? null : null
-          }
+          chosenSupplier={hasSelectedSupplier ? resolvedSelectedSupplier : null}
           ctaLabel="Create Purchase Order"
           ctaLoadingLabel="Submitting for Review…"
           ctaDoneMessage={
             poExists
               ? "A purchase order has already been created for this RFQ."
               : hasSelectedSupplier
-                ? `${approvalState?.selected_supplier ?? "Supplier"} has been awarded this RFQ.`
+                ? `${resolvedSelectedSupplier} has been awarded this RFQ.`
                 : undefined
           }
           onClose={closeAIModal}
@@ -1654,9 +1688,11 @@ export default function RFQDetailPage() {
         <SupplierSelectionSummary
           open={summaryModalOpen && hasSelectedSupplier}
           rfqName={rfqName}
-          selectedSupplier={approvalState?.selected_supplier ?? ""}
-          selectedAt={approvalState?.submitted_at ?? ""}
-          selectedTotal={approvalState?.selected_supplier_total ?? 0}
+          selectedSupplier={resolvedSelectedSupplier}
+          selectedAt={approvalState?.submitted_at ?? legalDoc?.submission_date ?? ""}
+          selectedTotal={
+            approvalState?.selected_supplier_total ?? legalDoc?.grand_total ?? 0
+          }
           analysis={aiResult ?? savedAnalysis?.analysis ?? null}
           quoteAmount={aiQuoteAmount}
           workflowStep={approvalState?.workflow_step}
@@ -1670,11 +1706,7 @@ export default function RFQDetailPage() {
     return (
       <>
         {aiModals}
-        <div className="space-y-4">
-          <Skeleton className="h-6 w-48" />
-          <Skeleton className="h-32 w-full" />
-          <Skeleton className="h-64 w-full" />
-        </div>
+        <AppLoading variant="document" />
       </>
     );
   }
@@ -1683,15 +1715,13 @@ export default function RFQDetailPage() {
     return (
       <>
         {aiModals}
-        <div>
-          <BackLink />
-          <ErrorState
-            icon={FileText}
-            title="RFQ not found"
-            description="It may have been deleted, or you may not have access."
-            onRetry={() => rfqQuery.refetch()}
-          />
-        </div>
+        <EnterpriseError
+          error={rfqQuery.error ?? new Error("not found")}
+          onRetry={() => void rfqQuery.refetch()}
+          onBack={() => {
+            window.location.assign("/sourcing/rfqs");
+          }}
+        />
       </>
     );
   }
@@ -1756,107 +1786,111 @@ export default function RFQDetailPage() {
   const canCompareQuotations =
     submittedQuoteCount > 0 && (aiAnalysisDone || procurementFinalized);
 
-  // Sourced from the REAL Legal Document Review record — see the comment
-  // on `legalDocQuery` above for why `approvalState` can never reflect an
-  // actual review decision.
-  const legalApproved = legalDoc?.review_status === "Approved";
-  const financeApproved = legalDoc?.finance_status === "Approved";
-  const fullyApproved = legalApproved && financeApproved;
-
   /* ── AI Procurement Copilot card derived values ──
    * These read straight from the saved analysis (persists across refresh —
    * see `saveAnalysis` / `getLatestAnalysisSnapshot`) so the card never has
    * to wait on `hasSelectedSupplier` to show what the analysis produced. */
   const copilotRecommendedRow = copilotHasAnalysis
-    ? savedAnalysis!.analysis.supplier_analysis.find(
+    ? (savedAnalysis?.analysis?.supplier_analysis ?? []).find(
         (s) =>
           s.name.toLowerCase() ===
-          (savedAnalysis!.recommended_supplier ?? "").trim().toLowerCase()
+          (savedAnalysis?.recommended_supplier ?? "").trim().toLowerCase()
       )
     : undefined;
   const copilotRiskLevel = copilotRecommendedRow
     ? supplierRiskLevel(copilotRecommendedRow)
     : null;
-  const copilotSavings = copilotHasAnalysis
-    ? getSavingsPotential(savedAnalysis!.analysis)
-    : null;
+  const copilotSavings =
+    copilotHasAnalysis && savedAnalysis?.analysis
+      ? getSavingsPotential(savedAnalysis.analysis)
+      : null;
 
-  const timeline: { label: string; meta: string; done: boolean; active: boolean }[] = [
-    {
-      label: "RFQ Created",
-      meta: formatDate(rfq.transaction_date),
-      done: true,
-      active: false,
-    },
-    {
-      label: "Suppliers Responded",
-      meta: hasQuotations ? `${respondedCount} of ${supplierCount}` : "Awaiting responses",
-      done: hasQuotations,
-      active: !hasQuotations,
-    },
-    {
-      label: "AI Analysis",
-      meta: aiAnalysisDone
-        ? aiConfidence != null
-          ? `Confidence ${clampScore(aiConfidence)}%`
-          : "Completed"
-        : "Pending",
-      done: aiAnalysisDone,
-      active: hasQuotations && !aiAnalysisDone,
-    },
-    {
-      label: "Supplier Selected",
-      meta: hasSelectedSupplier ? approvalState!.selected_supplier : "Pending",
-      done: hasSelectedSupplier,
-      active: aiAnalysisDone && !hasSelectedSupplier,
-    },
-    {
-      label: "Legal Review",
-      meta: legalApproved
-        ? "Approved"
-        : hasSelectedSupplier
-          ? legalDoc?.review_status ?? "Pending"
-          : "Pending",
-      done: legalApproved,
-      active: hasSelectedSupplier && !legalApproved,
-    },
-    {
-      label: "Finance Review",
-      meta: financeApproved
-        ? "Budget Approved"
-        : hasSelectedSupplier
-          ? legalDoc?.finance_status || "Pending"
-          : "Pending",
-      done: financeApproved,
-      active: legalApproved && !financeApproved,
-    },
-    {
-      label: "Purchase Order",
-      meta: isCompleted
-        ? completionSummary.poName
-        : fullyApproved
-          ? "Ready to create"
-          : "Pending",
-      done: isCompleted,
-      active: fullyApproved && !isCompleted,
-    },
-  ];
+  /**
+   * Single source of truth for timeline / Status Center / AI gates / Create PO.
+   * Sequentially gated — Legal/Finance/PO can never appear ahead of selection.
+   */
+  const linkedMaterialRequests = Array.from(
+    new Set(
+      (rfq.items ?? [])
+        .map((i) => i.material_request)
+        .filter((v): v is string => !!v && v.trim().length > 0)
+    )
+  );
+  const materialRequestLabel =
+    linkedMaterialRequests.length === 0
+      ? "—"
+      : linkedMaterialRequests.length === 1
+        ? linkedMaterialRequests[0]
+        : `${linkedMaterialRequests[0]} +${linkedMaterialRequests.length - 1} more`;
 
-  const currentStage = timeline.find((s) => s.active)?.label ?? (isCompleted ? "Completed" : "RFQ Created");
+  const workflow = deriveRfqProcurementWorkflow({
+    transactionDate: formatDate(rfq.transaction_date),
+    documentStatus:
+      rfq.docstatus === 1 ? "Submitted" : rfq.docstatus === 0 ? "Draft" : String(rfq.docstatus ?? "—"),
+    rfqStatus: rfq.status ?? "Draft",
+    hasMaterialRequest: true,
+    materialRequestLabel,
+    supplierCount,
+    respondedCount,
+    hasQuotations,
+    hasAnalysis: copilotHasAnalysis,
+    analysisConfidence: aiConfidence,
+    recommendedSupplier: savedAnalysis?.recommended_supplier ?? null,
+    selectedSupplier: resolvedSelectedSupplier || null,
+    legalStatus: legalDoc?.review_status ?? "",
+    financeStatus: legalDoc?.finance_status ?? "",
+    legalApprovedBy: legalDoc?.approved_by,
+    legalApprovedOn: legalDoc?.approved_on,
+    financeApprovedBy: legalDoc?.finance_approved_by,
+    financeApprovedOn: legalDoc?.finance_approved_on,
+    poExists,
+    poName: completionSummary.poName !== "—" ? completionSummary.poName : null,
+    currentOwnerOverride: legalDoc?.current_owner,
+    nextApproverOverride: legalDoc?.next_approver,
+  });
+
+  const timeline = workflow.stages;
+  const currentStage = workflow.currentStage;
+  const legalApproved = workflow.legalApproved;
+  const financeApproved = workflow.financeApproved;
+  const fullyApproved = legalApproved && financeApproved;
+  const canCreatePO = workflow.canCreatePO;
+
+  const quoteTotals = Array.from(localQuotes.values())
+    .map((q) => q.total)
+    .filter((t) => t > 0);
+  const allSuppliersResponded = supplierCount > 0 && awaitingCount === 0;
+  const avgQuote =
+    quoteTotals.length > 0
+      ? quoteTotals.reduce((a, b) => a + b, 0) / quoteTotals.length
+      : 0;
+  const lowestQuote = quoteTotals.length > 0 ? Math.min(...quoteTotals) : 0;
+  const highestQuote = quoteTotals.length > 0 ? Math.max(...quoteTotals) : 0;
+
+  const rfqScheduleDates = (rfq.items ?? [])
+    .map((it) => it.schedule_date)
+    .filter((d): d is string => !!d && String(d).trim().length > 0);
+  const expectedDelivery =
+    rfqScheduleDates.length > 0
+      ? formatDate(rfqScheduleDates.sort()[0])
+      : validTillDisplay;
+  const currencyLabel =
+    (rfq as { currency?: string }).currency ||
+    import.meta.env.VITE_DEFAULT_CURRENCY ||
+    "USD";
+  const deliveryLocation =
+    (rfq as { shipping_address_name?: string; shipping_address?: string })
+      .shipping_address_name ||
+    (rfq as { shipping_address?: string }).shipping_address ||
+    "—";
+  const estimatedBudget = (rfq.items ?? []).reduce((sum, it) => {
+    const rate = Number((it as { rate?: number; amount?: number }).rate ?? 0);
+    const amount = Number((it as { amount?: number }).amount ?? 0);
+    const qty = Number(it.qty ?? 0);
+    return sum + (amount || rate * qty);
+  }, 0);
 
   // ── RFQ Overview metadata (display-only, derived from the live RFQ) ──
-  const materialRequestLabel = (() => {
-    const mrs = Array.from(
-      new Set(
-        (rfq.items ?? [])
-          .map((i) => i.material_request)
-          .filter((v): v is string => !!v && v.trim().length > 0)
-      )
-    );
-    if (mrs.length === 0) return "—";
-    if (mrs.length === 1) return mrs[0];
-    return `${mrs[0]} +${mrs.length - 1} more`;
-  })();
   const rfqExtra = rfq as {
     department?: string;
     custom_department?: string;
@@ -1880,8 +1914,10 @@ export default function RFQDetailPage() {
           legalDoc={legalDoc}
           poExists={poExists}
           fullyApproved={fullyApproved}
-          selectedSupplier={approvalState?.selected_supplier ?? ""}
-          selectedSupplierTotal={approvalState?.selected_supplier_total ?? 0}
+          selectedSupplier={resolvedSelectedSupplier}
+          selectedSupplierTotal={
+            approvalState?.selected_supplier_total ?? legalDoc?.grand_total ?? 0
+          }
         />
       )}
 
@@ -1957,7 +1993,10 @@ export default function RFQDetailPage() {
           <RejectedReviewActions
             rfqName={rfq.name}
             reviewType="legal"
-            onResubmitted={() => legalDocQuery.refetch()}
+            onResubmitted={() => {
+              invalidateApprovalWorkflow(queryClient);
+              void legalDocQuery.refetch();
+            }}
           />
         </div>
       )}
@@ -1973,7 +2012,10 @@ export default function RFQDetailPage() {
             <RejectedReviewActions
               rfqName={rfq.name}
               reviewType="finance"
-              onResubmitted={() => legalDocQuery.refetch()}
+              onResubmitted={() => {
+                invalidateApprovalWorkflow(queryClient);
+                void legalDocQuery.refetch();
+              }}
             />
           </div>
         )}
@@ -2001,36 +2043,77 @@ export default function RFQDetailPage() {
             <MiniStat value={totalQty} label={t("rfq.totalQty")} />
             <MiniStat value={uomCount} label={t("rfq.uoms")} />
           </div>
-        </CommandCard>
-
-        {/* Row 1 · RFQ Status Center */}
-        <CommandCard icon={Activity} title={t("rfq.statusCenter")}>
-          <div className="space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-500">{t("rfq.currentStatus")}</span>
-              <StatusBadge status={rfq.status ?? "Draft"} />
+          <div className="mt-3 space-y-1.5 border-t border-neutral-100 pt-2.5 text-sm">
+            <div className="flex justify-between gap-2">
+              <span className="text-neutral-500">Estimated Budget</span>
+              <span className="font-semibold text-neutral-900">
+                {estimatedBudget > 0 ? formatCurrency(estimatedBudget) : "—"}
+              </span>
             </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-500">{t("rfq.documentState")}</span>
-              <Pill tone={rfq.docstatus === 1 ? "brand" : "neutral"}>
-                {rfq.docstatus === 1 ? t("status.submitted") : t("status.draft")}
-              </Pill>
+            <div className="flex justify-between gap-2">
+              <span className="text-neutral-500">Expected Delivery</span>
+              <span className="font-semibold text-neutral-900">{expectedDelivery}</span>
             </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-500">{t("rfq.procurement")}</span>
-              {isCompleted ? (
-                <Pill tone="success">
-                  <CheckCircle2 className="h-3 w-3" />
-                  {t("rfq.poCreated")}
-                </Pill>
-              ) : (
-                <Pill tone="amber">{t("status.inProgress")}</Pill>
-              )}
+            <div className="flex justify-between gap-2">
+              <span className="text-neutral-500">Currency</span>
+              <span className="font-semibold text-neutral-900">{currencyLabel}</span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span className="text-neutral-500">Delivery Location</span>
+              <span className="truncate font-semibold text-neutral-900" title={deliveryLocation}>
+                {deliveryLocation}
+              </span>
             </div>
           </div>
         </CommandCard>
 
-        {/* Row 2 · RFQ Status */}
+        {/* Row 1 · RFQ Status Center — same workflow object as timeline */}
+        <CommandCard icon={Activity} title={t("rfq.statusCenter")}>
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm text-neutral-500">Workflow Stage</span>
+              <span className="text-sm font-bold text-primary-700">{workflow.currentStage}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm text-neutral-500">Overall Status</span>
+              <Pill
+                tone={
+                  workflow.workflowStatus === "Completed"
+                    ? "success"
+                    : workflow.workflowStatus === "Rejected"
+                      ? "danger"
+                      : "amber"
+                }
+              >
+                {workflow.workflowStatus}
+              </Pill>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm text-neutral-500">Document Status</span>
+              <Pill tone={rfq.docstatus === 1 ? "brand" : "neutral"}>
+                {workflow.documentStatus}
+              </Pill>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm text-neutral-500">Current Owner</span>
+              <span className="text-sm font-semibold text-neutral-900">{workflow.currentOwner}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm text-neutral-500">Next Approver</span>
+              <span className="text-sm font-semibold text-neutral-900">{workflow.nextApprover}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm text-neutral-500">Last Updated</span>
+              <span className="text-sm font-semibold text-neutral-900">
+                {legalDoc?.modified
+                  ? formatDate(legalDoc.modified)
+                  : formatDate(rfq.modified || rfq.transaction_date)}
+              </span>
+            </div>
+          </div>
+        </CommandCard>
+
+        {/* Row 2 · Workflow Timeline — identical current stage as Status Center */}
         <CommandCard icon={Clock} title={t("rfq.rfqStatus")}>
           <div className="mb-3 flex items-center justify-between rounded-lg border border-primary/15 bg-primary/5 px-3 py-2">
             <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-500">{t("rfq.currentStage")}</span>
@@ -2039,11 +2122,12 @@ export default function RFQDetailPage() {
           <ol>
             {timeline.map((step, i) => (
               <TimelineStep
-                key={step.label}
+                key={step.id}
                 label={step.label}
                 meta={step.meta}
                 done={step.done}
-                active={step.active}
+                active={step.active && !step.rejected}
+                rejected={step.rejected}
                 last={i === timeline.length - 1}
               />
             ))}
@@ -2060,8 +2144,7 @@ export default function RFQDetailPage() {
             {quotesQuery.isError && (
               <div className="flex items-center justify-between gap-2 rounded-lg border border-danger-200 bg-danger-50 px-3 py-2 text-[11px] text-danger-800">
                 <span>
-                  Couldn't load quotations from ERPNext — counts below may be
-                  incomplete.
+                  Unable to load quotations — counts below may be incomplete.
                 </span>
                 <button
                   type="button"
@@ -2072,12 +2155,30 @@ export default function RFQDetailPage() {
                 </button>
               </div>
             )}
-            <div className="grid grid-cols-2 gap-2">
-              <MiniStat value={quotedCount} label="Quoted" />
-              <MiniStat value={declinedCount} label="No Quote" />
-              <MiniStat value={awaitingCount} label="Pending" />
-              <MiniStat value={respondedCount} label="Responded" />
-            </div>
+            {allSuppliersResponded ? (
+              <div className="grid grid-cols-2 gap-2">
+                <MiniStat
+                  value={avgQuote > 0 ? formatCurrency(avgQuote) : "—"}
+                  label="Average Quote"
+                />
+                <MiniStat
+                  value={lowestQuote > 0 ? formatCurrency(lowestQuote) : "—"}
+                  label="Lowest Quote"
+                />
+                <MiniStat
+                  value={highestQuote > 0 ? formatCurrency(highestQuote) : "—"}
+                  label="Highest Quote"
+                />
+                <MiniStat value={`${responseRate}%`} label="Response Rate" />
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                <MiniStat value={quotedCount} label="Quoted" />
+                <MiniStat value={declinedCount} label="No Quote" />
+                <MiniStat value={awaitingCount} label="Pending" />
+                <MiniStat value={respondedCount} label="Responded" />
+              </div>
+            )}
             <div>
               <div className="mb-1 flex items-center justify-between text-[11px] text-neutral-500">
                 <span>Response rate</span>
@@ -2143,26 +2244,33 @@ export default function RFQDetailPage() {
               </span>
             </div>
             <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-500">Recommended Supplier</span>
-              <Pill
-                tone={
-                  hasSelectedSupplier
-                    ? "success"
+              <span className="text-sm text-neutral-500">
+                {workflow.supplierSelectionStatus === "Selected"
+                  ? "Selected Supplier"
+                  : "Recommended Supplier"}
+              </span>
+              <div className="flex max-w-[60%] flex-col items-end gap-0.5">
+                <Pill
+                  tone={
+                    workflow.supplierSelectionStatus === "Selected"
+                      ? "success"
+                      : workflow.supplierSelectionStatus === "Recommended"
+                        ? "brand"
+                        : "amber"
+                  }
+                >
+                  {workflow.supplierSelectionStatus}
+                </Pill>
+                <span className="truncate text-xs font-semibold text-neutral-800">
+                  {hasSelectedSupplier
+                    ? resolvedSelectedSupplier
                     : copilotHasAnalysis
-                    ? "brand"
-                    : hasQuotations && aiReady
-                    ? "brand"
-                    : "amber"
-                }
-              >
-                {hasSelectedSupplier
-                  ? approvalState!.selected_supplier
-                  : copilotHasAnalysis
-                  ? savedAnalysis!.recommended_supplier
-                  : hasQuotations && aiReady
-                  ? "Ready to analyze"
-                  : "Not Available"}
-              </Pill>
+                      ? savedAnalysis!.recommended_supplier
+                      : hasQuotations && aiReady
+                        ? "Ready to analyze"
+                        : "Not Available"}
+                </span>
+              </div>
             </div>
             {copilotHasAnalysis && copilotRiskLevel && (
               <div className="flex items-center justify-between gap-2">
@@ -2189,10 +2297,8 @@ export default function RFQDetailPage() {
               </div>
             )}
 
-            {/* ── AI Action Buttons ── */}
-            {procurementFinalized ? (
-              /* Finalized: read-only historical record. Every procurement-decision
-                 action is hidden; only "View Purchase Order" remains. */
+            {/* ── AI Action Buttons — never show Perform when analysis exists ── */}
+            {workflow.aiButtonMode === "finalized" || procurementFinalized ? (
               <div className="mt-1 space-y-2.5">
                 <div className="flex items-start gap-2 rounded-lg border border-success-200 bg-success-50/70 px-3 py-2.5">
                   <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-success-600" />
@@ -2211,7 +2317,7 @@ export default function RFQDetailPage() {
                   </Link>
                 ) : null}
               </div>
-            ) : hasSelectedSupplier ? (
+            ) : workflow.aiButtonMode === "view_and_rerun" ? (
               <div className="mt-1 flex gap-2">
                 <button
                   type="button"
@@ -2219,9 +2325,9 @@ export default function RFQDetailPage() {
                   className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110"
                 >
                   <Sparkles className="h-4 w-4" />
-                  View Analysis
+                  View AI Report
                 </button>
-                {!isReadOnly && canReAnalyze && (
+                {!isReadOnly && !isCompleted && (
                   <button
                     type="button"
                     onClick={handleReAnalyze}
@@ -2233,7 +2339,7 @@ export default function RFQDetailPage() {
                     ) : (
                       <Activity className="h-4 w-4" />
                     )}
-                    {aiLoading ? "Analyzing…" : "Re-Analyze"}
+                    {aiLoading ? "Analyzing…" : "Re-run Analysis"}
                   </button>
                 )}
               </div>
@@ -2257,6 +2363,29 @@ export default function RFQDetailPage() {
                 )}
               </button>
             )}
+            {!isReadOnly && hasSelectedSupplier && !poExists && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void handleCreatePO(resolvedSelectedSupplier)}
+                  disabled={creatingPO || !canCreatePO}
+                  className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-accent-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-accent-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {creatingPO ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <ShoppingCart className="h-4 w-4" />
+                  )}
+                  {creatingPO ? "Creating PO…" : "Generate Purchase Order"}
+                </button>
+                {!canCreatePO && (
+                  <p className="text-center text-[11px] text-neutral-400">
+                    Generate PO unlocks after Supplier Selected, Legal Approved,
+                    and Finance Approved.
+                  </p>
+                )}
+              </>
+            )}
             {!procurementFinalized && !hasQuotations && !hasSelectedSupplier && (
               <p className="text-center text-[11px] text-neutral-400">
                 AI Analysis will be available after supplier quotations are submitted.
@@ -2275,6 +2404,90 @@ export default function RFQDetailPage() {
           </div>
         </CommandCard>
       </div>
+
+      {/* Approval Information — live LDR fields */}
+      {hasSelectedSupplier && (
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <CommandCard icon={Gavel} title="Legal Review">
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between gap-2">
+                <span className="text-neutral-500">Status</span>
+                <Pill
+                  tone={
+                    workflow.legalRejected
+                      ? "danger"
+                      : workflow.legalApproved
+                        ? "success"
+                        : "amber"
+                  }
+                >
+                  {workflow.legalStatus}
+                </Pill>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-neutral-500">Approved By</span>
+                <span className="font-semibold text-neutral-900">
+                  {legalDoc?.approved_by || "—"}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-neutral-500">Approved Date</span>
+                <span className="font-semibold text-neutral-900">
+                  {legalDoc?.approved_on ? formatDate(legalDoc.approved_on) : "—"}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-neutral-500">Signature</span>
+                <span className="font-semibold text-neutral-900">
+                  {legalDoc?.esign_status === "signed" ||
+                  legalDoc?.esign_status === "locked" ||
+                  legalDoc?.esign_signed_by
+                    ? legalDoc.esign_signed_by || "Signed"
+                    : "—"}
+                </span>
+              </div>
+            </div>
+          </CommandCard>
+          <CommandCard icon={Wallet} title="Finance Review">
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between gap-2">
+                <span className="text-neutral-500">Status</span>
+                <Pill
+                  tone={
+                    workflow.financeRejected
+                      ? "danger"
+                      : workflow.financeApproved
+                        ? "success"
+                        : "amber"
+                  }
+                >
+                  {workflow.financeStatus}
+                </Pill>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-neutral-500">Approved By</span>
+                <span className="font-semibold text-neutral-900">
+                  {legalDoc?.finance_approved_by || "—"}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-neutral-500">Approval Date</span>
+                <span className="font-semibold text-neutral-900">
+                  {legalDoc?.finance_approved_on
+                    ? formatDate(legalDoc.finance_approved_on)
+                    : "—"}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-neutral-500">Budget Approved</span>
+                <Pill tone={workflow.financeApproved ? "success" : "neutral"}>
+                  {workflow.financeApproved ? "Yes" : "No"}
+                </Pill>
+              </div>
+            </div>
+          </CommandCard>
+        </div>
+      )}
 
       {/* Reverse Bidding — available after AI analysis, before PO */}
       {!procurementFinalized &&
@@ -2332,6 +2545,12 @@ export default function RFQDetailPage() {
                   <th className="border-b border-neutral-200 bg-neutral-50 px-5 py-3 text-right">
                     UOM
                   </th>
+                  <th className="border-b border-neutral-200 bg-neutral-50 px-5 py-3">
+                    Part Name
+                  </th>
+                  <th className="border-b border-neutral-200 bg-neutral-50 px-5 py-3">
+                    Attachments
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -2365,6 +2584,22 @@ export default function RFQDetailPage() {
                     </td>
                     <td className="border-b border-neutral-100 px-5 py-3.5 text-right align-top text-neutral-600">
                       {it.uom ?? "—"}
+                    </td>
+                    <td className="border-b border-neutral-100 px-5 py-3.5 align-top">
+                      <PartNameCell value={it.custom_part_name} />
+                    </td>
+                    <td className="border-b border-neutral-100 px-5 py-3.5 align-top">
+                      <LineEngineeringDocsCell
+                        lookup={{
+                          item_code: it.item_code,
+                          material_request: it.material_request,
+                          material_request_item: it.material_request_item,
+                          custom_part_name: it.custom_part_name,
+                          custom_2d_drawing: it.custom_2d_drawing,
+                          custom_engineering_attachments:
+                            it.custom_engineering_attachments,
+                        }}
+                      />
                     </td>
                   </tr>
                 ))}
@@ -2674,7 +2909,7 @@ function RfqDetailHeader({
   owner: string;
   createdDate: string;
   validTill: string;
-  timeline: { label: string; meta: string; done: boolean; active: boolean }[];
+  timeline: RfqWorkflowStep[];
   actions?: ReactNode;
 }) {
   const { t } = useTranslation();
@@ -2775,36 +3010,40 @@ function OverviewRow({
   );
 }
 
-function HeaderTimeline({
-  steps,
-}: {
-  steps: { label: string; meta: string; done: boolean; active: boolean }[];
-}) {
+function HeaderTimeline({ steps }: { steps: RfqWorkflowStep[] }) {
   return (
-    <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+    <div className="flex items-center gap-0 overflow-x-auto pb-0.5">
       {steps.map((step, i) => {
-        const tone = step.done
-          ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-          : step.active
-            ? "bg-blue-50 text-blue-700 ring-blue-300"
-            : "bg-neutral-100 text-neutral-400 ring-neutral-200";
+        const tone = step.rejected
+          ? "bg-red-50 text-red-700 ring-red-200"
+          : step.done
+            ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+            : step.active
+              ? "bg-amber-50 text-amber-800 ring-amber-300"
+              : "bg-neutral-100 text-neutral-400 ring-neutral-200";
+        const lineTone = step.done ? "bg-emerald-400" : "bg-neutral-200";
         return (
-          <div key={step.label} className="flex flex-shrink-0 items-center gap-1.5">
+          <div key={step.id} className="flex flex-shrink-0 items-center">
             <span
               title={step.meta}
               className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ring-inset ${tone}`}
             >
-              {step.done ? (
+              {step.rejected ? (
+                <Ban className="h-3 w-3" />
+              ) : step.done ? (
                 <Check className="h-3 w-3" />
               ) : step.active ? (
-                <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
               ) : (
                 <span className="h-1.5 w-1.5 rounded-full bg-neutral-300" />
               )}
               {step.label}
             </span>
             {i < steps.length - 1 && (
-              <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-neutral-300" />
+              <span
+                aria-hidden
+                className={`mx-1 h-0.5 w-4 flex-shrink-0 rounded-full ${lineTone}`}
+              />
             )}
           </div>
         );
@@ -2904,21 +3143,25 @@ function TimelineStep({
   meta,
   done,
   active,
+  rejected,
   last,
 }: {
   label: string;
   meta: string;
   done: boolean;
   active: boolean;
+  rejected?: boolean;
   last: boolean;
 }) {
-  const dotBg = done
-    ? "bg-[#0ea5e9]"
-    : active
-      ? "bg-amber-500 ring-4 ring-amber-100"
-      : "bg-neutral-200";
+  const dotBg = rejected
+    ? "bg-red-500"
+    : done
+      ? "bg-emerald-500"
+      : active
+        ? "bg-amber-500 ring-4 ring-amber-100"
+        : "bg-neutral-200";
 
-  const connectorBg = done ? "bg-[#0ea5e9]/30" : "bg-neutral-200";
+  const connectorBg = done ? "bg-emerald-300" : "bg-neutral-200";
 
   return (
     <li className="relative flex gap-2.5 pb-3 last:pb-0">
@@ -2931,33 +3174,45 @@ function TimelineStep({
       <span
         className={`relative z-10 mt-0.5 flex h-3 w-3 flex-shrink-0 items-center justify-center rounded-full ${dotBg}`}
       >
-        {done && <Check className="h-2 w-2 text-white" strokeWidth={3} />}
+        {done && !rejected && (
+          <Check className="h-2 w-2 text-white" strokeWidth={3} />
+        )}
       </span>
       <div className="-mt-0.5 min-w-0 flex-1">
         <p
           className={`text-sm font-semibold ${
-            done
-              ? "text-neutral-900"
-              : active
-                ? "text-amber-700"
-                : "text-neutral-400"
+            rejected
+              ? "text-red-700"
+              : done
+                ? "text-neutral-900"
+                : active
+                  ? "text-amber-700"
+                  : "text-neutral-400"
           }`}
         >
           {label}
         </p>
         <p
           className={`truncate text-xs ${
-            active ? "text-amber-600" : "text-neutral-500"
+            rejected
+              ? "text-red-600"
+              : active
+                ? "text-amber-600"
+                : "text-neutral-500"
           }`}
         >
           {meta}
         </p>
       </div>
-      {active && (
+      {rejected ? (
+        <span className="mt-0.5 shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-red-700">
+          Rejected
+        </span>
+      ) : active ? (
         <span className="mt-0.5 shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-700">
           Current
         </span>
-      )}
+      ) : null}
     </li>
   );
 }
@@ -3014,43 +3269,39 @@ function ApprovalWorkflowTracker({
   selectedSupplier: string;
   selectedSupplierTotal: number;
 }) {
-  const reviewStatus = legalDoc?.review_status ?? "Pending";
-  const financeStatus = legalDoc?.finance_status ?? "";
+  // Post-selection slice of the same sequential workflow (never ahead of priors).
+  const slice = deriveRfqProcurementWorkflow({
+    supplierCount: 1,
+    respondedCount: 1,
+    hasQuotations: true,
+    hasAnalysis: true,
+    selectedSupplier,
+    legalStatus: legalDoc?.review_status ?? "Pending",
+    financeStatus: legalDoc?.finance_status ?? "",
+    poExists,
+    poName: null,
+  });
 
-  const steps: {
-    label: string;
-    icon: typeof Check;
-    done: boolean;
-    active: boolean;
-    rejected?: boolean;
-  }[] = [
-    {
-      label: "Supplier Selected",
-      icon: CheckCircle2,
-      done: true,
-      active: false,
-    },
-    {
-      label: "Legal Review",
-      icon: Gavel,
-      done: reviewStatus === "Approved",
-      active: reviewStatus === "Pending",
-      rejected: reviewStatus === "Rejected",
-    },
-    {
-      label: "Finance Review",
-      icon: Wallet,
-      done: financeStatus === "Approved",
-      active: reviewStatus === "Approved" && financeStatus === "Pending",
-      rejected: financeStatus === "Rejected",
-    },
-    {
-      label: "Create PO",
-      icon: ShoppingCart,
-      done: poExists,
-      active: fullyApproved && !poExists,
-    },
-  ];
+  const iconFor = (id: string) => {
+    if (id === "supplier_selected") return CheckCircle2;
+    if (id === "legal_review") return Gavel;
+    if (id === "finance_review") return Wallet;
+    return ShoppingCart;
+  };
+
+  const steps = slice.stages
+    .filter((s) =>
+      ["supplier_selected", "legal_review", "finance_review", "purchase_order"].includes(
+        s.id,
+      ),
+    )
+    .map((s) => ({
+      label: s.id === "purchase_order" ? "Create PO" : s.label,
+      icon: iconFor(s.id),
+      done: s.done,
+      active: s.active && !s.rejected,
+      rejected: s.rejected,
+    }));
 
   const stepBadge = (s: (typeof steps)[number]) => {
     if (s.done)
@@ -3058,20 +3309,18 @@ function ApprovalWorkflowTracker({
     if (s.rejected)
       return "border-red-500 bg-red-500 text-white";
     if (s.active)
-      return "border-primary bg-primary text-white animate-pulse";
+      return "border-amber-500 bg-amber-500 text-white";
     return "border-neutral-300 bg-white text-neutral-400";
   };
 
   const statusLabel = (() => {
     if (poExists) return { text: "PO Created", tone: "bg-emerald-100 text-emerald-700" };
     if (fullyApproved) return { text: "Approved for PO", tone: "bg-emerald-100 text-emerald-700" };
-    if (reviewStatus === "Rejected")
+    if (slice.legalRejected)
       return { text: "Legal Rejected", tone: "bg-red-100 text-red-700" };
-    if (financeStatus === "Rejected")
+    if (slice.financeRejected)
       return { text: "Finance Rejected", tone: "bg-red-100 text-red-700" };
-    if (reviewStatus === "Approved")
-      return { text: "Pending Finance Review", tone: "bg-primary-100 text-primary-700" };
-    return { text: "Pending Legal Review", tone: "bg-primary-100 text-primary-700" };
+    return { text: slice.currentStage, tone: "bg-amber-100 text-amber-800" };
   })();
 
   return (
@@ -3169,10 +3418,7 @@ function ReverseBiddingCTA({
   });
   const existing = existingQuery.data;
 
-  // After supplier selection, reverse bidding is locked. Keep the auction
-  // visible for reference if it already exists; otherwise hide the section.
-  if (!allowCreate && !existing) return null;
-
+  // Hooks must run unconditionally — early return only after every hook below.
   const createMutation = useMutation({
     mutationFn: () =>
       createReverseBiddingFromRFQ({
@@ -3189,6 +3435,10 @@ function ReverseBiddingCTA({
         e instanceof Error ? e.message : "Could not create reverse auction"
       ),
   });
+
+  // After supplier selection, reverse bidding is locked. Keep the auction
+  // visible for reference if it already exists; otherwise hide the section.
+  if (!allowCreate && !existing) return null;
 
   return (
     <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-[#0ea5e9]/30 bg-[#0ea5e9]/5 p-5 sm:flex-row sm:items-center sm:justify-between">

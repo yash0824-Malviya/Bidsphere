@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import toast from "react-hot-toast";
+import { useQuery } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
 import {
   Activity,
@@ -19,12 +18,10 @@ import {
 } from "lucide-react";
 
 import {
-  forwardToProcurement,
   getInventorySummary,
   getIssuedMaterials,
   getPendingMaterialRequests,
   getWarehouseProcurementRequiredRequests,
-  invalidateForwardCaches,
   selectProcurementRequiredRows,
   selectReadyToIssueRows,
 } from "../../services/warehouseService";
@@ -37,6 +34,7 @@ import ErrorState from "../../components/ErrorState";
 import PageHeader from "../../components/PageHeader";
 import { useAuthStore } from "../../store/authStore";
 import { formatDate, formatDateTime } from "../../utils/format";
+
 
 const PRIORITY_STYLES: Record<string, string> = {
   Urgent: "bg-rose-50 text-rose-700 border-rose-200",
@@ -56,12 +54,10 @@ interface ActivityEntry {
 
 export default function WarehouseDashboardPage() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const user = useAuthStore((s) => s.user);
   const role = user?.role;
   const canLoad = role === "warehouse" || role === "admin";
   const slaVisible = useSlaVisible();
-  const [forwardingMr, setForwardingMr] = useState<string | null>(null);
 
   // All widgets fetch in parallel and share query keys with their detail pages
   // (React Query dedupes + caches — no duplicate ERPNext calls). Every query
@@ -133,37 +129,6 @@ export default function WarehouseDashboardPage() {
     enabled: canLoad,
     retry: false,
     refetchOnWindowFocus: true,
-  });
-
-  // "Send to Procurement" — forwards a shortage MR, then invalidates every
-  // dependent cache so the request disappears from the warehouse queue and
-  // appears instantly in the Procurement queue/dashboard (single round-trip).
-  const forwardMutation = useMutation({
-    mutationFn: (mrName: string) =>
-      forwardToProcurement(mrName, user?.email || user?.name),
-    onMutate: (mrName: string) => setForwardingMr(mrName),
-    onSettled: () => setForwardingMr(null),
-    onSuccess: async (_res, mrName) => {
-      toast.success(`${mrName} sent to Procurement.`);
-      // Single source of truth = ERPNext. Invalidate every dependent cache,
-      // then await refetch of the two queues this dashboard renders so the
-      // forwarded MR leaves "Procurement Required" and the queue count updates
-      // immediately — no page reload.
-      // eslint-disable-next-line no-console
-      console.log("[Warehouse] Refreshing list", { mr: mrName });
-      invalidateForwardCaches(queryClient);
-      await Promise.all([
-        pendingQuery.refetch(),
-        procurementRequiredPersistedQuery.refetch(),
-        procurementQueueQuery.refetch(),
-      ]);
-    },
-    onError: (err: unknown, mrName) =>
-      toast.error(
-        err instanceof Error
-          ? err.message
-          : `Could not send ${mrName} to Procurement.`
-      ),
   });
 
   const allFailed =
@@ -292,8 +257,8 @@ export default function WarehouseDashboardPage() {
       <div className="p-4">
         <div className="rounded-2xl border border-slate-100 bg-white p-8 shadow-sm">
           <ErrorState
-            title="Unable to load Warehouse data."
-            description="We encountered an issue communicating with ERPNext. Please try again."
+            title="Unable to load warehouse data"
+            description="The requested information is temporarily unavailable. Please try again."
             onRetry={handleRetry}
           />
         </div>
@@ -583,12 +548,13 @@ export default function WarehouseDashboardPage() {
                 <td className="py-2 pl-2 text-right">
                   <RowButton
                     tone="primary"
-                    disabled={forwardMutation.isPending && forwardingMr === r.name}
-                    onClick={() => forwardMutation.mutate(r.name)}
+                    onClick={() =>
+                      navigate(
+                        `/warehouse/material-requests/review/${encodeURIComponent(r.name)}`,
+                      )
+                    }
                   >
-                    {forwardMutation.isPending && forwardingMr === r.name
-                      ? "Sending…"
-                      : "Send to Procurement"}
+                    View Details
                   </RowButton>
                 </td>
               </tr>

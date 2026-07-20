@@ -29,11 +29,7 @@ export default function ConnectionStatus() {
     if (inFlightRef.current) return;
     inFlightRef.current = true;
     try {
-      await erpnext.get("/api/resource/Supplier", {
-        params: {
-          limit_page_length: 1,
-          fields: JSON.stringify(["name"]),
-        },
+      await erpnext.get("/api/method/ping", {
         timeout: PING_TIMEOUT_MS,
         _silent: true,
       } as Parameters<typeof erpnext.get>[1]);

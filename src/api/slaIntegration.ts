@@ -75,7 +75,7 @@ export async function syncMaterialRequestSla(
       return;
 
     // "Procurement Required" = shortage identified, but Warehouse hasn't
-    // clicked "Send to Procurement" yet — the Warehouse Review SLA timer
+    // awaiting Confirm & Process — the Warehouse Review SLA timer
     // (started above) keeps running untouched until the actual forward.
     case "Procurement Required":
       return;

@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { ArrowRight, CheckCircle2, Clock, History, XCircle } from "lucide-react";
 
+import { APPROVAL_WORKFLOW_QUERY_KEY } from "../../api/approvalWorkflow";
 import { getFinanceReviewHistory } from "../../api/financeReviews";
 import type { FinanceReviewItem, FinanceReviewStatus } from "../../types/erpnext";
 import { Skeleton } from "../Skeleton";
@@ -15,9 +16,11 @@ const STATUS_TONE: Record<FinanceReviewStatus, string> = {
 
 export default function FinanceReviewHistoryTable() {
   const { data = [], isLoading, isError } = useQuery({
-    queryKey: ["finance-review-history"],
+    queryKey: [APPROVAL_WORKFLOW_QUERY_KEY, "finance-history", 10],
     queryFn: () => getFinanceReviewHistory(10),
-    staleTime: 60_000,
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
     retry: false,
   });
 
@@ -76,7 +79,8 @@ export default function FinanceReviewHistoryTable() {
 }
 
 function HistoryRow({ row }: { row: FinanceReviewItem }) {
-  const tone = STATUS_TONE[row.finance_status];
+  const tone =
+    STATUS_TONE[row.finance_status] ?? "bg-neutral-100 text-neutral-700";
   const Icon =
     row.finance_status === "Budget Approved"
       ? CheckCircle2

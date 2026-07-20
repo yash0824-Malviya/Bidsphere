@@ -2,8 +2,11 @@
  * PO Delivery Workflow API service.
  *
  * Manages the Supplier PO acceptance → delivery → GRN lifecycle.
- * State is persisted per-PO in localStorage and synced to ERPNext
- * custom fields when available.
+ *
+ * Persistence:
+ *   1. ERPNext DocType "PO Shipment" via `/api/po-shipment/*` — single source
+ *      of truth shared with Warehouse Receive Goods (cross-browser).
+ *   2. localStorage cache for instant portal UX / offline resilience.
  *
  * Workflow statuses:
  *   Pending Acceptance → Accepted / Rejected
@@ -12,6 +15,16 @@
 
 import { createNotification } from "./notifications";
 import type { NotificationTargetRole } from "../types/notification";
+import {
+  fetchPoShipment,
+  shipmentRecordToDeliveryState,
+  upsertPoShipmentRemote,
+} from "./poShipment";
+import { queryClient } from "../queryClient";
+import {
+  formatERPNextDate,
+  nowERPNextDatetime,
+} from "../utils/erpNextDate";
 
 /* -------------------------------------------------------------------------- */
 /*  Types                                                                      */
@@ -22,6 +35,8 @@ export type PODeliveryStatus =
   | "Accepted"
   | "Rejected"
   | "In Transit"
+  | "Delivered"
+  | "Arrived"
   | "Partially Received"
   | "Completed";
 
@@ -40,6 +55,8 @@ export interface PODeliveryState {
   vehicle_number?: string;
   tracking_number?: string;
   shipping_notes?: string;
+  /** When supplier marked the shipment In Transit. */
+  dispatch_date?: string;
 
   /* metadata */
   created_at: string;
@@ -80,6 +97,93 @@ export function saveDeliveryState(state: PODeliveryState): void {
   } catch {
     /* ignore storage errors */
   }
+}
+
+/**
+ * Persist to ERPNext PO Shipment + invalidate warehouse incoming list.
+ * Supplier Link is resolved server-side from Purchase Order.supplier — never
+ * pass a company display name (ERPNext Link validation will reject it).
+ */
+export async function persistDeliveryStateToErp(
+  state: PODeliveryState,
+  _erpSupplierId?: string,
+): Promise<void> {
+  try {
+    // eslint-disable-next-line no-console
+    console.log("[PO Delivery] Shipment submitted → ERP upsert", {
+      po_name: state.po_name,
+      status: state.status,
+      vehicle_number: state.vehicle_number,
+      tracking_number: state.tracking_number,
+      expected_delivery_date: state.expected_delivery_date,
+    });
+
+    const record = await upsertPoShipmentRemote({
+      ...state,
+      // Omit supplier — gateway resolves Link from the Purchase Order document.
+      supplier: undefined,
+    });
+
+    // eslint-disable-next-line no-console
+    console.log("[PO Delivery] PO updated / Ready for GRN flag", {
+      po_name: record.po_name,
+      shipment_status: record.shipment_status,
+      ready_for_grn: record.ready_for_grn,
+      warehouse_visible: record.warehouse_visible,
+    });
+
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ["incoming-purchase-orders"],
+        refetchType: "active",
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["warehouse", "incoming-pos"],
+        refetchType: "active",
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["po-shipments"],
+        refetchType: "active",
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["supplier-portal-pos"],
+        refetchType: "active",
+      }),
+    ]);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[PO Delivery] ERP shipment sync failed:", err);
+    throw err instanceof Error
+      ? err
+      : new Error("Failed to sync shipment details to warehouse.");
+  }
+}
+
+/**
+ * Push any localStorage delivery states that are Accepted / In Transit+ into ERP.
+ * Recovers from earlier sync failures (e.g. invalid Supplier Link).
+ */
+export async function resyncLocalDeliveryStatesToErp(
+  erpSupplierId?: string,
+): Promise<number> {
+  const states = getAllDeliveryStates().filter((s) =>
+    ["Accepted", "In Transit", "Delivered", "Arrived", "Partially Received", "Completed"].includes(
+      s.status,
+    ),
+  );
+  let synced = 0;
+  for (const state of states) {
+    try {
+      await persistDeliveryStateToErp(state, erpSupplierId);
+      synced += 1;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[PO Delivery] resync failed for", state.po_name, err);
+    }
+  }
+  // eslint-disable-next-line no-console
+  console.log("[PO Delivery] resync complete", { attempted: states.length, synced });
+  return synced;
 }
 
 function getAllDeliveryStates(): PODeliveryState[] {
@@ -170,7 +274,7 @@ export function ensureDeliveryState(
   const existing = getDeliveryState(poName);
   if (existing) return existing;
 
-  const now = new Date().toISOString();
+  const now = nowERPNextDatetime();
   const state: PODeliveryState = {
     po_name: poName,
     status: "Pending Acceptance",
@@ -191,24 +295,67 @@ export function ensureDeliveryState(
   return state;
 }
 
+/** Statuses where Accept / Reject must not be offered. */
+export const PO_ACCEPTANCE_LOCKED_STATUSES: readonly PODeliveryStatus[] = [
+  "Accepted",
+  "Rejected",
+  "In Transit",
+  "Delivered",
+  "Arrived",
+  "Partially Received",
+  "Completed",
+] as const;
+
+export function isPoPendingSupplierAcceptance(
+  status: string | null | undefined,
+): boolean {
+  return (status || "Pending Acceptance") === "Pending Acceptance";
+}
+
+/**
+ * Prefer ERP PO Shipment (SSoT), fall back to local cache / seed.
+ * Keeps portal UI aligned after accept across reloads / tabs.
+ */
+export async function hydrateDeliveryStateFromErp(
+  poName: string,
+  supplierName?: string,
+): Promise<PODeliveryState> {
+  try {
+    const remote = await fetchPoShipment(poName);
+    if (remote?.po_name && remote.shipment_status) {
+      const mapped = shipmentRecordToDeliveryState(remote);
+      saveDeliveryState(mapped);
+      return mapped;
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("[PO Delivery] ERP hydrate failed; using local cache:", err);
+  }
+  return ensureDeliveryState(poName, supplierName);
+}
+
 /**
  * Supplier accepts the PO and provides delivery details.
+ * Syncs to ERPNext so Warehouse sees ETA / logistics immediately.
  */
-export function acceptPO(
+export async function acceptPO(
   poName: string,
   payload: AcceptPOPayload,
   supplierName?: string
-): PODeliveryState {
-  const state = ensureDeliveryState(poName);
+): Promise<PODeliveryState> {
+  // Re-read ERP first so a prior accept (other tab / failed UI refresh) is visible.
+  const state = await hydrateDeliveryStateFromErp(poName, supplierName);
   if (state.status !== "Pending Acceptance") {
     throw new Error(`Cannot accept PO in status "${state.status}".`);
   }
 
-  const now = new Date().toISOString();
+  const now = nowERPNextDatetime();
   state.status = "Accepted";
   state.supplier_accepted = true;
   state.supplier_acceptance_date = now;
-  state.expected_delivery_date = payload.expected_delivery_date;
+  state.expected_delivery_date =
+    formatERPNextDate(payload.expected_delivery_date) ||
+    payload.expected_delivery_date;
   state.vehicle_number = payload.vehicle_number;
   state.tracking_number = payload.tracking_number;
   state.shipping_notes = payload.shipping_notes;
@@ -218,6 +365,8 @@ export function acceptPO(
 
   // eslint-disable-next-line no-console
   console.log("[PO Delivery] Accepted:", { poName, payload, supplierName });
+
+  await persistDeliveryStateToErp(state, supplierName);
 
   addDeliveryNotification({
     po_name: poName,
@@ -239,17 +388,17 @@ export function acceptPO(
 /**
  * Supplier rejects the PO.
  */
-export function rejectPO(
+export async function rejectPO(
   poName: string,
   payload: RejectPOPayload,
   supplierName?: string
-): PODeliveryState {
-  const state = ensureDeliveryState(poName);
+): Promise<PODeliveryState> {
+  const state = await hydrateDeliveryStateFromErp(poName, supplierName);
   if (state.status !== "Pending Acceptance") {
     throw new Error(`Cannot reject PO in status "${state.status}".`);
   }
 
-  const now = new Date().toISOString();
+  const now = nowERPNextDatetime();
   state.status = "Rejected";
   state.supplier_accepted = false;
   state.rejection_reason = payload.rejection_reason;
@@ -260,6 +409,8 @@ export function rejectPO(
 
   // eslint-disable-next-line no-console
   console.log("[PO Delivery] Rejected:", { poName, payload, supplierName });
+
+  await persistDeliveryStateToErp(state, supplierName);
 
   addDeliveryNotification({
     po_name: poName,
@@ -274,25 +425,31 @@ export function rejectPO(
 /**
  * Update delivery details (vehicle, tracking, etc.) on an accepted PO.
  */
-export function updateDeliveryDetails(
+export async function updateDeliveryDetails(
   poName: string,
   patch: Partial<AcceptPOPayload>,
   supplierName?: string
-): PODeliveryState {
+): Promise<PODeliveryState> {
   const state = getDeliveryState(poName);
   if (!state) throw new Error(`No delivery state for PO ${poName}.`);
   if (state.status === "Pending Acceptance" || state.status === "Rejected") {
     throw new Error(`Cannot update delivery in status "${state.status}".`);
   }
 
-  const now = new Date().toISOString();
-  if (patch.expected_delivery_date) state.expected_delivery_date = patch.expected_delivery_date;
+  const now = nowERPNextDatetime();
+  if (patch.expected_delivery_date) {
+    state.expected_delivery_date =
+      formatERPNextDate(patch.expected_delivery_date) ||
+      patch.expected_delivery_date;
+  }
   if (patch.vehicle_number !== undefined) state.vehicle_number = patch.vehicle_number;
   if (patch.tracking_number !== undefined) state.tracking_number = patch.tracking_number;
   if (patch.shipping_notes !== undefined) state.shipping_notes = patch.shipping_notes;
   state.updated_at = now;
   state.updated_by = supplierName;
   saveDeliveryState(state);
+
+  await persistDeliveryStateToErp(state, supplierName);
 
   addDeliveryNotification({
     po_name: poName,
@@ -307,20 +464,24 @@ export function updateDeliveryDetails(
 /**
  * Transition PO to "In Transit" status.
  */
-export function markInTransit(
+export async function markInTransit(
   poName: string,
   supplierName?: string
-): PODeliveryState {
+): Promise<PODeliveryState> {
   const state = getDeliveryState(poName);
   if (!state) throw new Error(`No delivery state for PO ${poName}.`);
   if (state.status !== "Accepted") {
     throw new Error(`Cannot mark in-transit from status "${state.status}".`);
   }
 
+  const now = nowERPNextDatetime();
   state.status = "In Transit";
-  state.updated_at = new Date().toISOString();
+  state.dispatch_date = now;
+  state.updated_at = now;
   state.updated_by = supplierName;
   saveDeliveryState(state);
+
+  await persistDeliveryStateToErp(state, supplierName);
 
   addDeliveryNotification({
     po_name: poName,
@@ -352,22 +513,35 @@ export function getEffectiveDeliveryStatus(poName: string): PODeliveryStatus {
 
 /**
  * Check whether GRN creation is allowed for this PO.
- * Only allowed when supplier has accepted or shipment is in transit.
+ * Only after shipment is dispatched (In Transit / Delivered / Arrived / …).
  */
 export function canCreateGRNForPO(poName: string): {
   allowed: boolean;
   reason?: string;
 } {
   const status = getEffectiveDeliveryStatus(poName);
-  if (status === "Accepted" || status === "In Transit" || status === "Partially Received" || status === "Completed") {
+  if (
+    status === "In Transit" ||
+    status === "Delivered" ||
+    status === "Arrived" ||
+    status === "Partially Received" ||
+    status === "Completed"
+  ) {
     return { allowed: true };
   }
   if (status === "Rejected") {
     return { allowed: false, reason: "This PO was rejected by the supplier." };
   }
+  if (status === "Accepted") {
+    return {
+      allowed: false,
+      reason: "Shipment is accepted but not yet dispatched. Wait until the supplier marks it In Transit.",
+    };
+  }
   return {
     allowed: false,
-    reason: "Supplier has not confirmed delivery yet. GRN can only be created after the supplier accepts the PO.",
+    reason:
+      "Supplier has not dispatched this shipment yet. GRN can only be created after the shipment is In Transit.",
   };
 }
 
@@ -448,7 +622,7 @@ export function syncDeliveryStateFromERPNext(
   const updated: PODeliveryState = {
     ...state,
     status: next,
-    updated_at: new Date().toISOString(),
+    updated_at: nowERPNextDatetime(),
     updated_by: "ERPNext sync",
   };
   saveDeliveryState(updated);

@@ -401,7 +401,7 @@
     "awarded": "Vergeben"
   },
   "procurementType": {
-    "label": "Beschaffungsart",
+    "label": "Anfrageart",
     "direct": "Direkt",
     "indirect": "Indirekt",
     "all": "Alle",
@@ -409,7 +409,16 @@
     "indirectProcurement": "Indirekte Beschaffung",
     "helpDirect": "Fertigungs-/Rohmaterialien — werden zur Bestandsprüfung an das Lager weitergeleitet.",
     "helpIndirect": "Büro-/Supportartikel — werden zur Genehmigung an die Verwaltung weitergeleitet.",
-    "filterLabel": "Beschaffungsart"
+    "filterLabel": "Anfrageart"
+  },
+  "requestMode": {
+    "label": "Anfragemodus",
+    "existing": "Bestehend",
+    "new": "Neu",
+    "all": "Alle",
+    "filterLabel": "Anfragemodus",
+    "helpExisting": "Artikel ist bereits im Artikelstamm / Katalog vorhanden.",
+    "helpNew": "Artikel existiert noch nicht — manuell eingeben; beim Absenden wird ein Stub-Artikel angelegt."
   },
   "adminReview": {
     "title": "Ausstehende indirekte Anfragen",

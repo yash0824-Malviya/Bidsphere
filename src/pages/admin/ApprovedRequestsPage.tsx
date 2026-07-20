@@ -6,9 +6,13 @@ import { CheckCircle2, Eye, Inbox, Search } from "lucide-react";
 import { listApprovedIndirectRequests } from "../../api/adminApprovals";
 import StatusBadge from "../../components/StatusBadge";
 import ProcurementTypeBadge from "../../components/ProcurementTypeBadge";
+import RequestModeBadge from "../../components/RequestModeBadge";
+import ExportButton from "../../components/export/ExportButton";
 import { Skeleton } from "../../components/Skeleton";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
 import { formatDate } from "../../utils/format";
+import type { ExportColumn } from "../../utils/export";
+import type { AdminApprovalRow } from "../../api/adminApprovals";
 
 export default function ApprovedRequestsPage() {
   const layout = useOptionalLayout();
@@ -63,6 +67,40 @@ export default function ApprovedRequestsPage() {
     fromDate !== "" ||
     toDate !== "";
 
+  const exportColumns = useMemo<ExportColumn<AdminApprovalRow>[]>(
+    () => [
+      { id: "name", label: "MR Number", accessor: (r) => r.name },
+      { id: "department", label: "Department", accessor: (r) => r.department },
+      { id: "requestedBy", label: "Requested By", accessor: (r) => r.requestedBy },
+      { id: "approvedBy", label: "Approved By", accessor: (r) => r.approvedBy },
+      {
+        id: "approvalDate",
+        label: "Approval Date",
+        type: "date",
+        accessor: (r) => r.approvalDate,
+      },
+      {
+        id: "procurementType",
+        label: "Request Type",
+        type: "status",
+        accessor: (r) => r.procurementType,
+      },
+      {
+        id: "requestMode",
+        label: "Request Mode",
+        type: "status",
+        accessor: (r) => r.requestMode,
+      },
+      {
+        id: "status",
+        label: "Status",
+        type: "status",
+        accessor: (r) => r.status,
+      },
+    ],
+    [],
+  );
+
   return (
     <div>
       {/* Header */}
@@ -78,11 +116,19 @@ export default function ApprovedRequestsPage() {
             Indirect Material Requests that passed the admin approval gate.
           </p>
         </div>
-        {data.length > 0 && (
-          <span className="ml-auto flex h-7 min-w-7 items-center justify-center rounded-full bg-emerald-50 px-2.5 text-sm font-bold text-emerald-700">
-            {data.length}
-          </span>
-        )}
+        <div className="ml-auto flex items-center gap-2">
+          <ExportButton
+            module="Approval History"
+            filenamePrefix="Approval_History_Approved"
+            columns={exportColumns}
+            rows={rows}
+          />
+          {data.length > 0 && (
+            <span className="flex h-7 min-w-7 items-center justify-center rounded-full bg-emerald-50 px-2.5 text-sm font-bold text-emerald-700">
+              {data.length}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
@@ -182,7 +228,10 @@ export default function ApprovedRequestsPage() {
                       {formatDate(row.approvalDate)}
                     </td>
                     <td className="px-4 py-3">
-                      <ProcurementTypeBadge type={row.procurementType} />
+                      <div className="flex flex-wrap items-center gap-1">
+                        <ProcurementTypeBadge type={row.procurementType} />
+                        <RequestModeBadge mode={row.requestMode} />
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <StatusBadge status={row.status} />

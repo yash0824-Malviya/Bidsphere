@@ -40,6 +40,7 @@ const MODULE_COLORS: Partial<Record<NotificationModule, string>> = {
   "PO Ready for GRN": "bg-amber-50 text-amber-700",
   GRN: "bg-teal-50 text-teal-700",
   Compliance: "bg-amber-50 text-amber-700",
+  "Live Auction": "bg-sky-50 text-sky-700",
 };
 
 type Tab = "notifications" | "templates";

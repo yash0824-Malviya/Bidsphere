@@ -47,15 +47,18 @@ export default function CompareQuotationsModal({
   onClose: () => void;
   canViewQuotation?: boolean;
 }) {
+  const safeItems = items ?? [];
+  const safeQuotes = quotes ?? [];
   const lowestUnitPriceByItem = new Map<string, number>();
-  for (const it of items) {
-    const prices = quotes
+  for (const it of safeItems) {
+    const prices = safeQuotes
       .map((q) => q.byItem.get(it.item_code)?.unit_price ?? 0)
       .filter((p) => p > 0);
     if (prices.length > 0) lowestUnitPriceByItem.set(it.item_code, Math.min(...prices));
   }
+  const positiveTotals = safeQuotes.map((q) => q.total).filter((t) => t > 0);
   const lowestTotal =
-    quotes.length > 0 ? Math.min(...quotes.map((q) => q.total).filter((t) => t > 0)) : 0;
+    positiveTotals.length > 0 ? Math.min(...positiveTotals) : 0;
 
   return (
     <div
@@ -78,7 +81,7 @@ export default function CompareQuotationsModal({
                 Compare Quotations
               </h2>
               <p className="text-xs text-neutral-500">
-                RFQ {rfqName} · {quotes.length} submitted
+                RFQ {rfqName} · {safeQuotes.length} submitted
               </p>
             </div>
           </div>
@@ -92,7 +95,7 @@ export default function CompareQuotationsModal({
           </button>
         </div>
 
-        {quotes.length === 0 ? (
+        {safeQuotes.length === 0 ? (
           <div className="p-10 text-center text-sm text-neutral-500">
             No supplier has submitted a quotation yet.
           </div>
@@ -104,7 +107,7 @@ export default function CompareQuotationsModal({
                   <th className="sticky left-0 z-10 bg-white px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-neutral-500">
                     Item
                   </th>
-                  {quotes.map((q) => (
+                  {safeQuotes.map((q) => (
                     <th
                       key={q.sqName || q.supplier}
                       className="min-w-[160px] border-b border-neutral-200 px-4 py-3 text-left"
@@ -128,7 +131,7 @@ export default function CompareQuotationsModal({
                 </tr>
               </thead>
               <tbody>
-                {items.map((it) => {
+                {safeItems.map((it) => {
                   const lowest = lowestUnitPriceByItem.get(it.item_code) ?? 0;
                   return (
                     <tr key={it.item_code}>
@@ -140,7 +143,7 @@ export default function CompareQuotationsModal({
                           Qty {it.qty} {it.uom ?? "Nos"}
                         </p>
                       </td>
-                      {quotes.map((q) => {
+                      {safeQuotes.map((q) => {
                         const cell = q.byItem.get(it.item_code);
                         const isLowest =
                           !!cell && cell.unit_price > 0 && cell.unit_price === lowest;
@@ -175,7 +178,7 @@ export default function CompareQuotationsModal({
                   <td className="sticky left-0 z-10 bg-neutral-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
                     Grand Total
                   </td>
-                  {quotes.map((q) => (
+                  {safeQuotes.map((q) => (
                     <td
                       key={q.sqName || q.supplier}
                       className={`px-4 py-3 font-bold tabular-nums ${
@@ -192,7 +195,7 @@ export default function CompareQuotationsModal({
                   <td className="sticky left-0 z-10 bg-white px-4 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
                     Delivery Time
                   </td>
-                  {quotes.map((q) => {
+                  {safeQuotes.map((q) => {
                     const days = [...q.byItem.values()].find((v) => v.delivery_days)
                       ?.delivery_days;
                     return (
@@ -206,7 +209,7 @@ export default function CompareQuotationsModal({
                   <td className="sticky left-0 z-10 bg-neutral-50 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
                     Payment Terms
                   </td>
-                  {quotes.map((q) => (
+                  {safeQuotes.map((q) => (
                     <td key={q.sqName || q.supplier} className="px-4 py-3 text-neutral-700">
                       {q.paymentTerms || "—"}
                     </td>
@@ -216,7 +219,7 @@ export default function CompareQuotationsModal({
                   <td className="sticky left-0 z-10 bg-white px-4 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">
                     Notes
                   </td>
-                  {quotes.map((q) => (
+                  {safeQuotes.map((q) => (
                     <td
                       key={q.sqName || q.supplier}
                       className="max-w-[220px] px-4 py-3 text-xs text-neutral-600"

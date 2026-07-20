@@ -1,11 +1,16 @@
 import type { AxiosError, AxiosResponse } from "axios";
 import erpnext, { apiGet } from "./erpnext";
 import { resolveRoleFromUser, type AppRole } from "../config/roles";
+import { writeAccessToken } from "../utils/accessToken";
 
 export interface LoginResponse {
   message?: string | { message?: string; full_name?: string };
   full_name?: string;
   home_page?: string;
+  role?: AppRole;
+  email?: string;
+  name?: string;
+  access_token?: string;
   exc?: string;
   exception?: string;
 }
@@ -186,29 +191,40 @@ export async function loginWithPassword(
     console.log("[Auth] Login successful for:", usr, "fullName:", fullName);
   }
 
-  // Fetch user roles from ERPNext to support dynamic role resolution
-  let erpnextRoles: string[] = [];
-  try {
-    erpnextRoles = await fetchUserRoles(usr);
-    if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
-      console.log("[Auth] ERPNext roles for", usr, ":", erpnextRoles);
+  // Prefer server-resolved role + access token (RBAC). Fall back to client
+  // resolution when talking to an older auth backend.
+  let role: AppRole =
+    payload?.role ??
+    resolveRoleFromUser({
+      name: usr,
+      email: usr.includes("@") ? usr : `${usr}@erpnext`,
+      erpnext_roles: [],
+    });
+
+  if (!payload?.role) {
+    let erpnextRoles: string[] = [];
+    try {
+      erpnextRoles = await fetchUserRoles(usr);
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.log("[Auth] ERPNext roles for", usr, ":", erpnextRoles);
+      }
+    } catch (roleErr) {
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn("[Auth] Could not fetch ERPNext roles:", roleErr);
+      }
     }
-  } catch (roleErr) {
-    if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
-      console.warn("[Auth] Could not fetch ERPNext roles:", roleErr);
-    }
+    role = resolveRoleFromUser({
+      name: usr,
+      email: usr.includes("@") ? usr : `${usr}@erpnext`,
+      erpnext_roles: erpnextRoles,
+    });
   }
 
-  const profile = {
-    name: usr,
-    email: usr.includes("@") ? usr : `${usr}@erpnext`,
-    full_name: fullName,
-    erpnext_roles: erpnextRoles,
-  };
-
-  const role = resolveRoleFromUser(profile);
+  if (payload?.access_token) {
+    writeAccessToken(payload.access_token, false);
+  }
 
   if (import.meta.env.DEV) {
     // eslint-disable-next-line no-console
@@ -216,9 +232,9 @@ export async function loginWithPassword(
   }
 
   return {
-    name: profile.name,
-    email: profile.email,
-    full_name: profile.full_name,
+    name: payload?.name || usr,
+    email: payload?.email || (usr.includes("@") ? usr : `${usr}@erpnext`),
+    full_name: fullName,
     role,
   };
 }

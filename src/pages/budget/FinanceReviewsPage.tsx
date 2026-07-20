@@ -192,11 +192,15 @@ export default function FinanceReviewsPage() {
 
   const allQuery = useQuery({
 
-    queryKey: ["finance-reviews-all"],
+    queryKey: ["approval-workflow", "finance-reviews-all"],
 
     queryFn: () => getFinanceReviews({ status: "All" }),
 
-    staleTime: 30_000,
+    staleTime: 0,
+
+    refetchOnMount: "always" as const,
+
+    refetchOnWindowFocus: true,
 
     retry: false,
 
@@ -270,7 +274,7 @@ export default function FinanceReviewsPage() {
 
         title="RFQ Financial Review"
 
-        description="Complete audit history of RFQ financial reviews — pending, approved, and rejected. Data sourced from ERPNext."
+        description="Finance Review stage of the shared Legal → Finance → Completed workflow. Same Legal Document Review records Legal uses — filtered by stage only."
 
       />
 
@@ -543,14 +547,14 @@ export default function FinanceReviewsPage() {
 
 function FinanceStatusBadge({ status }: { status: FinanceReviewStatus }) {
 
-  const Icon = STATUS_ICON[status];
+  const Icon = STATUS_ICON[status] ?? Clock;
 
-  const tone = STATUS_TONE[status];
+  const tone = STATUS_TONE[status] ?? "bg-neutral-100 text-neutral-700";
 
   const label =
     status === "Pending Finance Review" ? "Pending"
     : status === "Budget Approved" ? "Approved"
-    : status;
+    : status || "—";
 
   return (
 

@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { lazy, memo, Suspense } from "react";
 import {
   CartesianGrid,
   Line,
@@ -13,7 +13,9 @@ import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import { Skeleton } from "../Skeleton";
 import type { MonthlySpendPoint } from "../../utils/dashboardUtils";
 import { formatCurrency } from "../../utils/format";
-import CategorySpendBreakdown from "./CategorySpendBreakdown";
+
+/** Category donut + filters — load after the spend trend paints. */
+const CategorySpendBreakdown = lazy(() => import("./CategorySpendBreakdown"));
 
 interface Props {
   monthlySpend: MonthlySpendPoint[];
@@ -119,7 +121,9 @@ function AdminSpendCharts({ monthlySpend, loading }: Props) {
         </div>
       </ChartCard>
 
-      <CategorySpendBreakdown />
+      <Suspense fallback={<Skeleton className="min-h-[320px] rounded-xl" />}>
+        <CategorySpendBreakdown />
+      </Suspense>
     </div>
   );
 }

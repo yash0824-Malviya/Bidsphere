@@ -176,7 +176,17 @@ async function computeMonthlySpend(): Promise<
  * false` (never a Frappe error) when none exist so the UI can show
  * "No Active Budget Found".
  */
-export async function getBudgetDashboard(): Promise<BudgetDashboardData> {
+export async function getBudgetDashboard(opts?: {
+  /** Cap utilization fan-out (procurement analytics). Full Budget page omits. */
+  maxBudgets?: number;
+  /** React Query may pass QueryFunctionContext — ignore non-option shapes. */
+  queryKey?: unknown;
+}): Promise<BudgetDashboardData> {
+  const maxBudgets =
+    opts && typeof opts === "object" && typeof opts.maxBudgets === "number"
+      ? opts.maxBudgets
+      : undefined;
+
   let approved: Awaited<ReturnType<typeof fetchApprovedBudgets>> = [];
   try {
     approved = await fetchApprovedBudgets();
@@ -190,13 +200,21 @@ export async function getBudgetDashboard(): Promise<BudgetDashboardData> {
     return { kpis: EMPTY_KPIS, rows: [], currency, hasBudgets: false };
   }
 
+  const utilTargets =
+    typeof maxBudgets === "number" && maxBudgets > 0
+      ? approved.slice(0, maxBudgets)
+      : approved;
   const utils = await Promise.allSettled(
-    approved.map((b) => getBudgetUtilization(b.name)),
+    utilTargets.map((b) => getBudgetUtilization(b.name)),
+  );
+  const utilByName = new Map(
+    utilTargets.map((b, i) => [b.name, utils[i]] as const),
   );
 
-  const rows: BudgetDashboardRow[] = approved.map((b, i) => {
-    const settled = utils[i];
-    const util = settled.status === "fulfilled" ? settled.value : null;
+  const rows: BudgetDashboardRow[] = utilTargets.map((b) => {
+    const settled = utilByName.get(b.name);
+    const util =
+      settled && settled.status === "fulfilled" ? settled.value : null;
     const allocated = util?.budgetAmount ?? b.budget_amount ?? 0;
     const consumed = util?.actualExpense ?? 0;
     const reserved = util?.reservedBudget ?? 0;

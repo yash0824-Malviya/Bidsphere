@@ -93,6 +93,20 @@ const REQUIRED_FIELDS = [
     in_list_view: 1,
   },
   {
+    fieldname: "current_owner",
+    label: "Current Owner",
+    fieldtype: "Data",
+    insert_after: "workflow_state",
+    in_list_view: 1,
+  },
+  {
+    fieldname: "next_approver",
+    label: "Next Approver",
+    fieldtype: "Data",
+    insert_after: "current_owner",
+    in_list_view: 1,
+  },
+  {
     fieldname: "grand_total",
     label: "Grand Total",
     fieldtype: "Currency",
@@ -188,6 +202,51 @@ const REQUIRED_FIELDS = [
     label: "Finance Rejection Reason",
     fieldtype: "Small Text",
     insert_after: "finance_comments",
+  },
+  // ── Legal PDF e-sign (type signature) — future multi-role ready envelope
+  {
+    fieldname: "esign_sb",
+    label: "Electronic Signature",
+    fieldtype: "Section Break",
+    insert_after: "finance_rejection_reason",
+  },
+  {
+    fieldname: "esign_status",
+    label: "E-Sign Status",
+    fieldtype: "Select",
+    options: "\nunsigned\nsigned\nlocked",
+    insert_after: "esign_sb",
+    in_list_view: 1,
+  },
+  {
+    fieldname: "esign_document_hash",
+    label: "Document SHA-256",
+    fieldtype: "Data",
+    insert_after: "esign_status",
+  },
+  {
+    fieldname: "esign_signed_by",
+    label: "E-Signed By",
+    fieldtype: "Data",
+    insert_after: "esign_document_hash",
+  },
+  {
+    fieldname: "esign_signed_on",
+    label: "E-Signed On",
+    fieldtype: "Datetime",
+    insert_after: "esign_signed_by",
+  },
+  {
+    fieldname: "esign_signed_file_url",
+    label: "Signed PDF URL",
+    fieldtype: "Small Text",
+    insert_after: "esign_signed_on",
+  },
+  {
+    fieldname: "esign_envelope",
+    label: "E-Sign Envelope (JSON)",
+    fieldtype: "Long Text",
+    insert_after: "esign_signed_file_url",
   },
 ];
 

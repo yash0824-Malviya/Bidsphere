@@ -76,7 +76,8 @@ export default function PendingActionsSummary({ actions, loading }: Props) {
         <ul className="space-y-2">
           {actions.map((action) => {
             const Icon = ACTION_ICONS[action.id] ?? ClipboardList;
-            const style = PRIORITY_STYLES[action.priority];
+            const style =
+              PRIORITY_STYLES[action.priority] ?? PRIORITY_STYLES.normal;
             return (
               <li key={action.id}>
                 <Link

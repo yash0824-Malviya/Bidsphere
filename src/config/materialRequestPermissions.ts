@@ -57,6 +57,55 @@ export function canAccessMaterialRequestModule(role: AppRole | undefined): boole
   );
 }
 
+/** Department / Admin may upload & delete department attachments on MR (pre-submit). */
+export function canUploadDepartmentAttachments(role: AppRole | undefined): boolean {
+  return role === "department" || role === "admin";
+}
+
+/** View/download engineering attachments across the procurement lifecycle. */
+export function canViewEngineeringAttachments(role: AppRole | undefined): boolean {
+  return (
+    role === "department" ||
+    role === "warehouse" ||
+    role === "procurement" ||
+    role === "legal" ||
+    role === "finance" ||
+    role === "finance_executive" ||
+    role === "admin" ||
+    role === "manufacturing"
+  );
+}
+
+/** Admin has full attachment control. */
+export function canManageAllAttachments(role: AppRole | undefined): boolean {
+  return role === "admin";
+}
+
+/**
+ * Delete rules for engineering attachments (additive UI gate only).
+ * - Department: delete before submission only.
+ * - Admin: always.
+ * - Procurement / Warehouse / Supplier / Legal / Finance: never.
+ */
+export function canDeleteEngineeringAttachment(
+  role: AppRole | undefined,
+  _attachment: { source?: string },
+  opts: { documentSubmitted: boolean },
+): boolean {
+  if (role === "admin") return true;
+  if (opts.documentSubmitted) return false;
+  return role === "department";
+}
+
+/** Whether the role may upload on a Material Request that is still a draft. */
+export function canEditDepartmentAttachmentsOnMr(
+  role: AppRole | undefined,
+  opts: { documentSubmitted: boolean },
+): boolean {
+  if (opts.documentSubmitted) return false;
+  return canUploadDepartmentAttachments(role);
+}
+
 /** Paths each role may use within /material-requests/* */
 export function canAccessMaterialRequestPath(
   role: AppRole,

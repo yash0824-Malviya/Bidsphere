@@ -8,9 +8,15 @@ import { getSupplierPurchaseOrders } from "../../api/supplierPortal";
 import {
   type PODeliveryState,
   ensureDeliveryState,
+  saveDeliveryState,
   updateDeliveryDetails,
   markInTransit,
+  resyncLocalDeliveryStatesToErp,
 } from "../../api/poDeliveryWorkflow";
+import {
+  listPoShipmentsForPos,
+  shipmentRecordToDeliveryState,
+} from "../../api/poShipment";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
 import { TableSkeleton } from "../../components/Skeleton";
@@ -71,7 +77,7 @@ interface EditState {
 }
 
 export default function SupplierDeliverySchedulePage() {
-  const { supplierName, isReady } = useSupplierSession();
+  const { supplierName, erpSupplierName, isReady } = useSupplierSession();
   const [editingPO, setEditingPO] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<EditState>({
     vehicle_number: "",
@@ -81,9 +87,27 @@ export default function SupplierDeliverySchedulePage() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   const posQuery = useQuery({
-    queryKey: ["supplier-portal-pos", supplierName, refreshKey],
-    enabled: !!supplierName,
-    queryFn: () => getSupplierPurchaseOrders(supplierName),
+    queryKey: ["supplier-portal-pos", erpSupplierName, refreshKey],
+    enabled: !!erpSupplierName,
+    queryFn: async () => {
+      const pos = await getSupplierPurchaseOrders(erpSupplierName);
+      // Push any local Accepted / In Transit states that never reached ERP
+      // (e.g. earlier Supplier Link validation failures), then hydrate from SSoT.
+      try {
+        await resyncLocalDeliveryStatesToErp(erpSupplierName);
+      } catch {
+        /* non-fatal — hydrate still runs */
+      }
+      try {
+        const shipments = await listPoShipmentsForPos(pos.map((p) => p.name));
+        for (const ship of shipments) {
+          saveDeliveryState(shipmentRecordToDeliveryState(ship));
+        }
+      } catch {
+        /* local cache still works if ERP hydrate fails */
+      }
+      return pos;
+    },
   });
 
   const rows = useMemo<DeliveryRow[]>(() => {
@@ -91,7 +115,7 @@ export default function SupplierDeliverySchedulePage() {
 
     return posQuery.data
       .map((po) => {
-        const delivery = ensureDeliveryState(po.name, supplierName);
+        const delivery = ensureDeliveryState(po.name, erpSupplierName || supplierName);
         return {
           poName: po.name,
           transactionDate: po.transaction_date,
@@ -102,7 +126,7 @@ export default function SupplierDeliverySchedulePage() {
       .filter((r) =>
         DELIVERY_STATUSES.includes(r.delivery.status as DeliveryFilterStatus)
       );
-  }, [posQuery.data, supplierName, refreshKey]);
+  }, [posQuery.data, erpSupplierName, supplierName, refreshKey]);
 
   const counts = useMemo(() => {
     const c = { scheduled: 0, inTransit: 0, delivered: 0, pending: 0 };
@@ -127,10 +151,10 @@ export default function SupplierDeliverySchedulePage() {
     return c;
   }, [rows]);
 
-  function handleMarkShipped(poName: string) {
+  async function handleMarkShipped(poName: string) {
     try {
-      markInTransit(poName, supplierName);
-      toast.success(`PO ${poName} marked as shipped`);
+      await markInTransit(poName, erpSupplierName || supplierName);
+      toast.success(`PO ${poName} marked as shipped — warehouse can now create GRN.`);
       setRefreshKey((k) => k + 1);
     } catch (err) {
       toast.error(
@@ -152,10 +176,10 @@ export default function SupplierDeliverySchedulePage() {
     setEditingPO(null);
   }
 
-  function saveEditing(poName: string) {
+  async function saveEditing(poName: string) {
     try {
-      updateDeliveryDetails(poName, editForm, supplierName);
-      toast.success("Delivery details updated");
+      await updateDeliveryDetails(poName, editForm, erpSupplierName || supplierName);
+      toast.success("Delivery details updated — warehouse will see the same shipment data.");
       setEditingPO(null);
       setRefreshKey((k) => k + 1);
     } catch (err) {

@@ -263,6 +263,15 @@ export async function createMaterialRequest(
     if (item.rate !== undefined) row.rate = item.rate;
     if (item.amount !== undefined) row.amount = item.amount;
     if (item.cost_center) row.cost_center = item.cost_center;
+    // Engineering attachments live on Material Request Item (not parent MR).
+    // Previously these were dropped here, so Warehouse Review always saw
+    // "No attachments available" even after Department uploaded files.
+    const partName = String(item.custom_part_name ?? "").trim();
+    const drawing2d = String(item.custom_2d_drawing ?? "").trim();
+    const engJson = String(item.custom_engineering_attachments ?? "").trim();
+    if (partName) row.custom_part_name = partName;
+    if (drawing2d) row.custom_2d_drawing = drawing2d;
+    if (engJson) row.custom_engineering_attachments = engJson;
     return row;
   });
 
@@ -1673,7 +1682,11 @@ export async function createPurchaseReceipt(
   data: Partial<PurchaseReceipt>
 ): Promise<PurchaseReceipt> {
   assertCanManageGRN();
+  // eslint-disable-next-line no-console
+  console.log("[createPurchaseReceipt] posting_date before buildGrnPayload:", data.posting_date);
   const payload = buildGrnPayload({ ...data });
+  // eslint-disable-next-line no-console
+  console.log("[createPurchaseReceipt] posting_date after buildGrnPayload (Axios body):", payload.posting_date);
 
   // eslint-disable-next-line no-console
   console.group("GRN CREATE DEBUG");
@@ -1682,7 +1695,7 @@ export async function createPurchaseReceipt(
   // eslint-disable-next-line no-console
   console.log("Company:", payload.company);
   // eslint-disable-next-line no-console
-  console.log("Posting Date:", payload.posting_date);
+  console.log("Posting Date (YYYY-MM-DD wire):", payload.posting_date);
   // eslint-disable-next-line no-console
   console.log("Posting Time:", payload.posting_time);
   // eslint-disable-next-line no-console

@@ -43,28 +43,35 @@ export default function QuotationComparison({
   quotes,
   title = "Quotation Comparison",
 }: Props) {
+  const safeQuotes = quotes ?? [];
+  const safeItems = rfqItems ?? [];
+
   const lowestTotal = useMemo(() => {
-    if (quotes.length === 0) return null;
-    const totals = quotes.map((q) => q.total).filter((t) => t > 0);
+    if (safeQuotes.length === 0) return null;
+    const totals = safeQuotes.map((q) => q.total).filter((t) => t > 0);
     return totals.length ? Math.min(...totals) : null;
-  }, [quotes]);
+  }, [safeQuotes]);
 
   const highestTotal = useMemo(() => {
-    if (quotes.length === 0) return null;
-    const totals = quotes.map((q) => q.total).filter((t) => t > 0);
+    if (safeQuotes.length === 0) return null;
+    const totals = safeQuotes.map((q) => q.total).filter((t) => t > 0);
     return totals.length ? Math.max(...totals) : null;
-  }, [quotes]);
+  }, [safeQuotes]);
 
   // Only dim the "loser" column when the spread is meaningful — if the
   // highest equals the lowest there's nothing to highlight either way.
   const totalSpread =
     lowestTotal !== null &&
     highestTotal !== null &&
-    quotes.length > 1 &&
+    safeQuotes.length > 1 &&
     lowestTotal !== highestTotal;
 
-  if (quotes.length === 0) {
-    return null;
+  if (safeQuotes.length === 0) {
+    return (
+      <div className="rounded-lg border border-neutral-200 bg-white px-5 py-8 text-center text-sm text-neutral-500">
+        No quotations available to compare.
+      </div>
+    );
   }
 
   return (
@@ -82,7 +89,7 @@ export default function QuotationComparison({
           <thead className="bg-neutral-50 text-left text-xs font-medium uppercase tracking-wider text-neutral-500">
             <tr>
               <th className="px-4 py-3 align-bottom">Item</th>
-              {quotes.map((q) => {
+              {safeQuotes.map((q) => {
                 const isWinner = totalSpread && q.total === lowestTotal;
                 const isLoser = totalSpread && q.total === highestTotal;
                 return (
@@ -119,8 +126,8 @@ export default function QuotationComparison({
           </thead>
 
           <tbody className="divide-y divide-neutral-200">
-            {rfqItems.map((it) => {
-              const cells = quotes.map((q) => q.byItem.get(it.item_code));
+            {safeItems.map((it) => {
+              const cells = safeQuotes.map((q) => q.byItem.get(it.item_code));
               const validPrices = cells
                 .map((c) => c?.unit_price ?? 0)
                 .filter((p) => p > 0);
@@ -145,7 +152,7 @@ export default function QuotationComparison({
                     </p>
                   </td>
 
-                  {quotes.map((q, idx) => {
+                  {safeQuotes.map((q, idx) => {
                     const cell = cells[idx];
                     if (!cell || cell.unit_price <= 0) {
                       return (
@@ -205,7 +212,7 @@ export default function QuotationComparison({
               <td className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-neutral-600">
                 🏆 Grand Total
               </td>
-              {quotes.map((q) => {
+              {safeQuotes.map((q) => {
                 const isWinner = totalSpread && q.total === lowestTotal;
                 const isLoser = totalSpread && q.total === highestTotal;
                 return (

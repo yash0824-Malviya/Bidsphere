@@ -8,7 +8,12 @@
 import { apiGet, buildListConfig, buildResourceUrl } from "./erpnext";
 import { getPurchaseOrders, getPurchaseReceipts } from "./purchasing";
 import { daysUntil } from "../utils/upcomingDeliveries";
-import { getFinanceReviews } from "./financeReviews";
+import {
+  computeApprovalWorkflowCounters,
+  filterByWorkflowStage,
+  filterFinancePendingQueue,
+  getApprovalWorkflowRecords,
+} from "./approvalWorkflow";
 import { excludeVoucheredGRNs, getAllInvoices } from "./vouchers";
 
 /** React Query key for Finance dashboard headline KPIs. */
@@ -117,21 +122,33 @@ export async function getGRNsAwaitingInvoice(
   }
 }
 
-/** Aggregate finance dashboard metrics from ERPNext + RFQ workflow. */
+/** Aggregate finance dashboard metrics from ERPNext + shared approval workflow. */
 export async function getFinanceDashboardMetrics(): Promise<FinanceWorkflowKpis> {
-  const [reviewsResult, grnsResult, payablesResult, posResult] =
+  const [workflowResult, grnsResult, payablesResult, posResult] =
     await Promise.allSettled([
-      getFinanceReviews({ status: "All" }),
+      getApprovalWorkflowRecords(),
       getGRNsAwaitingInvoice(),
       getErpNextOutstandingPayables(),
       getOpenPurchaseOrders(),
     ]);
 
-  const financeReviews =
-    reviewsResult.status === "fulfilled" ? reviewsResult.value.items : [];
-  if (reviewsResult.status === "rejected") {
-    logQueryError("finance reviews", reviewsResult.reason);
+  // RFQ review KPIs come from the shared workflow (same dataset Legal uses).
+  const workflowRecords =
+    workflowResult.status === "fulfilled" ? workflowResult.value : [];
+  if (workflowResult.status === "rejected") {
+    logQueryError("approval workflow", workflowResult.reason);
   }
+  const workflowCounters = computeApprovalWorkflowCounters(workflowRecords);
+  const financeReviews = [
+    ...filterFinancePendingQueue(workflowRecords),
+    ...filterByWorkflowStage(workflowRecords, "Completed"),
+    ...filterByWorkflowStage(workflowRecords, "Procurement"),
+  ].map((r) => ({
+    finance_status: isFinancePendingRecordStatus(r.workflowStage)
+      ? "Pending Finance Review"
+      : "Budget Approved",
+    rfq_value: r.grandTotal,
+  }));
 
   const grns = grnsResult.status === "fulfilled" ? grnsResult.value : [];
   if (grnsResult.status === "rejected") {
@@ -158,13 +175,23 @@ export async function getFinanceDashboardMetrics(): Promise<FinanceWorkflowKpis>
   const voucherPayables = await getVoucherOutstandingPayables();
   const payables = mergePayables(erpPayables, voucherPayables);
 
-  return computeFinanceDashboardKpis({
+  const kpis = computeFinanceDashboardKpis({
     financeReviews,
     awaitingCount: grnsFiltered.length,
     unbilledGrnValue,
     openPoValue,
     payables,
   });
+
+  // Prefer shared workflow counters so Legal/Finance never drift.
+  kpis.pendingRfqReviews = workflowCounters.pendingFinance;
+  kpis.approvedRfqs = workflowCounters.approved;
+
+  return kpis;
+}
+
+function isFinancePendingRecordStatus(stage: string): boolean {
+  return stage === "Finance Review";
 }
 
 /**

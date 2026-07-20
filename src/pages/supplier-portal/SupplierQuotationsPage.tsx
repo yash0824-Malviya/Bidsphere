@@ -37,15 +37,15 @@ const SQ_COMPARATORS = supplierQuotationComparators<{
 }>();
 
 export default function SupplierQuotationsPage() {
-  const { supplierName, isReady } = useSupplierSession();
+  const { supplierName, erpSupplierName, isReady } = useSupplierSession();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [submittingDraft, setSubmittingDraft] = useState<string | null>(null);
 
   const sqsQuery = useQuery({
-    queryKey: ["supplier-portal-quotations", supplierName],
-    enabled: !!supplierName,
-    queryFn: () => getSupplierQuotations(supplierName),
+    queryKey: ["supplier-portal-quotations", erpSupplierName],
+    enabled: !!erpSupplierName,
+    queryFn: () => getSupplierQuotations(erpSupplierName),
   });
 
   const sqDetailsQuery = useQuery<SupplierQuotation[]>({

@@ -9,9 +9,17 @@ export const MR_WORKFLOW_FIELD = "custom_bidsphere_status";
 export const MR_PROCUREMENT_TYPE_FIELD = "custom_procurement_type";
 
 /**
+ * Request Mode — whether the requested item(s) already exist in Item Master.
+ * Stored as `custom_request_mode`. Legacy MRs without this field map to Existing.
+ */
+export const MR_REQUEST_MODE_FIELD = "custom_request_mode";
+
+/**
  * Every Material Request belongs to exactly one procurement class:
  *   • Direct   — manufacturing / raw materials. Routed through Warehouse first.
  *   • Indirect — office / support items. Routed through Admin approval first.
+ *
+ * UI label: "Request Type" (field remains custom_procurement_type for compat).
  */
 export type MaterialRequestProcurementType = "Direct" | "Indirect";
 
@@ -21,6 +29,26 @@ export const MATERIAL_REQUEST_PROCUREMENT_TYPES: MaterialRequestProcurementType[
 ];
 
 /**
+ * Request Mode:
+ *   • Existing — item already in Item Master / catalog (legacy default).
+ *   • New      — item does not yet exist; manual entry; stub Item may be created.
+ */
+export type MaterialRequestMode = "Existing" | "New";
+
+export const MATERIAL_REQUEST_MODES: MaterialRequestMode[] = ["Existing", "New"];
+
+/**
+ * Whether the create form should use Item Master dropdowns.
+ * Only Direct + Existing keeps the classic ERP item pickers.
+ * Indirect (any mode) and Direct + New use manual entry.
+ */
+export function usesItemMasterDropdowns(
+  requestType: MaterialRequestProcurementType,
+  requestMode: MaterialRequestMode,
+): boolean {
+  return requestType === "Direct" && requestMode === "Existing";
+}
+/**
  * Canonical Material Request workflow statuses — the ONLY values written to
  * ERPNext (`custom_bidsphere_status`) and rendered in the UI. This is the real
  * ERPNext procurement flow, branched by procurement type:
@@ -29,22 +57,17 @@ export const MATERIAL_REQUEST_PROCUREMENT_TYPES: MaterialRequestProcurementType[
  *     ├▶ DIRECT ──▶ Under Warehouse Review
  *     │              ├─ stock ok ─▶ Stock Available ─▶ Material Issued ─▶ Completed
  *     │              └─ no stock ─▶ Procurement Required
- *     │                              └─ warehouse clicks "Send to Procurement"
+ *     │                              └─ Confirm & Process All Decisions
  *     │                                 ─▶ Forwarded to Procurement ─▶ RFQ Created ─▶ Completed
  *     └▶ INDIRECT ─▶ Admin Review
  *                    ├─ approved  ─▶ Forwarded to Procurement ─▶ RFQ Created ─▶ Completed
  *                    └─ rejected  ─▶ Cancelled
  *   Cancelled (terminal)
  *
- * NOTE: "Procurement Required" and "Forwarded to Procurement" are DISTINCT,
- * genuinely-persisted statuses (both are real ERPNext Select options — see
- * scripts/setup-material-request-workflow.mjs). "Procurement Required" means
- * the warehouse review found a shortage but nobody has clicked "Send to
- * Procurement" yet — it is still a WAREHOUSE-owned item and must never be
- * visible to Procurement. "Forwarded to Procurement" means the explicit send
- * action has run (`forwardMaterialRequestToProcurement`) — the MR now belongs
- * to Procurement's active queue. Collapsing these two into one value was the
- * root cause of the "already forwarded" false-positive bug; keep them separate.
+ * NOTE: "Procurement Required" is a legacy warehouse-owned shortage status.
+ * New Confirm & Process runs write "Forwarded to Procurement" directly via
+ * `forwardMaterialRequestToProcurement`. Keep the statuses distinct so legacy
+ * rows stay warehouse-owned until Confirm is clicked.
  */
 export type MaterialRequestWorkflowStatus =
   | "Draft"
@@ -101,22 +124,18 @@ const LEGACY_STATUS_ALIASES: Record<string, MaterialRequestWorkflowStatus> = {
 };
 
 /**
- * Statuses that make a Material Request eligible for the Procurement Queue —
- * everything from the moment Warehouse records a shortage up to (but not
- * including) completion.
+ * Statuses related to the Procurement hand-off.
  *
- * REGRESSION NOTE: this previously excluded "Procurement Required", requiring
- * a separate, explicit "Send to Procurement" click (on top of the Warehouse
- * review decision that already records the shortage) before a request became
- * visible to Procurement. That extra manual gate did not exist in the
- * original working workflow — Warehouse's shortage decision was ALWAYS the
- * single action that forwarded a request — and its introduction is what
- * caused genuinely-forwarded requests to silently disappear from Procurement's
- * queue. "Procurement Required" is included again so a request is visible the
- * moment Warehouse identifies the shortage, matching the original behaviour.
+ * IMPORTANT — two distinct queues:
+ *   • Warehouse → Procurement Required  = shortages awaiting Stock Decision
+ *     (includes live Under Warehouse Review shortages + legacy
+ *     "Procurement Required")
+ *   • Procurement → Forwarded Material Requests = "Forwarded to Procurement"
+ *     (after Confirm & Process All Decisions; RFQ can be created)
+ *
+ * Do not collapse these — that breaks Warehouse / Procurement screens.
  */
 export const PROCUREMENT_QUEUE_STATUSES: MaterialRequestWorkflowStatus[] = [
-  "Procurement Required",
   "Forwarded to Procurement",
   "RFQ Created",
 ];
@@ -192,6 +211,7 @@ export type MaterialRequestPriority = "Low" | "Medium" | "High" | "Urgent";
 export interface MaterialRequestWorkflowFields {
   [MR_WORKFLOW_FIELD]?: MaterialRequestWorkflowStatus;
   [MR_PROCUREMENT_TYPE_FIELD]?: MaterialRequestProcurementType;
+  [MR_REQUEST_MODE_FIELD]?: MaterialRequestMode;
   custom_department?: string;
   custom_priority?: MaterialRequestPriority;
   custom_purpose?: string;
@@ -221,6 +241,16 @@ export function resolveProcurementType(
   raw: string | null | undefined,
 ): MaterialRequestProcurementType {
   return (raw ?? "").trim().toLowerCase() === "indirect" ? "Indirect" : "Direct";
+}
+
+/**
+ * Resolve Request Mode. Legacy records without `custom_request_mode` map to
+ * Existing (Direct → Direct+Existing, Indirect → Indirect+Existing).
+ */
+export function resolveRequestMode(
+  raw: string | null | undefined,
+): MaterialRequestMode {
+  return (raw ?? "").trim().toLowerCase() === "new" ? "New" : "Existing";
 }
 
 export interface MaterialRequestStockLine {

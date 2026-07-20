@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import EmptyState from "../../components/EmptyState";
+import { AppLoading, EnterpriseError } from "../../components/enterprise";
 import PdfActions from "../../components/PdfActions";
 import ProcurementTimeline from "../../components/supplier-portal/ProcurementTimeline";
 import type { TimelineStep } from "../../components/supplier-portal/ProcurementTimeline";
@@ -36,6 +37,10 @@ import {
   paymentStatus,
   rejectInvoice,
 } from "../../api/vouchers";
+import {
+  canApproveInvoice,
+  canReleasePayment,
+} from "../../config/roles";
 import { useAuthStore } from "../../store/authStore";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
 import { useVoucherSyncStore } from "../../store/voucherSyncStore";
@@ -49,7 +54,8 @@ export default function InvoiceWorkflowDetailPage() {
   const voucherId = decodeURIComponent(id);
   const navigate = useNavigate();
   const role = useAuthStore((s) => s.user?.role);
-  const canAct = role === "finance" || role === "admin";
+  const canAct = canApproveInvoice(role);
+  const canPay = canReleasePayment(role);
 
   const layout = useOptionalLayout();
   useLayoutEffect(() => {
@@ -80,12 +86,7 @@ export default function InvoiceWorkflowDetailPage() {
   if (isLoading) {
     return (
       <div>
-        <BackLink />
-        <EmptyState
-          icon={Receipt}
-          title="Loading invoice…"
-          description=""
-        />
+        <AppLoading variant="document" title="Loading document..." />
       </div>
     );
   }
@@ -93,46 +94,38 @@ export default function InvoiceWorkflowDetailPage() {
   if (isError) {
     return (
       <div>
-        <BackLink />
-        <EmptyState
-          icon={Receipt}
-          title="Could not load this invoice"
-          description={
-            error instanceof Error
-              ? error.message
-              : "ERPNext returned an error while loading this Voucher. Please retry."
-          }
+        <EnterpriseError
+          error={error}
+          onRetry={() => void refetch()}
+          onBack={() => {
+            window.location.assign("/p2p/invoices");
+          }}
         />
-        <button
-          type="button"
-          onClick={() => refetch()}
-          className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50"
-        >
-          Retry
-        </button>
       </div>
     );
   }
 
   if (!voucher) {
+    // eslint-disable-next-line no-console
     console.info(
-      `[Invoice Detail] Lookup failed: no Voucher named "${voucherId}" exists in ERPNext.`
+      `[Invoice Detail] Lookup failed: no voucher named "${voucherId}".`,
     );
     return (
       <div>
-        <BackLink />
-        <EmptyState
-          icon={Receipt}
-          title="Invoice not found"
-          description={`No record exists for "${voucherId}" in ERPNext.`}
+        <EnterpriseError
+          kind="empty"
+          onBack={() => {
+            window.location.assign("/p2p/invoices");
+          }}
         />
       </div>
     );
   }
 
   if (!voucher.invoice) {
+    // eslint-disable-next-line no-console
     console.info(
-      `[Invoice Detail] Voucher "${voucher.id}" was found but has no invoice_json yet — reporting as not-submitted, not "not found".`
+      `[Invoice Detail] Voucher "${voucher.id}" has no invoice yet — not submitted.`,
     );
     return (
       <div>
@@ -140,7 +133,7 @@ export default function InvoiceWorkflowDetailPage() {
         <EmptyState
           icon={Receipt}
           title="No invoice has been submitted"
-          description="This voucher has been verified against ERPNext — the supplier has not raised an invoice for it yet."
+          description="The supplier has not raised an invoice for this voucher yet."
         />
       </div>
     );
@@ -384,7 +377,7 @@ export default function InvoiceWorkflowDetailPage() {
                 <h2 className="text-sm font-semibold text-neutral-900">Payment Summary</h2>
               </div>
               <span
-                className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ring-inset ${PAYMENT_STATUS_TONE[payStatus]}`}
+                className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ring-inset ${PAYMENT_STATUS_TONE[payStatus] ?? "bg-neutral-100 text-neutral-700 ring-neutral-200"}`}
               >
                 {payStatus}
               </span>
@@ -450,7 +443,7 @@ export default function InvoiceWorkflowDetailPage() {
               </div>
             )}
 
-            {canAct && invoiceStatus === "approved" && (
+            {canPay && invoiceStatus === "approved" && (
               <div className="space-y-2">
                 <button
                   type="button"
@@ -608,7 +601,7 @@ function deriveExpectedRelease(
 function InvoiceWorkflowStatusBadge({ status }: { status: InvoiceDisplayStatus }) {
   return (
     <span
-      className={`inline-flex items-center rounded-xl px-3.5 py-1.5 text-sm font-bold ring-2 ring-inset ${INVOICE_DISPLAY_TONE[status]}`}
+      className={`inline-flex items-center rounded-xl px-3.5 py-1.5 text-sm font-bold ring-2 ring-inset ${INVOICE_DISPLAY_TONE[status] ?? "bg-neutral-100 text-neutral-700 ring-neutral-200"}`}
     >
       {status}
     </span>

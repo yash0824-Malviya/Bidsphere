@@ -9,8 +9,17 @@
  *
  * This module validates credentials with a server-side `fetch` and never
  * forwards `Set-Cookie` to the browser. The SPA continues to use API-key
- * token auth for all subsequent ERPNext calls.
+ * token auth for all subsequent ERPNext calls, plus a signed BidSphere
+ * access token for RBAC on custom APIs / the proxy.
  */
+
+import {
+  issueInternalAccessToken,
+  resolveServerRole,
+  type AppRole,
+} from "./rbacAuth.js";
+
+export type { AppRole };
 
 export interface ErpAuthConfig {
   baseUrl: string;
@@ -125,6 +134,10 @@ export async function authenticateWithPassword(
   message: string;
   full_name?: string;
   home_page?: string;
+  role: AppRole;
+  email: string;
+  name: string;
+  access_token: string;
 }> {
   const usr = typeof body.usr === "string" ? body.usr.trim() : "";
   const pwd = typeof body.pwd === "string" ? body.pwd : "";
@@ -220,11 +233,59 @@ export async function authenticateWithPassword(
       ? (msg as { full_name: string }).full_name
       : undefined);
 
+  const { key, secret } = readErpAuthConfig();
+  let erpnextRoles: string[] = [];
+  try {
+    const userUrl =
+      `${baseUrl}/api/resource/User/${encodeURIComponent(usr)}` +
+      `?fields=${encodeURIComponent(JSON.stringify(["name", "email", "enabled", "roles"]))}`;
+    const userRes = await fetch(userUrl, {
+      headers: {
+        Accept: "application/json",
+        Authorization: `token ${key}:${secret}`,
+      },
+    });
+    if (userRes.ok) {
+      const userJson = (await userRes.json()) as {
+        data?: { enabled?: number; roles?: Array<{ role?: string }> };
+      };
+      const userData = userJson.data;
+      if (userData?.enabled === 0) {
+        throw new AuthSessionError(
+          "This account has been disabled. Contact your administrator.",
+          403,
+        );
+      }
+      erpnextRoles = (userData?.roles ?? [])
+        .map((r) => String(r.role || ""))
+        .filter(Boolean);
+    }
+  } catch (err) {
+    if (err instanceof AuthSessionError) throw err;
+    // Role fetch failure is non-fatal — email map still resolves known users.
+  }
+
+  const email = usr.includes("@") ? usr : `${usr}@erpnext`;
+  const role = resolveServerRole({
+    name: usr,
+    email,
+    erpnext_roles: erpnextRoles,
+  });
+  const access_token = issueInternalAccessToken({
+    sub: usr,
+    email,
+    role,
+  });
+
   return {
     message: typeof msg === "string" ? msg : "Logged In",
     full_name: fullName,
     home_page:
       typeof data.home_page === "string" ? data.home_page : undefined,
+    role,
+    email,
+    name: usr,
+    access_token,
   };
 }
 

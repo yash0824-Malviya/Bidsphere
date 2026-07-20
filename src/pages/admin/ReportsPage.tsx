@@ -9,7 +9,9 @@ import {
   Download,
   Factory,
   FileText,
+  Package,
   ShoppingCart,
+  Sparkles,
   Truck,
   DollarSign,
 } from "lucide-react";
@@ -149,7 +151,7 @@ export default function ReportsPage() {
         <h2 className="mb-1.5 text-[9px] font-bold uppercase tracking-wider text-neutral-400">
           {t("reports.procurementTypeBreakdown")}
         </h2>
-        <div className="grid grid-cols-2 gap-2 lg:grid-cols-3 xl:grid-cols-6">
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4 xl:grid-cols-8">
           <TypeKpi
             icon={Factory}
             color="text-blue-600"
@@ -191,6 +193,20 @@ export default function ReportsPage() {
             iconBg="bg-orange-100"
             label={t("reports.indirectPurchaseOrders")}
             value={typeKpis?.indirectPurchaseOrders ?? 0}
+          />
+          <TypeKpi
+            icon={Package}
+            color="text-emerald-600"
+            iconBg="bg-emerald-100"
+            label={t("reports.totalExisting")}
+            value={typeKpis?.existingCount ?? 0}
+          />
+          <TypeKpi
+            icon={Sparkles}
+            color="text-amber-600"
+            iconBg="bg-amber-100"
+            label={t("reports.totalNew")}
+            value={typeKpis?.newCount ?? 0}
           />
         </div>
       </div>

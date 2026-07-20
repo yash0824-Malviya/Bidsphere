@@ -1,6 +1,12 @@
 import { Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
-import { AlertOctagon, RefreshCw } from "lucide-react";
+import { AlertOctagon, Home, RefreshCw } from "lucide-react";
+import BrandLogo from "./BrandLogo";
+import { APP_NAME } from "../config/branding";
+import {
+  createErrorId,
+  reportClientError,
+} from "../utils/clientErrorReporting";
 
 interface Props {
   children: ReactNode;
@@ -8,81 +14,97 @@ interface Props {
 
 interface State {
   error: Error | null;
+  errorId: string | null;
 }
 
 /**
- * Top-level error boundary. Without this, a single thrown component renders
- * an empty `<div id="root"></div>` and looks like a blank white screen.
- *
- * This catches render and lifecycle errors, logs them, and shows a fallback
- * UI with a message + a reload button so the issue is always visible.
+ * Top-level error boundary. Catches render/lifecycle errors and shows a
+ * recovery UI. Never surfaces stack traces or backend details to end users.
  */
 export default class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null };
+  state: State = { error: null, errorId: null };
 
-  static getDerivedStateFromError(error: Error): State {
-    return { error };
+  static getDerivedStateFromError(error: Error): Partial<State> {
+    return { error, errorId: createErrorId() };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
+    const errorId = this.state.errorId || createErrorId();
+    if (!this.state.errorId) {
+      this.setState({ errorId });
+    }
+    // Always surface the real error in the browser console for developers.
     // eslint-disable-next-line no-console
-    console.error("[ErrorBoundary] caught:", error, info.componentStack);
+    console.error("[ErrorBoundary]", errorId, error, info.componentStack);
+    reportClientError(error, {
+      errorId,
+      componentStack: info.componentStack,
+      source: "ErrorBoundary",
+    });
   }
 
   handleReload = () => {
     window.location.reload();
   };
 
-  handleReset = () => {
-    try {
-      localStorage.removeItem("inteva-auth");
-      sessionStorage.clear();
-    } catch {
-      /* ignore */
-    }
-    window.location.assign("/login");
+  handleGoDashboard = () => {
+    window.location.assign("/dashboard");
   };
 
   render() {
     if (!this.state.error) return this.props.children;
 
+    const errorId = this.state.errorId || "ERR-UNKNOWN";
+
     return (
-      <div className="min-h-screen w-full bg-gradient-to-br from-danger-50 via-neutral-50 to-warning-50 flex items-center justify-center p-4">
-        <div className="w-full max-w-lg rounded-2xl border border-danger-200 bg-white p-6 shadow-xl">
+      <div className="flex min-h-screen w-full items-center justify-center bg-white p-4">
+        <div className="enterprise-fade-in w-full max-w-lg rounded-2xl border border-neutral-100 bg-white p-8 shadow-xl">
+          <div className="mb-6 flex flex-col items-center text-center">
+            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl border border-[#146CE8]/15 bg-white shadow-sm">
+              <BrandLogo size="xs" className="max-h-8 max-w-[2rem]" />
+            </div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#146CE8]">
+              {APP_NAME}
+            </p>
+          </div>
+
           <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-danger-50 text-danger-600">
+            <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl bg-amber-50 text-amber-600 ring-1 ring-inset ring-amber-100">
               <AlertOctagon className="h-5 w-5" />
             </div>
             <div className="min-w-0 flex-1">
-              <h1 className="text-lg font-semibold text-neutral-900">
-                Something went wrong
+              <h1 className="text-lg font-semibold tracking-tight text-neutral-900">
+                Unable to load this document
               </h1>
-              <p className="mt-1 text-sm text-neutral-600">
-                The app hit an unexpected error while rendering. The most
-                common cause is a stale local session — clearing it and signing
-                in again usually fixes it.
+              <p className="mt-1.5 text-sm leading-relaxed text-neutral-600">
+                The requested information is temporarily unavailable. Please
+                try again or return to your dashboard.
               </p>
-              <pre className="mt-3 max-h-48 overflow-auto rounded-md bg-neutral-50 p-3 text-xs text-neutral-700 ring-1 ring-inset ring-neutral-200">
-                {this.state.error.name}: {this.state.error.message}
-              </pre>
+              <p className="mt-3 text-xs text-neutral-400">
+                Reference{" "}
+                <span className="font-mono font-semibold text-neutral-600">
+                  {errorId}
+                </span>
+              </p>
             </div>
           </div>
 
-          <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+          <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
             <button
               type="button"
-              onClick={this.handleReset}
-              className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+              onClick={this.handleGoDashboard}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-neutral-200 bg-white px-3.5 py-2 text-sm font-semibold text-neutral-700 hover:bg-neutral-50"
             >
-              Clear session &amp; sign in
+              <Home className="h-3.5 w-3.5" />
+              Back
             </button>
             <button
               type="button"
               onClick={this.handleReload}
-              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-semibold text-white hover:bg-primary-700"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[#146CE8] px-3.5 py-2 text-sm font-semibold text-white hover:bg-[#0F5BC7]"
             >
               <RefreshCw className="h-3.5 w-3.5" />
-              Reload
+              Retry
             </button>
           </div>
         </div>

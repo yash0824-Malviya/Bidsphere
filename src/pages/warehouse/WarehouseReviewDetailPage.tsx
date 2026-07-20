@@ -13,18 +13,41 @@ import {
 } from "lucide-react";
 
 import {
+  Drawing2dCell,
+  PartNameCell,
+} from "../../components/warehouse/EngineeringDocCells";
+import {
   getMaterialRequestDetail,
   rejectMaterialRequest,
 } from "../../services/warehouseService";
 import {
   updateMaterialRequestWorkflowStatus,
   createWarehouseReview,
+  forwardMaterialRequestToProcurement,
 } from "../../api/materialRequestWorkflow";
 import { apiGet, apiPost, buildListConfig, COMPANY } from "../../api/erpnext";
-import ErrorState from "../../components/ErrorState";
+import {
+  forwardToProcurement,
+  invalidateForwardCaches,
+} from "../../services/warehouseService";
+import { AppLoading, EnterpriseError } from "../../components/enterprise";
 import { validateWarehouseBelongsToCompany } from "../../utils/warehouseValidation";
 import { sanitizeFrappeError } from "../../utils/friendlyError";
 import { useAuthStore } from "../../store/authStore";
+import { logMrWorkflowStage } from "../../utils/mrWorkflowDebug";
+import { engineeringCustomFieldsForErp } from "../../utils/materialRequestItemFiles";
+
+function extractSavedDocName(saved: unknown): string | undefined {
+  if (!saved || typeof saved !== "object") return undefined;
+  const doc = saved as Record<string, unknown>;
+  if (typeof doc.name === "string" && doc.name) return doc.name;
+  const message = doc.message;
+  if (message && typeof message === "object") {
+    const inner = message as Record<string, unknown>;
+    if (typeof inner.name === "string" && inner.name) return inner.name;
+  }
+  return undefined;
+}
 
 /** Read-only summary of a completed warehouse decision (session-scoped). */
 interface ProcessedSummary {
@@ -201,6 +224,38 @@ async function cancelStockEntry(
   } catch {
     return "failed";
   }
+}
+
+/** Delete a Draft Material Request created during processing (best-effort). */
+async function deleteDraftMaterialRequest(name: string): Promise<void> {
+  try {
+    await apiPost("/api/method/frappe.client.delete", {
+      doctype: "Material Request",
+      name,
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+async function rollbackWarehouseProcess(opts: {
+  stockEntries: string[];
+  purchaseMr?: string;
+}): Promise<string> {
+  const notes: string[] = [];
+  for (const se of [...opts.stockEntries].reverse()) {
+    const result = await cancelStockEntry(se);
+    notes.push(
+      result === "cancelled"
+        ? `Stock Entry ${se} reversed`
+        : `Stock Entry ${se} could not be reversed — cancel manually in ERPNext`,
+    );
+  }
+  if (opts.purchaseMr) {
+    await deleteDraftMaterialRequest(opts.purchaseMr);
+    notes.push(`Draft Purchase MR ${opts.purchaseMr} removed`);
+  }
+  return notes.join(". ");
 }
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
@@ -407,6 +462,52 @@ export default function WarehouseReviewDetailPage() {
     },
   });
 
+  /**
+   * Legacy MRs stuck on "Procurement Required" (old two-step flow): one Confirm
+   * click forwards them — same final action label, no second Send button.
+   */
+  const handleLegacyForwardOnly = async () => {
+    if (!mrNumber || processing || processedResult) return;
+    setProcessing(true);
+    try {
+      const forwardedBy =
+        currentUser?.full_name ||
+        currentUser?.email ||
+        currentUser?.name ||
+        "Warehouse";
+      await forwardToProcurement(mrNumber, forwardedBy);
+      invalidateForwardCaches(queryClient);
+      void queryClient.invalidateQueries({
+        queryKey: ["warehouse", "mr-detail", mrNumber],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["material-request-workflow", mrNumber],
+      });
+      void queryClient.refetchQueries({ queryKey: ["mr-procurement-queue"] });
+      setProcessedResult({
+        issuedItems: 0,
+        forwardedItems: mrItems.length,
+        issuedQty: 0,
+        forwardedQty: mrItems.reduce((s, i) => s + i.required_qty, 0),
+        processedBy: forwardedBy,
+        processedOn: new Date().toISOString(),
+        remarks: warehouseRemarks.trim(),
+        outcome: "forwarded",
+      });
+      toast.success(`${mrNumber} forwarded to the Procurement Queue.`);
+    } catch (err: unknown) {
+      toast.error(
+        sanitizeFrappeError(
+          err,
+          "Unable to forward this Material Request. Please try again.",
+          "WarehouseReview.legacyForward",
+        ).message,
+      );
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   // ── Process all decisions ────────────────────────────────────────────────────
 
   const handleProcessAll = async () => {
@@ -416,6 +517,8 @@ export default function WarehouseReviewDetailPage() {
     setProcessing(true);
 
     const today = new Date().toISOString().split("T")[0];
+    const createdStockEntries: string[] = [];
+    let newProcurementMR: string | undefined;
 
     try {
       // Fetch Netlink warehouses for fallback & validation
@@ -526,6 +629,7 @@ export default function WarehouseReviewDetailPage() {
         };
 
         const seName = await createAndSubmitStockEntry(doc);
+        createdStockEntries.push(seName);
         await addMRComment(
           mrNumber,
           `Issued ${issueLocalItems.length} item(s) directly from Stores. Stock Entry: ${seName}`,
@@ -536,8 +640,6 @@ export default function WarehouseReviewDetailPage() {
       }
 
       // ─── Branch B: Transfer from remote warehouse → Stores, then issue ───────
-      // This is the "Transfer + Issue" flow. Both steps must succeed or the
-      // transfer is cancelled (rolled back) before the error is reported.
       if (issueTransferItems.length > 0) {
         const sources = issueTransferItems
           .map((i) => itemDecisions[i.item_code]?.bestWarehouse)
@@ -553,7 +655,6 @@ export default function WarehouseReviewDetailPage() {
           netlinkWhNames[0] ??
           "";
 
-        // ── Step 1: Material Transfer ──────────────────────────────────────────
         const transferDoc = {
           doctype: "Stock Entry",
           stock_entry_type: "Material Transfer",
@@ -578,6 +679,7 @@ export default function WarehouseReviewDetailPage() {
         let transferSEName: string;
         try {
           transferSEName = await createAndSubmitStockEntry(transferDoc);
+          createdStockEntries.push(transferSEName);
         } catch (transferErr) {
           const tMsg =
             transferErr instanceof Error
@@ -594,8 +696,6 @@ export default function WarehouseReviewDetailPage() {
           { icon: "🔄" },
         );
 
-        // ── Step 2: Material Issue from Stores ────────────────────────────────
-        // If this fails we cancel the transfer so inventory is restored.
         const issueDoc = {
           doctype: "Stock Entry",
           stock_entry_type: "Material Issue",
@@ -616,23 +716,20 @@ export default function WarehouseReviewDetailPage() {
         let issueSEName: string;
         try {
           issueSEName = await createAndSubmitStockEntry(issueDoc);
+          createdStockEntries.push(issueSEName);
         } catch (issueErr) {
-          // Issue failed — try to cancel the transfer to restore inventory.
-          const rollback = await cancelStockEntry(transferSEName);
-          const rollbackMsg =
-            rollback === "cancelled"
-              ? `Transfer SE ${transferSEName} was automatically reversed — inventory restored.`
-              : `⚠️ Transfer SE ${transferSEName} could NOT be reversed automatically. ` +
-                `Please cancel it manually in ERPNext to restore inventory.`;
+          const rollbackMsg = await rollbackWarehouseProcess({
+            stockEntries: [transferSEName],
+          });
+          createdStockEntries.length = 0;
           const iMsg =
             issueErr instanceof Error ? issueErr.message : String(issueErr);
           throw new Error(
-            `Material Issue from Stores failed. ${rollbackMsg} Issue error: ${iMsg}`,
+            `Material Issue from Stores failed. ${rollbackMsg}. Issue error: ${iMsg}`,
             { cause: issueErr },
           );
         }
 
-        // Both steps confirmed — write audit comment and notify.
         await addMRComment(
           mrNumber,
           `Transfer + Issue completed for ${issueTransferItems.length} item(s). ` +
@@ -644,148 +741,232 @@ export default function WarehouseReviewDetailPage() {
         );
       }
 
-      // ─── Branch C: Create Purchase MR for shortfall items ─────────────────
-      let newProcurementMR: string | undefined;
+      // ─── Branch C: Purchase MR for shortfall + forward to Procurement ──────
+      const forwardedBy =
+        currentUser?.full_name ||
+        currentUser?.email ||
+        currentUser?.name ||
+        "Warehouse";
+      const forwardWarehouse =
+        procurementItems.find((i) => i.warehouse)?.warehouse ||
+        mrItems.find((i) => i.warehouse)?.warehouse ||
+        "";
+
       if (procurementItems.length > 0) {
         const purchaseMRDoc = {
           doctype: "Material Request",
           material_request_type: "Purchase",
+          custom_bidsphere_status: "Draft",
+          custom_procurement_type: mr.procurement_type,
+          custom_request_mode: mr.request_mode,
+          custom_department: mr.department,
+          custom_priority: mr.priority,
+          custom_requested_by: mr.requested_by,
           transaction_date: today,
           schedule_date: today,
           company: COMPANY,
-          items: procurementItems.map((item, idx) => ({
-            doctype: "Material Request Item",
-            idx: idx + 1,
-            item_code: item.item_code,
-            item_name: item.description || item.item_code,
-            description: `${item.description || item.item_code} [Shortfall from ${mrNumber}]`,
-            qty: item.required_qty,
-            uom: item.uom || "Nos",
-            stock_uom: item.uom || "Nos",
-            conversion_factor: 1,
-            schedule_date: today,
-          })),
+          items: procurementItems.map((item, idx) => {
+            // Carry Department engineering attachment URL refs onto the Purchase
+            // MR (no File re-upload). RFQ / Supplier resolve these same URLs.
+            const eng = engineeringCustomFieldsForErp({
+              part_name: item.part_name,
+              drawing_2d_url: item.drawing_2d_url,
+              attachments: item.attachments,
+            });
+            return {
+              doctype: "Material Request Item",
+              idx: idx + 1,
+              item_code: item.item_code,
+              item_name: item.description || item.item_code,
+              description: `${item.description || item.item_code} [Shortfall from ${mrNumber}]`,
+              qty: item.required_qty,
+              uom: item.uom || "Nos",
+              stock_uom: item.uom || "Nos",
+              conversion_factor: 1,
+              schedule_date: today,
+              ...(item.warehouse || forwardWarehouse
+                ? { warehouse: item.warehouse || forwardWarehouse }
+                : {}),
+              ...eng,
+            };
+          }),
         };
 
-        const purchaseMR = await apiPost<MRResponse>(
-          "/api/method/frappe.client.save",
-          { doc: purchaseMRDoc },
-        );
-        newProcurementMR = purchaseMR?.name;
-
-        if (newProcurementMR) {
-          await addMRComment(
-            mrNumber,
-            `${procurementItems.length} item(s) have no stock — Purchase MR created for procurement: ${newProcurementMR}`,
+        try {
+          const purchaseMR = await apiPost<MRResponse>(
+            "/api/method/frappe.client.save",
+            { doc: purchaseMRDoc },
           );
-          await addMRComment(
-            newProcurementMR,
-            `Created from warehouse decision on ${mrNumber}. Items requiring procurement sourcing.`,
-          );
-          toast.success(
-            `📋 ${procurementItems.length} item(s) forwarded — Purchase MR ${newProcurementMR} created`,
+          console.log("Material Request API Response", purchaseMR);
+          newProcurementMR = extractSavedDocName(purchaseMR);
+          if (!newProcurementMR) {
+            throw new Error("Purchase Material Request was not created.");
+          }
+          logMrWorkflowStage("Warehouse Review → Purchase MR created", {
+            name: newProcurementMR,
+            material_request_type: "Purchase",
+            custom_bidsphere_status: "Draft",
+            docstatus: 0,
+          });
+        } catch (createErr) {
+          const rollbackMsg = await rollbackWarehouseProcess({
+            stockEntries: createdStockEntries,
+          });
+          createdStockEntries.length = 0;
+          const msg =
+            createErr instanceof Error ? createErr.message : String(createErr);
+          throw new Error(
+            `Purchase Material Request creation failed. ${rollbackMsg}. ${msg}`,
+            { cause: createErr },
           );
         }
+
+        await addMRComment(
+          mrNumber,
+          `${procurementItems.length} item(s) short — Purchase MR ${newProcurementMR} created and forwarded to Procurement.`,
+        );
+        await addMRComment(
+          newProcurementMR,
+          `Created from warehouse review of ${mrNumber}. Automatically forwarded to the Procurement Queue.`,
+        );
       }
 
-      // ─── Update original MR workflow status ───────────────────────────────
       const hasIssued =
         issueLocalItems.length > 0 || issueTransferItems.length > 0;
       const hasForwarded = procurementItems.length > 0;
 
-      try {
-        if (hasForwarded) {
-          // Tag the ORIGINAL MR with the exact shortfall items/quantities in
-          // the same [BidSphere:ForwardedItems:...] format the Procurement
-          // Queue and RFQ-from-MR flow parse (see parseForwardedItemsFromMr).
-          // Without this, those readers fall back to the MR's FULL original
-          // item quantities — over-stating what's actually left to procure
-          // whenever some items were issued locally alongside a forward.
-          const forwardingData = JSON.stringify(
-            procurementItems.map((item) => ({
-              item_code: item.item_code,
-              item_name: item.description || item.item_code,
-              requested_qty: item.required_qty,
-              issued_qty: 0,
-              forward_qty: item.required_qty,
-              uom: item.uom || "Nos",
-              warehouse: "",
-            })),
-          );
-          const remarksLines = [
-            warehouseRemarks.trim(),
-            newProcurementMR
-              ? `Purchase MR for shortfall: ${newProcurementMR}`
-              : "",
-            `[BidSphere:ForwardedItems:${forwardingData}]`,
-          ].filter(Boolean);
-          const remarksText = remarksLines.length > 0 ? remarksLines.join("\n") : undefined;
+      if (hasForwarded) {
+        // Single final step: forward to Procurement Queue + history + audit.
+        // No intermediate "Procurement Required" / second Send click.
+        const forwardingData = JSON.stringify(
+          procurementItems.map((item) => ({
+            item_code: item.item_code,
+            item_name: item.description || item.item_code,
+            requested_qty: item.required_qty,
+            issued_qty: 0,
+            forward_qty: item.required_qty,
+            uom: item.uom || "Nos",
+            warehouse: item.warehouse || forwardWarehouse || "",
+          })),
+        );
+        const remarksLines = [
+          warehouseRemarks.trim(),
+          newProcurementMR
+            ? `Purchase MR for shortfall: ${newProcurementMR}`
+            : "",
+          `[BidSphere:ForwardedItems:${forwardingData}]`,
+        ].filter(Boolean);
+        const remarksText = remarksLines.join("\n");
 
-          // Write "Forwarded to Procurement" directly (not the intermediate
-          // "Procurement Required" state) — this action IS the warehouse's
-          // single "Forward to Procurement" decision (see the dropdown option
-          // of the same name above), so it must make the request visible in
-          // Procurement's queue immediately. `fetchProcurementQueue` /
-          // `PROCUREMENT_QUEUE_STATUSES` only include "Forwarded to
-          // Procurement" and later stages — leaving this at "Procurement
-          // Required" silently stranded the request in a warehouse-only state
-          // that Procurement's page never queries for.
-          await updateMaterialRequestWorkflowStatus(
-            mrNumber,
-            "Forwarded to Procurement",
-            {
-              custom_warehouse_remarks: remarksText,
-            },
-          );
-          await createWarehouseReview({
-            material_request: mrNumber,
-            warehouse_remarks: remarksText,
-            decision: hasIssued ? "Partially Issued" : "Forwarded to Procurement",
-            issued_qty: issueLocalItems.reduce((sum, i) => sum + i.required_qty, 0) + issueTransferItems.reduce((sum, i) => sum + i.required_qty, 0),
-            forwarded_qty: procurementItems.reduce((sum, i) => sum + i.required_qty, 0),
+        try {
+          if (hasIssued) {
+            await createWarehouseReview({
+              material_request: mrNumber,
+              warehouse_remarks: remarksText,
+              decision: "Partially Issued",
+              issued_qty:
+                issueLocalItems.reduce((sum, i) => sum + i.required_qty, 0) +
+                issueTransferItems.reduce((sum, i) => sum + i.required_qty, 0),
+              forwarded_qty: procurementItems.reduce(
+                (sum, i) => sum + i.required_qty,
+                0,
+              ),
+              warehouse_user: forwardedBy,
+            });
+          }
+
+          await forwardMaterialRequestToProcurement(mrNumber, remarksText, {
+            forwardedBy,
+            skipStockCheck: true,
           });
-        } else if (hasIssued) {
-          const remarksText = warehouseRemarks.trim() || undefined;
-          await updateMaterialRequestWorkflowStatus(
-            mrNumber,
-            "Material Issued",
-            {
-              custom_warehouse_remarks: remarksText,
-            },
+          logMrWorkflowStage(
+            "Warehouse Review → Forwarded to Procurement (single step)",
+            { name: mrNumber, purchaseMR: newProcurementMR },
           );
+        } catch (forwardErr) {
+          const rollbackMsg = await rollbackWarehouseProcess({
+            stockEntries: createdStockEntries,
+            purchaseMr: newProcurementMR,
+          });
+          createdStockEntries.length = 0;
+          newProcurementMR = undefined;
+          console.error(
+            "[Warehouse] Forward to Procurement failed — rolled back:",
+            forwardErr,
+          );
+          const msg =
+            forwardErr instanceof Error
+              ? forwardErr.message
+              : sanitizeFrappeError(
+                  forwardErr,
+                  "Failed to forward Material Request to Procurement.",
+                  "WarehouseReview.forward",
+                ).message;
+          throw new Error(`${msg} ${rollbackMsg}`);
+        }
+
+        toast.success(
+          newProcurementMR
+            ? `${procurementItems.length} item(s) forwarded to Procurement — Purchase MR ${newProcurementMR} created.`
+            : `${procurementItems.length} item(s) forwarded to the Procurement Queue.`,
+        );
+      } else if (hasIssued) {
+        const remarksText = warehouseRemarks.trim() || undefined;
+        try {
+          await updateMaterialRequestWorkflowStatus(mrNumber, "Material Issued", {
+            custom_warehouse_remarks: remarksText,
+          });
           await createWarehouseReview({
             material_request: mrNumber,
             warehouse_remarks: remarksText,
             decision: "Material Issued",
-            issued_qty: issueLocalItems.reduce((sum, i) => sum + i.required_qty, 0) + issueTransferItems.reduce((sum, i) => sum + i.required_qty, 0),
+            issued_qty:
+              issueLocalItems.reduce((sum, i) => sum + i.required_qty, 0) +
+              issueTransferItems.reduce((sum, i) => sum + i.required_qty, 0),
           });
+        } catch (statusErr) {
+          const rollbackMsg = await rollbackWarehouseProcess({
+            stockEntries: createdStockEntries,
+          });
+          createdStockEntries.length = 0;
+          throw new Error(
+            `${
+              statusErr instanceof Error
+                ? statusErr.message
+                : "Failed to mark Material Request as issued."
+            } ${rollbackMsg}`,
+          );
         }
-      } catch {
-        // Status update failure is non-critical if stock entries were already processed
       }
 
-      // ─── Invalidate every affected query key so UI refreshes without reload ──
-      // Warehouse queues / issued / forwarded pages
-      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
-      // Department User dashboard cards and recent requests
+      // Invalidate every MR-related cache so Warehouse + Procurement refresh.
+      invalidateForwardCaches(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["mr-dashboard-rows"] });
       void queryClient.invalidateQueries({ queryKey: ["mr-dashboard-counts"] });
       void queryClient.invalidateQueries({ queryKey: ["mr-dashboard-recent"] });
-      // Procurement queue
-      void queryClient.invalidateQueries({
-        queryKey: ["mr-procurement-queue"],
-      });
-      // MR list / issued tab
       void queryClient.invalidateQueries({ queryKey: ["mr-issued"] });
       void queryClient.invalidateQueries({
-        queryKey: ["material-requests-workflow"],
+        queryKey: ["warehouse", "procurement-required-persisted"],
       });
-      // Individual MR detail cache
+      void queryClient.invalidateQueries({
+        queryKey: ["warehouse", "pending-requests"],
+      });
       if (mrNumber) {
         void queryClient.invalidateQueries({
           queryKey: ["material-request-workflow", mrNumber],
         });
+        void queryClient.invalidateQueries({
+          queryKey: ["warehouse", "mr-detail", mrNumber],
+        });
       }
+      if (newProcurementMR) {
+        void queryClient.invalidateQueries({
+          queryKey: ["material-request-workflow", newProcurementMR],
+        });
+      }
+      // Force procurement queue refetch immediately (don't wait for observers).
+      void queryClient.refetchQueries({ queryKey: ["mr-procurement-queue"] });
+      void queryClient.refetchQueries({ queryKey: ["warehouse"] });
 
       // Flip the page to its read-only, post-processing state and render the
       // decision summary. We intentionally do NOT auto-navigate away — the
@@ -836,29 +1017,16 @@ export default function WarehouseReviewDetailPage() {
   // ── Loading / Error guards ────────────────────────────────────────────────────
 
   if (detailQuery.isLoading) {
-    return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <div className="space-y-3 text-center">
-          <Loader2 className="mx-auto h-10 w-10 animate-spin text-primary-600" />
-          <p className="text-sm font-medium text-slate-500">
-            Loading material request…
-          </p>
-        </div>
-      </div>
-    );
+    return <AppLoading variant="document" />;
   }
 
   if (detailQuery.isError || !mr) {
     return (
-      <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
-        <div className="rounded-2xl border border-slate-100 bg-white p-8 shadow-sm">
-          <ErrorState
-            title="Unable to load request details"
-            description={`Could not load ${mrNumber ?? "this material request"}.`}
-            onRetry={() => void detailQuery.refetch()}
-          />
-        </div>
-      </div>
+      <EnterpriseError
+        error={detailQuery.error ?? new Error("not found")}
+        onRetry={() => void detailQuery.refetch()}
+        onBack={() => window.history.back()}
+      />
     );
   }
 
@@ -962,6 +1130,8 @@ export default function WarehouseReviewDetailPage() {
                   <th className="whitespace-nowrap px-5 py-3.5 text-right">
                     Requested Qty
                   </th>
+                  <th className="whitespace-nowrap px-5 py-3.5">Part Name</th>
+                  <th className="whitespace-nowrap px-5 py-3.5">Attachments</th>
                   <th className="whitespace-nowrap px-5 py-3.5 text-right">
                     Local Warehouse Stock
                   </th>
@@ -996,7 +1166,7 @@ export default function WarehouseReviewDetailPage() {
                           {item.item_code}
                         </td>
                         <td
-                          colSpan={10}
+                          colSpan={13}
                           className="px-5 py-4 text-xs text-slate-400"
                         >
                           <span className="flex items-center gap-2">
@@ -1027,6 +1197,17 @@ export default function WarehouseReviewDetailPage() {
                       </td>
                       <td className="px-5 py-4 text-right font-medium tabular-nums text-slate-800">
                         {item.required_qty}
+                      </td>
+
+                      {/* Engineering docs from Department MR — view only */}
+                      <td className="px-5 py-4">
+                        <PartNameCell value={item.part_name} />
+                      </td>
+                      <td className="px-5 py-4">
+                        <Drawing2dCell
+                          url={item.drawing_2d_url}
+                          attachments={item.attachments}
+                        />
                       </td>
 
                       {/* Local Stores qty */}
@@ -1283,8 +1464,8 @@ export default function WarehouseReviewDetailPage() {
                 {processedResult.outcome === "issued"
                   ? "Material Issued Successfully"
                   : processedResult.outcome === "forwarded"
-                    ? "Purchase Material Request Created"
-                    : "Partially Issued and Remaining Items Forwarded to Procurement"}
+                    ? "Shortage Items Forwarded to Procurement"
+                    : "Partially Issued — Remaining Items Forwarded to Procurement"}
               </p>
             </div>
           </div>
@@ -1325,7 +1506,14 @@ export default function WarehouseReviewDetailPage() {
                 Processed On
               </dt>
               <dd className="mt-1 text-sm font-medium text-slate-800">
-                {new Date(processedResult.processedOn).toLocaleString()}
+                {(() => {
+                  const d = processedResult.processedOn
+                    ? new Date(processedResult.processedOn)
+                    : null;
+                  return d && !Number.isNaN(d.getTime())
+                    ? d.toLocaleString()
+                    : "—";
+                })()}
               </dd>
             </div>
             {processedResult.purchaseMR && (
@@ -1360,14 +1548,14 @@ export default function WarehouseReviewDetailPage() {
               to={
                 processedResult.outcome === "issued"
                   ? "/warehouse/material-requests/issued"
-                  : "/warehouse/material-requests/forwarded"
+                  : "/warehouse/material-requests/history"
               }
               className="inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white no-underline shadow-sm transition hover:opacity-90"
               style={{ background: "#2D6A4F" }}
             >
               {processedResult.outcome === "issued"
                 ? "View Issued History"
-                : "View Procurement Queue"}
+                : "View Forwarded History"}
             </Link>
           </div>
         </div>
@@ -1390,19 +1578,38 @@ export default function WarehouseReviewDetailPage() {
               </div>
             </div>
           ) : mr.status === "Procurement Required" ? (
-            <div className="flex items-start gap-4">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-orange-100 text-orange-600">
                 <Truck className="h-5 w-5" />
               </div>
-              <div>
+              <div className="min-w-0 flex-1">
                 <h3 className="font-bold text-slate-800">
-                  Procurement Required
+                  Awaiting Final Warehouse Processing
                 </h3>
                 <p className="mt-1 text-sm text-slate-500">
-                  Items with insufficient stock were recorded for procurement.
-                  Click "Send to Procurement" from the Procurement Required
-                  queue to forward this request.
+                  Shortage was recorded earlier. Confirm below to forward this
+                  request to the Procurement Queue in one step — no separate
+                  Send action.
                 </p>
+                <button
+                  type="button"
+                  disabled={processing}
+                  onClick={() => void handleLegacyForwardOnly()}
+                  style={{ background: "#2D6A4F" }}
+                  className="mt-4 inline-flex items-center gap-2 rounded-xl px-6 py-3 text-sm font-bold text-white shadow-sm transition hover:opacity-90 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {processing ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Processing…
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="h-4 w-4" />
+                      Confirm &amp; Process All Decisions
+                    </>
+                  )}
+                </button>
               </div>
             </div>
           ) : mr.status === "Forwarded to Procurement" ? (

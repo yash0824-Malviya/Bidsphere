@@ -4,18 +4,23 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, ChevronDown, ChevronRight, Package, Truck } from "lucide-react";
 
 import {
+  getLinkedRfqName,
+  getMaterialRequestMode,
   getMaterialRequestProcurementType,
   getMaterialRequestWorkflowStatus,
   fetchProcurementQueue,
   parseForwardedItemsFromMr,
   type MaterialRequestWorkflowRecord,
 } from "../../api/materialRequestWorkflow";
+import { canCreateRfqFromMaterialRequest } from "../../api/createRFQFromMaterialRequest";
 import type {
+  MaterialRequestMode,
   MaterialRequestProcurementType,
   MaterialRequestWorkflowStatus,
 } from "../../types/materialRequestWorkflow";
 import StatusBadge from "../../components/StatusBadge";
 import ProcurementTypeBadge from "../../components/ProcurementTypeBadge";
+import RequestModeBadge from "../../components/RequestModeBadge";
 import ErrorState from "../../components/ErrorState";
 import PaginationBar from "../../components/PaginationBar";
 import { TableSkeleton } from "../../components/Skeleton";
@@ -24,8 +29,13 @@ import ForwardedFilterBar, {
   EMPTY_FORWARDED_FILTERS,
   type ForwardedFilters,
 } from "../../components/material-requests/ForwardedFilterBar";
+import {
+  Drawing2dCell,
+  PartNameCell,
+} from "../../components/warehouse/EngineeringDocCells";
 import { usePagination } from "../../hooks/usePagination";
 import { formatDate, formatDateTime } from "../../utils/format";
+import { pickEngineeringDocs } from "../../utils/materialRequestItemFiles";
 
 /* ─── types ─────────────────────────────────────────────────────────────── */
 
@@ -37,6 +47,9 @@ interface ShortageItem {
   forward_qty: number;
   uom: string;
   warehouse: string;
+  part_name?: string;
+  drawing_2d_url?: string;
+  attachments?: import("../../utils/materialRequestItemFiles").EngineeringAttachment[];
 }
 
 interface GroupedMrRow {
@@ -45,6 +58,7 @@ interface GroupedMrRow {
   department: string;
   warehouse: string;
   procurementType: MaterialRequestProcurementType;
+  requestMode: MaterialRequestMode;
   priority: string;
   requiredDate: string;
   forwardedOn: string;
@@ -81,6 +95,9 @@ function buildGroupedMrRows(
             .map((fi) => {
               const forward_qty = fi.forward_qty ?? fi.shortage_qty ?? 0;
               const requested_qty = fi.requested_qty ?? forward_qty;
+              const mrItem = (mr.items ?? []).find(
+                (i) => i.item_code === fi.item_code,
+              );
               return {
                 item_code: fi.item_code,
                 item_name: fi.item_name ?? fi.item_code,
@@ -90,6 +107,7 @@ function buildGroupedMrRows(
                 forward_qty,
                 uom: fi.uom ?? "Nos",
                 warehouse: fi.warehouse ?? "—",
+                ...pickEngineeringDocs(mrItem),
               };
             })
         : (mr.items ?? [])
@@ -104,6 +122,7 @@ function buildGroupedMrRows(
                 forward_qty: requested_qty,
                 uom: item.uom ?? "Nos",
                 warehouse: item.warehouse ?? "—",
+                ...pickEngineeringDocs(item),
               };
             });
 
@@ -120,6 +139,7 @@ function buildGroupedMrRows(
         shortageItems.find((i) => i.warehouse && i.warehouse !== "—")
           ?.warehouse ?? "—",
       procurementType: getMaterialRequestProcurementType(mr),
+      requestMode: getMaterialRequestMode(mr),
       priority: mr.custom_priority || "Medium",
       requiredDate: mr.schedule_date ? formatDate(mr.schedule_date) : "—",
       forwardedOn: forwardedOnOf(mr),
@@ -136,17 +156,24 @@ function buildGroupedMrRows(
 /* ─── action cell ────────────────────────────────────────────────────────── */
 
 function ActionCell({ mr }: { mr: MaterialRequestWorkflowRecord }) {
-  // Once an RFQ is linked, offer "View RFQ" (defensive — the active queue
-  // filters these into History, but a lingering row must never show Create RFQ
-  // twice).
-  if (mr.custom_linked_rfq) {
+  // Once an RFQ exists (custom field, remarks tag, or stamped after RFQ Item
+  // lookup), never offer Create RFQ again.
+  const linkedRfq = getLinkedRfqName(mr);
+  if (linkedRfq || !canCreateRfqFromMaterialRequest(mr)) {
+    if (linkedRfq) {
+      return (
+        <Link
+          to={`/sourcing/rfq/${encodeURIComponent(linkedRfq)}`}
+          className="inline-flex items-center gap-1 rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs font-semibold text-primary-600 no-underline hover:bg-neutral-50"
+        >
+          View RFQ
+        </Link>
+      );
+    }
     return (
-      <Link
-        to={`/sourcing/rfq/${encodeURIComponent(mr.custom_linked_rfq)}`}
-        className="inline-flex items-center gap-1 rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs font-semibold text-primary-600 no-underline hover:bg-neutral-50"
-      >
-        View RFQ
-      </Link>
+      <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200">
+        RFQ Created
+      </span>
     );
   }
 
@@ -176,18 +203,10 @@ export default function MaterialRequestProcurementPage() {
     refetchOnWindowFocus: true,
   });
 
-  // Active queue = any request Warehouse has forwarded (shortage recorded,
-  // i.e. "Procurement Required" or the explicit "Forwarded to Procurement")
-  // that doesn't have an RFQ yet — matches `PROCUREMENT_QUEUE_STATUSES`.
-  // RFQ-created MRs move to Forwarded History.
+  // API is the source of truth (Forwarded to Procurement only). Keep a light
+  // RFQ-link guard so Create RFQ never double-fires.
   const allRows = useMemo(
-    () =>
-      buildGroupedMrRows(mrs).filter(
-        (r) =>
-          !r.mr.custom_linked_rfq &&
-          (r.status === "Procurement Required" ||
-            r.status === "Forwarded to Procurement"),
-      ),
+    () => buildGroupedMrRows(mrs).filter((r) => !getLinkedRfqName(r.mr)),
     [mrs],
   );
 
@@ -215,6 +234,8 @@ export default function MaterialRequestProcurementPage() {
       if (filters.priority && r.priority !== filters.priority) return false;
       if (filters.procurementType && r.procurementType !== filters.procurementType)
         return false;
+      if (filters.requestMode && r.requestMode !== filters.requestMode)
+        return false;
       if (dateFloor && r.forwardedOn) {
         const d = new Date(r.forwardedOn);
         if (!Number.isNaN(d.getTime()) && d < dateFloor) return false;
@@ -224,12 +245,24 @@ export default function MaterialRequestProcurementPage() {
   }, [allRows, filters]);
 
   useEffect(() => {
-    console.log(`[Procurement] Rendering ${rows.length} records`, {
-      apiReturned: mrs.length,
-      afterActiveFilter: allRows.length,
-      rendered: rows.map((r) => r.mrNumber),
+    console.log("[Procurement] UI render", {
+      numberOfPurchaseMrsFound: mrs.length,
+      appliedFilters: filters,
+      finalRenderedRows: rows.map((r) => ({
+        mrNumber: r.mrNumber,
+        purpose: r.mr.material_request_type,
+        bidsphereStatus: r.mr.custom_bidsphere_status ?? r.status,
+        department: r.department,
+        warehouse: r.warehouse,
+        priority: r.priority,
+        requiredDate: r.requiredDate,
+        forwardedOn: r.forwardedOn,
+        requestedBy: r.requestedBy,
+        totalItems: r.totalItems,
+        remainingQty: r.totalRemainingQty,
+      })),
     });
-  }, [rows, allRows.length, mrs.length]);
+  }, [rows, mrs.length, filters]);
 
   // Derived from a computed workflow-status roll-up (not a raw ERPNext
   // column) plus multiple free-text filters, so the fetch stays a single
@@ -360,6 +393,7 @@ export default function MaterialRequestProcurementPage() {
                               {row.mrNumber}
                             </Link>
                             <ProcurementTypeBadge type={row.procurementType} withIcon={false} />
+                            <RequestModeBadge mode={row.requestMode} />
                           </div>
                         </td>
                         <td className="whitespace-nowrap px-4 py-3 text-neutral-700">
@@ -435,6 +469,8 @@ export default function MaterialRequestProcurementPage() {
                                     <th className="px-4 py-2 text-left font-semibold">Item Code</th>
                                     <th className="px-4 py-2 text-left font-semibold">Item Name</th>
                                     <th className="px-4 py-2 text-right font-semibold">Requested Qty</th>
+                                    <th className="px-4 py-2 text-left font-semibold">Part Name</th>
+                                    <th className="px-4 py-2 text-left font-semibold">Attachments</th>
                                     <th className="px-4 py-2 text-right font-semibold">Available Qty</th>
                                     <th className="px-4 py-2 text-right font-semibold">Remaining Qty</th>
                                     <th className="px-4 py-2 text-left font-semibold">UOM</th>
@@ -455,6 +491,15 @@ export default function MaterialRequestProcurementPage() {
                                       </td>
                                       <td className="whitespace-nowrap px-4 py-2 text-right tabular-nums text-neutral-700">
                                         {item.requested_qty}
+                                      </td>
+                                      <td className="px-4 py-2">
+                                        <PartNameCell value={item.part_name} />
+                                      </td>
+                                      <td className="px-4 py-2">
+                                        <Drawing2dCell
+                                          url={item.drawing_2d_url}
+                                          attachments={item.attachments}
+                                        />
                                       </td>
                                       <td className="whitespace-nowrap px-4 py-2 text-right tabular-nums text-neutral-600">
                                         {item.available_qty}

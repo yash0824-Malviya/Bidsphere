@@ -10,7 +10,6 @@ import {
   DollarSign,
   Download,
   ExternalLink,
-  FileCheck2,
   FileText,
   Layers,
   Loader2,
@@ -28,13 +27,18 @@ import {
   getPurchaseOrder,
   submitPurchaseOrder,
 } from "../../api/purchasing";
-import EmptyState from "../../components/EmptyState";
-import { Skeleton } from "../../components/Skeleton";
+import { AppLoading, EnterpriseError } from "../../components/enterprise";
 import StatusBadge from "../../components/StatusBadge";
 import SlaStageBadge from "../../components/sla/SlaStageBadge";
 import { useAuthStore } from "../../store/authStore";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
-import { canCreateGRN } from "../../config/roles";
+import {
+  canApproveInvoice,
+  canCreateGRN,
+  canManageVouchers,
+  canSubmitPurchaseOrder,
+  canViewGRN,
+} from "../../config/roles";
 import {
   type PODeliveryState,
   getDeliveryState,
@@ -58,6 +62,7 @@ import {
   downloadPurchaseOrderPdf,
   printPurchaseOrderPdf,
 } from "../../utils/pdf";
+import LineEngineeringDocsCell from "../../components/attachments/LineEngineeringDocsCell";
 
 type TabKey = "items" | "grn" | "invoices" | "audit";
 
@@ -81,7 +86,7 @@ export default function PurchaseOrderDetailPage() {
     return () => layout?.unregisterPageHeader();
   }, [layout]);
 
-  const { data: po, isLoading, isError } = useQuery({
+  const { data: po, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["purchase-order", name],
     queryFn: () => getPurchaseOrder(name),
     enabled: !!name,
@@ -121,27 +126,16 @@ export default function PurchaseOrderDetailPage() {
   });
 
   if (isLoading) {
-    return (
-      <div className="space-y-2">
-        <Skeleton className="h-5 w-40 rounded" />
-        <Skeleton className="h-14 rounded" />
-        <div className="grid grid-cols-4 gap-1.5">{[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-12 rounded" />)}</div>
-        <div className="grid grid-cols-[1fr_240px] gap-2">
-          <Skeleton className="h-[420px] rounded" />
-          <Skeleton className="h-[420px] rounded" />
-        </div>
-      </div>
-    );
+    return <AppLoading variant="document" />;
   }
 
   if (isError || !po) {
     return (
-      <div>
-        <Link to="/p2p/purchase-orders" className="mb-2 inline-flex items-center gap-1 text-xs text-neutral-500 hover:text-primary-600">
-          <ArrowLeft className="h-3.5 w-3.5" /> Back
-        </Link>
-        <EmptyState icon={FileCheck2} title="Purchase order not found" description="It may have been deleted, or you may not have access." />
-      </div>
+      <EnterpriseError
+        error={error ?? new Error("not found")}
+        onRetry={() => void refetch()}
+        onBack={() => window.history.back()}
+      />
     );
   }
 
@@ -210,6 +204,17 @@ export default function PurchaseOrderDetailPage() {
   const isFullyReceived = receivedPct >= 100;
   const hasInvoice = !!primaryInvoice;
   const allInvoicesPaid = workflowSnapshot.workflowComplete;
+  const openVoucher =
+    poVouchers.find(
+      (v) =>
+        !!v.invoice ||
+        ["invoice_raised", "under_review", "invoice_approved", "invoice_rejected"].includes(
+          v.status,
+        ),
+    ) ?? poVouchers[0];
+  const hasSupplierInvoice = !!openVoucher?.invoice;
+  const needsVoucher =
+    hasSubmittedGRN && poVouchers.length === 0 && !hasInvoice;
 
   const itemCount = (po.items ?? []).length;
   const grandTotal = po.grand_total ?? 0;
@@ -221,6 +226,11 @@ export default function PurchaseOrderDetailPage() {
     navigate(
       `/p2p/invoices/${encodeURIComponent(primaryInvoice.name)}?fromPo=${encodeURIComponent(po.name)}`
     );
+  };
+
+  const openSupplierInvoiceReview = () => {
+    if (!openVoucher?.id) return;
+    navigate(`/p2p/invoices/${encodeURIComponent(openVoucher.id)}`);
   };
 
   const auditEntries = [
@@ -265,7 +275,7 @@ export default function PurchaseOrderDetailPage() {
           </div>
         </div>
         <div className="flex flex-shrink-0 items-center gap-1.5">
-          {isDraft && (
+          {isDraft && canSubmitPurchaseOrder(role) && (
             <ActionBtn
               icon={Send}
               label="Submit PO"
@@ -282,18 +292,50 @@ export default function PurchaseOrderDetailPage() {
               variant={hasSubmittedGRN ? "ghost" : "success"}
             />
           )}
-          {isSubmitted && hasSubmittedGRN && (
+          {isSubmitted &&
+            hasSubmittedGRN &&
+            canViewGRN(role) &&
+            (isFullyReceived || !canCreateGRN(role)) && (
+            <ActionBtn
+              icon={PackagePlus}
+              label="View GRN"
+              onClick={() =>
+                navigate(
+                  `/p2p/grn/${encodeURIComponent(submittedGRNs[0]?.name ?? "")}`,
+                )
+              }
+              variant="ghost"
+            />
+          )}
+          {/* Finance creates vouchers only — suppliers create invoices in the portal. */}
+          {isSubmitted && needsVoucher && canManageVouchers(role) && (
+            <ActionBtn
+              icon={FileText}
+              label="Create Voucher"
+              onClick={() =>
+                navigate(
+                  `/p2p/grn/${encodeURIComponent(submittedGRNs[0]?.name ?? "")}`,
+                )
+              }
+              variant="success"
+            />
+          )}
+          {isSubmitted &&
+            hasSupplierInvoice &&
+            canApproveInvoice(role) && (
+              <ActionBtn
+                icon={Receipt}
+                label="Review Invoice"
+                onClick={openSupplierInvoiceReview}
+                variant="success"
+              />
+            )}
+          {isSubmitted && hasInvoice && (
             <ActionBtn
               icon={Receipt}
-              label={hasInvoice ? "View Invoice" : "Create Invoice"}
-              onClick={() =>
-                hasInvoice
-                  ? openInvoiceDetail()
-                  : navigate(
-                      `/p2p/grn/${encodeURIComponent(submittedGRNs[0]?.name ?? "")}`
-                    )
-              }
-              variant={hasInvoice ? "ghost" : "success"}
+              label="View Invoice"
+              onClick={openInvoiceDetail}
+              variant="ghost"
             />
           )}
           <ActionBtn
@@ -371,7 +413,13 @@ export default function PurchaseOrderDetailPage() {
               })}
             </div>
             <div className="rounded-b-lg border border-t-0 border-neutral-200 bg-white shadow-sm">
-              {activeTab === "items" && <ItemsTab items={po.items ?? []} grandTotal={grandTotal} />}
+              {activeTab === "items" && (
+                <ItemsTab
+                  items={po.items ?? []}
+                  grandTotal={grandTotal}
+                  rfqName={po.remarks || po.custom_rfq_reference}
+                />
+              )}
               {activeTab === "grn" && <GRNTab grns={grns} poName={po.name} />}
               {activeTab === "invoices" && (
                 <InvoicesTab invoices={activeInvoices} poName={po.name} />
@@ -397,6 +445,26 @@ export default function PurchaseOrderDetailPage() {
           {/* Actions */}
           <SideCard title="Actions">
             <div className="space-y-1.5">
+              {needsVoucher && canManageVouchers(role) && (
+                <SideActionBtn
+                  icon={FileText}
+                  label="Create Voucher"
+                  onClick={() =>
+                    navigate(
+                      `/p2p/grn/${encodeURIComponent(submittedGRNs[0]?.name ?? "")}`,
+                    )
+                  }
+                  tone="primary"
+                />
+              )}
+              {hasSupplierInvoice && canApproveInvoice(role) && (
+                <SideActionBtn
+                  icon={Receipt}
+                  label="Review Invoice"
+                  onClick={openSupplierInvoiceReview}
+                  tone="primary"
+                />
+              )}
               {hasInvoice && (
                 <SideActionBtn
                   icon={Receipt}
@@ -532,9 +600,23 @@ export default function PurchaseOrderDetailPage() {
 function ItemsTab({
   items,
   grandTotal,
+  rfqName,
 }: {
-  items: Array<{ name?: string; item_code: string; item_name?: string; qty: number; rate?: number; amount?: number; uom?: string; received_qty?: number; billed_amt?: number }>;
+  items: Array<{
+    name?: string;
+    item_code: string;
+    item_name?: string;
+    qty: number;
+    rate?: number;
+    amount?: number;
+    uom?: string;
+    received_qty?: number;
+    billed_amt?: number;
+    material_request?: string;
+    material_request_item?: string;
+  }>;
   grandTotal: number;
+  rfqName?: string;
 }) {
   if (items.length === 0) return <p className="px-4 py-5 text-center text-xs text-neutral-500">No items on this Purchase Order.</p>;
 
@@ -545,6 +627,7 @@ function ItemsTab({
           <tr className="border-b border-neutral-200">
             <th className="px-3 py-1.5 text-left font-semibold text-neutral-500 w-9">#</th>
             <th className="px-3 py-1.5 text-left font-semibold text-neutral-500">Item</th>
+            <th className="px-3 py-1.5 text-left font-semibold text-neutral-500 min-w-[160px]">Attachments</th>
             <th className="px-3 py-1.5 text-right font-semibold text-neutral-500 w-16">Qty</th>
             <th className="px-3 py-1.5 text-left font-semibold text-neutral-500 w-14">UOM</th>
             <th className="px-3 py-1.5 text-right font-semibold text-neutral-500 w-24">Rate</th>
@@ -556,25 +639,37 @@ function ItemsTab({
         <tbody>
           {items.map((item, idx) => (
             <tr key={item.name ?? idx} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50/60">
-              <td className="px-3 py-1.5 text-neutral-400">{idx + 1}</td>
-              <td className="px-3 py-1.5">
+              <td className="px-3 py-1.5 text-neutral-400 align-top">{idx + 1}</td>
+              <td className="px-3 py-1.5 align-top">
                 <span className="font-medium text-neutral-900">{item.item_code}</span>
                 {item.item_name && item.item_name !== item.item_code && (
                   <span className="ml-1.5 text-neutral-500">{item.item_name}</span>
                 )}
               </td>
-              <td className="px-3 py-1.5 text-right tabular-nums font-medium">{item.qty}</td>
-              <td className="px-3 py-1.5 text-neutral-500">{item.uom ?? "Nos"}</td>
-              <td className="px-3 py-1.5 text-right tabular-nums">{formatCurrency(item.rate ?? 0)}</td>
-              <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{formatCurrency(item.amount ?? 0)}</td>
-              <td className="px-3 py-1.5 text-right tabular-nums text-neutral-600">{item.received_qty ?? 0}</td>
-              <td className="px-3 py-1.5 text-right tabular-nums text-neutral-600">{formatCurrency(item.billed_amt ?? 0)}</td>
+              <td className="px-3 py-1.5 align-top">
+                <LineEngineeringDocsCell
+                  lookup={{
+                    item_code: item.item_code,
+                    material_request: item.material_request,
+                    material_request_item: item.material_request_item,
+                    purchase_order_item: item.name,
+                    rfq_name: rfqName,
+                  }}
+                  showPartName
+                />
+              </td>
+              <td className="px-3 py-1.5 text-right tabular-nums font-medium align-top">{item.qty}</td>
+              <td className="px-3 py-1.5 text-neutral-500 align-top">{item.uom ?? "Nos"}</td>
+              <td className="px-3 py-1.5 text-right tabular-nums align-top">{formatCurrency(item.rate ?? 0)}</td>
+              <td className="px-3 py-1.5 text-right tabular-nums font-semibold align-top">{formatCurrency(item.amount ?? 0)}</td>
+              <td className="px-3 py-1.5 text-right tabular-nums text-neutral-600 align-top">{item.received_qty ?? 0}</td>
+              <td className="px-3 py-1.5 text-right tabular-nums text-neutral-600 align-top">{formatCurrency(item.billed_amt ?? 0)}</td>
             </tr>
           ))}
         </tbody>
         <tfoot className="sticky bottom-0 bg-neutral-50">
           <tr className="border-t border-neutral-200">
-            <td colSpan={5} className="px-3 py-2 text-right text-xs font-semibold text-neutral-700">Grand Total</td>
+            <td colSpan={6} className="px-3 py-2 text-right text-xs font-semibold text-neutral-700">Grand Total</td>
             <td className="px-3 py-2 text-right text-xs font-bold tabular-nums text-neutral-900">{formatCurrency(grandTotal)}</td>
             <td colSpan={2} />
           </tr>

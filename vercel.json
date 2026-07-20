@@ -13,6 +13,22 @@
       "destination": "/api/legal-review?action=$1"
     },
     {
+      "source": "/api/bom/(.*)",
+      "destination": "/api/bom?action=$1"
+    },
+    {
+      "source": "/api/supplier-onboarding/(.*)",
+      "destination": "/api/supplier-onboarding?action=$1"
+    },
+    {
+      "source": "/api/po-shipment/(.*)",
+      "destination": "/api/po-shipment?action=$1"
+    },
+    {
+      "source": "/api/supplier-voucher/(.*)",
+      "destination": "/api/supplier-voucher?action=$1"
+    },
+    {
       "source": "/api/file-proxy",
       "destination": "/api/file-proxy"
     },

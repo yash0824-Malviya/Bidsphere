@@ -64,7 +64,7 @@ function supplierRiskLevel(s: SupplierAnalysisRow): RiskLevel {
   if (s.verdict === "AVOID") return "High";
   if (s.verdict === "EXPENSIVE") return "Medium";
   const rel = s.score?.reliability ?? 50;
-  if (rel < 40 || s.weaknesses.length >= 3) return "High";
+  if (rel < 40 || (s.weaknesses ?? []).length >= 3) return "High";
   if (rel < 65 || s.verdict === "GOOD OPTION") return "Medium";
   return "Low";
 }
@@ -126,7 +126,7 @@ function buildDecisionPoints(
     pts.push({ label: "Top-ranked supplier by AI evaluation", icon: Award });
   }
 
-  const hasCompleteQuote = row.strengths.some(
+  const hasCompleteQuote = (row.strengths ?? []).some(
     (s) => /complete|quotation|all items/i.test(s)
   );
   if (hasCompleteQuote) {
@@ -137,7 +137,7 @@ function buildDecisionPoints(
     pts.push({ label: "Strong supplier reliability rating", icon: Shield });
   }
 
-  const highRisks = analysis.risk_flags.filter(
+  const highRisks = (analysis.risk_flags ?? []).filter(
     (f) => f.severity === "high"
   ).length;
   if (highRisks === 0) {
@@ -189,17 +189,15 @@ function buildRecommendationNarrative(
   return `Based on ${joined}, ${supplierName} achieved the highest overall evaluation score and was recommended for award.`;
 }
 
-function formatDisplayDate(iso: string): string {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
-  } catch {
-    return iso;
-  }
+function formatDisplayDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
 }
 
 /* ══════════════════════════════════════════════════════════════════════════ */
@@ -416,16 +414,16 @@ export default function SupplierSelectionSummary({
 
             {/* ═══ Strengths & Areas to Note ═══ */}
             {supplierRow &&
-              (supplierRow.strengths.length > 0 ||
-                supplierRow.weaknesses.length > 0) && (
+              ((supplierRow.strengths ?? []).length > 0 ||
+                (supplierRow.weaknesses ?? []).length > 0) && (
                 <div className="grid gap-4 sm:grid-cols-2">
-                  {supplierRow.strengths.length > 0 && (
+                  {(supplierRow.strengths ?? []).length > 0 && (
                     <div className="rounded-xl border border-success-100 bg-success-50/50 p-4">
                       <p className="mb-2.5 text-[10px] font-bold uppercase tracking-widest text-success-700">
                         Strengths
                       </p>
                       <ul className="space-y-1.5">
-                        {supplierRow.strengths.map((s, i) => (
+                        {(supplierRow.strengths ?? []).map((s, i) => (
                           <li
                             key={i}
                             className="flex items-start gap-2 text-sm text-neutral-700"
@@ -437,13 +435,13 @@ export default function SupplierSelectionSummary({
                       </ul>
                     </div>
                   )}
-                  {supplierRow.weaknesses.length > 0 && (
+                  {(supplierRow.weaknesses ?? []).length > 0 && (
                     <div className="rounded-xl border border-amber-100 bg-amber-50/50 p-4">
                       <p className="mb-2.5 text-[10px] font-bold uppercase tracking-widest text-amber-700">
                         Areas to Note
                       </p>
                       <ul className="space-y-1.5">
-                        {supplierRow.weaknesses.map((w, i) => (
+                        {(supplierRow.weaknesses ?? []).map((w, i) => (
                           <li
                             key={i}
                             className="flex items-start gap-2 text-sm text-neutral-700"

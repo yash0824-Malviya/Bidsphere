@@ -59,8 +59,8 @@ function ExecutiveInsightsPanel({ insights, loading }: Props) {
         </h3>
       </div>
       <ul className="flex flex-wrap gap-2">
-        {insights.map((insight) => {
-          const style = TONE[insight.tone];
+        {(insights ?? []).map((insight) => {
+          const style = TONE[insight.tone] ?? TONE.info;
           const Icon = style.icon;
           return (
             <li

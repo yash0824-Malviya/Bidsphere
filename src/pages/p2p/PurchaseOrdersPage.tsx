@@ -16,6 +16,8 @@ import PageHeader from "../../components/PageHeader";
 import PaginationBar from "../../components/PaginationBar";
 import { TableSkeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
+import ExportButton from "../../components/export/ExportButton";
+import type { ExportColumn } from "../../utils/export";
 import {
   FilterBar,
   FilterField,
@@ -170,11 +172,61 @@ export default function PurchaseOrdersPage() {
     });
   }
 
+  const exportColumns = useMemo<ExportColumn<PurchaseOrder>[]>(
+    () => [
+      { id: "name", label: "PO Number", accessor: (r) => r.name },
+      {
+        id: "supplier",
+        label: "Supplier",
+        accessor: (r) => r.supplier_name || r.supplier,
+      },
+      {
+        id: "transaction_date",
+        label: "Date",
+        type: "date",
+        accessor: (r) => r.transaction_date,
+      },
+      {
+        id: "status",
+        label: "Status",
+        type: "status",
+        accessor: (r) => r.status,
+      },
+      {
+        id: "grand_total",
+        label: "Total",
+        type: "currency",
+        accessor: (r) => r.grand_total,
+      },
+      {
+        id: "per_received",
+        label: "% Received",
+        type: "number",
+        accessor: (r) => r.per_received,
+      },
+      {
+        id: "per_billed",
+        label: "% Billed",
+        type: "number",
+        accessor: (r) => r.per_billed,
+      },
+    ],
+    [],
+  );
+
   return (
     <div>
       <PageHeader
         title="Purchase Orders"
         description="Track all open and completed purchase orders."
+        actions={
+          <ExportButton
+            module="Purchase Orders"
+            filenamePrefix="Purchase_Orders"
+            columns={exportColumns}
+            rows={sortedRows}
+          />
+        }
       />
 
       <FilterBar>

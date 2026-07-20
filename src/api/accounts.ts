@@ -13,6 +13,11 @@ import {
   COMPANY,
 } from "./erpnext";
 import type { ListParams } from "./erpnext";
+import {
+  canCreateInvoice,
+  canReleasePayment,
+} from "../config/roles";
+import { useAuthStore } from "../store/authStore";
 import { DEFAULT_CURRENCY } from "../utils/format";
 import {
   buildPaymentEntryPayload,
@@ -26,6 +31,24 @@ import {
   FALLBACK_PAYMENT_MODES,
   sortPaymentModes,
 } from "../utils/usPaymentMethods";
+
+function assertCanCreateInvoice(): void {
+  const role = useAuthStore.getState().user?.role;
+  if (!canCreateInvoice(role)) {
+    throw new Error(
+      "Access denied. Only Finance Manager, Accounts Payable, or Finance Admin can create ERP Purchase Invoices during payment processing.",
+    );
+  }
+}
+
+function assertCanReleasePayment(): void {
+  const role = useAuthStore.getState().user?.role;
+  if (!canReleasePayment(role)) {
+    throw new Error(
+      "Access denied. Only Finance Manager, Accounts Payable, or Finance Admin can release payments.",
+    );
+  }
+}
 
 /** Thrown when supplier ledger currency conflicts with invoice payable account. */
 export class InvoiceCurrencyMismatchError extends Error {
@@ -54,6 +77,21 @@ export class InvoiceCurrencyMismatchError extends Error {
 const PURCHASE_INVOICE_DOCTYPE = "Purchase Invoice";
 const PAYMENT_ENTRY_DOCTYPE = "Payment Entry";
 const MODE_OF_PAYMENT_DOCTYPE = "Mode of Payment";
+
+function isTimestampConflict(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return (
+    /TimestampMismatchError/i.test(msg) ||
+    /modified after you opened it/i.test(msg) ||
+    /Document has been modified/i.test(msg)
+  );
+}
+
+function readModifiedStamp(doc: unknown): string | undefined {
+  if (!doc || typeof doc !== "object") return undefined;
+  const row = doc as { modified?: string; data?: { modified?: string } };
+  return row.modified ?? row.data?.modified;
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Purchase Invoice                                                          */
@@ -290,7 +328,19 @@ export async function getPurchaseInvoice(
 export async function createPurchaseInvoice(
   data: Partial<PurchaseInvoice>
 ): Promise<PurchaseInvoice> {
-  const payload = buildPurchaseInvoicePayload({ ...data });
+  assertCanCreateInvoice();
+  // make_purchase_invoice drafts often include server meta (modified/name/…).
+  // Strip lock/identity fields so POST create never carries a stale stamp.
+  const {
+    name: _n,
+    modified: _m,
+    creation: _c,
+    owner: _o,
+    modified_by: _mb,
+    idx: _i,
+    ...clean
+  } = data as Partial<PurchaseInvoice> & Record<string, unknown>;
+  const payload = buildPurchaseInvoicePayload({ ...clean });
   // eslint-disable-next-line no-console
   console.log("Final API Payload", payload);
   const created = await apiPost<PurchaseInvoice>(
@@ -298,10 +348,15 @@ export async function createPurchaseInvoice(
     payload
   );
   // Keep spend-driven dashboards (Category Spend Breakdown, KPIs) live.
+  void import("./procurementDashboardTruth").then((m) =>
+    m.invalidateProcurementTruthCounts(),
+  );
   void queryClient.invalidateQueries({ queryKey: ["dashboard-category-spend"] });
   void queryClient.invalidateQueries({ queryKey: ["dashboard-analytics"] });
+  void queryClient.invalidateQueries({ queryKey: ["procurement-dashboard-charts"] });
   void queryClient.invalidateQueries({ queryKey: ["dashboard-counts"] });
   void queryClient.invalidateQueries({ queryKey: ["procurement-dashboard-kpis"] });
+  void queryClient.invalidateQueries({ queryKey: ["procurement-analytics"] });
   return created;
 }
 
@@ -708,26 +763,26 @@ export async function createInvoiceFromReceipt(
 }
 
 /**
- * Patch a draft Purchase Invoice so `credit_to` and exchange rates are valid
- * before submission. ERPNext rejects submit when payable account currency
- * conflicts with the supplier's existing ledger currency.
+ * Resolve credit_to + conversion_rate for a draft Purchase Invoice without
+ * writing. Used so prepare + submit can be a single PUT (avoids
+ * TimestampMismatchError from prepare-PUT then stale submit-PUT).
  */
-export async function preparePurchaseInvoiceForSubmit(
-  name: string
-): Promise<PurchaseInvoice> {
-  const inv = await getPurchaseInvoice(name);
-  if ((inv.docstatus ?? 0) !== 0) return inv;
-
+async function resolvePurchaseInvoiceSubmitFields(
+  inv: PurchaseInvoice & { company?: string },
+): Promise<{
+  creditTo: string;
+  accountCurrency: string;
+  conversionRate: number;
+  needsFieldUpdate: boolean;
+  note?: string;
+}> {
   const invoiceCurrency = inv.currency ?? "USD";
   const company = inv.company ?? COMPANY;
-  const supplier = inv.supplier;
-
   const resolved = await resolvePurchaseInvoiceCreditTo(
     company,
-    supplier,
-    invoiceCurrency
+    inv.supplier,
+    invoiceCurrency,
   );
-
   const companyCurrency = await getCompanyCurrency(company);
   const conversionRate =
     invoiceCurrency === companyCurrency
@@ -735,116 +790,202 @@ export async function preparePurchaseInvoiceForSubmit(
       : await getExchangeRate(
           invoiceCurrency,
           companyCurrency,
-          inv.posting_date ?? todayERPNextDate()
+          inv.posting_date ?? todayERPNextDate(),
         );
-
   const currentCreditCurrency = inv.credit_to
     ? await getAccountCurrency(inv.credit_to)
     : null;
-
-  const needsUpdate =
+  const needsFieldUpdate =
     inv.credit_to !== resolved.creditTo ||
     currentCreditCurrency !== resolved.accountCurrency ||
     Math.abs((inv.conversion_rate ?? 0) - conversionRate) > 0.0001;
 
-  if (!needsUpdate) return inv;
+  return {
+    creditTo: resolved.creditTo,
+    accountCurrency: resolved.accountCurrency,
+    conversionRate,
+    needsFieldUpdate,
+    note: resolved.message,
+  };
+}
+
+/**
+ * Patch a draft Purchase Invoice so `credit_to` and exchange rates are valid.
+ * Always reloads `modified` immediately before PUT (ERPNext optimistic lock).
+ */
+export async function preparePurchaseInvoiceForSubmit(
+  name: string,
+): Promise<PurchaseInvoice> {
+  const inv = await getPurchaseInvoice(name);
+  if ((inv.docstatus ?? 0) !== 0) return inv;
+
+  const fields = await resolvePurchaseInvoiceSubmitFields(inv);
+  if (!fields.needsFieldUpdate) return inv;
 
   /* eslint-disable no-console */
   console.group("[Invoice] preparePurchaseInvoiceForSubmit");
   console.log("  invoice            :", name);
-  console.log("  credit_to          :", inv.credit_to, "→", resolved.creditTo);
-  console.log("  payable currency   :", resolved.accountCurrency);
-  console.log("  conversion_rate    :", inv.conversion_rate, "→", conversionRate);
-  if (resolved.message) console.warn("  note:", resolved.message);
+  console.log("  credit_to          :", inv.credit_to, "→", fields.creditTo);
+  console.log("  payable currency   :", fields.accountCurrency);
+  console.log(
+    "  conversion_rate    :",
+    inv.conversion_rate,
+    "→",
+    fields.conversionRate,
+  );
+  if (fields.note) console.warn("  note:", fields.note);
   console.groupEnd();
   /* eslint-enable no-console */
 
   return updatePurchaseInvoice(name, {
-    credit_to: resolved.creditTo,
-    conversion_rate: conversionRate,
+    credit_to: fields.creditTo,
+    conversion_rate: fields.conversionRate,
   });
 }
 
-/** Update an existing Purchase Invoice. */
+/** Update an existing Purchase Invoice (fresh `modified` stamp on every PUT). */
 export async function updatePurchaseInvoice(
   name: string,
-  data: Partial<PurchaseInvoice>
+  data: Partial<PurchaseInvoice>,
 ): Promise<PurchaseInvoice> {
-  return apiPut<PurchaseInvoice>(
-    buildResourceUrl(PURCHASE_INVOICE_DOCTYPE, name),
-    data
-  );
+  assertCanCreateInvoice();
+  const url = buildResourceUrl(PURCHASE_INVOICE_DOCTYPE, name);
+  const write = async (): Promise<PurchaseInvoice> => {
+    const fresh = await apiGet<PurchaseInvoice>(url);
+    const modified = readModifiedStamp(fresh);
+    const body: Record<string, unknown> = { ...data };
+    if (modified) body.modified = modified;
+    return apiPut<PurchaseInvoice>(url, body);
+  };
+  try {
+    return await write();
+  } catch (err) {
+    if (!isTimestampConflict(err)) throw err;
+    return write();
+  }
 }
 
 /**
  * Submit a Purchase Invoice — transitions docstatus 0 → 1.
- * Uses GET-then-PUT (same proven pattern as PO/GRN/RFQ submission).
+ *
+ * Same proven pattern as PO/GRN/RFQ submit:
+ *  1. Optionally prepare credit_to / conversion_rate (separate locked PUT).
+ *  2. GET the latest document for an exact `modified` stamp.
+ *  3. PUT { docstatus: 1, modified } only — never mix field updates into submit.
+ *  4. Retry once on TimestampMismatchError after a fresh reload.
+ *
+ * Important: `modified` must not be rewritten by date sanitizers (fractional
+ * seconds are part of Frappe's optimistic lock).
+ *
  * `frappe.client.submit(doctype, docname)` raises
  * "submit() missing 1 required positional argument: 'doc'".
  */
 export async function submitPurchaseInvoice(
-  name: string
+  name: string,
 ): Promise<PurchaseInvoice> {
-  // Fix credit_to / conversion_rate before submit.
-  const prepared = await preparePurchaseInvoiceForSubmit(name);
+  assertCanCreateInvoice();
+  const url = buildResourceUrl(PURCHASE_INVOICE_DOCTYPE, name);
 
-  const invoiceCurrency = prepared.currency ?? "USD";
-  const payableCurrency =
-    prepared.credit_to
-      ? await getAccountCurrency(prepared.credit_to)
-      : invoiceCurrency;
+  const attemptSubmit = async (): Promise<PurchaseInvoice> => {
+    const inv = await getPurchaseInvoice(name);
+    if ((inv.docstatus ?? 0) !== 0) return inv;
 
-  if (prepared.credit_to) {
+    const fields = await resolvePurchaseInvoiceSubmitFields(inv);
+    const invoiceCurrency = inv.currency ?? "USD";
+    const payableCurrency = fields.accountCurrency || invoiceCurrency;
+
     const ledgerCurrency = await getSupplierLedgerCurrency(
-      prepared.supplier,
-      prepared.company ?? COMPANY
+      inv.supplier,
+      inv.company ?? COMPANY,
     );
-    if (
-      ledgerCurrency &&
-      payableCurrency !== ledgerCurrency
-    ) {
+    if (ledgerCurrency && payableCurrency !== ledgerCurrency) {
       throw new InvoiceCurrencyMismatchError(
-        `Cannot submit invoice: supplier "${prepared.supplier}" requires payable ` +
-          `account in ${ledgerCurrency}, but "${prepared.credit_to}" is ${payableCurrency}.`,
+        `Cannot submit invoice: supplier "${inv.supplier}" requires payable ` +
+          `account in ${ledgerCurrency}, but "${fields.creditTo}" is ${payableCurrency}.`,
         {
-          supplier: prepared.supplier,
+          supplier: inv.supplier,
           invoiceCurrency,
           ledgerCurrency,
-          creditTo: prepared.credit_to,
-        }
+          creditTo: fields.creditTo,
+        },
       );
     }
-  }
 
-  const modified =
-    (prepared as { modified?: string }).modified ??
-    (prepared as { data?: { modified?: string } }).data?.modified;
-  const body: Record<string, unknown> = { docstatus: 1 };
-  if (modified) body.modified = modified;
+    // Step A — field prepare (locked PUT), never combined with docstatus.
+    if (fields.needsFieldUpdate) {
+      /* eslint-disable no-console */
+      console.info("[Invoice] prepare before submit", {
+        name,
+        credit_to: fields.creditTo,
+        conversion_rate: fields.conversionRate,
+      });
+      /* eslint-enable no-console */
+      await updatePurchaseInvoice(name, {
+        credit_to: fields.creditTo,
+        conversion_rate: fields.conversionRate,
+      });
+    }
+
+    // Step B — reload immediately, then submit with ONLY docstatus + modified.
+    const fresh = await apiGet<PurchaseInvoice>(url);
+    if ((fresh.docstatus ?? 0) !== 0) return fresh;
+
+    const modified = readModifiedStamp(fresh);
+    const body: Record<string, unknown> = { docstatus: 1 };
+    if (modified) body.modified = modified;
+
+    /* eslint-disable no-console */
+    console.info("[Invoice] submitPurchaseInvoice", {
+      name,
+      modified,
+      payload: body,
+    });
+    /* eslint-enable no-console */
+
+    return apiPut<PurchaseInvoice>(url, body);
+  };
 
   try {
-    const submitted = await apiPut<PurchaseInvoice>(
-      buildResourceUrl(PURCHASE_INVOICE_DOCTYPE, name),
-      body
-    );
-    // Submitted invoice → Consumed Budget increases. Refresh budget views.
+    let submitted: PurchaseInvoice;
+    try {
+      submitted = await attemptSubmit();
+    } catch (err) {
+      if (!isTimestampConflict(err)) throw err;
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[Invoice] TimestampMismatchError on submit — reloading and retrying once:",
+        name,
+      );
+      submitted = await attemptSubmit();
+    }
     invalidateBudgetQueries();
     return submitted;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes("InvalidAccountCurrency")) {
+      let inv: PurchaseInvoice | null = null;
+      try {
+        inv = await getPurchaseInvoice(name);
+      } catch {
+        /* ignore */
+      }
+      const invoiceCurrency = inv?.currency ?? "USD";
+      const creditTo = inv?.credit_to ?? "";
+      const payableCurrency = creditTo
+        ? await getAccountCurrency(creditTo).catch(() => invoiceCurrency)
+        : invoiceCurrency;
       throw new InvoiceCurrencyMismatchError(
-        `Supplier "${prepared.supplier}" has existing accounting entries in ` +
+        `Supplier "${inv?.supplier ?? "unknown"}" has existing accounting entries in ` +
           `${payableCurrency === invoiceCurrency ? "another" : payableCurrency} ` +
-          `currency for company "${prepared.company}". ` +
-          `Use payable account "${prepared.credit_to}" (${payableCurrency}). ` +
+          `currency for company "${inv?.company ?? COMPANY}". ` +
+          `Use payable account "${creditTo}" (${payableCurrency}). ` +
           `Outstanding is recorded in ${payableCurrency}, not ${invoiceCurrency}.`,
         {
-          supplier: prepared.supplier,
+          supplier: inv?.supplier ?? "",
           invoiceCurrency,
           ledgerCurrency: payableCurrency,
-          creditTo: prepared.credit_to ?? "",
-        }
+          creditTo,
+        },
       );
     }
     throw err;
@@ -1007,6 +1148,7 @@ export async function getExchangeRate(
 export async function createPaymentEntry(
   data: Partial<PaymentEntry>
 ): Promise<PaymentEntry> {
+  assertCanReleasePayment();
   const payload = buildPaymentEntryPayload({ ...data });
   // eslint-disable-next-line no-console
   console.log("Final API Payload", payload);
@@ -1021,6 +1163,7 @@ export async function updatePaymentEntry(
   name: string,
   data: Partial<PaymentEntry>
 ): Promise<PaymentEntry> {
+  assertCanReleasePayment();
   const fresh = await apiGet<PaymentEntry>(
     buildResourceUrl(PAYMENT_ENTRY_DOCTYPE, name)
   );
@@ -1039,22 +1182,36 @@ export async function updatePaymentEntry(
 
 /**
  * Submit a Payment Entry — transitions docstatus 0 → 1.
- * Uses GET-then-PUT (same proven pattern as PO/GRN/RFQ/Invoice submission).
+ * GET latest `modified`, PUT { docstatus: 1, modified } only; retry once
+ * on TimestampMismatchError (same pattern as Purchase Invoice submit).
  */
 export async function submitPaymentEntry(name: string): Promise<PaymentEntry> {
-  const fresh = await apiGet<PaymentEntry>(
-    buildResourceUrl(PAYMENT_ENTRY_DOCTYPE, name)
-  );
-  const modified =
-    (fresh as { modified?: string }).modified ??
-    (fresh as { data?: { modified?: string } }).data?.modified;
-  const body: Record<string, unknown> = { docstatus: 1 };
-  if (modified) body.modified = modified;
-  const submitted = await apiPut<PaymentEntry>(
-    buildResourceUrl(PAYMENT_ENTRY_DOCTYPE, name),
-    body
-  );
-  // Submitted payment → appears in Budget Transaction History. Refresh views.
+  assertCanReleasePayment();
+  const url = buildResourceUrl(PAYMENT_ENTRY_DOCTYPE, name);
+
+  const attemptSubmit = async (): Promise<PaymentEntry> => {
+    const fresh = await apiGet<PaymentEntry>(url);
+    if ((fresh.docstatus ?? 0) !== 0) return fresh;
+    const modified =
+      (fresh as { modified?: string }).modified ??
+      (fresh as { data?: { modified?: string } }).data?.modified;
+    const body: Record<string, unknown> = { docstatus: 1 };
+    if (modified) body.modified = modified;
+    return apiPut<PaymentEntry>(url, body);
+  };
+
+  let submitted: PaymentEntry;
+  try {
+    submitted = await attemptSubmit();
+  } catch (err) {
+    if (!isTimestampConflict(err)) throw err;
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[Payment Entry] TimestampMismatchError on submit — reloading and retrying once:",
+      name,
+    );
+    submitted = await attemptSubmit();
+  }
   invalidateBudgetQueries();
   return submitted;
 }

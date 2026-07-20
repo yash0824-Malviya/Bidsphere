@@ -13,7 +13,7 @@
  * Promise.allSettled) so a single failing query never takes down the section.
  */
 import { getBudgetDashboard } from "./budgetDashboard";
-import { getCount } from "./erpnext";
+import { apiGet, getCount } from "./erpnext";
 import {
   getMaterialRequest,
   getMaterialRequests,
@@ -24,9 +24,15 @@ import {
   getRFQ,
   getRFQs,
   getSupplierQuotation,
-  getSupplierQuotations,
+  getSupplierQuotationSummariesForRfq,
 } from "./sourcing";
 import { RESPONSE_DOCTYPE } from "./supplierRfqResponse";
+import { timedDashApi } from "./dashboardPerf";
+import {
+  fetchProcurementTruthCounts,
+  logDashboardWidget,
+  type ProcurementTruthCounts,
+} from "./procurementDashboardTruth";
 
 /* ── Public types ─────────────────────────────────────────────────────── */
 
@@ -47,7 +53,7 @@ export interface AnalyticsKpi {
   available: boolean;
   /** Raw numeric value (null when unavailable). */
   value: number | null;
-  /** Pre-formatted current value for display. */
+  /** Pre-formatted current value for display (`--` when waiting). */
   display: string;
   status: KpiStatus;
   trend: KpiTrend | null;
@@ -57,10 +63,13 @@ export interface AnalyticsKpi {
   progress?: number;
   /** Extra key/value bits rendered beneath the value (already formatted). */
   meta?: Array<{ label: string; value: string }>;
+  /** Line under the value (e.g. "Waiting for completed RFQs"). */
+  subtitle?: string;
+  /** Footer tip shown under meta (waiting or live explanatory text). */
+  footer?: string;
   /**
    * Custom text shown when `available` is false, in place of the generic
-   * "No data available" (e.g. cycle time uses "No completed procurement
-   * cycles yet.").
+   * "No data available" (prefer `subtitle` + `display: "--"` for waiting KPIs).
    */
   emptyMessage?: string;
 }
@@ -110,7 +119,7 @@ export interface ProcurementAnalytics {
 
 /** How many recent RFQs / POs to hydrate for join-based KPIs. Bounded to keep
  *  the dashboard responsive; each call is independent and cached for 5 min. */
-const SAMPLE_LIMIT = 10;
+const SAMPLE_LIMIT = 5;
 
 const UNAVAILABLE: AnalyticsKpi = {
   available: false,
@@ -142,35 +151,33 @@ function diffHours(later: Date, earlier: Date): number {
 }
 
 /**
- * Format an average procurement-cycle duration (given in hours): sub-day
- * durations show as whole hours ("6 Hours"), otherwise as one-decimal days
- * ("1.2 Days", "2.8 Days").
+ * Compact enterprise duration: "6h 18m", "2d 6h", "45m".
+ * Never returns "0 days" / NaN.
  */
-function formatCycleDuration(hours: number): string {
-  if (hours < 24) {
-    const h = Math.round(hours);
-    return `${h} ${h === 1 ? "Hour" : "Hours"}`;
-  }
-  const days = hours / 24;
-  return `${days.toFixed(1)} Days`;
-}
-
-/**
- * Format an average duration (given in hours) as "2 Days 6 Hours" /
- * "6 Hours" / "45 Minutes", per the RFQ Turnaround card's requested format.
- */
-function formatDaysHours(totalHours: number): string {
+function formatCompactDuration(totalHours: number): string {
+  if (!Number.isFinite(totalHours) || totalHours < 0) return "--";
   const totalMinutes = Math.round(totalHours * 60);
+  if (totalMinutes <= 0) return "<1m";
   const days = Math.floor(totalMinutes / (24 * 60));
   const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
-  if (days === 0 && hours === 0) {
-    const minutes = Math.max(1, totalMinutes % 60);
-    return `${minutes} ${minutes === 1 ? "Minute" : "Minutes"}`;
+  const minutes = totalMinutes % 60;
+  if (days > 0) {
+    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
   }
-  const parts: string[] = [];
-  if (days > 0) parts.push(`${days} ${days === 1 ? "Day" : "Days"}`);
-  if (hours > 0) parts.push(`${hours} ${hours === 1 ? "Hour" : "Hours"}`);
-  return parts.join(" ");
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+  return `${minutes}m`;
+}
+
+/** @deprecated alias — prefer formatCompactDuration */
+function formatCycleDuration(hours: number): string {
+  return formatCompactDuration(hours);
+}
+
+/** @deprecated alias — prefer formatCompactDuration */
+function formatDaysHours(totalHours: number): string {
+  return formatCompactDuration(totalHours);
 }
 
 function monthKey(d: Date): string {
@@ -228,7 +235,6 @@ function trendFromSeries(
 
 interface RfqLike {
   transaction_date?: string;
-  valid_till?: string;
   creation?: string;
   modified?: string;
   suppliers?: Array<{ quote_status?: string; quote_received?: number }>;
@@ -265,13 +271,117 @@ function isResponded(status?: string, received?: number): boolean {
   );
 }
 
+type PoDetailLite = {
+  name?: string;
+  creation?: string;
+  transaction_date?: string;
+  remarks?: string;
+  items?: Array<{
+    material_request?: string;
+    request_for_quotation?: string;
+    supplier_quotation?: string;
+  }>;
+};
+
+/**
+ * Prefer ONE Purchase Order Item list query for linkage fields; only fall
+ * back to get_doc when the child doctype is not queryable.
+ *
+ * Never request `request_for_quotation` on Purchase Order Item — this
+ * install returns HTTP 417 "Field not permitted in query". RFQ links are
+ * recovered via `supplier_quotation` → Supplier Quotation Item.
+ */
+async function hydratePoDetailsForAnalytics(
+  pos: Array<PoLike & { creation?: string }>,
+): Promise<Array<PoDetailLite | null>> {
+  if (pos.length === 0) return [];
+  const poNames = pos.map((p) => p.name);
+
+  const byParent = new Map<string, PoDetailLite>();
+  for (const p of pos) {
+    byParent.set(p.name, {
+      name: p.name,
+      transaction_date: p.transaction_date,
+      creation: (p as { creation?: string }).creation,
+      items: [],
+    });
+  }
+
+  try {
+    const items = await apiGet<
+      Array<{
+        parent?: string;
+        material_request?: string;
+        supplier_quotation?: string;
+      }>
+    >("/api/resource/Purchase Order Item", {
+      params: {
+        // Only fields known to be list-queryable on this ERPNext install.
+        fields: JSON.stringify([
+          "parent",
+          "material_request",
+          "supplier_quotation",
+        ]),
+        filters: JSON.stringify([["parent", "in", poNames]]),
+        limit_page_length: Math.min(500, poNames.length * 40),
+      },
+    });
+    for (const row of items ?? []) {
+      const parent = row.parent?.trim();
+      if (!parent || !byParent.has(parent)) continue;
+      byParent.get(parent)!.items!.push({
+        material_request: row.material_request,
+        supplier_quotation: row.supplier_quotation,
+      });
+    }
+
+    return poNames.map((n) => byParent.get(n) ?? null);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(
+      "[ERP failing request] Purchase Order Item hydrate (analytics)",
+      { poNames, fields: ["parent", "material_request", "supplier_quotation"] },
+      err instanceof Error ? err.message : err,
+    );
+    // Fall back to get_doc (full doc includes child tables).
+    return Promise.all(
+      poNames.map((name) =>
+        getPurchaseOrder(name)
+          .then((d) => d as unknown as PoDetailLite)
+          .catch(() => null),
+      ),
+    );
+  }
+}
+
+/** Sum draft (pending) PO grand totals for budget forecast commitment. */
+async function sumPendingPoCommitment(): Promise<number> {
+  try {
+    const rows = await getPurchaseOrders({
+      filters: [["docstatus", "=", 0]],
+      fields: ["name", "grand_total", "docstatus"],
+      limit_page_length: 200,
+      order_by: "modified desc",
+    });
+    return rows.reduce((s, r) => s + (Number(r.grand_total) || 0), 0);
+  } catch {
+    return 0;
+  }
+}
+
 /** Budget utilisation from the Budget doctype (allocated vs consumed). */
-async function computeBudget(): Promise<{
+async function computeBudget(opts?: {
+  openRfqs?: number;
+  pendingPurchaseOrders?: number;
+}): Promise<{
   kpi: AnalyticsKpi;
   chart: BudgetActualPoint[];
   currency: string;
 }> {
-  const data = await getBudgetDashboard();
+  const [data, pendingCommitment] = await Promise.all([
+    getBudgetDashboard({ maxBudgets: 8 }),
+    sumPendingPoCommitment(),
+  ]);
   const { totalBudget, consumedBudget, availableBudget, utilizationPct } =
     data.kpis;
 
@@ -289,7 +399,21 @@ async function computeBudget(): Promise<{
     return { kpi: unavailable(), chart, currency: data.currency || "USD" };
   }
 
+  // Forecast = spent + pending PO commitment (+ light RFQ pipeline buffer).
+  const openRfqs = opts?.openRfqs ?? 0;
+  const avgPendingPo =
+    (opts?.pendingPurchaseOrders ?? 0) > 0
+      ? pendingCommitment / (opts!.pendingPurchaseOrders as number)
+      : 0;
+  const rfqPipelineEstimate = openRfqs > 0 ? openRfqs * avgPendingPo * 0.35 : 0;
+  const forecast = Math.max(
+    consumedBudget,
+    consumedBudget + pendingCommitment + rfqPipelineEstimate,
+  );
+  const remaining = Math.max(totalBudget - consumedBudget, 0);
   const pct = Math.round(utilizationPct);
+  const forecastPct =
+    totalBudget > 0 ? Math.round((forecast / totalBudget) * 100) : 0;
   const status: KpiStatus =
     pct >= 90 ? "bad" : pct >= 70 ? "warning" : "good";
 
@@ -300,14 +424,19 @@ async function computeBudget(): Promise<{
       available: true,
       value: pct,
       display: `${pct}%`,
+      subtitle: "Budget utilisation",
       status,
       trend: null,
       sparkline: [],
       progress: Math.min(100, pct),
       meta: [
         { label: "Allocated", value: formatUSD(totalBudget) },
-        { label: "Remaining", value: formatUSD(availableBudget) },
         { label: "Spent", value: formatUSD(consumedBudget) },
+        { label: "Remaining", value: formatUSD(remaining) },
+        {
+          label: "Forecast",
+          value: `${formatUSD(forecast)} (${forecastPct}%)`,
+        },
       ],
     },
   };
@@ -327,6 +456,7 @@ function computeSavings(
   let totalSavings = 0;
   let totalBaseline = 0;
   let contributingRfqs = 0;
+  const thisMonthKey = monthKey(new Date());
 
   for (const { month, quotes } of quotesByRfq) {
     const totals = quotes
@@ -345,28 +475,47 @@ function computeSavings(
     }
   }
 
-  const chart: SavingsPoint[] = monthKeys.map((k) => ({
-    month: monthLabel(k),
-    savings: Math.round(byMonth.get(k) ?? 0),
-  }));
+  const chart: SavingsPoint[] = monthKeys
+    .map((k) => ({
+      month: monthLabel(k),
+      savings: Math.round(byMonth.get(k) ?? 0),
+    }))
+    .filter((p) => p.savings > 0);
 
   if (contributingRfqs === 0 || totalSavings <= 0) {
-    return { kpi: unavailable(), chart };
+    return {
+      kpi: {
+        ...unavailable(),
+        display: "--",
+        emptyMessage: "No data available",
+        subtitle: "Need 2+ quotes per RFQ to measure savings",
+      },
+      chart,
+    };
   }
 
   const pct = totalBaseline > 0 ? (totalSavings / totalBaseline) * 100 : 0;
-  const sparkline = chart.map((c) => c.savings);
+  const savedThisMonth = byMonth.get(thisMonthKey) ?? 0;
+  const sparkline = monthKeys.map((k) => byMonth.get(k) ?? 0).filter((v) => v > 0);
   return {
     kpi: {
       available: true,
       value: totalSavings,
       display: formatUSD(totalSavings),
+      subtitle: "Highest quote − lowest quote",
       status: "good",
-      trend: trendFromSeries(sparkline, "vs last month"),
+      trend: trendFromSeries(
+        monthKeys.map((k) => byMonth.get(k) ?? 0),
+        "vs last month",
+      ),
       sparkline,
       meta: [
         { label: "Savings", value: `${pct.toFixed(1)}%` },
         { label: "RFQs", value: String(contributingRfqs) },
+        {
+          label: "Saved this month",
+          value: formatUSD(savedThisMonth),
+        },
       ],
     },
     chart,
@@ -379,17 +528,62 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
   const t0 = typeof performance !== "undefined" ? performance.now() : 0;
   const monthKeys = last12MonthKeys();
 
-  // Kick off the independent list queries in parallel.
+  // Truth counts first (shared cache with executive KPIs), then parallel samples.
+  const truth: ProcurementTruthCounts = await timedDashApi(
+    "Truth counts (analytics)",
+    () => fetchProcurementTruthCounts(),
+  ).catch(() => ({
+    openRfqs: 0,
+    pendingQuotations: 0,
+    pendingPurchaseOrders: 0,
+    activeSuppliers: 0,
+    submittedMaterialRequests: 0,
+    submittedPurchaseOrders: 0,
+    fetchedAt: new Date().toISOString(),
+    source: "frappe.client.get_count" as const,
+  }));
+
   const [budgetRes, poRes, rfqListRes, mrRes, declineCountRes] =
     await Promise.allSettled([
-      computeBudget(),
-      getPurchaseOrders({ limit_page_length: 200, order_by: "transaction_date desc" }),
-      getRFQs(),
-      getMaterialRequests({
-        limit_page_length: 200,
-        fields: ["name", "status", "transaction_date", "creation", "modified", "owner"],
-      }),
-      getCount(RESPONSE_DOCTYPE, []),
+      timedDashApi("Supplier Analytics · Budget", () =>
+        computeBudget({
+          openRfqs: truth.openRfqs,
+          pendingPurchaseOrders: truth.pendingPurchaseOrders,
+        }),
+      ),
+      timedDashApi("Supplier Analytics · PO list", () =>
+        getPurchaseOrders({
+          limit_page_length: 100,
+          fields: [
+            "name",
+            "status",
+            "transaction_date",
+            "schedule_date",
+            "grand_total",
+            "per_received",
+            "modified",
+            "creation",
+          ],
+          order_by: "transaction_date desc",
+        }),
+      ),
+      timedDashApi("Supplier Analytics · RFQ list", () => getRFQs()),
+      timedDashApi("Supplier Analytics · MR list", () =>
+        getMaterialRequests({
+          limit_page_length: 100,
+          fields: [
+            "name",
+            "status",
+            "transaction_date",
+            "creation",
+            "modified",
+            "owner",
+          ],
+        }),
+      ),
+      timedDashApi("Supplier Analytics · No-quote count", () =>
+        getCount(RESPONSE_DOCTYPE, []),
+      ),
     ]);
 
   const noQuoteTotal =
@@ -420,42 +614,30 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
   );
   const recentPos = eligiblePos.slice(0, SAMPLE_LIMIT);
 
-  // Hydrate the join-based samples in parallel, tolerating per-item failures.
-  const [rfqDetails, quotesPerRfq, poDetails] = await Promise.all([
-    Promise.all(
-      recentRfqs.map((r) =>
-        getRFQ(r.name)
-          .then((d) => d as unknown as RfqLike)
-          .catch(() => null)
-      )
-    ),
-    Promise.all(
-      recentRfqs.map((r) =>
-        getSupplierQuotations(r.name)
-          .then((qs) => ({ rfq: r, quotes: qs as unknown as SqLike[] }))
-          .catch(() => ({ rfq: r, quotes: [] as SqLike[] }))
-      )
-    ),
-    Promise.all(
-      recentPos.map((p) =>
-        getPurchaseOrder(p.name)
-          .then(
-            (d) =>
-              d as unknown as {
-                creation?: string;
-                transaction_date?: string;
-                remarks?: string;
-                items?: Array<{
-                  material_request?: string;
-                  request_for_quotation?: string;
-                  supplier_quotation?: string;
-                }>;
-              }
-          )
-          .catch(() => null)
-      )
-    ),
-  ]);
+  // Hydrate join samples in parallel.
+  // SQ path uses list summaries (no N× get_doc). PO links prefer a single
+  // Purchase Order Item query before falling back to get_doc.
+  const [rfqDetails, quotesPerRfq, poDetails] = await timedDashApi(
+    "Supplier Analytics · hydrate samples",
+    () =>
+      Promise.all([
+        Promise.all(
+          recentRfqs.map((r) =>
+            getRFQ(r.name)
+              .then((d) => d as unknown as RfqLike)
+              .catch(() => null),
+          ),
+        ),
+        Promise.all(
+          recentRfqs.map((r) =>
+            getSupplierQuotationSummariesForRfq(r.name)
+              .then((qs) => ({ rfq: r, quotes: qs as SqLike[] }))
+              .catch(() => ({ rfq: r, quotes: [] as SqLike[] })),
+          ),
+        ),
+        hydratePoDetailsForAnalytics(recentPos),
+      ]),
+  );
 
   /* ── Monthly spend (submitted POs by transaction_date) ── */
   const spendByMonth = new Map<string, number>(monthKeys.map((k) => [k, 0]));
@@ -522,21 +704,34 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
 
   let supplierResponse: AnalyticsKpi;
   if (invitedTotal === 0) {
-    supplierResponse = unavailable();
+    supplierResponse = {
+      ...unavailable(),
+      display: "--",
+      emptyMessage: "No data available",
+      subtitle: "No supplier invitations in sample",
+    };
   } else {
+    const pendingResponses = Math.max(0, invitedTotal - respondedTotal);
     const rate = (respondedTotal / invitedTotal) * 100;
-    const spark = supplierResponseChart.map((c) => c.rate);
+    const spark = supplierResponseChart
+      .map((c) => c.rate)
+      .filter((r) => r > 0);
     supplierResponse = {
       available: true,
       value: Math.round(rate),
       display: `${Math.round(rate)}%`,
+      subtitle: "Response rate",
       status: rate >= 75 ? "good" : rate >= 50 ? "warning" : "bad",
-      trend: trendFromSeries(spark, "vs last month"),
+      trend: trendFromSeries(
+        supplierResponseChart.map((c) => c.rate),
+        "vs last month",
+      ),
       sparkline: spark,
       progress: Math.min(100, Math.round(rate)),
       meta: [
         { label: "Invited", value: String(invitedTotal) },
         { label: "Responded", value: String(respondedTotal) },
+        { label: "Pending", value: String(pendingResponses) },
         ...(noQuoteTotal > 0
           ? [{ label: "No Quote", value: String(noQuoteTotal) }]
           : []),
@@ -648,125 +843,201 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
     }
   }
 
-  // RFQ name → earliest Purchase Order creation raised against it. This is
-  // the RFQ's real completion signal (see the RFQ turnaround block below).
-  const rfqCompletedAt = new Map<string, Date>();
+  // Resolve linkages in parallel. Cycle time uses ONLY
+  // Purchase Order Date − Material Request Date (completed cycles).
+  // RFQ turnaround uses completed_date (PO) − creation_date (RFQ).
+  const cycleResolved = await Promise.all(
+    poDetails.map(async (doc) => {
+      if (!doc) return null;
+      const poDate =
+        safeDate(doc.transaction_date) ?? safeDate(doc.creation);
+      if (!poDate) return null;
 
-  const cycleHours: number[] = [];
-  for (let i = 0; i < poDetails.length; i++) {
-    const doc = poDetails[i];
-    if (!doc) continue;
-    const poDate = safeDate(doc.creation) ?? safeDate(doc.transaction_date);
-    if (!poDate) continue;
+      let rfqName = rfqNameForPo(doc);
+      if (!rfqName) {
+        const sqNames = [
+          ...new Set(
+            (doc.items ?? [])
+              .map((it) => it.supplier_quotation)
+              .filter(Boolean),
+          ),
+        ] as string[];
+        const resolved = await Promise.all(
+          sqNames.map((sq) => resolveRfqForSupplierQuotation(sq)),
+        );
+        rfqName = resolved.find(Boolean) ?? null;
+      }
 
-    let rfqName = rfqNameForPo(doc);
-    if (!rfqName) {
-      const sqNames = [
-        ...new Set((doc.items ?? []).map((it) => it.supplier_quotation).filter(Boolean)),
+      const mrNames = [
+        ...new Set(
+          (doc.items ?? [])
+            .map((it) => it.material_request)
+            .filter(Boolean),
+        ),
       ] as string[];
-      for (const sqName of sqNames) {
-        rfqName = await resolveRfqForSupplierQuotation(sqName);
-        if (rfqName) break;
+      const mrDates = await Promise.all(mrNames.map((n) => resolveMrDate(n)));
+      let cycleHours: number | null = null;
+      let completedMr: string | null = null;
+      for (let i = 0; i < mrNames.length; i++) {
+        const mrDate = mrDates[i];
+        if (!mrDate) continue;
+        const hours = diffHours(poDate, mrDate);
+        if (Number.isFinite(hours) && hours >= 0 && hours < 365 * 24) {
+          cycleHours = hours;
+          completedMr = mrNames[i];
+          break;
+        }
+      }
+
+      return { rfqName, poDate, cycleHours, completedMr };
+    }),
+  );
+
+  // RFQ name → earliest Purchase Order date (completed_date signal).
+  const rfqCompletedAt = new Map<string, Date>();
+  const cycleHours: number[] = [];
+  for (const row of cycleResolved) {
+    if (!row) continue;
+    if (row.cycleHours != null) cycleHours.push(row.cycleHours);
+    if (row.rfqName) {
+      const existing = rfqCompletedAt.get(row.rfqName);
+      if (!existing || row.poDate < existing) {
+        rfqCompletedAt.set(row.rfqName, row.poDate);
       }
     }
-    if (rfqName) {
-      const existing = rfqCompletedAt.get(rfqName);
-      if (!existing || poDate < existing) rfqCompletedAt.set(rfqName, poDate);
-    }
-
-    // Primary: Material Request creation date.
-    let sourceDate: Date | null = null;
-    for (const it of doc.items ?? []) {
-      if (!it.material_request) continue;
-      sourceDate = await resolveMrDate(it.material_request);
-      if (sourceDate) break;
-    }
-
-    // Fallback: RFQ creation date.
-    if (!sourceDate && rfqName) {
-      sourceDate = await resolveRfqDate(rfqName);
-    }
-
-    if (!sourceDate) continue;
-    const hours = diffHours(poDate, sourceDate);
-    if (hours >= 0 && hours < 365 * 24) cycleHours.push(hours);
   }
 
-  /* ── RFQ turnaround = Average(PO creation − RFQ creation) over RFQs that
-   * have resulted in a Purchase Order. ERPNext's "Request for Quotation"
-   * status never actually transitions to a "Completed"/"Closed" value in
-   * this workflow (RFQs stay "Submitted" forever), and the `valid_till`
-   * field is a supplier quote-validity deadline, not a completion date — so
-   * neither can be used as `completed_date`. Instead, an RFQ is considered
-   * complete once a Purchase Order has been raised from one of its accepted
-   * Supplier Quotations (the same signal the RFQ list page's "Completed"
-   * badge uses), and that PO's creation timestamp is the workflow
-   * completion timestamp. */
+  /* ── RFQ turnaround = Average(completed_date − creation_date) over
+   * completed RFQs only. An RFQ is complete once a Purchase Order has been
+   * raised against it; that PO date is completed_date. */
   const turnaroundHours: number[] = [];
   const turnByMonth = new Map<string, number[]>();
-  for (const [rfqName, completedAt] of rfqCompletedAt) {
-    const created = await resolveRfqDate(rfqName);
-    if (!created) continue;
-    const hours = diffHours(completedAt, created);
-    if (hours < 0 || hours >= 365 * 24) continue;
-    turnaroundHours.push(hours);
-    const mKey = monthKey(created);
+  const turnEntries = await Promise.all(
+    [...rfqCompletedAt.entries()].map(async ([rfqName, completedAt]) => {
+      const created = await resolveRfqDate(rfqName);
+      if (!created) return null;
+      const hours = diffHours(completedAt, created);
+      if (!Number.isFinite(hours) || hours < 0 || hours >= 365 * 24) return null;
+      return { created, hours };
+    }),
+  );
+  for (const entry of turnEntries) {
+    if (!entry) continue;
+    turnaroundHours.push(entry.hours);
+    const mKey = monthKey(entry.created);
     if (monthKeys.includes(mKey)) {
       const arr = turnByMonth.get(mKey) ?? [];
-      arr.push(hours / 24);
+      arr.push(entry.hours / 24);
       turnByMonth.set(mKey, arr);
     }
   }
 
-  const rfqTurnaroundChart: TurnaroundPoint[] = monthKeys.map((k) => ({
-    month: monthLabel(k),
-    days: Number(mean(turnByMonth.get(k) ?? []).toFixed(1)),
-  }));
+  // Only months with real averages — never pad charts with 0 days.
+  const rfqTurnaroundChart: TurnaroundPoint[] = monthKeys
+    .map((k) => {
+      const values = turnByMonth.get(k) ?? [];
+      if (values.length === 0) return null;
+      const days = mean(values);
+      if (!Number.isFinite(days) || days <= 0) return null;
+      return { month: monthLabel(k), days: Number(days.toFixed(1)) };
+    })
+    .filter((p): p is TurnaroundPoint => p != null);
 
+  // Completed RFQs = RFQs with a linked PO (closed) in the analytics sample.
+  // Open RFQs = exact ERP count (same filter as top KPI card).
   const completedRfqCount = turnaroundHours.length;
+  const openRfqCount = truth.openRfqs;
+
   let rfqTurnaround: AnalyticsKpi;
-  if (completedRfqCount === 0) {
+  const avgTurnHours =
+    completedRfqCount > 0 ? mean(turnaroundHours) : Number.NaN;
+  if (
+    completedRfqCount === 0 ||
+    !Number.isFinite(avgTurnHours) ||
+    avgTurnHours < 0
+  ) {
     rfqTurnaround = {
       ...unavailable(),
+      display: "--",
+      subtitle: "No completed RFQs yet",
       emptyMessage: "No completed RFQs yet",
+      meta: [
+        { label: "Open RFQs", value: String(openRfqCount) },
+        { label: "Completed RFQs", value: "0" },
+      ],
+      footer: "KPI will appear after the first RFQ is completed.",
     };
   } else {
-    const avgHours = mean(turnaroundHours);
-    const avgDays = avgHours / 24;
-    const spark = rfqTurnaroundChart.map((c) => c.days);
+    const avgDays = avgTurnHours / 24;
+    const fastestH = Math.min(...turnaroundHours);
+    const slowestH = Math.max(...turnaroundHours);
+    const spark = rfqTurnaroundChart.map((c) => c.days).filter((d) => d > 0);
     rfqTurnaround = {
       available: true,
       value: Number(avgDays.toFixed(2)),
-      display: formatDaysHours(avgHours),
+      display: formatCompactDuration(avgTurnHours),
+      subtitle: "Average RFQ Turnaround",
       status: avgDays <= 5 ? "good" : avgDays <= 10 ? "warning" : "bad",
-      trend: trendFromSeries(spark, "vs last month", true),
+      trend: spark.length >= 2 ? trendFromSeries(spark, "vs last month", true) : null,
       sparkline: spark,
-      meta: [{ label: "Completed RFQs", value: String(completedRfqCount) }],
+      meta: [
+        { label: "Completed RFQs", value: String(completedRfqCount) },
+        { label: "Open RFQs", value: String(openRfqCount) },
+        { label: "Fastest", value: formatCompactDuration(fastestH) },
+        { label: "Slowest", value: formatCompactDuration(slowestH) },
+      ],
     };
   }
 
   const completedCyclesCount = cycleHours.length;
+  const completedMrNames = new Set(
+    cycleResolved
+      .map((r) => r?.completedMr)
+      .filter((n): n is string => Boolean(n)),
+  );
+  const materialRequestCount = truth.submittedMaterialRequests;
+  const purchaseOrderCount = truth.submittedPurchaseOrders;
+  const activeCycles = Math.max(
+    0,
+    truth.submittedMaterialRequests - completedMrNames.size,
+  );
+  const avgCycleHours =
+    completedCyclesCount > 0 ? mean(cycleHours) : Number.NaN;
+
   let cycleTime: AnalyticsKpi;
-  if (completedCyclesCount === 0) {
+  if (
+    completedCyclesCount === 0 ||
+    !Number.isFinite(avgCycleHours) ||
+    avgCycleHours < 0
+  ) {
     cycleTime = {
       ...unavailable(),
-      emptyMessage: "No completed procurement cycles yet.",
+      display: "--",
+      subtitle: "Waiting for completed procurement cycles.",
+      emptyMessage: "Waiting for completed procurement cycles.",
+      meta: [
+        { label: "Material Requests", value: String(materialRequestCount) },
+        { label: "Purchase Orders", value: String(purchaseOrderCount) },
+      ],
+      footer: "KPI will appear after the first Purchase Order is generated.",
     };
   } else {
-    const avgHours = mean(cycleHours);
-    const avgDays = avgHours / 24;
+    const avgDays = avgCycleHours / 24;
+    const fastestH = Math.min(...cycleHours);
+    const slowestH = Math.max(...cycleHours);
     cycleTime = {
       available: true,
       value: Number(avgDays.toFixed(2)),
-      display: formatCycleDuration(avgHours),
+      display: formatCompactDuration(avgCycleHours),
+      subtitle: "Average Procurement Cycle",
       status: avgDays <= 7 ? "good" : avgDays <= 14 ? "warning" : "bad",
       trend: null,
       sparkline: [],
       meta: [
-        {
-          label: "Completed cycles",
-          value: String(completedCyclesCount),
-        },
+        { label: "Completed Cycles", value: String(completedCyclesCount) },
+        { label: "Active cycles", value: String(activeCycles) },
+        { label: "Fastest", value: formatCompactDuration(fastestH) },
+        { label: "Slowest", value: formatCompactDuration(slowestH) },
       ],
     };
   }
@@ -785,7 +1056,12 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
   }
   let onTimeDelivery: AnalyticsKpi;
   if (received === 0) {
-    onTimeDelivery = unavailable();
+    onTimeDelivery = {
+      ...unavailable(),
+      display: "--",
+      emptyMessage: "No data available",
+      subtitle: "No fully received purchase orders yet",
+    };
   } else {
     const rate = (onTime / received) * 100;
     onTimeDelivery = {
@@ -803,9 +1079,57 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
     };
   }
 
+  logDashboardWidget("5. RFQ Turnaround", {
+    available: rfqTurnaround.available,
+    display: rfqTurnaround.display,
+    value: rfqTurnaround.value,
+    openRfqs: openRfqCount,
+    openRfqsSource: "truth.get_count RFQ status in Submitted|Open",
+    completedRfqs: completedRfqCount,
+    completedRfqsSource: "sample: RFQs with linked PO (closed − created)",
+    matchesExecutiveOpenRfqs: openRfqCount === truth.openRfqs,
+  });
+  logDashboardWidget("6. Procurement Cycle Time", {
+    available: cycleTime.available,
+    display: cycleTime.display,
+    value: cycleTime.value,
+    materialRequests: materialRequestCount,
+    purchaseOrders: purchaseOrderCount,
+    completedCycles: completedCyclesCount,
+    formula: "PO submitted − Material Request submitted",
+  });
+  logDashboardWidget("7. Budget Utilisation", {
+    available: budget.kpi.available,
+    display: budget.kpi.display,
+    value: budget.kpi.value,
+    meta: budget.kpi.meta,
+    currency: budget.currency,
+  });
+  logDashboardWidget("8. Cost Savings", {
+    available: savings.kpi.available,
+    display: savings.kpi.display,
+    value: savings.kpi.value,
+    meta: savings.kpi.meta,
+    source: "Highest SQ − Lowest SQ per RFQ",
+  });
+  logDashboardWidget("9. Supplier Response Rate", {
+    available: supplierResponse.available,
+    display: supplierResponse.display,
+    value: supplierResponse.value,
+    meta: supplierResponse.meta,
+    progress: supplierResponse.progress,
+  });
+  logDashboardWidget("10. On-Time Delivery", {
+    available: onTimeDelivery.available,
+    display: onTimeDelivery.display,
+    value: onTimeDelivery.value,
+    received,
+    onTime,
+  });
+
   if (import.meta.env.DEV && t0) {
     console.log(
-      `[Dashboard] procurement analytics ${Math.round(performance.now() - t0)}ms`,
+      `[Dashboard Perf] procurement analytics ${Math.round(performance.now() - t0)}ms`,
     );
   }
 

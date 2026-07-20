@@ -25,6 +25,8 @@ import {
   updatePaymentEntry,
 } from "./accounts";
 import { getPurchaseOrder, getPurchaseReceipt } from "./purchasing";
+import { canReleasePayment } from "../config/roles";
+import { useAuthStore } from "../store/authStore";
 import type { PurchaseInvoice } from "../types/erpnext";
 import { DEFAULT_CURRENCY } from "../utils/format";
 import { generateId } from "../utils/id";
@@ -91,13 +93,14 @@ export async function uploadPaymentFile(
   form.append("doctype", PAYMENT_ENTRY_DOCTYPE);
   form.append("docname", paymentEntryName);
 
+  // Do NOT set Content-Type — erpnext interceptor strips it for FormData so
+  // the browser can attach the multipart boundary. Forcing
+  // `multipart/form-data` without a boundary causes Frappe HTTP 417.
   const msg = await apiPost<{
     file_url: string;
     file_name?: string;
     name: string;
-  }>("/api/method/upload_file", form, {
-    headers: { "Content-Type": "multipart/form-data" },
-  });
+  }>("/api/method/upload_file", form);
 
   return {
     kind,
@@ -148,6 +151,30 @@ export interface ProcessInvoicePaymentResult {
   attachmentUrls: string[];
 }
 
+/** Thrown when the PI/voucher is already paid — UI should not toast this as an error. */
+export class AlreadyPaidPaymentError extends Error {
+  readonly code = "ALREADY_PAID" as const;
+  constructor(
+    message = "Payment has already been completed. No further payment is required.",
+  ) {
+    super(message);
+    this.name = "AlreadyPaidPaymentError";
+  }
+}
+
+export function isAlreadyPaidPaymentError(err: unknown): boolean {
+  if (err instanceof AlreadyPaidPaymentError) return true;
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  return (
+    /already been (fully )?paid/i.test(msg) ||
+    /no outstanding balance/i.test(msg) ||
+    /no further payment is (required|due)/i.test(msg) ||
+    /already been completed/i.test(msg) ||
+    /outstanding_amount\s*<=?\s*0/i.test(msg) ||
+    /Payment Entry.*already/i.test(msg)
+  );
+}
+
 /**
  * Resolve the live Purchase Invoice to pay against, creating one if none
  * exists yet.
@@ -180,9 +207,9 @@ async function resolveOrCreatePurchaseInvoice(
       (i) => i.docstatus === 1 && (i.outstanding_amount ?? 0) <= 0
     );
     if (fullyPaid) {
-      throw new Error(
+      throw new AlreadyPaidPaymentError(
         `Goods Receipt Note "${grnReference}" has already been fully invoiced and paid ` +
-          `(${fullyPaid.name}). No further payment is due for this voucher.`
+          `(${fullyPaid.name}). No further payment is due for this voucher.`,
       );
     }
 
@@ -214,10 +241,9 @@ async function resolveOrCreatePurchaseInvoice(
     (i) => i.docstatus === 1 && (i.outstanding_amount ?? 0) <= 0
   );
   if (fullyPaid) {
-    throw new Error(
+    throw new AlreadyPaidPaymentError(
       `Purchase Order "${poReference}" has already been fully invoiced and paid ` +
-        `(${fullyPaid.name}). No further payment is due for this voucher — please ` +
-        `verify the linked PO/GRN reference before retrying.`
+        `(${fullyPaid.name}). No further payment is due for this voucher.`,
     );
   }
 
@@ -261,9 +287,47 @@ function assertInvoiceHasItems(
  * ERPNext then drives all downstream status: Purchase Invoice → Paid,
  * Purchase Order → Fully Billed.
  */
+/** Prevents concurrent payment runs for the same PO/GRN (double-click / duplicate API). */
+const inflightPaymentKeys = new Set<string>();
+
+/**
+ * Find a non-cancelled Payment Entry already reconciled to this Purchase Invoice.
+ * Prefer submitted; fall back to draft so a partial previous run can finish.
+ */
+async function findExistingPaymentForInvoice(
+  purchaseInvoiceName: string,
+): Promise<{ name: string; docstatus?: number; paid_amount?: number; received_amount?: number } | null> {
+  try {
+    const rows = await getPaymentEntries({
+      filters: [
+        ["payment_type", "=", "Pay"],
+        ["docstatus", "!=", 2],
+        ["Payment Entry Reference", "reference_doctype", "=", "Purchase Invoice"],
+        ["Payment Entry Reference", "reference_name", "=", purchaseInvoiceName],
+      ],
+      fields: ["name", "docstatus", "paid_amount", "received_amount", "status"],
+      limit_page_length: 10,
+      order_by: "modified desc",
+    });
+    if (!rows.length) return null;
+    const submitted = rows.find((r) => (r.docstatus ?? 0) === 1);
+    return submitted ?? rows[0] ?? null;
+  } catch {
+    // Child-table filters can fail on some ERPNext builds — fall back to full get.
+    return null;
+  }
+}
+
 export async function processInvoicePayment(
   input: ProcessInvoicePaymentInput
 ): Promise<ProcessInvoicePaymentResult> {
+  const role = useAuthStore.getState().user?.role;
+  if (!canReleasePayment(role)) {
+    throw new Error(
+      "Access denied. Only Finance Manager, Accounts Payable, or Finance Admin can release payments.",
+    );
+  }
+
   const {
     poReference,
     grnReference,
@@ -281,153 +345,196 @@ export async function processInvoicePayment(
     );
   }
 
-  const piName = await resolveOrCreatePurchaseInvoice(poReference, grnReference);
-
-  // 2. Ensure submitted.
-  let pi = await getPurchaseInvoice(piName);
-  if ((pi.docstatus ?? 0) === 0) {
-    await submitPurchaseInvoice(piName);
-    pi = await getPurchaseInvoice(piName);
-  }
-
-  // ERPNext requires Payment Entry posting_date >= Purchase Invoice posting_date.
-  // If the user's selected date is earlier, we auto-correct to the invoice date
-  // (the effective date is applied to posting_date and reference_date below).
-  const invoiceDate = (pi as { posting_date?: string }).posting_date;
-
-  const company = (pi as { company?: string }).company ?? COMPANY;
-  const payableCurrency =
-    (pi as { payable_currency?: string }).payable_currency ??
-    pi.currency ??
-    DEFAULT_CURRENCY;
-  const outstanding = pi.outstanding_amount ?? pi.grand_total ?? 0;
-
-  if (outstanding <= 0) {
-    throw new Error("This invoice has no outstanding balance to pay.");
-  }
-  if (!pi.credit_to) {
-    throw new Error("Invoice payable account (credit_to) could not be resolved.");
-  }
-
-  // 3. Bank account + exchange rates.
-  const fromAccount = await getDefaultPaymentFromAccount(
-    company,
-    payableCurrency
-  );
-  if (!fromAccount) {
+  const inflightKey = `${poReference}::${grnReference ?? ""}`;
+  if (inflightPaymentKeys.has(inflightKey)) {
     throw new Error(
-      `No bank or cash account is configured for ${payableCurrency} payments in ERPNext.`
+      "A payment for this invoice is already being processed. Please wait.",
     );
   }
-  const companyCurrency = await getCompanyCurrency(company);
-  const sourceRate = await getExchangeRate(
-    fromAccount.account_currency,
-    companyCurrency,
-    postingDate
-  );
-  const targetRate = await getExchangeRate(
-    payableCurrency,
-    companyCurrency,
-    postingDate
-  );
-  if (sourceRate <= 0 || targetRate <= 0) {
-    throw new Error("Exchange rate unavailable. Please retry.");
-  }
-  const paidAmountInBank = outstanding * (targetRate / sourceRate);
+  inflightPaymentKeys.add(inflightKey);
 
-  // 4. Create the Payment Entry as a draft (needed before file attach).
-  const baseRemarks = buildPaymentRemarks(
-    {
-      v: 1,
-      method: paymentMethod,
-      details: methodDetails,
-      attachments: [],
-      uiStatus: "Paid",
-    },
-    note ?? `Payment released from ${APP_NAME}`
-  );
+  try {
+    const piName = await resolveOrCreatePurchaseInvoice(
+      poReference,
+      grnReference,
+    );
 
-  // Ensure posting_date and reference_date are not before the invoice date.
-  const effectivePostingDate =
-    invoiceDate && postingDate < invoiceDate ? invoiceDate : postingDate;
+    // 2. Ensure submitted (single-PUT submit with fresh modified stamp).
+    let pi = await getPurchaseInvoice(piName);
+    if ((pi.docstatus ?? 0) === 0) {
+      await submitPurchaseInvoice(piName);
+      pi = await getPurchaseInvoice(piName);
+    }
 
-  const paymentEntryPayload = {
-    payment_type: "Pay" as const,
-    party_type: "Supplier" as const,
-    party: pi.supplier,
-    posting_date: effectivePostingDate,
-    company,
-    mode_of_payment: paymentMethod,
-    paid_from: fromAccount.name,
-    paid_from_account_currency: fromAccount.account_currency,
-    paid_amount: paidAmountInBank,
-    source_exchange_rate: sourceRate,
-    paid_to: pi.credit_to,
-    paid_to_account_currency: payableCurrency,
-    received_amount: outstanding,
-    target_exchange_rate: targetRate,
-    reference_no: paymentReference.trim(),
-    reference_date: effectivePostingDate,
-    remarks: baseRemarks,
-    references: [
-      {
-        name: generateId(),
-        reference_doctype: "Purchase Invoice" as const,
-        reference_name: piName,
-        total_amount: pi.grand_total ?? 0,
-        outstanding_amount: outstanding,
-        allocated_amount: outstanding,
-      },
-    ],
-  };
+    // Idempotency: if a Payment Entry already exists for this PI, reuse it
+    // instead of creating a duplicate (retry after network blip / voucher sync).
+    const existingPe = await findExistingPaymentForInvoice(piName);
+    if (existingPe) {
+      const pe =
+        (existingPe.docstatus ?? 0) === 0
+          ? await submitPaymentEntry(existingPe.name)
+          : existingPe;
+      const paid =
+        pe.paid_amount ??
+        pe.received_amount ??
+        pi.grand_total ??
+        0;
+      return {
+        purchaseInvoice: piName,
+        paymentEntry: pe.name,
+        amountPaid: paid,
+        currency: pi.currency ?? DEFAULT_CURRENCY,
+        attachmentUrls: [],
+      };
+    }
 
-  /* eslint-disable no-console */
-  console.log("PAYMENT ENTRY PAYLOAD", paymentEntryPayload);
-  console.log("Invoice Date", invoiceDate);
-  console.log("Invoice Due Date", (pi as { due_date?: string }).due_date);
-  console.log("Payment Date (user)", postingDate);
-  console.log("Effective Payment Date", effectivePostingDate);
-  /* eslint-enable no-console */
+    // ERPNext requires Payment Entry posting_date >= Purchase Invoice posting_date.
+    // If the user's selected date is earlier, we auto-correct to the invoice date
+    // (the effective date is applied to posting_date and reference_date below).
+    const invoiceDate = (pi as { posting_date?: string }).posting_date;
 
-  const draft = await createPaymentEntry(paymentEntryPayload);
+    const company = (pi as { company?: string }).company ?? COMPANY;
+    const payableCurrency =
+      (pi as { payable_currency?: string }).payable_currency ??
+      pi.currency ??
+      DEFAULT_CURRENCY;
+    const outstanding = pi.outstanding_amount ?? pi.grand_total ?? 0;
 
-  // 5. Upload + link attachments to the draft (best-effort, non-blocking).
-  const attachmentUrls: string[] = [];
-  for (const { kind, file } of files) {
-    try {
-      const uploaded = await uploadPaymentFile(file, draft.name, kind);
-      attachmentUrls.push(uploaded.file_url);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[processInvoicePayment] attachment "${file.name}" upload failed:`,
-        err instanceof Error ? err.message : err
+    if (
+      outstanding <= 0 ||
+      String(pi.status ?? "").toLowerCase() === "paid" ||
+      pi.is_paid === 1
+    ) {
+      throw new AlreadyPaidPaymentError();
+    }
+    if (!pi.credit_to) {
+      throw new Error(
+        "Invoice payable account (credit_to) could not be resolved.",
       );
     }
-  }
 
-  // 6. Persist the backend file URLs into remarks, then submit.
-  if (attachmentUrls.length > 0) {
-    const remarksWithUrls = buildPaymentRemarks(
+    // 3. Bank account + exchange rates.
+    const fromAccount = await getDefaultPaymentFromAccount(
+      company,
+      payableCurrency,
+    );
+    if (!fromAccount) {
+      throw new Error(
+        `No bank or cash account is configured for ${payableCurrency} payments in ERPNext.`,
+      );
+    }
+    const companyCurrency = await getCompanyCurrency(company);
+    const sourceRate = await getExchangeRate(
+      fromAccount.account_currency,
+      companyCurrency,
+      postingDate,
+    );
+    const targetRate = await getExchangeRate(
+      payableCurrency,
+      companyCurrency,
+      postingDate,
+    );
+    if (sourceRate <= 0 || targetRate <= 0) {
+      throw new Error("Exchange rate unavailable. Please retry.");
+    }
+    const paidAmountInBank = outstanding * (targetRate / sourceRate);
+
+    // 4. Create the Payment Entry as a draft (needed before file attach).
+    const baseRemarks = buildPaymentRemarks(
       {
         v: 1,
         method: paymentMethod,
         details: methodDetails,
-        attachments: attachmentUrls,
+        attachments: [],
         uiStatus: "Paid",
       },
-      note ?? `Payment released from ${APP_NAME}`
+      note ?? `Payment released from ${APP_NAME}`,
     );
-    await updatePaymentEntry(draft.name, { remarks: remarksWithUrls });
+
+    // Ensure posting_date and reference_date are not before the invoice date.
+    const effectivePostingDate =
+      invoiceDate && postingDate < invoiceDate ? invoiceDate : postingDate;
+
+    const paymentEntryPayload = {
+      payment_type: "Pay" as const,
+      party_type: "Supplier" as const,
+      party: pi.supplier,
+      posting_date: effectivePostingDate,
+      company,
+      mode_of_payment: paymentMethod,
+      paid_from: fromAccount.name,
+      paid_from_account_currency: fromAccount.account_currency,
+      paid_amount: paidAmountInBank,
+      source_exchange_rate: sourceRate,
+      paid_to: pi.credit_to,
+      paid_to_account_currency: payableCurrency,
+      received_amount: outstanding,
+      target_exchange_rate: targetRate,
+      reference_no: paymentReference.trim(),
+      reference_date: effectivePostingDate,
+      remarks: baseRemarks,
+      references: [
+        {
+          name: generateId(),
+          reference_doctype: "Purchase Invoice" as const,
+          reference_name: piName,
+          total_amount: pi.grand_total ?? 0,
+          outstanding_amount: outstanding,
+          allocated_amount: outstanding,
+        },
+      ],
+    };
+
+    /* eslint-disable no-console */
+    console.log("PAYMENT ENTRY PAYLOAD", paymentEntryPayload);
+    console.log("Invoice Date", invoiceDate);
+    console.log("Invoice Due Date", (pi as { due_date?: string }).due_date);
+    console.log("Payment Date (user)", postingDate);
+    console.log("Effective Payment Date", effectivePostingDate);
+    /* eslint-enable no-console */
+
+    const draft = await createPaymentEntry(paymentEntryPayload);
+
+    // 5. Upload + link attachments to the draft (best-effort, non-blocking).
+    const attachmentUrls: string[] = [];
+    for (const { kind, file } of files) {
+      try {
+        const uploaded = await uploadPaymentFile(file, draft.name, kind);
+        attachmentUrls.push(uploaded.file_url);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[processInvoicePayment] attachment "${file.name}" upload failed:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
+    // 6. Persist the backend file URLs into remarks, then submit.
+    if (attachmentUrls.length > 0) {
+      const remarksWithUrls = buildPaymentRemarks(
+        {
+          v: 1,
+          method: paymentMethod,
+          details: methodDetails,
+          attachments: attachmentUrls,
+          uiStatus: "Paid",
+        },
+        note ?? `Payment released from ${APP_NAME}`,
+      );
+      await updatePaymentEntry(draft.name, { remarks: remarksWithUrls });
+    }
+
+    const submitted = await submitPaymentEntry(draft.name);
+
+    return {
+      purchaseInvoice: piName,
+      paymentEntry: submitted.name,
+      amountPaid: outstanding,
+      currency: payableCurrency,
+      attachmentUrls,
+    };
+  } finally {
+    inflightPaymentKeys.delete(inflightKey);
   }
-
-  const submitted = await submitPaymentEntry(draft.name);
-
-  return {
-    purchaseInvoice: piName,
-    paymentEntry: submitted.name,
-    amountPaid: outstanding,
-    currency: payableCurrency,
-    attachmentUrls,
-  };
 }

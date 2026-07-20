@@ -7,6 +7,7 @@ export interface ForwardedFilters {
   priority: string;
   status: string;
   procurementType: string;
+  requestMode: string;
   forwardDate: string;
 }
 
@@ -17,6 +18,7 @@ export const EMPTY_FORWARDED_FILTERS: ForwardedFilters = {
   priority: "",
   status: "",
   procurementType: "",
+  requestMode: "",
   forwardDate: "",
 };
 
@@ -28,8 +30,10 @@ interface Props {
   priorities: string[];
   /** Optional — pass [] to hide the Status select (e.g. the active queue). */
   statuses?: string[];
-  /** Show the Procurement Type select. Default true. */
+  /** Show the Request Type select. Default true. */
   showProcurementType?: boolean;
+  /** Show the Request Mode select. Default true. */
+  showRequestMode?: boolean;
 }
 
 /**
@@ -45,6 +49,7 @@ export default function ForwardedFilterBar({
   priorities,
   statuses = [],
   showProcurementType = true,
+  showRequestMode = true,
 }: Props) {
   const set = (patch: Partial<ForwardedFilters>) =>
     onChange({ ...value, ...patch });
@@ -90,10 +95,19 @@ export default function ForwardedFilterBar({
       />
       {showProcurementType && (
         <Select
-          label="Type"
+          label="Request Type"
           value={value.procurementType}
           options={["Direct", "Indirect"]}
           onChange={(v) => set({ procurementType: v })}
+          cls={selectCls}
+        />
+      )}
+      {showRequestMode && (
+        <Select
+          label="Request Mode"
+          value={value.requestMode}
+          options={["Existing", "New"]}
+          onChange={(v) => set({ requestMode: v })}
           cls={selectCls}
         />
       )}

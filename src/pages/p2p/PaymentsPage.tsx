@@ -13,8 +13,6 @@ import {
 } from "recharts";
 import {
   CreditCard,
-  Download,
-  FileSpreadsheet,
   Plus,
   TrendingUp,
   Users,
@@ -31,13 +29,16 @@ import PdfActions from "../../components/PdfActions";
 import { buildPaymentReceiptPdf } from "../../utils/pdf/paymentPdf";
 import { buildVoucherPaymentPdf } from "../../utils/pdf/voucherDocPdf";
 import EmptyState from "../../components/EmptyState";
+import ConnectionError from "../../components/ConnectionError";
 import PageHeader from "../../components/PageHeader";
 import { TableSkeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
+import ExportButton from "../../components/export/ExportButton";
 import { FilterBar, FilterField, SearchInput, SortableTableHeader, ErpNextDatePicker } from "../../components/ui";
 import { useListSort } from "../../hooks/useListSort";
 import { useDebounce } from "../../hooks/useDebounce";
-import { exportPaymentsCsv, exportPaymentsPdf } from "../../utils/paymentExport";
+import type { ExportColumn } from "../../utils/export";
+import type { PaymentEntry } from "../../types/erpnext";
 import {
   computePaymentKpis,
   filterPayments,
@@ -58,7 +59,6 @@ import {
   paymentComparators,
   sortNewestFirst,
 } from "../../utils/listSort";
-import type { PaymentEntry } from "../../types/erpnext";
 
 const PAYMENT_COMPARATORS = paymentComparators<PaymentEntry>();
 
@@ -82,7 +82,7 @@ export default function PaymentsPage() {
     staleTime: 5 * 60_000,
   });
 
-  const { data: rows = [], isLoading, isError } = useQuery({
+  const { data: rows = [], isLoading, isError, error, refetch } = useQuery({
     queryKey: ["payment-entries", apiFilters],
     queryFn: () =>
       getPaymentEntries({
@@ -219,24 +219,45 @@ export default function PaymentsPage() {
   );
   const largePayments = useMemo(() => recentLargePayments(filtered, 5), [filtered]);
 
-  function handleExportPdf() {
-    if (filtered.length === 0) {
-      toast.error("No payments to export.");
-      return;
-    }
-    void exportPaymentsPdf(filtered)
-      .then(() => toast.success("Payments PDF downloaded."))
-      .catch(() => toast.error("Could not generate payments PDF."));
-  }
-
-  function handleExportExcel() {
-    if (filtered.length === 0) {
-      toast.error("No payments to export.");
-      return;
-    }
-    exportPaymentsCsv(filtered);
-    toast.success("Payments exported to Excel (CSV).");
-  }
+  const exportColumns = useMemo<ExportColumn<PaymentEntry>[]>(
+    () => [
+      { id: "name", label: "Payment Number", accessor: (r) => r.name },
+      {
+        id: "supplier",
+        label: "Supplier",
+        accessor: (r) => r.party_name || r.party,
+      },
+      {
+        id: "posting_date",
+        label: "Date",
+        type: "date",
+        accessor: (r) => r.posting_date,
+      },
+      {
+        id: "method",
+        label: "Payment Method",
+        accessor: (r) => getPaymentModeLabel(r.mode_of_payment) || r.mode_of_payment,
+      },
+      {
+        id: "reference",
+        label: "Reference",
+        accessor: (r) => r.reference_no,
+      },
+      {
+        id: "status",
+        label: "Status",
+        type: "status",
+        accessor: (r) => mapPaymentUiStatus(r),
+      },
+      {
+        id: "amount",
+        label: "Amount",
+        type: "currency",
+        accessor: (r) => paymentAmount(r),
+      },
+    ],
+    [],
+  );
 
   return (
     <div className="space-y-6">
@@ -245,25 +266,15 @@ export default function PaymentsPage() {
         description="Accounts Payable disbursements — ACH, wire, check, and card payments to suppliers."
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <ExportButton
+              module="Payments"
+              filenamePrefix="Payments"
+              columns={exportColumns}
+              rows={sortedRows}
+            />
             <Link to="/p2p/payments/new" className="btn-primary">
               <Plus className="h-4 w-4" /> New Payment
             </Link>
-            <button
-              type="button"
-              onClick={handleExportPdf}
-              className="btn-secondary"
-            >
-              <Download className="h-4 w-4" />
-              Export PDF
-            </button>
-            <button
-              type="button"
-              onClick={handleExportExcel}
-              className="btn-secondary"
-            >
-              <FileSpreadsheet className="h-4 w-4" />
-              Export Excel
-            </button>
           </div>
         }
       />
@@ -413,7 +424,11 @@ export default function PaymentsPage() {
             {isLoading ? (
               <TableSkeleton rows={8} columns={8} />
             ) : isError && mergedRows.length === 0 ? (
-              <EmptyState icon={CreditCard} title="Could not load payments" />
+              <ConnectionError
+                error={error}
+                title="Could not load payments"
+                onRetry={() => void refetch()}
+              />
             ) : sortedRows.length === 0 ? (
               <EmptyState
                 icon={CreditCard}

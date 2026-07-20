@@ -225,7 +225,7 @@ function supplierRiskLevel(s: SupplierAnalysisRow): RiskLevel {
   if (s.verdict === "AVOID") return "High";
   if (s.verdict === "EXPENSIVE") return "Medium";
   const rel = s.score?.reliability ?? 50;
-  if (rel < 40 || s.weaknesses.length >= 3) return "High";
+  if (rel < 40 || (s.weaknesses ?? []).length >= 3) return "High";
   if (rel < 65 || s.verdict === "GOOD OPTION") return "Medium";
   return "Low";
 }
@@ -1064,9 +1064,9 @@ function RecommendationResultsScreen({
           </p>
         </div>
         <p className="text-sm leading-relaxed text-slate-100/95">{executiveSummary}</p>
-        {recommendedRow.strengths.length > 0 && (
+        {(recommendedRow.strengths ?? []).length > 0 && (
           <ul className="mt-4 space-y-1.5 border-t border-white/10 pt-4">
-            {recommendedRow.strengths.slice(0, 3).map((item) => (
+            {(recommendedRow.strengths ?? []).slice(0, 3).map((item) => (
               <li key={item} className="flex gap-2 text-sm text-slate-200/90">
                 <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
                 {item}

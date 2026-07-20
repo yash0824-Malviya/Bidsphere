@@ -6,7 +6,17 @@ import { ArrowLeft, Loader2, Lock, Send, Save } from "lucide-react";
 
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
-import { getGRNsForPO, getPurchaseOrder, getPurchaseOrders } from "../../api/purchasing";
+import {
+  getGRNsForPO,
+  getPurchaseOrder,
+  getPurchaseOrders,
+  getPurchaseReceipt,
+} from "../../api/purchasing";
+import {
+  appendWarehouseEsignAudit,
+  assertGrnReadyForVoucher,
+  assertGrnReadyForVoucherAsync,
+} from "../../api/warehouseEsign";
 import { createVoucher, sendVoucherToSupplier } from "../../api/vouchers";
 import { canManageVouchers } from "../../config/roles";
 import { useAuthStore } from "../../store/authStore";
@@ -49,6 +59,16 @@ export default function CreateVoucherPage() {
     queryFn: () => getGRNsForPO(poName),
   });
 
+  const { data: selectedGrn } = useQuery({
+    queryKey: ["purchase-receipt", grnName],
+    enabled: !!grnName,
+    queryFn: () => getPurchaseReceipt(grnName),
+    staleTime: 0,
+  });
+
+  const grnGate = assertGrnReadyForVoucher(selectedGrn ?? null);
+  const canCreateFromGrn = !!grnName && grnGate.ok;
+
   const items: VoucherItem[] = (po?.items ?? []).map((it) => ({
     item_code: it.item_code,
     item_name: it.item_name ?? it.item_code,
@@ -60,6 +80,8 @@ export default function CreateVoucherPage() {
   const amount = po?.grand_total ?? items.reduce((s, it) => s + it.amount, 0);
 
   async function handleCreate(sendNow: boolean) {
+    // eslint-disable-next-line no-console
+    console.log("Create Voucher clicked", { sendNow, poName, grnName });
     if (!canManage) {
       toast.error("Only the Finance team can create vouchers.");
       return;
@@ -68,8 +90,32 @@ export default function CreateVoucherPage() {
       toast.error("Select a Purchase Order first.");
       return;
     }
+    if (!grnName) {
+      toast.error(
+        "GRN is missing. Select a signed Goods Receipt before creating a voucher.",
+      );
+      return;
+    }
+    const gate = await assertGrnReadyForVoucherAsync(selectedGrn ?? null);
+    if (!gate.ok) {
+      // eslint-disable-next-line no-console
+      console.warn("[Create Voucher] stopped: GRN gate", gate);
+      toast.error(
+        gate.message ||
+          "Warehouse GRN is not digitally signed. Please complete Warehouse verification before continuing.",
+      );
+      return;
+    }
+    // eslint-disable-next-line no-console
+    console.log("Validation passed");
     setSubmitting(true);
     try {
+      // eslint-disable-next-line no-console
+      console.log("Calling voucher API", {
+        po_reference: poName,
+        grn_reference: grnName,
+        sendNow,
+      });
       const voucher = await createVoucher({
         po_reference: poName,
         grn_reference: grnName,
@@ -82,6 +128,14 @@ export default function CreateVoucherPage() {
         due_date: dueDate || undefined,
         notes: notes || undefined,
       });
+      // eslint-disable-next-line no-console
+      console.log("Voucher API response", voucher);
+      appendWarehouseEsignAudit(
+        "Voucher created",
+        "Finance",
+        `${grnName} → ${voucher.id}`,
+        { targetRole: "finance", grnName },
+      );
       if (sendNow) {
         await sendVoucherToSupplier(voucher.id);
         toast.success(`Voucher ${voucher.id} created and sent to supplier.`);
@@ -90,8 +144,12 @@ export default function CreateVoucherPage() {
       }
       navigate(`/p2p/vouchers/${encodeURIComponent(voucher.id)}`);
     } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[Create Voucher] API failed:", err);
       toast.error(
-        err instanceof Error ? err.message : "Could not create the voucher."
+        err instanceof Error && err.message.trim()
+          ? err.message
+          : "Could not create the voucher.",
       );
     } finally {
       setSubmitting(false);
@@ -164,7 +222,7 @@ export default function CreateVoucherPage() {
             </div>
             <div>
               <label className="mb-1.5 block text-xs font-medium text-neutral-700">
-                Goods Receipt (GRN)
+                Goods Receipt (GRN)<span className="text-danger-500">*</span>
               </label>
               <select
                 value={grnName}
@@ -173,7 +231,7 @@ export default function CreateVoucherPage() {
                 disabled={!poName}
               >
                 <option value="">
-                  {!poName ? "Select a PO first" : "Optional — link a GRN…"}
+                  {!poName ? "Select a PO first" : "Select a signed GRN…"}
                 </option>
                 {grns.map((g) => (
                   <option key={g.name} value={g.name}>
@@ -182,6 +240,17 @@ export default function CreateVoucherPage() {
                   </option>
                 ))}
               </select>
+              {grnName && !grnGate.ok && (
+                <p className="mt-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900">
+                  {grnGate.message ||
+                    "Warehouse GRN is not digitally signed. Please complete Warehouse verification before continuing."}
+                </p>
+              )}
+              {grnName && grnGate.ok && (
+                <p className="mt-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800">
+                  Warehouse signature verified — voucher creation enabled.
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -291,8 +360,14 @@ export default function CreateVoucherPage() {
           <button
             type="button"
             onClick={() => void handleCreate(false)}
-            disabled={!poName || submitting}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-60"
+            disabled={!poName || !canCreateFromGrn || submitting}
+            title={
+              !canCreateFromGrn
+                ? grnGate.message ||
+                  "Warehouse GRN is not digitally signed. Please complete Warehouse verification before continuing."
+                : undefined
+            }
+            className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Save className="h-4 w-4" />
             Save as Draft
@@ -300,8 +375,14 @@ export default function CreateVoucherPage() {
           <button
             type="button"
             onClick={() => void handleCreate(true)}
-            disabled={!poName || submitting}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-600 disabled:opacity-60"
+            disabled={!poName || !canCreateFromGrn || submitting}
+            title={
+              !canCreateFromGrn
+                ? grnGate.message ||
+                  "Warehouse GRN is not digitally signed. Please complete Warehouse verification before continuing."
+                : undefined
+            }
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {submitting ? (
               <Loader2 className="h-4 w-4 animate-spin" />

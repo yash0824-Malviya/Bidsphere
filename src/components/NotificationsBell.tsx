@@ -44,6 +44,7 @@ const MODULE_TONE: Partial<Record<NotificationModule, string>> = {
   Payment: "bg-success-50 text-success-600",
   "Legal Review": "bg-amber-50 text-amber-700",
   RFQ: "bg-blue-50 text-blue-700",
+  "Live Auction": "bg-sky-50 text-sky-700",
 };
 
 function toneForModule(module: NotificationModule): string {

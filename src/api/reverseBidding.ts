@@ -31,7 +31,7 @@ import {
   ensureLegalDocumentReviewForSelection,
   type LegalDocumentItemSummary,
 } from "./legalDocs";
-import { formatERPNextDatetime } from "../utils/erpNextDate";
+import { formatERPNextDatetime, nowERPNextDatetime } from "../utils/erpNextDate";
 import type { PurchaseOrder } from "../types/erpnext";
 import type {
   AuctionStatus,
@@ -2355,7 +2355,8 @@ export async function sendAuctionWinnerToReview(
         company: rfq.company ?? doc.company ?? "",
         quotation_number: sq.name,
         procurement_manager: pm,
-        submission_date: sq.transaction_date ?? new Date().toISOString(),
+        submission_date:
+          sq.transaction_date ?? nowERPNextDatetime(),
         grand_total: winnerPrice,
         valid_till: sq.valid_till,
         item_summary: JSON.stringify(itemSummary),

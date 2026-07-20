@@ -16,6 +16,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import MainLayout from "./components/layout/MainLayout";
 import Placeholder from "./components/Placeholder";
 import ProtectedRoute from "./components/ProtectedRoute";
+import SupplierPortalGuard from "./components/SupplierPortalGuard";
 import SlaEngine from "./components/sla/SlaEngine";
 
 // Eager — first-paint critical routes. Per the performance policy these are
@@ -93,10 +94,35 @@ const VoucherDetailPage = lazy(() => import("./pages/vouchers/VoucherDetailPage"
 const SuppliersPage = lazy(() => import("./pages/supplier/SuppliersPage"));
 const NewSupplierPage = lazy(() => import("./pages/supplier/NewSupplierPage"));
 const SupplierDetailPage = lazy(() => import("./pages/supplier/SupplierDetailPage"));
+const SupplierOnboardingListPage = lazy(
+  () => import("./pages/supplier/SupplierOnboardingListPage"),
+);
+const SupplierOnboardingDetailPage = lazy(
+  () => import("./pages/supplier/SupplierOnboardingDetailPage"),
+);
+const SupplierOnboardingPublicPage = lazy(
+  () => import("./pages/public/SupplierOnboardingPublicPage"),
+);
+const SupplierChangePasswordPage = lazy(
+  () => import("./pages/supplier-portal/SupplierChangePasswordPage"),
+);
+const SupplierSecurityPage = lazy(
+  () => import("./pages/supplier-portal/SupplierSecurityPage"),
+);
+const SupplierForgotPasswordPage = lazy(
+  () => import("./pages/supplier-portal/SupplierForgotPasswordPage"),
+);
+const SupplierPortalProfilePage = lazy(
+  () => import("./pages/supplier-portal/SupplierPortalProfilePage"),
+);
+const SupplierLockedPage = lazy(
+  () => import("./pages/supplier-portal/SupplierLockedPage"),
+);
 
 const NewRFQPage = lazy(() => import("./pages/sourcing/NewRFQPage"));
 const RFQDetailPage = lazy(() => import("./pages/sourcing/RFQDetailPage"));
 const RFQTemplatesPage = lazy(() => import("./pages/sourcing/RFQTemplatesPage"));
+const UploadBomPage = lazy(() => import("./pages/sourcing/UploadBomPage"));
 const ReverseBiddingListPage = lazy(
   () => import("./pages/sourcing/ReverseBiddingListPage")
 );
@@ -364,49 +390,61 @@ function App() {
           <Route path="/verify-otp" element={<OtpVerificationPage />} />
 
           {/*
-            Public Supplier Portal — these routes sit OUTSIDE the
-            ProtectedRoute / MainLayout chrome. Suppliers share a single
-            entry point (`/supplier/login`), pick their company from a
-            dropdown, and authenticate with a portal PIN. Each page below
-            independently checks `sessionStorage.supplier_session`.
+            Public Supplier Portal — outside ProtectedRoute / MainLayout.
+            SupplierPortalGuard blocks internal staff from /supplier/* URLs
+            and requires a supplier session for operational pages.
           */}
           <Route path="/supplier/login" element={<SupplierLoginPage />} />
-          <Route path="/supplier/dashboard" element={<SupplierDashboard />} />
-          <Route path="/supplier/rfqs" element={<SupplierRFQsPage />} />
-          <Route path="/supplier/quotations" element={<SupplierQuotationsPage />} />
-          <Route path="/supplier/quotations/:id" element={<SupplierQuotationDetailPage />} />
-          <Route path="/supplier/quotation/:sqName/legal-docs" element={<SupplierLegalUploadPage />} />
-          <Route path="/supplier/purchase-orders" element={<SupplierPOListPage />} />
-          <Route path="/supplier/delivery-schedule" element={<SupplierDeliverySchedulePage />} />
-          <Route path="/supplier/grn" element={<SupplierGRNListPage />} />
-          <Route path="/supplier/grn/:id" element={<SupplierGRNDetailPage />} />
-          <Route path="/supplier/invoices" element={<SupplierInvoiceListPage />} />
           <Route
-            path="/supplier/invoices/:id"
-            element={<SupplierInvoiceDetailPage />}
+            path="/supplier/forgot-password"
+            element={<SupplierForgotPasswordPage />}
           />
-          <Route path="/supplier/payments" element={<SupplierPaymentListPage />} />
           <Route
-            path="/supplier/payments/:id"
-            element={<SupplierPaymentDetailPage />}
+            path="/onboarding/:token"
+            element={<SupplierOnboardingPublicPage />}
           />
-          <Route path="/supplier/vouchers" element={<SupplierVoucherListPage />} />
-          <Route
-            path="/supplier/vouchers/:id"
-            element={<SupplierVoucherDetailPage />}
-          />
-          <Route path="/supplier/help-desk" element={<SupplierHelpDeskPage />} />
-          <Route
-            path="/supplier/contact-support"
-            element={<SupplierContactSupportPage />}
-          />
-          <Route path="/supplier/rfq/:rfqName" element={<SupplierRFQPage />} />
-          <Route path="/supplier/po/:poName" element={<SupplierPOPage />} />
-          <Route path="/supplier/auctions" element={<SupplierAuctionsListPage />} />
-          <Route
-            path="/supplier/auctions/:auctionName"
-            element={<SupplierAuctionPage />}
-          />
+          <Route element={<SupplierPortalGuard />}>
+            <Route path="/supplier/change-password" element={<SupplierChangePasswordPage />} />
+            <Route path="/supplier/security" element={<SupplierSecurityPage />} />
+            <Route path="/supplier/profile" element={<SupplierPortalProfilePage />} />
+            <Route path="/supplier/locked" element={<SupplierLockedPage />} />
+            <Route path="/supplier/dashboard" element={<SupplierDashboard />} />
+            <Route path="/supplier/rfqs" element={<SupplierRFQsPage />} />
+            <Route path="/supplier/quotations" element={<SupplierQuotationsPage />} />
+            <Route path="/supplier/quotations/:id" element={<SupplierQuotationDetailPage />} />
+            <Route path="/supplier/quotation/:sqName/legal-docs" element={<SupplierLegalUploadPage />} />
+            <Route path="/supplier/purchase-orders" element={<SupplierPOListPage />} />
+            <Route path="/supplier/delivery-schedule" element={<SupplierDeliverySchedulePage />} />
+            <Route path="/supplier/grn" element={<SupplierGRNListPage />} />
+            <Route path="/supplier/grn/:id" element={<SupplierGRNDetailPage />} />
+            <Route path="/supplier/invoices" element={<SupplierInvoiceListPage />} />
+            <Route
+              path="/supplier/invoices/:id"
+              element={<SupplierInvoiceDetailPage />}
+            />
+            <Route path="/supplier/payments" element={<SupplierPaymentListPage />} />
+            <Route
+              path="/supplier/payments/:id"
+              element={<SupplierPaymentDetailPage />}
+            />
+            <Route path="/supplier/vouchers" element={<SupplierVoucherListPage />} />
+            <Route
+              path="/supplier/vouchers/:id"
+              element={<SupplierVoucherDetailPage />}
+            />
+            <Route path="/supplier/help-desk" element={<SupplierHelpDeskPage />} />
+            <Route
+              path="/supplier/contact-support"
+              element={<SupplierContactSupportPage />}
+            />
+            <Route path="/supplier/rfq/:rfqName" element={<SupplierRFQPage />} />
+            <Route path="/supplier/po/:poName" element={<SupplierPOPage />} />
+            <Route path="/supplier/auctions" element={<SupplierAuctionsListPage />} />
+            <Route
+              path="/supplier/auctions/:auctionName"
+              element={<SupplierAuctionPage />}
+            />
+          </Route>
 
           <Route
             element={
@@ -511,6 +549,14 @@ function App() {
             {/* Suppliers */}
             <Route path="/suppliers" element={<SuppliersPage />} />
             <Route path="/suppliers/new" element={<NewSupplierPage />} />
+            <Route
+              path="/suppliers/onboarding"
+              element={<SupplierOnboardingListPage />}
+            />
+            <Route
+              path="/suppliers/onboarding/:id"
+              element={<SupplierOnboardingDetailPage />}
+            />
             <Route path="/suppliers/:name" element={<SupplierDetailPage />} />
 
             {/* Sourcing — Smart RFQ */}
@@ -521,6 +567,11 @@ function App() {
             <Route path="/sourcing/rfq" element={<RFQListPage />} />
             <Route path="/sourcing/rfq/new" element={<NewRFQPage />} />
             <Route path="/sourcing/rfq/:id" element={<RFQDetailPage />} />
+            <Route path="/upload-bom" element={<UploadBomPage />} />
+            <Route
+              path="/sourcing/upload-bom"
+              element={<Navigate to="/upload-bom" replace />}
+            />
             <Route
               path="/sourcing/reverse-bidding"
               element={<ReverseBiddingListPage />}

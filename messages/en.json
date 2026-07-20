@@ -76,6 +76,7 @@
     "payments": "Payments",
     "allRfqs": "All RFQs",
     "newRfq": "New RFQ",
+    "uploadBom": "Upload BOM",
     "rfqTemplateLibrary": "RFQ Template Library",
     "legalReviews": "Legal Reviews",
     "supplierQuotations": "Supplier Quotations",
@@ -88,6 +89,7 @@
     "myBudgets": "My Budgets",
     "budgetRequests": "Budget Requests",
     "supplierDirectory": "Supplier Directory",
+    "supplierOnboarding": "Supplier Onboarding",
     "supplierPerformance": "Supplier Performance",
     "myRequests": "My Requests",
     "warehouseReview": "Warehouse Review",
@@ -323,6 +325,10 @@
   },
   "supplierNav": {
     "dashboard": "Dashboard",
+    "profile": "Profile",
+    "profileDetails": "Profile Details",
+    "security": "Security",
+    "documents": "Documents",
     "rfqs": "RFQs",
     "myRfqs": "My RFQs",
     "submittedQuotations": "Submitted Quotations",
@@ -401,7 +407,7 @@
     "awarded": "Awarded"
   },
   "procurementType": {
-    "label": "Procurement Type",
+    "label": "Request Type",
     "direct": "Direct",
     "indirect": "Indirect",
     "all": "All",
@@ -409,7 +415,16 @@
     "indirectProcurement": "Indirect Procurement",
     "helpDirect": "Manufacturing / raw materials — routed through the warehouse for stock check.",
     "helpIndirect": "Office / support items — routed to admin for approval.",
-    "filterLabel": "Procurement Type"
+    "filterLabel": "Request Type"
+  },
+  "requestMode": {
+    "label": "Request Mode",
+    "existing": "Existing",
+    "new": "New",
+    "all": "All",
+    "filterLabel": "Request Mode",
+    "helpExisting": "Item already exists in Item Master / catalog.",
+    "helpNew": "Item does not exist yet — enter details manually; a stub Item is created on submit."
   },
   "adminReview": {
     "title": "Pending Indirect Requests",
@@ -582,13 +597,15 @@
     }
   },
   "reports": {
-    "totalDirect": "Total Direct Procurement",
-    "totalIndirect": "Total Indirect Procurement",
+    "totalDirect": "Total Direct Requests",
+    "totalIndirect": "Total Indirect Requests",
+    "totalExisting": "Existing Mode",
+    "totalNew": "New Mode",
     "directSpend": "Direct Spend",
     "indirectSpend": "Indirect Spend",
     "directPurchaseOrders": "Direct Purchase Orders",
     "indirectPurchaseOrders": "Indirect Purchase Orders",
-    "procurementTypeBreakdown": "Procurement Type Breakdown"
+    "procurementTypeBreakdown": "Request Type & Mode Breakdown"
   },
   "search": {
     "placeholder": "Search suppliers, POs, invoices…",

@@ -224,7 +224,10 @@ export default function AdminDashboardPage() {
 
   const readyToIssue = useMemo(() => {
     const list = readyIssueQ.data ?? [];
-    return list.filter((mr) => mr.items.length > 0 && mr.items.every((it) => it.status === "Available")).length;
+    return list.filter((mr) => {
+      const items = mr.items ?? [];
+      return items.length > 0 && items.every((it) => it.status === "Available");
+    }).length;
   }, [readyIssueQ.data]);
 
   const upcomingSla = useMemo(() => {

@@ -17,6 +17,7 @@ export {
   printGrnPdf,
   grnPdfFilename,
   buildGrnPdf,
+  buildSignedGrnPdfBytes,
 } from "./grnPdf";
 
 export {

@@ -8,6 +8,8 @@ import PageHeader from "../../components/PageHeader";
 import InvoiceStatusBadge from "../../components/InvoiceStatusBadge";
 import PaginationBar from "../../components/PaginationBar";
 import PdfActions from "../../components/PdfActions";
+import ExportButton from "../../components/export/ExportButton";
+import type { ExportColumn } from "../../utils/export";
 import { getAllInvoices, getVoucherById } from "../../api/vouchers";
 import { usePagination } from "../../hooks/usePagination";
 import { useVoucherSyncStore } from "../../store/voucherSyncStore";
@@ -56,11 +58,11 @@ export default function InvoiceListPage() {
       if (statusFilter !== "all" && inv.status !== statusFilter) return false;
       if (!q) return true;
       return (
-        inv.invoice_number.toLowerCase().includes(q) ||
-        inv.supplier_name.toLowerCase().includes(q) ||
-        inv.voucher_id.toLowerCase().includes(q) ||
-        inv.po_reference.toLowerCase().includes(q) ||
-        inv.grn_reference.toLowerCase().includes(q)
+        (inv.invoice_number ?? "").toLowerCase().includes(q) ||
+        (inv.supplier_name ?? "").toLowerCase().includes(q) ||
+        (inv.voucher_id ?? "").toLowerCase().includes(q) ||
+        (inv.po_reference ?? "").toLowerCase().includes(q) ||
+        (inv.grn_reference ?? "").toLowerCase().includes(q)
       );
     });
   }, [invoices, statusFilter, q]);
@@ -91,14 +93,57 @@ export default function InvoiceListPage() {
     [filtered, currentPage, pageSize]
   );
 
+  const exportColumns = useMemo<ExportColumn<(typeof filtered)[number]>[]>(
+    () => [
+      { id: "invoice_number", label: "Invoice Number", accessor: (r) => r.invoice_number },
+      { id: "supplier_name", label: "Supplier", accessor: (r) => r.supplier_name },
+      { id: "voucher_id", label: "Voucher", accessor: (r) => r.voucher_id },
+      { id: "po_reference", label: "PO", accessor: (r) => r.po_reference },
+      { id: "grn_reference", label: "GRN", accessor: (r) => r.grn_reference },
+      {
+        id: "raised_at",
+        label: "Invoice Date",
+        type: "date",
+        accessor: (r) => r.raised_at,
+      },
+      {
+        id: "due_date",
+        label: "Due Date",
+        type: "date",
+        accessor: (r) => r.due_date,
+      },
+      {
+        id: "amount",
+        label: "Amount",
+        type: "currency",
+        accessor: (r) => r.amount,
+      },
+      {
+        id: "status",
+        label: "Status",
+        type: "status",
+        accessor: (r) => r.status,
+      },
+    ],
+    [],
+  );
+
   return (
     <div>
       <PageHeader
         title="Invoices"
         description={
           readOnly
-            ? "Supplier invoices raised against vouchers — monitoring view (read only)."
-            : "Supplier invoices raised against vouchers. Review, approve, and release payment."
+            ? "Supplier-submitted invoices against vouchers — monitoring view (read only)."
+            : "Supplier-submitted invoices only. Review, approve, or reject — invoices are created in the Supplier Portal."
+        }
+        actions={
+          <ExportButton
+            module="Invoice"
+            filenamePrefix="Invoice_List"
+            columns={exportColumns}
+            rows={filtered}
+          />
         }
       />
 

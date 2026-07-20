@@ -3,7 +3,9 @@ import type { QueryClient } from "@tanstack/react-query";
 import {
   normalizeWorkflowStatus,
   resolveProcurementType,
+  resolveRequestMode,
   type MaterialRequestWorkflowStatus,
+  type MaterialRequestMode,
   type MaterialRequestPriority,
   type MaterialRequestProcurementType,
 } from "../types/materialRequestWorkflow";
@@ -30,6 +32,12 @@ export interface WarehouseMaterialRequestItem {
   /** Warehouse the stock check resolved this line against (live ERPNext Bin). */
   warehouse?: string;
   status: "Available" | "Partial Stock" | "Out of Stock";
+  /** Optional engineering part label from Department MR (read-only in Warehouse). */
+  part_name?: string;
+  /** Optional 2D drawing Attach URL on the MR item row. */
+  drawing_2d_url?: string;
+  /** Multi-file engineering attachments (JSON / legacy merge). */
+  attachments?: EngineeringAttachment[];
 }
 
 export interface WarehouseMaterialRequest {
@@ -41,6 +49,7 @@ export interface WarehouseMaterialRequest {
   priority: MaterialRequestPriority;
   status: MaterialRequestWorkflowStatus;
   procurement_type: MaterialRequestProcurementType;
+  request_mode: MaterialRequestMode;
   items_count: number;
   items: WarehouseMaterialRequestItem[];
 }
@@ -111,12 +120,19 @@ import {
   rejectMaterialRequest as rejectMaterialRequestWorkflow,
   listMaterialRequestsWorkflow,
   getMaterialRequestProcurementType,
+  getMaterialRequestMode,
   parseForwardedItemsFromMr,
   WAREHOUSE_PENDING_STATUSES,
 } from "../api/materialRequestWorkflow";
 import { fetchWarehouseStockSummary } from "../api/warehouseStock";
 import { getMaterialRequest } from "../api/purchasing";
 import { apiGet, buildListConfig, buildResourceUrl, COMPANY } from "../api/erpnext";
+import { hydrateEngineeringDocsFromChild } from "../utils/materialRequestItemFiles";
+import type { EngineeringAttachment } from "../utils/materialRequestItemFiles";
+import {
+  logMrFilterTable,
+  logMrWorkflowStage,
+} from "../utils/mrWorkflowDebug";
 
 /** True when the ERPNext response indicates the caller lacks permission. */
 function isForbidden(err: unknown): boolean {
@@ -164,8 +180,7 @@ function workflowStatusFromStandardFields(mr: any): MaterialRequestWorkflowStatu
   // This fallback only runs when `custom_bidsphere_status` is entirely
   // unavailable/unset, so it has no visibility into whether Warehouse has
   // reviewed the request yet. A submitted MR must therefore default to
-  // "Under Warehouse Review" — "Procurement Required" is only ever written by
-  // the explicit warehouse "no stock" / "Send to Procurement" actions.
+  // "Under Warehouse Review" — shortage statuses are written by Stock Decision.
   if (docstatus === 1) return "Under Warehouse Review";
   return "Draft";
 }
@@ -184,6 +199,13 @@ export async function getPendingMaterialRequests(): Promise<WarehouseMaterialReq
     return [];
   }
 
+  // eslint-disable-next-line no-console
+  console.log("Material Request API Response", {
+    page: "Warehouse → Pending Review",
+    api: "listWarehouseMaterialRequestQueue",
+    beforeFilter: rawList.length,
+  });
+
   // Fetch details in parallel — Promise.allSettled so a single failed detail
   // fetch never blocks the others from rendering.
   const detailResults = await Promise.allSettled(
@@ -193,32 +215,50 @@ export async function getPendingMaterialRequests(): Promise<WarehouseMaterialReq
     result.status === "fulfilled" ? result.value : rawList[idx]
   );
 
-  // Exclude anything already forwarded to Procurement (or otherwise past the
-  // warehouse stage). The single-doc detail carries custom_bidsphere_status,
-  // custom_forwarded_to_procurement and the remarks tag reliably (unlike the
-  // list query, whose custom-field inclusion is best-effort), so a forwarded MR
-  // can never leak back into the warehouse "Ready to Issue" / "Procurement
-  // Required" queues. This is the warehouse side of "forwarded_to_procurement
-  // == 0 OR procurement_status != Forwarded".
+  // ERP BidSphere Status is the single source of truth after hydrate.
+  // Do NOT hide rows that still say Under Warehouse Review just because an
+  // optional forwarded flag/tag was set by a partial write.
+  const rejected: Array<{ name: string; reason: string }> = [];
   const details = detailsRaw.filter((mr: any) => {
     const status =
       normalizeWorkflowStatus(mr.custom_bidsphere_status) ||
       workflowStatusFromStandardFields(mr);
-    const forwardedFlag = Number(mr.custom_forwarded_to_procurement) === 1;
-    const forwardedTag = /\[BidSphere:Forwarded:/.test(
-      String(mr.custom_warehouse_remarks ?? mr.remarks ?? "")
-    );
-    const keep =
-      WAREHOUSE_PENDING_STATUSES.includes(status) &&
-      !forwardedFlag &&
-      !forwardedTag;
+    const payload = {
+      "MR Number": mr.name,
+      Purpose: mr.material_request_type,
+      Docstatus: mr.docstatus,
+      Status: mr.status,
+      "Workflow State": mr.workflow_state ?? null,
+      "BidSphere Status": mr.custom_bidsphere_status ?? null,
+      "Warehouse Status": status,
+      "Procurement Status": mr.custom_bidsphere_status ?? status,
+      "Request Type": mr.custom_procurement_type ?? null,
+      "Request Mode": mr.custom_request_mode ?? null,
+      Resolved: status,
+    };
+    // eslint-disable-next-line no-console
+    console.log("ERP Response (hydrated MR)", payload);
+
+    const keep = WAREHOUSE_PENDING_STATUSES.includes(status);
     if (!keep) {
+      const reason = `Rejected ${mr.name} — BidSphere Status "${mr.custom_bidsphere_status || status}" is not a Pending Review status (${WAREHOUSE_PENDING_STATUSES.join(", ")})`;
       // eslint-disable-next-line no-console
-      console.log(
-        `[Warehouse] Excluding ${mr.name} from pending queue (status=${status}, forwarded=${forwardedFlag || forwardedTag}).`
-      );
+      console.log(reason);
+      rejected.push({ name: mr.name, reason });
     }
     return keep;
+  });
+
+  logMrFilterTable({
+    page: "Warehouse → Pending Review",
+    api: "listWarehouseMaterialRequestQueue + getMaterialRequest hydrate",
+    filterUsed: {
+      docstatus: 1,
+      bidsphere_status_in: WAREHOUSE_PENDING_STATUSES,
+      request_type: "Direct",
+    },
+    recordsReturned: details.length,
+    rejected: rejected.slice(0, 40),
   });
 
   const mappedResults = await Promise.allSettled(
@@ -260,6 +300,7 @@ export async function getPendingMaterialRequests(): Promise<WarehouseMaterialReq
         priority: mr.custom_priority || "Medium",
         status: normalizeWorkflowStatus(mr.custom_bidsphere_status) || workflowStatusFromStandardFields(mr),
         procurement_type: resolveProcurementType(mr.custom_procurement_type),
+        request_mode: resolveRequestMode(mr.custom_request_mode),
         items_count: mr.items ? mr.items.length : 0,
         items,
       };
@@ -275,40 +316,93 @@ export async function getPendingMaterialRequests(): Promise<WarehouseMaterialReq
 }
 
 /**
- * Genuinely-persisted "Procurement Required" Material Requests — the
- * warehouse has already reviewed these and ERPNext records a real shortage
- * (`custom_bidsphere_status = "Procurement Required"`), but nobody has
- * clicked "Send to Procurement" yet (`custom_forwarded_to_procurement` is
- * unset). Item lines come from the `[BidSphere:ForwardedItems:...]` snapshot
- * captured at review time — NOT a fresh live stock check — since the review
- * decision is frozen. Concatenate this with `getPendingMaterialRequests()`
- * before calling `selectProcurementRequiredRows` so BOTH the dashboard
- * quick-action-inferred shortages AND the detailed-review-recorded ones show
- * up in the same "Procurement Required" queue. Never throws.
+ * Legacy "Procurement Required" Material Requests (pre single-step forward) —
+ * shortage recorded but not yet Forwarded. Item lines come from the
+ * `[BidSphere:ForwardedItems:...]` snapshot. Concatenate with
+ * `getPendingMaterialRequests()` before `selectProcurementRequiredRows`.
+ * Never throws.
  */
 export async function getWarehouseProcurementRequiredRequests(): Promise<
   WarehouseMaterialRequest[]
 > {
   let rows: Awaited<ReturnType<typeof listMaterialRequestsWorkflow>>;
   try {
+    // Do NOT hard-filter material_request_type — Purchase-type MRs also enter
+    // warehouse review. Do NOT rely on list-row workflowStatus alone (custom
+    // fields may be missing from list). Fetch submitted MRs, hydrate, then
+    // filter on ERP custom_bidsphere_status.
     rows = await listMaterialRequestsWorkflow({
       docstatus: 1,
-      materialRequestType: "Material Issue",
-      workflowStatus: "Procurement Required",
-      limit: 200,
+      limit: 500,
     });
   } catch (err) {
     logWidgetFailure("Procurement Required (persisted)", err);
     return [];
   }
 
-  const notForwarded = rows
-    .filter((mr) => getMaterialRequestProcurementType(mr) === "Direct")
-    // Defensive: never surface an already-forwarded record even if the
-    // status field momentarily lags behind the forwarded flag.
-    .filter((mr) => Number(mr.custom_forwarded_to_procurement) !== 1);
+  // eslint-disable-next-line no-console
+  console.log("Material Request API Response", {
+    page: "Warehouse → Procurement Required",
+    api: "listMaterialRequestsWorkflow(docstatus=1)",
+    beforeFilter: rows.length,
+    sample: rows.slice(0, 10).map((m) => ({
+      name: m.name,
+      custom_bidsphere_status: m.custom_bidsphere_status,
+      material_request_type: m.material_request_type,
+      docstatus: m.docstatus,
+    })),
+  });
 
-  return notForwarded.map((mr) => {
+  const detailResults = await Promise.allSettled(
+    rows.map((r) => getMaterialRequest(r.name)),
+  );
+  const hydrated = detailResults.map((result, idx) =>
+    result.status === "fulfilled" ? (result.value as any) : (rows[idx] as any),
+  );
+
+  const rejected: Array<{ name: string; reason: string }> = [];
+  const notForwarded = hydrated.filter((mr: any) => {
+    const name = String(mr.name || "");
+    const status =
+      normalizeWorkflowStatus(mr.custom_bidsphere_status) ||
+      workflowStatusFromStandardFields(mr);
+    const procurementType = resolveProcurementType(mr.custom_procurement_type);
+    const forwardedFlag = Number(mr.custom_forwarded_to_procurement) === 1;
+
+    logMrWorkflowStage("Warehouse Procurement Required (hydrate)", mr);
+
+    if (procurementType !== "Direct") {
+      rejected.push({ name, reason: `procurement_type=${procurementType}` });
+      return false;
+    }
+    if (status !== "Procurement Required") {
+      rejected.push({
+        name,
+        reason: `bidsphere_status=${mr.custom_bidsphere_status || status}`,
+      });
+      return false;
+    }
+    if (forwardedFlag) {
+      rejected.push({ name, reason: "custom_forwarded_to_procurement=1" });
+      return false;
+    }
+    return true;
+  });
+
+  logMrFilterTable({
+    page: "Warehouse → Procurement Required",
+    api: "listMaterialRequestsWorkflow + getMaterialRequest hydrate",
+    filterUsed: {
+      docstatus: 1,
+      custom_bidsphere_status: "Procurement Required",
+      custom_forwarded_to_procurement: "!= 1",
+      procurement_type: "Direct",
+    },
+    recordsReturned: notForwarded.length,
+    rejected: rejected.slice(0, 30),
+  });
+
+  return notForwarded.map((mr: any) => {
     const forwardedItems = parseForwardedItemsFromMr(mr);
     const items: WarehouseMaterialRequestItem[] =
       forwardedItems.length > 0
@@ -348,8 +442,11 @@ export async function getWarehouseProcurementRequiredRequests(): Promise<
       request_date: mr.transaction_date || mr.modified?.split("T")[0] || "",
       required_date: mr.schedule_date || "",
       priority: mr.custom_priority || "Medium",
-      status: "Procurement Required",
+      status:
+        normalizeWorkflowStatus(mr.custom_bidsphere_status) ||
+        ("Procurement Required" as MaterialRequestWorkflowStatus),
       procurement_type: getMaterialRequestProcurementType(mr),
+      request_mode: getMaterialRequestMode(mr),
       items_count: items.length,
       items,
     };
@@ -372,24 +469,32 @@ export async function getMaterialRequestDetail(
   }
   const stockMap = new Map(stockLines.map((l) => [l.item_code, l]));
 
-  const items = (mr.items || []).map((item: any) => {
-    const stock = stockMap.get(item.item_code);
-    const avail = stock ? stock.available_qty : 0;
-    return {
-      item_code: item.item_code,
-      description: item.description || "",
-      required_qty: item.qty || 0,
-      available_qty: avail,
-      uom: item.uom || "Nos",
-      warehouse: stock?.warehouse || item.warehouse || undefined,
-      status:
-        avail >= (item.qty || 0)
-          ? ("Available" as const)
-          : avail > 0
-            ? ("Partial Stock" as const)
-            : ("Out of Stock" as const),
-    };
-  });
+  const items = await Promise.all(
+    (mr.items || []).map(async (item: any) => {
+      const stock = stockMap.get(item.item_code);
+      const avail = stock ? stock.available_qty : 0;
+      // Prefer child JSON / Attach fields; fall back to File DocType links
+      // when upload succeeded but custom_engineering_attachments was empty.
+      const eng = await hydrateEngineeringDocsFromChild(item);
+      return {
+        item_code: item.item_code,
+        description: item.description || "",
+        required_qty: item.qty || 0,
+        available_qty: avail,
+        uom: item.uom || "Nos",
+        warehouse: stock?.warehouse || item.warehouse || undefined,
+        status:
+          avail >= (item.qty || 0)
+            ? ("Available" as const)
+            : avail > 0
+              ? ("Partial Stock" as const)
+              : ("Out of Stock" as const),
+        part_name: eng.part_name,
+        drawing_2d_url: eng.drawing_2d_url,
+        attachments: eng.attachments,
+      };
+    }),
+  );
 
   return {
     name: mr.name,
@@ -400,6 +505,7 @@ export async function getMaterialRequestDetail(
     priority: mr.custom_priority || "Medium",
     status: normalizeWorkflowStatus(mr.custom_bidsphere_status) || workflowStatusFromStandardFields(mr),
     procurement_type: resolveProcurementType(mr.custom_procurement_type),
+    request_mode: resolveRequestMode(mr.custom_request_mode),
     items_count: mr.items ? mr.items.length : 0,
     items,
   };
@@ -904,8 +1010,8 @@ export function selectReadyToIssueRows(
  * insufficient (≥1 short line) and that have NOT yet been forwarded. Feed this
  * BOTH `getPendingMaterialRequests()` (live-inferred shortages on MRs still
  * "Under Warehouse Review") AND `getWarehouseProcurementRequiredRequests()`
- * (genuinely-persisted "Procurement Required" records) concatenated together
- * — this is the warehouse's actionable "Send to Procurement" queue.
+ * (legacy persisted "Procurement Required" records) concatenated together —
+ * awaiting Stock Decision / Confirm & Process (not a separate Send action).
  */
 export function selectProcurementRequiredRows(
   pending: WarehouseMaterialRequest[]
@@ -913,16 +1019,15 @@ export function selectProcurementRequiredRows(
   return pending
     .filter((mr) => {
       if (mr.procurement_type !== "Direct") return false;
-      // Defensive: an ALREADY-forwarded MR must never show in the warehouse
-      // queue. "Procurement Required" is the expected PRE-forward state and
-      // must stay included — only "Forwarded to Procurement" / "RFQ Created"
-      // mean Procurement already has it.
+      // Already handed to Procurement — leave the warehouse queue.
       if (
         mr.status === "Forwarded to Procurement" ||
         mr.status === "RFQ Created"
       ) {
         return false;
       }
+      // Legacy shortage-recorded (pre single-step forward) — still warehouse-owned.
+      if (mr.status === "Procurement Required") return true;
       const items = mr.items ?? [];
       if (items.length === 0) return false;
       const hasDemand = items.some((i) => i.required_qty > 0);

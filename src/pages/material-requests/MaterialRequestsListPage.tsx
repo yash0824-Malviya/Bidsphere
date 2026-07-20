@@ -13,12 +13,14 @@ import {
 } from "lucide-react";
 
 import {
+  getMaterialRequestMode,
   getMaterialRequestProcurementType,
   getMaterialRequestWorkflowStatus,
   listMaterialRequestsWorkflow,
 } from "../../api/materialRequestWorkflow";
 import { canCreateMaterialRequest } from "../../config/materialRequestPermissions";
 import type {
+  MaterialRequestMode,
   MaterialRequestProcurementType,
   MaterialRequestWorkflowStatus,
 } from "../../types/materialRequestWorkflow";
@@ -26,6 +28,9 @@ import PageHeader from "../../components/PageHeader";
 import PaginationBar from "../../components/PaginationBar";
 import StatusBadge from "../../components/StatusBadge";
 import ProcurementTypeBadge from "../../components/ProcurementTypeBadge";
+import RequestModeBadge from "../../components/RequestModeBadge";
+import ExportButton from "../../components/export/ExportButton";
+import type { ExportColumn } from "../../utils/export";
 import { usePagination } from "../../hooks/usePagination";
 import { useAuthStore } from "../../store/authStore";
 import { formatDate } from "../../utils/format";
@@ -53,6 +58,9 @@ export default function MaterialRequestsListPage() {
   const typeParam = params.get("type");
   const typeFilter: MaterialRequestProcurementType | null =
     typeParam === "Direct" || typeParam === "Indirect" ? typeParam : null;
+  const modeParam = params.get("mode");
+  const modeFilter: MaterialRequestMode | null =
+    modeParam === "Existing" || modeParam === "New" ? modeParam : null;
   const user = useAuthStore((s) => s.user);
   const canCreate = canCreateMaterialRequest(user?.role);
 
@@ -60,6 +68,13 @@ export default function MaterialRequestsListPage() {
     const nextParams = new URLSearchParams(params);
     if (next) nextParams.set("type", next);
     else nextParams.delete("type");
+    setParams(nextParams, { replace: true });
+  };
+
+  const setModeFilter = (next: MaterialRequestMode | null) => {
+    const nextParams = new URLSearchParams(params);
+    if (next) nextParams.set("mode", next);
+    else nextParams.delete("mode");
     setParams(nextParams, { replace: true });
   };
 
@@ -125,6 +140,10 @@ export default function MaterialRequestsListPage() {
       );
     }
 
+    if (modeFilter) {
+      base = base.filter((m) => getMaterialRequestMode(m) === modeFilter);
+    }
+
     if (fParam && FULFILLMENT_FILTERS[fParam]) {
       const allowed = new Set(FULFILLMENT_FILTERS[fParam]);
       base = base.filter((m) =>
@@ -168,14 +187,14 @@ export default function MaterialRequestsListPage() {
 
       return workflow === statusFilter || status === statusFilter;
     });
-  }, [data, statusFilter, fParam, typeFilter]);
+  }, [data, statusFilter, fParam, typeFilter, modeFilter]);
 
   // This queue is built from a computed workflow-status roll-up (not a raw
   // ERPNext column), so the underlying fetch stays a single bulk query —
   // pagination is applied client-side, over the already-filtered rows, purely
   // to cap how many are rendered per page.
   const { page, pageSize, setPage, setPageSize } = usePagination({
-    resetKey: `${statusFilter ?? ""}|${fParam ?? ""}|${typeFilter ?? ""}`,
+    resetKey: `${statusFilter ?? ""}|${fParam ?? ""}|${typeFilter ?? ""}|${modeFilter ?? ""}`,
   });
   const totalRecords = rows.length;
   const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
@@ -185,21 +204,77 @@ export default function MaterialRequestsListPage() {
     [rows, currentPage, pageSize]
   );
 
+  const exportColumns = useMemo<ExportColumn<(typeof rows)[number]>[]>(
+    () => [
+      { id: "name", label: "MR Number", accessor: (r) => r.name },
+      {
+        id: "type",
+        label: "Request Type",
+        type: "status",
+        accessor: (r) => getMaterialRequestProcurementType(r),
+      },
+      {
+        id: "mode",
+        label: "Request Mode",
+        type: "status",
+        accessor: (r) => getMaterialRequestMode(r),
+      },
+      {
+        id: "request_date",
+        label: "Request Date",
+        type: "date",
+        accessor: (r) => r.transaction_date,
+      },
+      {
+        id: "required_date",
+        label: "Required Date",
+        type: "date",
+        accessor: (r) => r.schedule_date,
+      },
+      {
+        id: "department",
+        label: "Department",
+        accessor: (r) => r.custom_department,
+      },
+      {
+        id: "priority",
+        label: "Priority",
+        type: "status",
+        accessor: (r) => r.custom_priority,
+      },
+      {
+        id: "status",
+        label: "Status",
+        type: "status",
+        accessor: (r) => getMaterialRequestWorkflowStatus(r),
+      },
+    ],
+    [],
+  );
+
   return (
     <div>
       <PageHeader
         title="My Requests"
         description="Request items and track their fulfillment."
         actions={
-          canCreate ? (
-            <Link
-              to="/material-requests/new"
-              className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white no-underline"
-            >
-              <Plus className="h-4 w-4" />
-              New Request
-            </Link>
-          ) : undefined
+          <div className="flex flex-wrap items-center gap-2">
+            <ExportButton
+              module="Material Requests"
+              filenamePrefix="Material_Requests"
+              columns={exportColumns}
+              rows={rows}
+            />
+            {canCreate ? (
+              <Link
+                to="/material-requests/new"
+                className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white no-underline"
+              >
+                <Plus className="h-4 w-4" />
+                New Request
+              </Link>
+            ) : null}
+          </div>
         }
       />
 
@@ -273,6 +348,32 @@ export default function MaterialRequestsListPage() {
             </button>
           );
         })}
+        <span className="ml-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+          {t("requestMode.filterLabel")}
+        </span>
+        {([null, "Existing", "New"] as const).map((opt) => {
+          const active = modeFilter === opt;
+          const label =
+            opt === null
+              ? t("requestMode.all")
+              : opt === "Existing"
+                ? t("requestMode.existing")
+                : t("requestMode.new");
+          return (
+            <button
+              key={opt ?? "all-mode"}
+              type="button"
+              onClick={() => setModeFilter(opt)}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                active
+                  ? "bg-primary-600 text-white"
+                  : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
       </div>
 
       <div className="card overflow-hidden">
@@ -287,6 +388,7 @@ export default function MaterialRequestsListPage() {
                 <tr>
                   <th className="px-4 py-3">MR Number</th>
                   <th className="px-4 py-3">{t("procurementType.label")}</th>
+                  <th className="px-4 py-3">{t("requestMode.label")}</th>
                   <th className="px-4 py-3">Request Date</th>
                   <th className="px-4 py-3">Required Date</th>
                   <th className="px-4 py-3">Department</th>
@@ -309,6 +411,9 @@ export default function MaterialRequestsListPage() {
                       <ProcurementTypeBadge
                         type={getMaterialRequestProcurementType(mr)}
                       />
+                    </td>
+                    <td className="px-4 py-3">
+                      <RequestModeBadge mode={getMaterialRequestMode(mr)} />
                     </td>
                     <td className="px-4 py-3">
                       {formatDate(mr.transaction_date)}

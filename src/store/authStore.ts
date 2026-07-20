@@ -26,6 +26,12 @@ import {
   writeSessionProof,
   type SessionProof,
 } from "./authStorage";
+import {
+  clearAccessToken,
+  hydrateAccessTokenFromRemember,
+  writeAccessToken,
+  readAccessToken,
+} from "../utils/accessToken";
 
 export type { AuthUserProfile as AuthUser };
 
@@ -90,6 +96,10 @@ function finalizeAuthenticatedUser(
 ): void {
   const proof = createSessionProof(user.name, rememberMe);
   writeSessionProof(proof);
+  // Persist access token for the session (and remember-me if requested)
+  const token = readAccessToken();
+  if (token) writeAccessToken(token, rememberMe);
+  hydrateAccessTokenFromRemember();
   authLog("login complete", { user: user.name, rememberMe });
 
   if (typeof window !== "undefined") {
@@ -297,6 +307,7 @@ export const useAuthStore = create<AuthState>()(
 
       restoreSession: async () => {
         authLog("restoreSession start");
+        hydrateAccessTokenFromRemember();
         set({ isVerifying: true, isAuthenticated: false, sessionRestoreError: null });
         try {
           purgeStaleAuthStorage();

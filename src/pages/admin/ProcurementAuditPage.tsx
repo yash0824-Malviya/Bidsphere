@@ -6,7 +6,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
-  Download,
   FileSearch,
   FileText,
   Filter,
@@ -14,13 +13,14 @@ import {
   Search,
   X,
 } from "lucide-react";
-import hotToast from "react-hot-toast";
 
 import { getProcurementAuditTrail, getAuditUsers } from "../../api/auditTrail";
 import type { AuditEntry, AuditFilters } from "../../api/auditTrail";
+import ExportButton from "../../components/export/ExportButton";
 import { Skeleton } from "../../components/Skeleton";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
 import { formatDateTime } from "../../utils/format";
+import type { ExportColumn } from "../../utils/export";
 
 const DOCTYPES = [
   { value: "", label: "All Documents" },
@@ -85,35 +85,33 @@ export default function ProcurementAuditPage() {
     setSearchInput("");
   }
 
-  function exportCSV() {
-    if (entries.length === 0) return;
-    const header = "Timestamp,Role,Module,Action,Document No,Old Value,New Value,Remarks";
-    const rows = entries.map((e) =>
-      [
-        e.timestamp,
-        `"${e.role}"`,
-        e.module,
-        `"${e.action.replace(/"/g, '""')}"`,
-        e.documentId,
-        `"${(e.previousValue ?? "").replace(/"/g, '""')}"`,
-        `"${(e.newValue ?? "").replace(/"/g, '""')}"`,
-        `"${(e.remarks ?? "").replace(/"/g, '""')}"`,
-      ].join(",")
-    );
-    const csv = [header, ...rows].join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `procurement-audit-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function exportExcel() {
-    exportCSV();
-    hotToast("CSV exported — open in Excel for .xlsx conversion");
-  }
+  const exportColumns = useMemo<ExportColumn<AuditEntry>[]>(
+    () => [
+      {
+        id: "timestamp",
+        label: "Timestamp",
+        type: "date",
+        accessor: (e) => e.timestamp,
+      },
+      { id: "role", label: "Role", accessor: (e) => e.role },
+      { id: "module", label: "Module", accessor: (e) => e.module },
+      {
+        id: "action",
+        label: "Action",
+        type: "status",
+        accessor: (e) => e.action,
+      },
+      { id: "documentId", label: "Document No", accessor: (e) => e.documentId },
+      {
+        id: "previousValue",
+        label: "Old Value",
+        accessor: (e) => e.previousValue,
+      },
+      { id: "newValue", label: "New Value", accessor: (e) => e.newValue },
+      { id: "remarks", label: "Remarks", accessor: (e) => e.remarks },
+    ],
+    [],
+  );
 
   return (
     <div className="-mt-1">
@@ -132,12 +130,12 @@ export default function ProcurementAuditPage() {
           <button type="button" onClick={() => refetch()} disabled={isFetching} className="inline-flex items-center gap-1 rounded-md bg-white px-2.5 py-1.5 text-[11px] font-semibold text-neutral-600 ring-1 ring-neutral-200 hover:bg-neutral-50 disabled:opacity-50 cursor-pointer border-none">
             <RefreshCw className={`h-3 w-3 ${isFetching ? "animate-spin" : ""}`} /> Refresh
           </button>
-          <button type="button" onClick={exportCSV} disabled={entries.length === 0} className="inline-flex items-center gap-1 rounded-md bg-white px-2.5 py-1.5 text-[11px] font-semibold text-neutral-600 ring-1 ring-neutral-200 hover:bg-neutral-50 disabled:opacity-50 cursor-pointer border-none">
-            <Download className="h-3 w-3" /> CSV
-          </button>
-          <button type="button" onClick={exportExcel} disabled={entries.length === 0} className="inline-flex items-center gap-1 rounded-md bg-white px-2.5 py-1.5 text-[11px] font-semibold text-neutral-600 ring-1 ring-neutral-200 hover:bg-neutral-50 disabled:opacity-50 cursor-pointer border-none">
-            <Download className="h-3 w-3" /> Excel
-          </button>
+          <ExportButton
+            module="Audit Logs"
+            filenamePrefix="Procurement_Audit_Logs"
+            columns={exportColumns}
+            rows={entries}
+          />
         </div>
       </div>
 

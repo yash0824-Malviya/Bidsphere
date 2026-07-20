@@ -139,7 +139,7 @@ export default function BomDetailPage() {
       <section className="card grid grid-cols-2 gap-4 p-5 sm:grid-cols-4">
         <Meta label="Finished Product" value={bom.item_name} />
         <Meta label="Output Quantity" value={`${bom.quantity} ${bom.uom ?? ""}`} />
-        <Meta label="Components" value={String(bom.items.length)} />
+        <Meta label="Components" value={String((bom.items ?? []).length)} />
         <Meta label="Status" value={status.label} />
       </section>
 
@@ -163,14 +163,14 @@ export default function BomDetailPage() {
               </tr>
             </thead>
             <tbody className="bg-white">
-              {bom.items.length === 0 ? (
+              {(bom.items ?? []).length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-10 text-center text-sm text-neutral-500">
                     This BOM has no components.
                   </td>
                 </tr>
               ) : (
-                bom.items.map((c, idx) => (
+                (bom.items ?? []).map((c, idx) => (
                   <tr
                     key={`${c.item_code}-${idx}`}
                     className="border-b border-neutral-100 last:border-0"

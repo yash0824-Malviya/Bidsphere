@@ -39,7 +39,12 @@ import NoQuoteDialog, {
   type NoQuotePayload,
 } from "../../components/supplier-portal/NoQuoteDialog";
 import { uploadFileToERPNext, getFullFileUrl } from "../../api/legalDocsStorage";
-import { Skeleton } from "../../components/Skeleton";
+import { AppLoading, EnterpriseError } from "../../components/enterprise";
+import EngineeringDocumentsPanel from "../../components/supplier-portal/EngineeringDocumentsPanel";
+import {
+  Drawing2dCell,
+  PartNameCell,
+} from "../../components/warehouse/EngineeringDocCells";
 import type { RFQ, RFQItem } from "../../types/erpnext";
 import {
   formatCurrency,
@@ -48,6 +53,11 @@ import {
   isoDateOffset,
   todayIso,
 } from "../../utils/format";
+import { resolveItemEngineeringDocsBatch } from "../../api/resolveItemEngineeringDocs";
+import {
+  pickEngineeringDocs,
+  type EngineeringDocs,
+} from "../../utils/materialRequestItemFiles";
 import SupplierPortalLayout from "./SupplierPortalLayout";
 import {
   Select,
@@ -62,6 +72,9 @@ const DELIVERY_DAY_OPTIONS = [1, 2, 3, 5, 7, 10, 14, 15, 21, 30, 45, 60, 90] as 
 interface SupplierSession {
   supplierName: string;
   loggedIn: boolean;
+  linkedSupplier?: string;
+  companyName?: string;
+  authMode?: "pin" | "account";
 }
 
 interface QuoteLine {
@@ -73,6 +86,9 @@ interface QuoteLine {
   unit_price: number;
   delivery_days: number;
   notes: string;
+  part_name?: string;
+  drawing_2d_url?: string;
+  attachments?: import("../../utils/materialRequestItemFiles").EngineeringAttachment[];
 }
 
 /**
@@ -147,7 +163,19 @@ export default function SupplierRFQPage() {
     }
   }, [navigate]);
 
-  const supplierName = session?.supplierName ?? "";
+  // Must match Request for Quotation Supplier.supplier (ERP Supplier.name), not display label.
+  const supplierName = (() => {
+    if (!session) return "";
+    const linked = String(session.linkedSupplier || "").trim();
+    const stored = String(session.supplierName || "").trim();
+    const company = String(session.companyName || "").trim();
+    return (
+      linked ||
+      (session.authMode === "pin" ? stored : "") ||
+      (company && stored && company !== stored ? stored : "") ||
+      stored
+    );
+  })();
 
   /* ─────────────── RFQ data ─────────────── */
 
@@ -287,6 +315,10 @@ export default function SupplierRFQPage() {
   /* ─────────────── Local quote state ─────────────── */
 
   const [lines, setLines] = useState<QuoteLine[]>([]);
+  /** Resolved MR→RFQ engineering docs by item_code (read-only for suppliers). */
+  const [engByCode, setEngByCode] = useState<Map<string, EngineeringDocs>>(
+    () => new Map(),
+  );
   const [paymentTerms, setPaymentTerms] = useState("Net 30 days");
   const [validityDate, setValidityDate] = useState(isoDateOffset(30));
   const [notes, setNotes] = useState("");
@@ -388,68 +420,112 @@ export default function SupplierRFQPage() {
   useEffect(() => {
     if (!rfq?.items || !supplierName) return;
 
-    const draftKey = `draft_quotation_${rfq.name}_${supplierName}`;
-    const raw = sessionStorage.getItem(draftKey);
-    if (raw) {
-      try {
-        const draft = JSON.parse(raw) as {
-          items?: QuoteLine[];
-          payment_terms?: string;
-          valid_till?: string;
-          notes?: string;
-          legal_documents?: {
-            terms_conditions_pdf?: string | null;
-            terms_conditions_note?: string;
-            terms_conditions_name?: string;
-            warranty_certificate_pdf?: string | null;
-            warranty_certificate_note?: string;
-            warranty_certificate_name?: string;
-            insurance_certificate_pdf?: string | null;
-            insurance_certificate_note?: string;
-            insurance_certificate_name?: string;
-          };
-          saved_at?: string;
-        };
+    let cancelled = false;
 
-        if (draft.items?.length) {
-          setLines(draft.items);
-          if (draft.payment_terms) setPaymentTerms(draft.payment_terms);
-          if (draft.valid_till) setValidityDate(draft.valid_till);
-          if (draft.notes != null) setNotes(draft.notes);
-          if (draft.legal_documents) {
-            const ld = draft.legal_documents;
-            setLegalDraft({
-              terms_file_url: ld.terms_conditions_pdf ?? "",
-              terms_file_name: ld.terms_conditions_name ?? "",
-              terms_note: ld.terms_conditions_note ?? "",
-              warranty_file_url: ld.warranty_certificate_pdf ?? "",
-              warranty_file_name: ld.warranty_certificate_name ?? "",
-              warranty_note: ld.warranty_certificate_note ?? "",
-              insurance_file_url: ld.insurance_certificate_pdf ?? "",
-              insurance_file_name: ld.insurance_certificate_name ?? "",
-              insurance_note: ld.insurance_certificate_note ?? "",
-            });
-          }
-          if (draft.saved_at) setDraftSavedAt(draft.saved_at);
-          return;
-        }
-      } catch {
-        /* fall through to RFQ defaults */
+    void (async () => {
+      // Resolve from RFQ Item JSON and/or linked Material Request Item + File
+      // DocType — never re-upload; same references Warehouse/Procurement use.
+      const engMap = await resolveItemEngineeringDocsBatch(
+        (rfq.items ?? []).map((it) => ({
+          item_code: it.item_code,
+          material_request: it.material_request,
+          material_request_item: it.material_request_item,
+          custom_part_name: it.custom_part_name,
+          custom_2d_drawing: it.custom_2d_drawing,
+          custom_engineering_attachments: it.custom_engineering_attachments,
+          rfq_name: rfq.name,
+        })),
+      );
+      if (cancelled) return;
+
+      const engFor = (it: RFQItem) =>
+        engMap.get(String(it.material_request_item || "").trim()) ||
+        engMap.get(`${rfq.name}::${it.item_code}`) ||
+        engMap.get(it.item_code) ||
+        pickEngineeringDocs(it);
+
+      const byCode = new Map<string, EngineeringDocs>();
+      for (const it of rfq.items ?? []) {
+        byCode.set(it.item_code, engFor(it));
       }
-    }
+      setEngByCode(byCode);
 
-    setLines(
-      rfq.items.map<QuoteLine>((it: RFQItem) => ({
-        item_code: it.item_code,
-        item_name: it.item_name ?? it.item_code,
-        description: it.description ?? "",
-        qty: it.qty,
-        uom: it.uom ?? "Nos",
-        unit_price: 0,
-        delivery_days: 7,
-        notes: "",
-      }))
-    );
+      const draftKey = `draft_quotation_${rfq.name}_${supplierName}`;
+      const raw = sessionStorage.getItem(draftKey);
+      if (raw) {
+        try {
+          const draft = JSON.parse(raw) as {
+            items?: QuoteLine[];
+            payment_terms?: string;
+            valid_till?: string;
+            notes?: string;
+            legal_documents?: {
+              terms_conditions_pdf?: string | null;
+              terms_conditions_note?: string;
+              terms_conditions_name?: string;
+              warranty_certificate_pdf?: string | null;
+              warranty_certificate_note?: string;
+              warranty_certificate_name?: string;
+              insurance_certificate_pdf?: string | null;
+              insurance_certificate_note?: string;
+              insurance_certificate_name?: string;
+            };
+            saved_at?: string;
+          };
+
+          if (draft.items?.length) {
+            const byCode = new Map(
+              (rfq.items ?? []).map((it) => [it.item_code, engFor(it)]),
+            );
+            setLines(
+              draft.items.map((line) => ({
+                ...line,
+                ...byCode.get(line.item_code),
+              })),
+            );
+            if (draft.payment_terms) setPaymentTerms(draft.payment_terms);
+            if (draft.valid_till) setValidityDate(draft.valid_till);
+            if (draft.notes != null) setNotes(draft.notes);
+            if (draft.legal_documents) {
+              const ld = draft.legal_documents;
+              setLegalDraft({
+                terms_file_url: ld.terms_conditions_pdf ?? "",
+                terms_file_name: ld.terms_conditions_name ?? "",
+                terms_note: ld.terms_conditions_note ?? "",
+                warranty_file_url: ld.warranty_certificate_pdf ?? "",
+                warranty_file_name: ld.warranty_certificate_name ?? "",
+                warranty_note: ld.warranty_certificate_note ?? "",
+                insurance_file_url: ld.insurance_certificate_pdf ?? "",
+                insurance_file_name: ld.insurance_certificate_name ?? "",
+                insurance_note: ld.insurance_certificate_note ?? "",
+              });
+            }
+            if (draft.saved_at) setDraftSavedAt(draft.saved_at);
+            return;
+          }
+        } catch {
+          /* fall through to RFQ defaults */
+        }
+      }
+
+      setLines(
+        rfq.items.map<QuoteLine>((it: RFQItem) => ({
+          item_code: it.item_code,
+          item_name: it.item_name ?? it.item_code,
+          description: it.description ?? "",
+          qty: it.qty,
+          uom: it.uom ?? "Nos",
+          unit_price: 0,
+          delivery_days: 7,
+          notes: "",
+          ...engFor(it),
+        })),
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [rfq, supplierName]);
 
   function persistDraft(showToast = false) {
@@ -866,10 +942,7 @@ export default function SupplierRFQPage() {
   if (rfqQuery.isLoading) {
     return (
       <SupplierPortalLayout supplierName={supplierName}>
-        <div className="space-y-4">
-          <Skeleton className="h-24 w-full" />
-          <Skeleton className="h-72 w-full" />
-        </div>
+        <AppLoading variant="document" />
       </SupplierPortalLayout>
     );
   }
@@ -877,23 +950,11 @@ export default function SupplierRFQPage() {
   if (rfqQuery.isError || !rfq) {
     return (
       <SupplierPortalLayout supplierName={supplierName}>
-        <BackToDashboard />
-        <div className="rounded-2xl border border-danger-200 bg-danger-50 p-6 text-center">
-          <AlertTriangle className="mx-auto h-6 w-6 text-danger-600" />
-          <h2 className="mt-2 text-base font-semibold text-danger-800">
-            Couldn't load this RFQ
-          </h2>
-          <p className="mt-1 text-sm text-danger-700">
-            The RFQ may have been deleted, or you may not have access.
-          </p>
-          <button
-            type="button"
-            onClick={() => rfqQuery.refetch()}
-            className="mt-3 inline-flex items-center gap-1 rounded-md border border-danger-300 bg-white px-3 py-1.5 text-xs font-medium text-danger-700 hover:bg-danger-100"
-          >
-            Try again
-          </button>
-        </div>
+        <EnterpriseError
+          error={rfqQuery.error ?? new Error("not found")}
+          onRetry={() => void rfqQuery.refetch()}
+          onBack={() => window.history.back()}
+        />
       </SupplierPortalLayout>
     );
   }
@@ -1117,12 +1178,23 @@ export default function SupplierRFQPage() {
 
             {/* Mobile stacked cards */}
             <div className="divide-y divide-neutral-200 md:hidden">
-              {subData.items.map((line) => (
+              {subData.items.map((line) => {
+                const eng =
+                  engByCode.get(line.item_code) ||
+                  pickEngineeringDocs(
+                    (rfq.items ?? []).find((i) => i.item_code === line.item_code),
+                  );
+                return (
                 <div key={line.item_code} className="space-y-2 p-4 bg-neutral-50/40">
                   <div>
                     <p className="font-medium text-neutral-900">{line.item_name}</p>
                     <p className="text-xs text-neutral-500">{line.item_code}</p>
                   </div>
+                  <EngineeringDocumentsPanel
+                    partName={eng.part_name}
+                    drawing2dUrl={eng.drawing_2d_url}
+                    attachments={eng.attachments}
+                  />
                   <div className="grid grid-cols-2 gap-2 text-sm">
                     <div>
                       <p className="text-[10px] font-medium uppercase text-neutral-500">Quantity</p>
@@ -1145,7 +1217,8 @@ export default function SupplierRFQPage() {
                     <p className="text-xs text-neutral-500">Note: {line.notes}</p>
                   )}
                 </div>
-              ))}
+              );
+              })}
               <div className="flex items-center justify-between bg-neutral-100 px-4 py-3">
                 <span className="text-xs font-semibold uppercase text-neutral-600">Grand Total</span>
                 <span className="text-base font-bold tabular-nums text-primary-700">{formatCurrency(readOnlyTotal)}</span>
@@ -1158,6 +1231,8 @@ export default function SupplierRFQPage() {
                 <thead className="bg-neutral-50 text-left text-xs font-medium uppercase tracking-wider text-neutral-500">
                   <tr>
                     <th className="px-4 py-2">Item</th>
+                    <th className="px-4 py-2">Part Name</th>
+                    <th className="px-4 py-2">Attachments</th>
                     <th className="px-4 py-2 text-right">Qty</th>
                     <th className="px-4 py-2">UOM</th>
                     <th className="px-4 py-2 text-right">Unit Price</th>
@@ -1167,11 +1242,28 @@ export default function SupplierRFQPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-200">
-                  {subData.items.map((line) => (
+                  {subData.items.map((line) => {
+                    const eng =
+                      engByCode.get(line.item_code) ||
+                      pickEngineeringDocs(
+                        (rfq.items ?? []).find(
+                          (i) => i.item_code === line.item_code,
+                        ),
+                      );
+                    return (
                     <tr key={line.item_code} className="bg-neutral-50/40">
                       <td className="px-4 py-2 align-top">
                         <p className="font-medium text-neutral-900">{line.item_name}</p>
                         <p className="text-xs text-neutral-500">{line.item_code}</p>
+                      </td>
+                      <td className="px-4 py-2 align-top">
+                        <PartNameCell value={eng.part_name} />
+                      </td>
+                      <td className="px-4 py-2 align-top">
+                        <Drawing2dCell
+                          url={eng.drawing_2d_url}
+                          attachments={eng.attachments}
+                        />
                       </td>
                       <td className="px-4 py-2 text-right tabular-nums text-neutral-700">{line.qty}</td>
                       <td className="px-4 py-2 text-neutral-700">{line.uom}</td>
@@ -1180,11 +1272,12 @@ export default function SupplierRFQPage() {
                       <td className="px-4 py-2 text-right tabular-nums text-neutral-700">{line.delivery_days}</td>
                       <td className="px-4 py-2 text-neutral-600">{line.notes || "—"}</td>
                     </tr>
-                  ))}
+                  );
+                  })}
                 </tbody>
                 <tfoot className="bg-neutral-100">
                   <tr>
-                    <td colSpan={4} className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-neutral-600">Grand Total</td>
+                    <td colSpan={7} className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-neutral-600">Grand Total</td>
                     <td className="px-4 py-3 text-right text-base font-bold tabular-nums text-primary-700">{formatCurrency(readOnlyTotal)}</td>
                     <td colSpan={2} />
                   </tr>
@@ -1230,9 +1323,18 @@ export default function SupplierRFQPage() {
     parsedMessage.validTill || rfq.valid_till || undefined;
   const rfqStatusLabel = rfq.status ?? "Open";
 
+  const submitDisabledTitle = !acceptedTerms
+    ? "Accept Terms & Conditions to enable submission."
+    : submitBlockers.length > 0
+      ? submitBlockers.join("; ")
+      : undefined;
+
   return (
     <SupplierPortalLayout supplierName={supplierName}>
-      <div className="pb-28">
+      {/* Content scrolls above a sticky footer so Submit is never clipped */}
+      <div className="flex h-[calc(100dvh-7.5rem)] flex-col overflow-hidden sm:h-[calc(100dvh-4rem)] lg:h-[calc(100dvh-3.75rem)]">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          <div className="mx-auto w-full max-w-6xl px-4 pb-3 pt-4 sm:px-5 lg:px-6">
         <BackToDashboard />
 
         {/* Compact RFQ header */}
@@ -1493,24 +1595,45 @@ export default function SupplierRFQPage() {
             {/* Review */}
             <section
               id="section-review"
-              className="scroll-mt-24 rounded-xl border border-neutral-200 bg-white p-3.5 shadow-sm transition-shadow hover:shadow-md"
+              className="scroll-mt-24 rounded-xl border border-neutral-200 bg-white p-3 shadow-sm transition-shadow hover:shadow-md"
             >
               <h2 className="text-sm font-semibold text-neutral-900">Review &amp; Submit</h2>
               <p className="mt-0.5 text-[11px] text-neutral-500">
                 Confirm terms before submitting your quotation to the buyer
               </p>
-              <label className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-lg border border-neutral-100 bg-neutral-50/60 p-3 text-sm text-neutral-700 transition hover:border-primary-200 hover:bg-primary-50/30">
+              <label
+                className={`mt-2.5 flex cursor-pointer items-start gap-2.5 rounded-lg border p-2.5 text-sm transition ${
+                  !acceptedTerms
+                    ? "border-red-300 bg-red-50/50 text-neutral-800 ring-1 ring-inset ring-red-200"
+                    : "border-neutral-100 bg-neutral-50/60 text-neutral-700 hover:border-primary-200 hover:bg-primary-50/30"
+                }`}
+              >
                 <input
                   type="checkbox"
                   checked={acceptedTerms}
                   onChange={(e) => setAcceptedTerms(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 rounded border-neutral-300 text-primary-600 focus:ring-primary-500"
+                  aria-invalid={!acceptedTerms}
+                  aria-describedby={!acceptedTerms ? "terms-accept-hint" : undefined}
+                  className={`mt-0.5 h-4 w-4 rounded focus:ring-2 ${
+                    !acceptedTerms
+                      ? "border-red-500 text-red-600 focus:ring-red-500"
+                      : "border-neutral-300 text-primary-600 focus:ring-primary-500"
+                  }`}
                 />
                 <span>
                   I accept Netlink&apos;s RFQ terms &amp; conditions and confirm the pricing
                   above is firm and binding for the validity period.
                 </span>
               </label>
+              {!acceptedTerms && (
+                <p
+                  id="terms-accept-hint"
+                  className="mt-1.5 flex items-center gap-1 px-0.5 text-xs font-medium text-red-600"
+                >
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                  Accept Terms &amp; Conditions to enable submission.
+                </p>
+              )}
             </section>
           </div>
 
@@ -1527,7 +1650,7 @@ export default function SupplierRFQPage() {
         </div>
 
         {/* Mobile summary — sticky while scrolling */}
-        <div className="sticky top-16 z-10 mt-3 lg:hidden">
+        <div className="sticky top-0 z-10 mt-3 lg:hidden">
           <QuoteSummaryPanel
             itemCount={lines.length}
             grandTotal={grandTotal}
@@ -1536,30 +1659,18 @@ export default function SupplierRFQPage() {
             completionPct={completionPct}
           />
         </div>
-      </div>
+          </div>
+        </div>
 
-      {/* Sticky bottom action bar */}
-      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-neutral-200 bg-white/95 px-4 py-3 shadow-[0_-8px_30px_rgba(15,23,42,0.1)] backdrop-blur-md lg:left-[260px]">
-        <div className="mx-auto flex max-w-6xl flex-col gap-2.5">
-          {!canSubmit && submitBlockers.length > 0 && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-              <p className="flex items-center gap-1.5 font-semibold">
-                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                Complete the following to submit:
-              </p>
-              <ul className="mt-1 list-inside list-disc space-y-0.5 text-amber-800">
-                {submitBlockers.map((issue) => (
-                  <li key={issue}>{issue}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
+      {/* Sticky bottom action bar — Quote Total + actions in one footer */}
+      <div className="sticky bottom-0 z-40 shrink-0 border-t border-neutral-200 bg-white/95 shadow-[0_-6px_24px_rgba(15,23,42,0.08)] backdrop-blur-md supports-[backdrop-filter]:bg-white/90">
+        <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 px-4 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:px-5 lg:px-6">
+          <div className="flex flex-col gap-2.5 md:flex-row md:items-center md:justify-between md:gap-4">
+            <div className="min-w-0 shrink-0">
               <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
                 Quote Total
               </p>
-              <p className="text-2xl font-bold tabular-nums text-primary-600 sm:text-3xl">
+              <p className="text-xl font-bold tabular-nums text-primary-600 sm:text-2xl">
                 {formatCurrency(grandTotal)}
               </p>
               {draftSavedAt && (
@@ -1569,42 +1680,51 @@ export default function SupplierRFQPage() {
                 </p>
               )}
             </div>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="flex w-full flex-wrap items-center gap-2 md:w-auto md:justify-end">
               <button
                 type="button"
                 onClick={handleSaveDraft}
                 disabled={submitting}
-                className="inline-flex items-center justify-center gap-2 rounded-lg border border-neutral-300 bg-white px-4 py-2.5 text-sm font-semibold text-neutral-700 shadow-sm transition hover:border-primary-300 hover:bg-neutral-50 hover:shadow disabled:opacity-60"
+                className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm font-semibold text-neutral-700 shadow-sm transition hover:border-primary-300 hover:bg-neutral-50 hover:shadow disabled:opacity-60 sm:flex-none sm:px-4"
               >
-                <Save className="h-4 w-4" />
-                Save Draft
+                <Save className="h-4 w-4 shrink-0" />
+                <span className="whitespace-nowrap">Save Draft</span>
               </button>
               <button
                 type="button"
                 onClick={() => setNoQuoteOpen(true)}
                 disabled={submitting}
-                className="inline-flex items-center justify-center gap-2 rounded-lg border border-warning-300 bg-warning-50 px-4 py-2.5 text-sm font-semibold text-warning-700 shadow-sm transition hover:border-warning-400 hover:bg-warning-100 disabled:opacity-60"
+                className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg border border-warning-300 bg-warning-50 px-3 py-2 text-sm font-semibold text-warning-700 shadow-sm transition hover:border-warning-400 hover:bg-warning-100 disabled:opacity-60 sm:flex-none sm:px-4"
               >
-                <Ban className="h-4 w-4" />
-                No Quote
+                <Ban className="h-4 w-4 shrink-0" />
+                <span className="whitespace-nowrap">No Quote</span>
               </button>
-              <button
-                type="button"
-                onClick={handleSubmit}
-                disabled={!canSubmit}
-                title={!canSubmit ? submitBlockers.join("; ") : undefined}
-                className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md transition hover:bg-primary-700 hover:shadow-lg disabled:cursor-not-allowed disabled:bg-neutral-300 disabled:text-neutral-500 disabled:shadow-none"
+              {/* Wrapper so tooltip works while the button is disabled */}
+              <span
+                className="inline-flex min-w-0 flex-[1.2] sm:flex-none"
+                title={submitDisabledTitle}
               >
-                {submitting ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Send className="h-4 w-4" />
-                )}
-                {submitting ? "Submitting…" : "Submit Quotation"}
-              </button>
+                <button
+                  type="button"
+                  onClick={handleSubmit}
+                  disabled={!canSubmit}
+                  aria-disabled={!canSubmit}
+                  className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-md transition hover:bg-primary-700 hover:shadow-lg disabled:cursor-not-allowed disabled:bg-neutral-300 disabled:text-neutral-500 disabled:shadow-none sm:min-w-[11.5rem] sm:px-5"
+                >
+                  {submitting ? (
+                    <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                  ) : (
+                    <Send className="h-4 w-4 shrink-0" />
+                  )}
+                  <span className="whitespace-nowrap">
+                    {submitting ? "Submitting…" : "Submit Quotation"}
+                  </span>
+                </button>
+              </span>
             </div>
           </div>
         </div>
+      </div>
       </div>
 
       <NoQuoteDialog
@@ -1785,6 +1905,13 @@ function QuoteItemCard({
           </p>
         </div>
       </div>
+
+      <EngineeringDocumentsPanel
+        partName={line.part_name}
+        drawing2dUrl={line.drawing_2d_url}
+        attachments={line.attachments}
+      />
+
       <div className="mt-2 grid gap-1.5 sm:grid-cols-3">
         <div>
           <label className="mb-0.5 block text-[10px] font-medium text-neutral-600">

@@ -1,12 +1,19 @@
 import { QueryClient } from "@tanstack/react-query";
 
-import { isDocNotFoundError } from "./api/erpnext";
+import {
+  isDocNotFoundError,
+  isPermissionDeniedError,
+} from "./api/erpnext";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: (failureCount, error) => {
-        if (isDocNotFoundError(error)) return false;
+        // Permission / not-found failures won't succeed on retry — fail fast
+        // and let the page render an empty/error state without toast spam.
+        if (isDocNotFoundError(error) || isPermissionDeniedError(error)) {
+          return false;
+        }
         return failureCount < 1;
       },
       retryDelay: 2_000,

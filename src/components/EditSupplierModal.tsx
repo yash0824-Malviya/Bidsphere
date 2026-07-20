@@ -5,8 +5,8 @@ import { Loader2, X } from "lucide-react";
 
 import { apiGet, apiPost, apiPut } from "../api/erpnext";
 import { updateSupplier } from "../api/supplier";
+import { listSupplierCategories } from "../api/supplierOnboarding";
 import type { Supplier } from "../types/erpnext";
-import { SUPPLIER_CATEGORIES } from "../config/supplierCategories";
 
 interface AddressSnapshot {
   name?: string;
@@ -30,7 +30,10 @@ export type SupplierStatus = "Active" | "Inactive";
 
 export interface EditSupplierFormValues {
   supplierName: string;
+  /** Linked Supplier Category (custom_supplier_category) — read-only after create */
   category: string;
+  /** Direct / Indirect (custom_sourcing_type) — read-only after create */
+  sourcingType: string;
   email: string;
   phone: string;
   website: string;
@@ -66,9 +69,14 @@ function buildEditFormValues(
   supplier: Supplier,
   address?: AddressSnapshot
 ): EditSupplierFormValues {
+  const sourcing = String(supplier.custom_sourcing_type || "").trim();
+  const category = String(supplier.custom_supplier_category || "").trim();
   return {
     supplierName: supplier.supplier_name ?? supplier.name ?? "",
-    category: supplier.supplier_group ?? "",
+    // Only custom_supplier_category counts — do not treat supplier_group as filled
+    category,
+    sourcingType:
+      sourcing === "Direct" || sourcing === "Indirect" ? sourcing : "",
     email: supplier.email_id ?? "",
     phone: supplier.mobile_no ?? "",
     website: supplier.website ?? "",
@@ -79,6 +87,22 @@ function buildEditFormValues(
     status: supplier.disabled === 1 ? "Inactive" : "Active",
   };
 }
+
+/** Legacy one-time fill: field is locked only once ERP already has a value. */
+function isSourcingTypeLocked(supplier: Supplier): boolean {
+  const v = String(supplier.custom_sourcing_type || "").trim();
+  return v === "Direct" || v === "Indirect" || v.length > 0;
+}
+
+function isCategoryLocked(supplier: Supplier): boolean {
+  return String(supplier.custom_supplier_category || "").trim().length > 0;
+}
+
+const inputClass =
+  "w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20";
+
+const readonlyInputClass =
+  "w-full cursor-not-allowed rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-600";
 
 export default function EditSupplierModal({
   open,
@@ -91,9 +115,8 @@ export default function EditSupplierModal({
     buildEditFormValues(supplier, primaryAddress)
   );
   // Reset form when the modal opens for a (possibly different) supplier.
-  // Adjusting state during render avoids a cascading setState-in-effect.
   const formSourceKey = open
-    ? `${supplier.name}|${primaryAddress?.name ?? ""}|${supplier.modified ?? ""}`
+    ? `${supplier.name}|${primaryAddress?.name ?? ""}|${supplier.modified ?? ""}|${supplier.custom_sourcing_type ?? ""}|${supplier.custom_supplier_category ?? ""}`
     : "";
   const [loadedKey, setLoadedKey] = useState(formSourceKey);
   if (open && formSourceKey !== loadedKey) {
@@ -109,6 +132,23 @@ export default function EditSupplierModal({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
+
+  const sourcingTypeLocked = isSourcingTypeLocked(supplier);
+  const categoryLocked = isCategoryLocked(supplier);
+  const needsLegacyClassification = !sourcingTypeLocked || !categoryLocked;
+
+  // Resolve category label for read-only display (options from ERP, not hardcoded)
+  const { data: categories = [], isLoading: categoriesLoading } = useQuery({
+    queryKey: ["edit-supplier-categories"],
+    queryFn: () => listSupplierCategories(),
+    staleTime: 60_000,
+    enabled: open,
+  });
+
+  const categoryLabel =
+    categories.find((c) => c.name === form.category)?.category_name ||
+    form.category ||
+    "—";
 
   const { data: paymentTermTemplates = [] } = useQuery<PaymentTermsRow[]>({
     queryKey: ["payment-terms-templates"],
@@ -144,9 +184,6 @@ export default function EditSupplierModal({
       if (!values.supplierName.trim()) {
         throw new Error("Supplier name is required.");
       }
-      if (!values.category) {
-        throw new Error("Category is required.");
-      }
       if (
         values.email &&
         !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email.trim())
@@ -154,9 +191,9 @@ export default function EditSupplierModal({
         throw new Error("Email address looks invalid.");
       }
 
-      await updateSupplier(supplier.name, {
+      // Legacy one-time fill — only send classification fields when still empty in ERP
+      const patch: Parameters<typeof updateSupplier>[1] = {
         supplier_name: values.supplierName.trim(),
-        supplier_group: values.category || undefined,
         email_id: values.email.trim() || undefined,
         mobile_no: values.phone.trim() || undefined,
         website: values.website.trim() || undefined,
@@ -164,7 +201,28 @@ export default function EditSupplierModal({
         payment_terms: values.paymentTerms || undefined,
         default_currency: values.currency || undefined,
         disabled: values.status === "Inactive" ? 1 : 0,
-      });
+      };
+
+      if (!sourcingTypeLocked) {
+        const sourcing = values.sourcingType.trim();
+        if (!sourcing) {
+          throw new Error("Sourcing Type is required.");
+        }
+        if (sourcing !== "Direct" && sourcing !== "Indirect") {
+          throw new Error("Sourcing Type must be Direct or Indirect.");
+        }
+        patch.custom_sourcing_type = sourcing;
+      }
+
+      if (!categoryLocked) {
+        const category = values.category.trim();
+        if (!category) {
+          throw new Error("Supplier Category is required.");
+        }
+        patch.custom_supplier_category = category;
+      }
+
+      await updateSupplier(supplier.name, patch);
 
       const addressLine = values.address.trim();
       if (addressLine) {
@@ -247,6 +305,18 @@ export default function EditSupplierModal({
           }}
           className="overflow-y-auto px-5 py-4"
         >
+          <p
+            className={`mb-4 rounded-lg border px-3 py-2 text-xs ${
+              needsLegacyClassification
+                ? "border-amber-200 bg-amber-50 text-amber-900"
+                : "border-sky-200 bg-sky-50 text-sky-900"
+            }`}
+          >
+            {needsLegacyClassification
+              ? "This legacy supplier is missing Sourcing Type and/or Supplier Category. Set the missing value(s) once — they become read-only after save."
+              : "Supplier Category and Sourcing Type are assigned during supplier onboarding and cannot be modified after supplier creation."}
+          </p>
+
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Supplier Name" required className="sm:col-span-2">
               <input
@@ -257,19 +327,54 @@ export default function EditSupplierModal({
               />
             </Field>
 
-            <Field label="Category" required>
-              <select
-                value={form.category}
-                onChange={(e) => setField("category", e.target.value)}
-                className={inputClass}
-              >
-                <option value="">Select category…</option>
-                {SUPPLIER_CATEGORIES.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
+            <Field label="Sourcing Type" required={!sourcingTypeLocked}>
+              {sourcingTypeLocked ? (
+                <input
+                  value={form.sourcingType || "—"}
+                  readOnly
+                  className={readonlyInputClass}
+                />
+              ) : (
+                <select
+                  value={form.sourcingType}
+                  onChange={(e) => setField("sourcingType", e.target.value)}
+                  className={inputClass}
+                  required
+                >
+                  <option value="">Select sourcing type…</option>
+                  <option value="Direct">Direct</option>
+                  <option value="Indirect">Indirect</option>
+                </select>
+              )}
+            </Field>
+
+            <Field label="Supplier Category" required={!categoryLocked}>
+              {categoryLocked ? (
+                <input
+                  value={categoryLabel}
+                  readOnly
+                  className={readonlyInputClass}
+                />
+              ) : (
+                <select
+                  value={form.category}
+                  onChange={(e) => setField("category", e.target.value)}
+                  className={inputClass}
+                  required
+                  disabled={categoriesLoading}
+                >
+                  <option value="">
+                    {categoriesLoading
+                      ? "Loading categories…"
+                      : "Select category…"}
                   </option>
-                ))}
-              </select>
+                  {categories.map((c) => (
+                    <option key={c.name} value={c.name}>
+                      {c.category_name || c.name}
+                    </option>
+                  ))}
+                </select>
+              )}
             </Field>
 
             <Field label="Email">
@@ -393,9 +498,6 @@ export default function EditSupplierModal({
     </div>
   );
 }
-
-const inputClass =
-  "w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20";
 
 function Field({
   label,

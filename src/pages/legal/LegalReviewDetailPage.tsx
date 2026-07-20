@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
@@ -24,6 +24,10 @@ import {
   XCircle,
 } from "lucide-react";
 
+const LegalPdfViewer = lazy(
+  () => import("../../components/legal/LegalPdfViewer"),
+);
+
 import {
   getRFQ,
   getSupplierQuotations,
@@ -37,14 +41,27 @@ import {
   submitLegalReview,
 } from "../../api/legalDocs";
 import type { LegalDocumentItemSummary, LegalDocumentSet } from "../../api/legalDocs";
-import { triggerLegalDocumentsRequested } from "../../api/notifications";
+import { invalidateApprovalWorkflow } from "../../api/approvalWorkflow";
+import {
+  triggerFinanceReviewRequired,
+  triggerLegalDocumentsRequested,
+} from "../../api/notifications";
 import { getFullFileUrl } from "../../api/legalDocsStorage";
+import { resolveEsignBundle } from "../../api/legalEsign";
 import { getLatestAnalysisSnapshot } from "../../api/supplierScoringResults";
 import { useAuthStore } from "../../store/authStore";
 import { formatCurrency, formatDate } from "../../utils/format";
-import { Skeleton } from "../../components/Skeleton";
+import { AppLoading, EnterpriseError, FadeIn } from "../../components/enterprise";
 import SlaStageBadge from "../../components/sla/SlaStageBadge";
 import type { RFQ, SupplierQuotation, AIRecommendation } from "../../types/erpnext";
+import {
+  getDocReviewProgress,
+  getDocSignatureUiStatus,
+  hasAnyLegalSignature,
+  hasDocSignature,
+  type LegalDocKey,
+  type LegalEsignBundle,
+} from "../../types/legalEsign";
 
 /**
  * Local decision-status type matching the ERPNext "Legal Document Review"
@@ -104,6 +121,18 @@ export default function LegalReviewDetailPage() {
 
   const [legalDocs, setLegalDocs] = useState<LegalDocumentSet | null>(null);
   const [loadingDocs, setLoadingDocs] = useState(true);
+  const [viewerDocKey, setViewerDocKey] = useState<LegalDocKey | null>(null);
+  const [esignBundle, setEsignBundle] = useState<LegalEsignBundle | null>(null);
+  const [showSigRequiredWarning, setShowSigRequiredWarning] = useState(false);
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    summary: true,
+    supplier: true,
+    ai: false,
+    checklist: true,
+    notes: true,
+    timeline: false,
+    actions: true,
+  });
 
   const decodedId = useMemo(() => {
     if (rfqId) return decodeURIComponent(rfqId);
@@ -245,19 +274,28 @@ export default function LegalReviewDetailPage() {
       // eslint-disable-next-line no-console
       console.log("[LegalReview] Loaded from ERPNext:", docs);
       setLegalDocs(docs);
+      setEsignBundle(
+        resolveEsignBundle(docs?.name, docs?.esign_envelope),
+      );
       setLoadingDocs(false);
     };
     void load();
   }, [sqName, selectedSQName]);
 
   const handleViewPdf = useCallback(
-    async (field: "terms" | "warranty" | "insurance") => {
+    async (field: LegalDocKey) => {
       const url = legalDocs?.[`${field}_file_url`];
       if (!url) {
         toast.error("PDF not available");
         return;
       }
-      window.open(getFullFileUrl(url), "_blank", "noopener,noreferrer");
+      // Toggle inline viewer — only one open at a time.
+      if (viewerDocKey === field) {
+        setViewerDocKey(null);
+        return;
+      }
+      setViewerDocKey(field);
+      setExpandedSections((prev) => ({ ...prev, checklist: true }));
 
       if (legalDocs?.name) {
         try {
@@ -265,17 +303,25 @@ export default function LegalReviewDetailPage() {
             [`${field}_viewed`]: 1,
           } as Partial<LegalDocumentSet>);
           setLegalDocs(updated);
+          setEsignBundle(
+            resolveEsignBundle(updated.name, updated.esign_envelope),
+          );
         } catch {
           toast.error("Could not mark document as viewed");
         }
       }
     },
-    [legalDocs]
+    [legalDocs, viewerDocKey]
   );
 
   const handleApproveToggle = useCallback(
     async (field: "terms" | "warranty" | "insurance", checked: boolean) => {
       if (!legalDocs?.name) return;
+      if (checked && !hasDocSignature(esignBundle, field)) {
+        setShowSigRequiredWarning(true);
+        toast.error("Signature required before approving this document.");
+        return;
+      }
       try {
         const updated = await updateLegalDocs(legalDocs.name, {
           [`${field}_approved`]: checked ? 1 : 0,
@@ -285,14 +331,20 @@ export default function LegalReviewDetailPage() {
         toast.error("Could not update approval status");
       }
     },
-    [legalDocs]
+    [legalDocs, esignBundle]
   );
 
-  const allApproved = !!(
-    legalDocs?.terms_approved &&
-    legalDocs?.warranty_approved &&
-    legalDocs?.insurance_approved
-  );
+  const documentSigned = useMemo(() => {
+    if (hasAnyLegalSignature(esignBundle)) return true;
+    const status = String(legalDocs?.esign_status ?? "").toLowerCase();
+    if (status === "signed" || status === "locked") return true;
+    if (legalDocs?.esign_signed_by) return true;
+    return false;
+  }, [esignBundle, legalDocs]);
+
+  const canEsign =
+    (user?.role === "legal" || user?.role === "admin") &&
+    legalDocs?.review_status === "Pending";
 
   // Step 2: Fetch ONLY that single SQ as a raw object (not from list)
   const selectedSQQuery = useQuery<Record<string, unknown>>({
@@ -332,8 +384,6 @@ export default function LegalReviewDetailPage() {
     console.groupEnd();
   }, [rawSQ, selectedSQName]);
 
-  const checklistComplete = allApproved;
-
   const itemSummary: LegalDocumentItemSummary[] = useMemo(() => {
     if (!legalDocs?.item_summary) return [];
     try {
@@ -346,17 +396,6 @@ export default function LegalReviewDetailPage() {
 
   /* ── Decision comments (mandatory; written to ERPNext on submit) ── */
   const [actionReason, setActionReason] = useState("");
-
-  /* ── Expanded sections ── */
-  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
-    summary: true,
-    supplier: true,
-    ai: false,
-    checklist: true,
-    notes: true,
-    timeline: false,
-    actions: true,
-  });
 
   const toggleSection = useCallback((key: string) => {
     setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -384,55 +423,29 @@ export default function LegalReviewDetailPage() {
   /* ── Loading / error states ── */
   if (rfqQuery.isLoading) {
     return (
-      <div className="space-y-4 p-6">
-        <Skeleton className="h-8 w-64 rounded-lg" />
-        <Skeleton className="h-[600px] rounded-xl" />
+      <div className="p-6">
+        <AppLoading variant="document" />
       </div>
     );
   }
 
   if (rfqQuery.isError || !rfq) {
-    const errMsg =
-      rfqQuery.error instanceof Error
-        ? rfqQuery.error.message
-        : String(rfqQuery.error ?? "Unknown error");
-    const isNotFound =
-      errMsg.includes("does not exist") ||
-      errMsg.includes("DoesNotExistError");
     // eslint-disable-next-line no-console
-    console.error("[LegalReviewDetail] RFQ load failed:", {
+    console.error("[LegalReviewDetail] Document load failed:", {
       requestedId: decodedId,
       rawParam: rfqId,
-      errorMessage: errMsg,
       fullError: rfqQuery.error,
     });
     return (
-      <div className="flex flex-col items-center justify-center py-20">
-        <AlertTriangle className="mb-4 h-12 w-12 text-danger-400" />
-        <h2 className="text-lg font-bold text-neutral-900">
-          {isNotFound ? "RFQ Not Found" : "Error Loading RFQ"}
-        </h2>
-        <p className="mt-2 max-w-md text-center text-sm text-neutral-600">
-          {isNotFound ? (
-            <>
-              <span className="font-semibold">Request for Quotation</span>{" "}
-              "{decodedId}" does not exist in ERPNext.
-              <br />
-              It may have been deleted or the ID may be incorrect.
-            </>
-          ) : (
-            errMsg
-          )}
-        </p>
-        <p className="mt-3 text-xs text-neutral-400">
-          DocType: Request for Quotation &middot; Document: {decodedId}
-        </p>
-        <Link
-          to="/sourcing/legal-reviews"
-          className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white"
-        >
-          <ArrowLeft className="h-4 w-4" /> Back to Legal Reviews
-        </Link>
+      <div className="p-6">
+        <EnterpriseError
+          error={rfqQuery.error ?? new Error("not found")}
+          onRetry={() => void rfqQuery.refetch()}
+          onBack={() => {
+            window.location.assign("/sourcing/legal-reviews");
+          }}
+          backLabel="Back"
+        />
       </div>
     );
   }
@@ -456,7 +469,7 @@ export default function LegalReviewDetailPage() {
   const currentLegalStatus: DocReviewStatus = legalDocs?.review_status ?? "Pending";
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <FadeIn className="mx-auto max-w-5xl">
       {/* ── Header ── */}
       <div className="mb-6">
         <Link
@@ -910,103 +923,211 @@ export default function LegalReviewDetailPage() {
                 const hasPdf = !!fileUrl;
                 const isViewed = !!legalDocs?.[`${shortField}_viewed` as keyof LegalDocumentSet];
                 const isApproved = !!legalDocs?.[`${shortField}_approved` as keyof LegalDocumentSet];
+                const docSigned = hasDocSignature(esignBundle, shortField);
+                const sigUi = getDocSignatureUiStatus({
+                  reviewStatus: legalDocs?.review_status,
+                  docApproved: isApproved,
+                  signed: docSigned,
+                  viewed: isViewed,
+                });
+                const progress = getDocReviewProgress({
+                  reviewStatus: legalDocs?.review_status,
+                  viewed: isViewed,
+                  signed: docSigned,
+                  docApproved: isApproved,
+                });
+                const isOpen = viewerDocKey === shortField;
+
+                const statusChip =
+                  sigUi === "rejected"
+                    ? { label: "Rejected", className: "border-rose-200 bg-rose-50 text-rose-700", dot: "bg-rose-500" }
+                    : sigUi === "approved"
+                      ? { label: "Approved", className: "border-emerald-200 bg-emerald-50 text-emerald-700", dot: "bg-emerald-500" }
+                      : sigUi === "signed"
+                        ? { label: "Signed", className: "border-emerald-200 bg-emerald-50 text-emerald-700", dot: "bg-emerald-500" }
+                        : { label: "Pending Signature", className: "border-amber-200 bg-amber-50 text-amber-800", dot: "bg-amber-400" };
 
                 return (
-                  <div key={shortField} style={{
-                    border: `1px solid ${isApproved ? '#86efac' : isViewed ? '#bfdbfe' : '#e5e7eb'}`,
-                    borderRadius: '10px', padding: '16px', marginBottom: '12px',
-                    background: isApproved ? '#f0fdf4' : 'white'
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 700 }}>{icon} {label}</span>
-                      {isViewed && (
-                        <span style={{
-                          padding: '3px 10px', background: '#eff6ff', color: '#1d4ed8',
-                          borderRadius: '20px', fontSize: '11px', fontWeight: 700,
-                          display: 'flex', alignItems: 'center', gap: '4px'
-                        }}>👁 Viewed</span>
-                      )}
+                  <div
+                    key={shortField}
+                    className={`rounded-xl border bg-white p-4 shadow-sm transition ${
+                      isApproved
+                        ? "border-emerald-200"
+                        : isOpen
+                          ? "border-sky-300 ring-2 ring-sky-100"
+                          : "border-slate-200"
+                    }`}
+                  >
+                    <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-sm font-bold text-slate-900">
+                        {icon} {label}
+                      </span>
+                      <span
+                        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${statusChip.className}`}
+                      >
+                        <span className={`h-1.5 w-1.5 rounded-full ${statusChip.dot}`} />
+                        {statusChip.label}
+                      </span>
+                    </div>
+
+                    <div className="mb-3 flex flex-wrap gap-1.5">
+                      {(
+                        [
+                          ["review_started", "Review Started"],
+                          ["signed", "Signed"],
+                          ["approved", "Approved"],
+                          ["completed", "Completed"],
+                        ] as const
+                      ).map(([key, labelStep]) => {
+                        const done = progress.includes(key);
+                        return (
+                          <span
+                            key={key}
+                            className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                              done
+                                ? "bg-slate-900 text-white"
+                                : "bg-slate-100 text-slate-400"
+                            }`}
+                          >
+                            {labelStep}
+                          </span>
+                        );
+                      })}
                     </div>
 
                     {pdfName && (
-                      <div style={{ fontSize: '13px', color: '#374151', marginBottom: '10px' }}>
+                      <div className="mb-2.5 text-[13px] text-slate-700">
                         📎 {pdfName}
                       </div>
                     )}
 
-                    <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
+                    <div className="mb-3 flex flex-wrap gap-2">
                       {hasPdf ? (
                         <>
                           <button
                             type="button"
                             onClick={() => void handleViewPdf(shortField)}
-                            style={{
-                              padding: '6px 16px', background: '#2D6A4F', color: 'white',
-                              border: 'none', borderRadius: '6px', cursor: 'pointer',
-                              fontSize: '13px', fontWeight: 600,
-                              display: 'flex', alignItems: 'center', gap: '6px'
-                            }}
-                          >👁 View PDF</button>
+                            className={`inline-flex items-center gap-1.5 rounded-lg px-4 py-1.5 text-[13px] font-semibold text-white transition ${
+                              isOpen
+                                ? "bg-slate-800 hover:bg-slate-700"
+                                : "bg-emerald-800 hover:bg-emerald-700"
+                            }`}
+                          >
+                            {isOpen ? "Close Review" : "Review"}
+                          </button>
                           {fileUrl && (
-                            <a
-                              href={getFullFileUrl(fileUrl)}
-                              download={pdfName}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              style={{
-                                padding: '6px 16px', background: 'white', color: '#2D6A4F',
-                                border: '1px solid #2D6A4F', borderRadius: '6px',
-                                fontSize: '13px', fontWeight: 600, textDecoration: 'none',
-                                display: 'flex', alignItems: 'center', gap: '6px'
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void (async () => {
+                                  try {
+                                    const { fetchPdfBytes } = await import(
+                                      "../../api/legalEsign"
+                                    );
+                                    const bytes = await fetchPdfBytes(
+                                      getFullFileUrl(fileUrl),
+                                    );
+                                    const blob = new Blob([bytes], {
+                                      type: "application/pdf",
+                                    });
+                                    const objectUrl = URL.createObjectURL(blob);
+                                    const a = document.createElement("a");
+                                    a.href = objectUrl;
+                                    a.download = pdfName || `${shortField}.pdf`;
+                                    a.click();
+                                    URL.revokeObjectURL(objectUrl);
+                                  } catch (err) {
+                                    toast.error(
+                                      err instanceof Error
+                                        ? err.message
+                                        : "Unable to download PDF.",
+                                    );
+                                  }
+                                })();
                               }}
-                            >⬇ Download PDF</a>
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-800 bg-white px-4 py-1.5 text-[13px] font-semibold text-emerald-800 transition hover:bg-emerald-50"
+                            >
+                              Download PDF
+                            </button>
                           )}
                         </>
                       ) : (
-                        <span style={{
-                          padding: '6px 16px', background: '#fee2e2', color: '#dc2626',
-                          borderRadius: '6px', fontSize: '13px', fontWeight: 600
-                        }}>PDF not available</span>
+                        <span className="rounded-lg bg-rose-100 px-4 py-1.5 text-[13px] font-semibold text-rose-600">
+                          PDF not available
+                        </span>
                       )}
                     </div>
 
-                    <div style={{
-                      background: '#f9fafb', border: '1px solid #e5e7eb',
-                      borderRadius: '6px', padding: '10px 12px', marginBottom: '12px',
-                      fontSize: '13px', color: '#374151'
-                    }}>
-                      <strong>Supplier Note:</strong> {note ? note : <span style={{ color: '#9ca3af' }}>(none)</span>}
+                    <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-[13px] text-slate-700">
+                      <strong>Supplier Note:</strong>{" "}
+                      {note ? note : <span className="text-slate-400">(none)</span>}
                     </div>
 
-                    <label style={{
-                      display: 'flex', alignItems: 'center', gap: '8px',
-                      fontSize: '13px', fontWeight: 600,
-                      color: !isViewed || submitted ? '#9ca3af' : '#111',
-                      cursor: !isViewed || submitted ? 'not-allowed' : 'pointer'
-                    }}>
+                    <label
+                      className={`flex items-center gap-2 text-[13px] font-semibold ${
+                        !isViewed || submitted || !docSigned
+                          ? "cursor-not-allowed text-slate-400"
+                          : "cursor-pointer text-slate-900"
+                      }`}
+                    >
                       <input
                         type="checkbox"
                         checked={isApproved}
-                        disabled={!isViewed || submitted}
-                        onChange={e => handleApproveToggle(shortField, e.target.checked)}
-                        style={{ accentColor: '#2D6A4F', width: '16px', height: '16px' }}
+                        disabled={!isViewed || submitted || (!docSigned && !isApproved)}
+                        onChange={(e) =>
+                          handleApproveToggle(shortField, e.target.checked)
+                        }
+                        className="h-4 w-4 accent-emerald-800"
                       />
                       Approve
-                      {!isViewed && (
-                        <span style={{ fontSize: '11px', color: '#dc2626', fontWeight: 400 }}>
-                          (view PDF first)
+                      {!docSigned && (
+                        <span className="text-[11px] font-normal text-rose-600">
+                          (signature required)
                         </span>
                       )}
                     </label>
+
+                    {isOpen && legalDocs && fileUrl ? (
+                      <Suspense
+                        fallback={
+                          <div className="mt-4 flex min-h-[320px] items-center justify-center rounded-2xl border border-slate-200 bg-white">
+                            <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
+                          </div>
+                        }
+                      >
+                        <LegalPdfViewer
+                          key={`${shortField}:${String(fileUrl)}`}
+                          review={legalDocs}
+                          documentKey={shortField}
+                          fileUrl={String(fileUrl)}
+                          canSign={Boolean(canEsign)}
+                          readOnly={submitted || user?.role === "procurement"}
+                          reviewerFullName={
+                            user?.full_name ||
+                            user?.email ||
+                            user?.name ||
+                            "Legal Reviewer"
+                          }
+                          reviewerId={user?.email || user?.name || "legal"}
+                          esignBundle={esignBundle}
+                          onBundleChange={(bundle, updated) => {
+                            setEsignBundle(bundle);
+                            setLegalDocs(updated);
+                            setShowSigRequiredWarning(false);
+                          }}
+                        />
+                      </Suspense>
+                    ) : null}
                   </div>
-                )
+                );
               })}
             </div>
           )}
-          {legalDocs && !checklistComplete && !submitted && (
-            <div className="mt-3 flex items-center gap-2 rounded-lg bg-warning-50 px-3 py-2 text-xs font-medium text-warning-700">
+
+          {legalDocs && !documentSigned && !submitted && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
               <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
-              View each PDF, then approve all three documents before submitting your decision.
+              Open a document with Review, place your electronic signature, then Approve &amp; Sign.
             </div>
           )}
         </CollapsibleSection>
@@ -1089,119 +1210,178 @@ export default function LegalReviewDetailPage() {
           expanded={expandedSections.actions}
           onToggle={toggleSection}
         >
-          <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
             <button
-              disabled={!allApproved || submitted || submitting || !actionReason.trim()}
-              onClick={async () => {
-                if (!legalDocs?.name) {
-                  toast.error('No Legal Document Review record found')
-                  return
-                }
-                if (!actionReason.trim()) {
-                  toast.error('Provide a decision reason before approving.')
-                  return
-                }
-                setSubmitting(true);
-                try {
-                  // The ERPNext "Legal Document Review" document is the ONLY
-                  // place this decision is written — review_status,
-                  // approved_by, approved_on, and legal_comments all land on
-                  // the same document, server-side, via the backend gateway.
-                  const updated = await submitLegalReview(
-                    legalDocs.name,
-                    'Approved',
-                    user?.email ?? 'System',
-                    actionReason.trim()
-                  )
-                  setLegalDocs(updated);
-                  // Sync any other Legal views open in this session (Dashboard,
-                  // Pending/History list) — cross-device sync needs no code at
-                  // all here since every page fetches fresh from ERPNext.
-                  await queryClient.invalidateQueries({ queryKey: ["legal-document-reviews"] });
-                  toast.success('Legal review approved ✅')
-                } catch (err) {
-                  toast.error(err instanceof Error ? err.message : 'Failed to update legal review')
-                } finally {
-                  setSubmitting(false);
-                }
-              }}
-              style={{
-                padding: '12px 28px',
-                background: allApproved && !submitted ? '#2D6A4F' : '#d1d5db',
-                color: 'white',
-                border: 'none', borderRadius: '8px',
-                cursor: allApproved && !submitted && !submitting ? 'pointer' : 'not-allowed',
-                fontSize: '14px', fontWeight: 700,
-                opacity: allApproved && !submitted ? 1 : 0.8
-              }}
-            >
-              {submitting
-                ? 'Submitting…'
-                : allApproved
-                ? '✅ Approve Review'
-                : `Approve Review (${approvedCount}/3 documents approved)`}
-            </button>
-            <button
+              type="button"
               disabled={submitted || submitting || !actionReason.trim()}
               onClick={async () => {
                 if (!legalDocs?.name) {
-                  toast.error('No Legal Document Review record found')
-                  return
+                  toast.error("No Legal Document Review record found");
+                  return;
                 }
                 if (!actionReason.trim()) {
-                  toast.error('Provide a rejection reason before rejecting.')
-                  return
+                  toast.error("Provide a rejection reason before rejecting.");
+                  return;
                 }
                 setSubmitting(true);
                 try {
                   const updated = await submitLegalReview(
                     legalDocs.name,
-                    'Rejected',
-                    user?.email ?? 'System',
+                    "Rejected",
+                    user?.email ?? "System",
                     actionReason.trim(),
-                    actionReason.trim()
-                  )
+                    actionReason.trim(),
+                  );
                   setLegalDocs(updated);
-                  await queryClient.invalidateQueries({ queryKey: ["legal-document-reviews"] });
-                  toast.error('Legal review rejected')
+                  setEsignBundle(
+                    resolveEsignBundle(updated.name, updated.esign_envelope),
+                  );
+                  invalidateApprovalWorkflow(queryClient);
+                  toast.error("Legal review rejected");
                 } catch (err) {
-                  toast.error(err instanceof Error ? err.message : 'Failed to update legal review')
+                  toast.error(
+                    err instanceof Error
+                      ? err.message
+                      : "Failed to update legal review",
+                  );
                 } finally {
                   setSubmitting(false);
                 }
               }}
-              style={{
-                padding: '10px 24px',
-                background: submitted ? '#f3f4f6' : 'white',
-                color: submitted ? '#9ca3af' : '#dc2626',
-                border: `1px solid ${submitted ? '#e5e7eb' : '#fca5a5'}`,
-                borderRadius: '8px',
-                cursor: submitted || submitting ? 'not-allowed' : 'pointer',
-                fontSize: '14px', fontWeight: 600,
-                opacity: submitted ? 0.6 : 1
-              }}
-            >❌ Reject</button>
+              className="rounded-xl border border-rose-200 bg-white px-5 py-2.5 text-sm font-semibold text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Reject
+            </button>
 
-            {(!loadingDocs && !legalDocs || (legalDocs?.review_status === 'Pending' && !legalDocs.terms_file_url && !legalDocs.warranty_file_url && !legalDocs.insurance_file_url)) && !submitted && (
-              <button
-                onClick={() => {
-                  if (!selectedSQName) {
-                    toast.error('No Supplier Quotation selected');
-                    return;
+            <button
+              type="button"
+              disabled={submitted || submitting || !actionReason.trim()}
+              onClick={async () => {
+                if (!legalDocs?.name) {
+                  toast.error("No Legal Document Review record found");
+                  return;
+                }
+                if (!documentSigned) {
+                  setShowSigRequiredWarning(true);
+                  return;
+                }
+                if (!actionReason.trim()) {
+                  toast.error("Provide a decision reason before approving.");
+                  return;
+                }
+                setShowSigRequiredWarning(false);
+                setSubmitting(true);
+                try {
+                  const updated = await submitLegalReview(
+                    legalDocs.name,
+                    "Approved",
+                    user?.email ?? "System",
+                    actionReason.trim(),
+                  );
+                  if (updated.review_status !== "Approved") {
+                    throw new Error(
+                      "Legal approval did not persist review_status=Approved.",
+                    );
                   }
-                  triggerLegalDocumentsRequested(selectedSQName);
-                  toast.success('Document request sent to supplier');
-                }}
-                style={{
-                  padding: '10px 24px', background: '#f59e0b', color: 'white',
-                  border: 'none', borderRadius: '8px', cursor: 'pointer',
-                  fontSize: '14px', fontWeight: 600
-                }}
-              >
-                📨 Request Documents from Supplier
-              </button>
-            )}
+                  if (updated.finance_status !== "Pending") {
+                    throw new Error(
+                      "Legal approval saved but Finance handoff failed (finance_status is not Pending). " +
+                        "Ask an admin to run: node scripts/setup-legal-review-doctype.mjs",
+                    );
+                  }
+                  if (
+                    updated.workflow_state &&
+                    updated.workflow_state !== "Finance Review"
+                  ) {
+                    throw new Error(
+                      `Legal approval saved but workflow_state is "${updated.workflow_state}" (expected Finance Review).`,
+                    );
+                  }
+                  setLegalDocs(updated);
+                  setEsignBundle(
+                    resolveEsignBundle(updated.name, updated.esign_envelope),
+                  );
+                  const rfqForNotify =
+                    updated.rfq_name || legalDocs.rfq_name || decodedId;
+                  if (rfqForNotify) {
+                    try {
+                      triggerFinanceReviewRequired(
+                        rfqForNotify,
+                        Number(updated.grand_total ?? legalDocs.grand_total ?? 0),
+                      );
+                    } catch {
+                      /* notification is non-blocking */
+                    }
+                  }
+                  invalidateApprovalWorkflow(queryClient);
+                  toast.success(
+                    "Approved & signed — moved to Finance Review queue",
+                  );
+                } catch (err) {
+                  const msg =
+                    err instanceof Error
+                      ? err.message
+                      : "Failed to update legal review";
+                  if (/sign/i.test(msg) && !/handoff/i.test(msg)) {
+                    setShowSigRequiredWarning(true);
+                  } else {
+                    toast.error(msg);
+                  }
+                } finally {
+                  setSubmitting(false);
+                }
+              }}
+              className={`rounded-xl px-6 py-2.5 text-sm font-bold text-white transition ${
+                documentSigned && !submitted
+                  ? "bg-slate-900 hover:bg-slate-800"
+                  : "bg-slate-300 hover:bg-slate-300"
+              }`}
+            >
+              {submitting ? "Submitting…" : "Approve & Sign"}
+            </button>
           </div>
+
+          {showSigRequiredWarning && !documentSigned && !submitted ? (
+            <div
+              role="alert"
+              className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 shadow-sm"
+            >
+              <p className="flex items-center gap-2 font-bold">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                Signature Required
+              </p>
+              <p className="mt-1 text-rose-700">
+                Please place your electronic signature before approving this
+                document.
+              </p>
+            </div>
+          ) : !documentSigned && !submitted ? (
+            <p className="mt-2 text-right text-xs text-slate-500">
+              Approve &amp; Sign requires an electronic signature on at least one
+              reviewed document.
+            </p>
+          ) : null}
+
+          {(!loadingDocs && !legalDocs || (legalDocs?.review_status === 'Pending' && !legalDocs.terms_file_url && !legalDocs.warranty_file_url && !legalDocs.insurance_file_url)) && !submitted && (
+            <button
+              type="button"
+              onClick={() => {
+                if (!selectedSQName) {
+                  toast.error('No Supplier Quotation selected');
+                  return;
+                }
+                triggerLegalDocumentsRequested(selectedSQName);
+                toast.success('Document request sent to supplier');
+              }}
+              style={{
+                padding: '10px 24px', background: '#f59e0b', color: 'white',
+                border: 'none', borderRadius: '8px', cursor: 'pointer',
+                fontSize: '14px', fontWeight: 600
+              }}
+            >
+              📨 Request Documents from Supplier
+            </button>
+          )}
 
           {legalDocs?.review_status !== 'Pending' && (
             <div style={{
@@ -1222,7 +1402,7 @@ export default function LegalReviewDetailPage() {
           )}
         </CollapsibleSection>
       </div>
-    </div>
+    </FadeIn>
   );
 }
 

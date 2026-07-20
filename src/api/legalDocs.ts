@@ -21,9 +21,21 @@ const DOCTYPE = "Legal Document Review";
  * directly from ERPNext, which remains the single source of truth.
  */
 async function callLegalReviewApi<T>(action: string, body: unknown): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  try {
+    const token =
+      sessionStorage.getItem("bidsphere-access-token") ||
+      localStorage.getItem("bidsphere-access-token-remember");
+    if (token) headers["X-Bidsphere-Access-Token"] = token;
+  } catch {
+    /* ignore */
+  }
+
   const res = await fetch(`/api/legal-review/${action}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(body ?? {}),
   });
 
@@ -89,6 +101,10 @@ export interface LegalDocumentSet {
    * "Pending" automatically the moment `review_status` becomes "Approved".
    */
   finance_status?: "Pending" | "Approved" | "Rejected" | "";
+  /** Active queue owner (persisted on LDR). */
+  current_owner?: string;
+  /** Next approver role (persisted on LDR). */
+  next_approver?: string;
   /** Set only once finance_status !== "Pending" — the Finance reviewer's identity. */
   finance_approved_by?: string;
   /** Set only once finance_status !== "Pending" — server-stamped decision time. */
@@ -97,6 +113,14 @@ export interface LegalDocumentSet {
   finance_comments?: string;
   /** Required context for a finance Rejected decision; empty when Approved. */
   finance_rejection_reason?: string;
+  /** JSON LegalEsignBundle (v2) or legacy LegalEsignEnvelope — overlay signatures + audit. */
+  esign_envelope?: string;
+  /** unsigned | signed | locked */
+  esign_status?: string;
+  esign_document_hash?: string;
+  esign_signed_file_url?: string;
+  esign_signed_by?: string;
+  esign_signed_on?: string;
 }
 
 export interface LegalDocumentItemSummary {
@@ -223,23 +247,23 @@ export const getLegalDocsByRfq = async (
   }
 };
 
+/**
+ * Load every Legal Document Review via the privileged `/api/legal-review/list`
+ * gateway (same credentials as Legal approve). Browser ERPNext list reads are
+ * NOT used — they can silently return [] or omit finance_status/workflow_state,
+ * which is the root cause of "Legal approved but never appears in Finance".
+ */
 export const getAllLegalDocs = async (): Promise<LegalDocumentSet[]> => {
   try {
-    const rows = (await erpnextClient.get(resourceBase(), {
-      params: {
-        fields: JSON.stringify(["*"]),
-        limit_page_length: 200,
-        // "modified desc" so History (Approved/Rejected) surfaces the most
-        // recently decided reviews first — matches the required query:
-        // SELECT ... WHERE review_status IN ("Approved","Rejected")
-        // ORDER BY modified DESC.
-        order_by: "modified desc",
-      },
-    })) as LegalDocumentSet[];
-    return Array.isArray(rows) ? rows : [];
+    const result = await callLegalReviewApi<{ records: LegalDocumentSet[] }>("list", {
+      limit: 200,
+    });
+    return Array.isArray(result.records) ? result.records : [];
   } catch (err) {
-    logFullFailure("getAllLegalDocs", err);
-    return [];
+    logFullFailure("getAllLegalDocs(gateway)", err);
+    // Do NOT swallow into [] — callers must see the failure so dashboards
+    // show an error instead of an empty Finance queue after Legal approve.
+    throw err instanceof Error ? err : new Error(String(err));
   }
 };
 
@@ -278,16 +302,27 @@ export const getLegalDocsByStatus = async (
 };
 
 /**
- * Legal-approved records currently awaiting a Finance decision —
- * `SELECT * FROM tabLegal Document Review WHERE review_status = "Approved"
- * AND finance_status = "Pending"`. This is the Finance Dashboard's Pending
- * queue, sourced entirely from ERPNext.
+ * Legal-approved records currently awaiting a Finance decision.
+ *
+ * Membership rule (canonical):
+ *   review_status = Approved
+ *   AND finance_status is Pending OR blank (blank = handoff never stamped —
+ *   still belongs in Finance queue; must not vanish after Legal approve)
+ *
+ * We load Legal-approved rows first, then filter client-side so a missing /
+ * unfilterable `finance_status` field can never empty the Finance queue.
  */
 export const getFinancePendingReviews = async (
   limit = 200
 ): Promise<LegalDocumentSet[]> => {
+  const isAwaitingFinance = (r: LegalDocumentSet) => {
+    const fs = String(r.finance_status ?? "").trim();
+    return !fs || fs === "Pending";
+  };
+
   try {
-    const rows = (await erpnextClient.get(resourceBase(), {
+    // Prefer the precise ERPNext filter when the field is queryable.
+    const precise = (await erpnextClient.get(resourceBase(), {
       params: {
         fields: JSON.stringify(["*"]),
         filters: JSON.stringify([
@@ -298,10 +333,43 @@ export const getFinancePendingReviews = async (
         order_by: "modified desc",
       },
     })) as LegalDocumentSet[];
-    return Array.isArray(rows) ? rows : [];
+    const preciseRows = Array.isArray(precise) ? precise : [];
+
+    // Also pull Legal-approved rows so blank finance_status (failed historical
+    // handoffs) still appear — merge by name.
+    const approved = (await erpnextClient.get(resourceBase(), {
+      params: {
+        fields: JSON.stringify(["*"]),
+        filters: JSON.stringify([["review_status", "=", "Approved"]]),
+        limit_page_length: limit,
+        order_by: "modified desc",
+      },
+    })) as LegalDocumentSet[];
+    const awaiting = (Array.isArray(approved) ? approved : []).filter(
+      isAwaitingFinance,
+    );
+
+    const byName = new Map<string, LegalDocumentSet>();
+    for (const row of [...preciseRows, ...awaiting]) {
+      if (row?.name) byName.set(row.name, row);
+    }
+    return Array.from(byName.values());
   } catch (err) {
     logFullFailure("getFinancePendingReviews", err);
-    return [];
+    try {
+      const approved = (await erpnextClient.get(resourceBase(), {
+        params: {
+          fields: JSON.stringify(["*"]),
+          filters: JSON.stringify([["review_status", "=", "Approved"]]),
+          limit_page_length: limit,
+          order_by: "modified desc",
+        },
+      })) as LegalDocumentSet[];
+      return (Array.isArray(approved) ? approved : []).filter(isAwaitingFinance);
+    } catch (fallbackErr) {
+      logFullFailure("getFinancePendingReviews.fallback", fallbackErr);
+      return [];
+    }
   }
 };
 
@@ -357,7 +425,21 @@ export const getAllFinanceReviews = async (
     return Array.isArray(rows) ? rows : [];
   } catch (err) {
     logFullFailure("getAllFinanceReviews", err);
-    return [];
+    // Fallback: Legal-approved records are the Finance funnel membership.
+    try {
+      const approved = (await erpnextClient.get(resourceBase(), {
+        params: {
+          fields: JSON.stringify(["*"]),
+          filters: JSON.stringify([["review_status", "=", "Approved"]]),
+          limit_page_length: limit,
+          order_by: "modified desc",
+        },
+      })) as LegalDocumentSet[];
+      return Array.isArray(approved) ? approved : [];
+    } catch (fallbackErr) {
+      logFullFailure("getAllFinanceReviews.fallback", fallbackErr);
+      return [];
+    }
   }
 };
 

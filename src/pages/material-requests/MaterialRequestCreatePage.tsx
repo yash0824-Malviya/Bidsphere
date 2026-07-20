@@ -23,6 +23,7 @@ import { COMPANY } from "../../api/erpnext";
 
 import {
   createMaterialRequestWorkflow,
+  ensureItemsExistForNewMode,
   fetchMaterialRequestWorkflow,
   submitMaterialRequestWorkflow,
 } from "../../api/materialRequestWorkflow";
@@ -32,11 +33,14 @@ import {
 } from "../../api/purchasing";
 import {
   MR_PROCUREMENT_TYPE_FIELD,
+  MR_REQUEST_MODE_FIELD,
   MR_WORKFLOW_FIELD,
+  usesItemMasterDropdowns,
 } from "../../types/materialRequestWorkflow";
 import { defaultProcurementTypeForDepartment } from "../../config/procurementType";
 
 import type {
+  MaterialRequestMode,
   MaterialRequestPriority,
   MaterialRequestProcurementType,
 } from "../../types/materialRequestWorkflow";
@@ -51,13 +55,22 @@ import { ErpNextDatePicker } from "../../components/ui";
 
 import { useAuthStore } from "../../store/authStore";
 
-import { canCreateMaterialRequest } from "../../config/materialRequestPermissions";
+import {
+  canCreateMaterialRequest,
+  canDeleteEngineeringAttachment,
+  canEditDepartmentAttachmentsOnMr,
+} from "../../config/materialRequestPermissions";
 
 import { todayIso } from "../../utils/format";
 
 import { assertERPNextDate } from "../../utils/erpNextDate";
 
 import { generateId } from "../../utils/id";
+import {
+  engineeringFieldsForPayload,
+  resolveEngineeringAttachments,
+  syncMaterialRequestItemEngineeringFiles,
+} from "../../utils/materialRequestItemFiles";
 
 function newDraftItem(requiredBy: string): MaterialRequestDraftLine {
   return {
@@ -78,6 +91,8 @@ function newDraftItem(requiredBy: string): MaterialRequestDraftLine {
     schedule_date: requiredBy,
 
     remarks: "",
+
+    part_name: "",
   };
 }
 
@@ -87,10 +102,10 @@ function resolveDepartmentValue(value?: string | null): string {
 
 function validateMaterialRequestForm(
   purpose: string,
-
   department: string,
-
   items: MaterialRequestDraftLine[],
+  requestType: MaterialRequestProcurementType,
+  requestMode: MaterialRequestMode,
 ): string | null {
   if (!purpose) {
     return "Purpose is required.";
@@ -101,20 +116,30 @@ function validateMaterialRequestForm(
   }
 
   const activeLines = items.filter(
-    (line) => line.item_code || line.qty > 0 || line.description,
+    (line) => line.item_code || line.qty > 0 || line.description || line.item_name,
   );
 
   if (activeLines.length === 0) {
     return "Add at least one item line.";
   }
 
+  const useDropdowns = usesItemMasterDropdowns(requestType, requestMode);
+
   for (const line of activeLines) {
-    if (!line.item_group) {
-      return "Select an item group for each line.";
+    if (!line.item_group.trim()) {
+      return useDropdowns
+        ? "Select an item group for each line."
+        : "Enter an item group for each line.";
     }
 
-    if (!line.item_code) {
-      return "Select an item for each line.";
+    if (!line.item_code.trim()) {
+      return useDropdowns
+        ? "Select an item for each line."
+        : "Enter an item code for each line.";
+    }
+
+    if (!useDropdowns && !line.item_name.trim()) {
+      return "Enter an item name for each line.";
     }
 
     if (!(line.qty > 0)) {
@@ -122,8 +147,7 @@ function validateMaterialRequestForm(
     }
   }
 
-  const codes = activeLines.map((line) => line.item_code);
-
+  const codes = activeLines.map((line) => line.item_code.trim());
   if (new Set(codes).size !== codes.length) {
     return "Remove duplicate items — each item may only appear once.";
   }
@@ -156,6 +180,8 @@ export default function MaterialRequestCreatePage() {
   const [procurementType, setProcurementType] =
     useState<MaterialRequestProcurementType>("Direct");
   const [procurementTypeTouched, setProcurementTypeTouched] = useState(false);
+  const [requestMode, setRequestMode] = useState<MaterialRequestMode>("Existing");
+  const [requestModeTouched, setRequestModeTouched] = useState(false);
 
   const [priority, setPriority] = useState<MaterialRequestPriority>("Medium");
 
@@ -219,6 +245,16 @@ export default function MaterialRequestCreatePage() {
       );
       setProcurementTypeTouched(true);
     }
+    if (doc[MR_REQUEST_MODE_FIELD]) {
+      setRequestMode(
+        doc[MR_REQUEST_MODE_FIELD] === "New" ? "New" : "Existing",
+      );
+      setRequestModeTouched(true);
+    } else {
+      // Legacy draft without mode → Existing
+      setRequestMode("Existing");
+      setRequestModeTouched(true);
+    }
     if (doc.custom_priority) setPriority(doc.custom_priority);
     setPurpose(doc.custom_purpose || "Purchase");
     // `remarks` carries the free-text notes when they differ from the intent
@@ -238,6 +274,11 @@ export default function MaterialRequestCreatePage() {
       schedule_date:
         it.schedule_date || doc.schedule_date || todayIso(),
       remarks: "",
+      part_name: it.custom_part_name ?? "",
+      attachments: resolveEngineeringAttachments(it),
+      drawing_2d_url: it.custom_2d_drawing || undefined,
+      pendingAttachments: [],
+      attachmentsDirty: false,
     }));
     setItems(
       lines.length > 0
@@ -269,6 +310,10 @@ export default function MaterialRequestCreatePage() {
       ? procurementType
       : defaultProcurementTypeForDepartment(resolvedDepartment);
 
+  const resolvedRequestMode: MaterialRequestMode = requestModeTouched
+    ? requestMode
+    : "Existing";
+
   const usedItemCodes = useMemo(() => {
     const set = new Set<string>();
 
@@ -296,6 +341,8 @@ export default function MaterialRequestCreatePage() {
         purpose,
         resolvedDepartment,
         items,
+        resolvedProcurementType,
+        resolvedRequestMode,
       );
 
       if (validationError) throw new Error(validationError);
@@ -310,20 +357,37 @@ export default function MaterialRequestCreatePage() {
       // Resolve warehouse dynamically before create/update so stock items never
       // hit ERPNext without a warehouse (e.g. company=Bidsphere has warehouses
       // but SRM005 has no Bidsphere item_defaults → ValidationError).
-      const payloadItems = await ensureMaterialRequestItemWarehouses(
-        company,
-        items
-          .filter((line) => line.item_code && line.qty > 0)
-          .map((line) => ({
+      const activeLines = items.filter((line) => line.item_code && line.qty > 0);
+
+      // New mode: create Item Master stubs before MR create/update so Link
+      // validation succeeds for codes that do not exist yet.
+      if (resolvedRequestMode === "New") {
+        await ensureItemsExistForNewMode(
+          activeLines.map((line) => ({
             item_code: line.item_code,
             item_name: line.item_name,
             description: line.description,
+            item_group: line.item_group,
             qty: line.qty,
             uom: line.uom || "Nos",
-            schedule_date: line.schedule_date
-              ? assertERPNextDate(line.schedule_date, "schedule_date")
-              : scheduleIso,
           })),
+          resolvedProcurementType,
+        );
+      }
+
+      const payloadItems = await ensureMaterialRequestItemWarehouses(
+        company,
+        activeLines.map((line) => ({
+          item_code: line.item_code,
+          item_name: line.item_name,
+          description: line.description,
+          qty: line.qty,
+          uom: line.uom || "Nos",
+          schedule_date: line.schedule_date
+            ? assertERPNextDate(line.schedule_date, "schedule_date")
+            : scheduleIso,
+          ...engineeringFieldsForPayload(line),
+        })),
       );
 
       const transactionIso = assertERPNextDate(
@@ -334,6 +398,33 @@ export default function MaterialRequestCreatePage() {
       // Prefer an already-created draft (edit URL, or a previous attempt in this
       // page session) so retries never insert a second Material Request.
       const existingDraft = editName || createdDraftNameRef.current;
+
+      const applyItemFileSync = async (mrName: string) => {
+        try {
+          const patches = await syncMaterialRequestItemEngineeringFiles(
+            mrName,
+            activeLines,
+            user?.email ?? user?.name,
+          );
+          if (Object.keys(patches).length > 0) {
+            setItems((prev) =>
+              prev.map((line) =>
+                patches[line.id] ? { ...line, ...patches[line.id] } : line,
+              ),
+            );
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // Custom fields may not be provisioned yet — don't block MR save.
+          if (/Custom Field|Unknown column|not found/i.test(msg)) {
+            toast.error(
+              "Item saved, but engineering file fields are not set up in ERPNext yet. Run the Material Request setup script.",
+            );
+            return;
+          }
+          throw err;
+        }
+      };
 
       if (existingDraft) {
         if (import.meta.env.DEV) {
@@ -353,6 +444,7 @@ export default function MaterialRequestCreatePage() {
           schedule_date: scheduleIso,
           custom_department: resolvedDepartment,
           [MR_PROCUREMENT_TYPE_FIELD]: resolvedProcurementType,
+          [MR_REQUEST_MODE_FIELD]: resolvedRequestMode,
           custom_priority: priority,
           custom_purpose: purpose,
           remarks: notes.trim() || purpose,
@@ -362,6 +454,8 @@ export default function MaterialRequestCreatePage() {
             ...it,
           })),
         } as never);
+
+        await applyItemFileSync(existingDraft);
 
         if (submit) {
           return submitMaterialRequestWorkflow(existingDraft);
@@ -381,6 +475,8 @@ export default function MaterialRequestCreatePage() {
 
         procurement_type: resolvedProcurementType,
 
+        request_mode: resolvedRequestMode,
+
         priority,
 
         purpose: purpose,
@@ -397,6 +493,8 @@ export default function MaterialRequestCreatePage() {
       if (import.meta.env.DEV) {
         console.log("[MR Create] document created", { name: created.name });
       }
+
+      await applyItemFileSync(created.name);
 
       if (submit) {
         return submitMaterialRequestWorkflow(created.name);
@@ -455,11 +553,16 @@ export default function MaterialRequestCreatePage() {
     );
   }
 
-  // Switching Procurement Type reloads the correct Item Group category, so every
-  // selected Item Group / Item (and its auto-filled Description / UOM) is cleared.
+  // Switching Request Type / Mode reloads the item-entry UI, so clear lines.
   function handleProcurementTypeChange(next: MaterialRequestProcurementType) {
     setProcurementTypeTouched(true);
     setProcurementType(next);
+    setItems([newDraftItem(requiredDate)]);
+  }
+
+  function handleRequestModeChange(next: MaterialRequestMode) {
+    setRequestModeTouched(true);
+    setRequestMode(next);
     setItems([newDraftItem(requiredDate)]);
   }
 
@@ -485,6 +588,8 @@ export default function MaterialRequestCreatePage() {
       purpose,
       resolvedDepartment,
       items,
+      resolvedProcurementType,
+      resolvedRequestMode,
     );
 
     if (validationError) {
@@ -641,6 +746,20 @@ export default function MaterialRequestCreatePage() {
               </p>
             </Field>
 
+            <Field label={t("requestMode.label")} required>
+              <RequestModePicker
+                value={resolvedRequestMode}
+                onChange={handleRequestModeChange}
+                disabled={busy}
+                t={t}
+              />
+              <p className="mt-1 text-[11px] text-neutral-500">
+                {resolvedRequestMode === "Existing"
+                  ? t("requestMode.helpExisting")
+                  : t("requestMode.helpNew")}
+              </p>
+            </Field>
+
             <Field label="Priority" required>
               <PriorityPicker
                 value={priority}
@@ -706,8 +825,8 @@ export default function MaterialRequestCreatePage() {
 
                 <p className="text-xs text-neutral-500">
                   {showStock
-                    ? "Pick an item group, then the item — Description, UOM and stock are filled automatically from live ERPNext data."
-                    : "Pick an item group, then the item — Description and UOM are filled automatically from live ERPNext data."}
+                    ? "Pick an item group, then the item — Description, UOM and stock are filled automatically. Optional Part Name and Attachments stay on each line."
+                    : "Pick an item group, then the item — Description and UOM are filled automatically. Optional Part Name and Attachments stay on each line."}
                 </p>
               </div>
             </div>
@@ -735,7 +854,7 @@ export default function MaterialRequestCreatePage() {
             }
           >
             <table
-              className={`${showStock ? "min-w-[1470px]" : "min-w-[1130px]"} w-full table-fixed text-sm`}
+              className={`${showStock ? "min-w-[1970px]" : "min-w-[1630px]"} w-full table-fixed text-sm`}
             >
               <colgroup>
                 <col style={{ width: 40 }} />
@@ -744,6 +863,9 @@ export default function MaterialRequestCreatePage() {
                 <col style={{ width: 360 }} />
                 <col style={{ width: 90 }} />
                 <col style={{ width: 90 }} />
+                <col style={{ width: 180 }} />
+                <col style={{ width: 160 }} />
+                <col style={{ width: 160 }} />
                 {showStock && (
                   <>
                     <col style={{ width: 110 }} />
@@ -792,6 +914,21 @@ export default function MaterialRequestCreatePage() {
                     Qty <span className="text-danger-500">*</span>
                   </th>
 
+                  <th
+                    className={`${shouldScrollLineItems ? "sticky top-0 z-10 bg-neutral-50/95 backdrop-blur" : ""} px-3 py-3`}
+                  >
+                    Part Name{" "}
+                    <span className="font-normal normal-case text-neutral-400">
+                      (Optional)
+                    </span>
+                  </th>
+
+                  <th
+                    className={`${shouldScrollLineItems ? "sticky top-0 z-10 bg-neutral-50/95 backdrop-blur" : ""} min-w-[240px] px-3 py-3`}
+                  >
+                    Attachments
+                  </th>
+
                   {showStock && (
                     <>
                       <th
@@ -835,12 +972,26 @@ export default function MaterialRequestCreatePage() {
 
                     procurementType={resolvedProcurementType}
 
+                    requestMode={resolvedRequestMode}
+
                     canRemove={items.length > 1}
 
                     usedItemCodes={
                       new Set(
                         [...usedItemCodes].filter((c) => c !== item.item_code),
                       )
+                    }
+
+                    attachmentsReadOnly={
+                      !canEditDepartmentAttachmentsOnMr(user?.role, {
+                        documentSubmitted: false,
+                      })
+                    }
+
+                    canDeleteAttachment={(att) =>
+                      canDeleteEngineeringAttachment(user?.role, att, {
+                        documentSubmitted: false,
+                      })
                     }
 
                     onChange={(patch) => updateItem(item.id, patch)}
@@ -1002,6 +1153,58 @@ function ProcurementTypePicker({
             }`}
           >
             <Icon className="h-3.5 w-3.5" />
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function RequestModePicker({
+  value,
+  onChange,
+  disabled,
+  t,
+}: {
+  value: MaterialRequestMode;
+  onChange: (next: MaterialRequestMode) => void;
+  disabled?: boolean;
+  t: (key: string) => string;
+}) {
+  const options: Array<{
+    key: MaterialRequestMode;
+    label: string;
+    active: string;
+  }> = [
+    {
+      key: "Existing",
+      label: t("requestMode.existing"),
+      active: "border-emerald-500 bg-emerald-50 text-emerald-700",
+    },
+    {
+      key: "New",
+      label: t("requestMode.new"),
+      active: "border-amber-500 bg-amber-50 text-amber-700",
+    },
+  ];
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {options.map((opt) => {
+        const active = value === opt.key;
+        return (
+          <button
+            key={opt.key}
+            type="button"
+            disabled={disabled}
+            aria-pressed={active}
+            onClick={() => onChange(opt.key)}
+            className={`inline-flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+              active
+                ? opt.active
+                : "border-neutral-200 bg-white text-neutral-500 hover:border-neutral-300"
+            }`}
+          >
             {opt.label}
           </button>
         );

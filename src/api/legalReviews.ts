@@ -9,7 +9,6 @@
  */
 
 import { apiGet, buildResourceUrl } from "./erpnext";
-import { getPurchaseOrderByRFQ } from "./purchasing";
 import {
   getApprovalState,
   saveApprovalState,
@@ -24,6 +23,7 @@ import type {
   LegalReviewItem,
   LegalComment,
 } from "../types/erpnext";
+import { nowERPDateTime } from "../utils/erpDate";
 
 export type LegalReviewFilterStatus = LegalReviewStatus | "All";
 
@@ -445,28 +445,80 @@ export function parseRfqTitle(message: string | undefined | null): string | unde
 
 /**
  * For a list of RFQ names, resolve which ones have a linked Purchase Order
- * and return a map of rfqName → poName. Lookups run in parallel.
+ * and return a map of rfqName → poName.
+ *
+ * IMPORTANT — this ERPNext install rejects list queries on
+ * `Purchase Order Item.request_for_quotation` (HTTP 417 DataError).
+ * The RFQ link lives on **Supplier Quotation Item.request_for_quotation**;
+ * POs link via **Purchase Order Item.supplier_quotation**. We use that
+ * chain only (same as `getRFQNamesWithPO` / RFQ list).
  */
 export async function batchRFQToPOMap(
   rfqNames: string[]
 ): Promise<Map<string, string>> {
   const map = new Map<string, string>();
-  if (rfqNames.length === 0) return map;
+  const unique = [...new Set(rfqNames.filter(Boolean))];
+  if (unique.length === 0) return map;
+
+  const t0 = typeof performance !== "undefined" ? performance.now() : 0;
+  // Dashboard counters only need a bounded sample.
+  const targets = unique.slice(0, 40);
 
   await Promise.all(
-    rfqNames.map(async (rfqName) => {
+    targets.map(async (rfqName) => {
       try {
-        const po = await getPurchaseOrderByRFQ(rfqName);
-        if (po) map.set(rfqName, po.name);
-      } catch {
-        /* skip — PO lookup is best-effort */
+        // 1) Supplier Quotation names for this RFQ (permitted parent filter).
+        const sqRows = await apiGet<Array<{ name: string }>>(
+          buildResourceUrl("Supplier Quotation"),
+          {
+            params: {
+              fields: JSON.stringify(["name"]),
+              filters: JSON.stringify([
+                ["items.request_for_quotation", "=", rfqName],
+              ]),
+              limit_page_length: 50,
+            },
+          },
+        );
+        const sqNames = [
+          ...new Set((sqRows ?? []).map((r) => r.name).filter(Boolean)),
+        ];
+        if (sqNames.length === 0) return;
+
+        // 2) PO parent list filtered by child supplier_quotation (permitted).
+        const pos = await apiGet<Array<{ name: string }>>(
+          buildResourceUrl("Purchase Order"),
+          {
+            params: {
+              fields: JSON.stringify(["name"]),
+              filters: JSON.stringify([
+                ["Purchase Order Item", "supplier_quotation", "in", sqNames],
+              ]),
+              order_by: "creation desc",
+              limit_page_length: 1,
+            },
+          },
+        );
+        const poName = pos?.[0]?.name;
+        if (poName) map.set(rfqName, poName);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(
+          "[ERP failing request] batchRFQToPOMap",
+          { rfqName },
+          err instanceof Error ? err.message : err,
+        );
       }
-    })
+    }),
   );
 
   // eslint-disable-next-line no-console
-  console.log(LOG_TAG, `batchRFQToPOMap: ${rfqNames.length} RFQs queried, ${map.size} have POs:`,
-    Object.fromEntries(map));
+  console.log(
+    LOG_TAG,
+    `batchRFQToPOMap: ${targets.length}/${unique.length} RFQs → ${map.size} POs` +
+      (t0 ? ` in ${Math.round(performance.now() - t0)}ms` : ""),
+    Object.fromEntries(map),
+  );
   return map;
 }
 
@@ -480,7 +532,7 @@ export async function updateReviewStatus(
   reviewedBy: string,
   comment?: string
 ): Promise<void> {
-  const now = new Date().toISOString();
+  const now = nowERPDateTime();
 
   let state = getApprovalState(rfqName);
   if (!state) {

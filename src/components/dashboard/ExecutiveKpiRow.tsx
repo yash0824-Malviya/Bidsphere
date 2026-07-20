@@ -33,6 +33,18 @@ export default function ExecutiveKpiRow({
   loading,
   visibleLabels,
 }: Props) {
+  if (loading || !kpis || !counts) {
+    const skeletonCount =
+      visibleLabels && visibleLabels.length > 0 ? visibleLabels.length : 6;
+    return (
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+        {Array.from({ length: skeletonCount }).map((_, i) => (
+          <Skeleton key={i} className="h-[108px] rounded-card" />
+        ))}
+      </div>
+    );
+  }
+
   const cards: Array<{
     icon: LucideIcon;
     label: string;
@@ -99,18 +111,6 @@ export default function ExecutiveKpiRow({
       to: "/sourcing/rfq?preset=open",
     },
   ];
-
-  if (loading) {
-    const skeletonCount =
-      visibleLabels && visibleLabels.length > 0 ? visibleLabels.length : 6;
-    return (
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-        {Array.from({ length: skeletonCount }).map((_, i) => (
-          <Skeleton key={i} className="h-[108px] rounded-card" />
-        ))}
-      </div>
-    );
-  }
 
   const visibleCards =
     visibleLabels && visibleLabels.length > 0

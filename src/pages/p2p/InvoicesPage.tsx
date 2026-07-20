@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, Receipt } from "lucide-react";
+import { Receipt } from "lucide-react";
 
 import { getPurchaseInvoices } from "../../api/accounts";
 import type { Filter } from "../../api/erpnext";
@@ -9,9 +9,10 @@ import type {
   PurchaseInvoice,
   PurchaseInvoiceStatus,
 } from "../../types/erpnext";
+import ConnectionError from "../../components/ConnectionError";
 import EmptyState from "../../components/EmptyState";
+import { AppLoading } from "../../components/enterprise";
 import PageHeader from "../../components/PageHeader";
-import { TableSkeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
 import { FilterBar, FilterField, SearchInput, SortableTableHeader } from "../../components/ui";
 import { useListSort } from "../../hooks/useListSort";
@@ -166,20 +167,11 @@ export default function InvoicesPage() {
 
       <div className="table-shell">
         {isLoading ? (
-          <TableSkeleton rows={6} columns={7} />
-        ) : isError ? (
-          <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
-            <AlertCircle className="h-10 w-10 text-danger-400" />
-            <p className="text-sm font-semibold text-neutral-800">
-              Could not load invoices
-            </p>
-            <p className="max-w-md text-xs text-neutral-500">
-              {(error as Error)?.message || "Unknown error — check console for details."}
-            </p>
-            <button onClick={() => refetch()} className="btn-secondary mt-1">
-              Retry
-            </button>
+          <div className="p-4">
+            <AppLoading variant="table" compact title="Loading document..." />
           </div>
+        ) : isError ? (
+          <ConnectionError error={error} onRetry={() => void refetch()} />
         ) : sortedRows.length === 0 ? (
           <EmptyState
             icon={Receipt}

@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import {
+  getMaterialRequestMode,
   getMaterialRequestProcurementType,
   getMaterialRequestWorkflowStatus,
   listMaterialRequestsWorkflow,
@@ -19,6 +20,7 @@ import { getDashboardConfig } from "../../config/dashboardRoles";
 import { formatDate } from "../../utils/format";
 import StatusBadge from "../StatusBadge";
 import ProcurementTypeBadge from "../ProcurementTypeBadge";
+import RequestModeBadge from "../RequestModeBadge";
 import { Skeleton } from "../Skeleton";
 import DashboardHeader from "./DashboardHeader";
 import SlaCountdownWidget from "../sla/SlaCountdownWidget";
@@ -318,6 +320,9 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
                           <ProcurementTypeBadge
                             type={getMaterialRequestProcurementType(mr)}
                             withIcon={false}
+                          />
+                          <RequestModeBadge
+                            mode={getMaterialRequestMode(mr)}
                           />
                           {mr.custom_priority ? (
                             <PriorityBadge priority={mr.custom_priority} />

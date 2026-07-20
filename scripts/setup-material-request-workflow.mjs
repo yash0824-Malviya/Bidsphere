@@ -59,7 +59,7 @@ const CUSTOM_FIELDS = [
   {
     dt: "Material Request",
     fieldname: "custom_procurement_type",
-    label: "Procurement Type",
+    label: "Request Type",
     fieldtype: "Select",
     options: "Direct\nIndirect",
     default: "Direct",
@@ -70,10 +70,22 @@ const CUSTOM_FIELDS = [
   },
   {
     dt: "Material Request",
+    fieldname: "custom_request_mode",
+    label: "Request Mode",
+    fieldtype: "Select",
+    options: "Existing\nNew",
+    default: "Existing",
+    insert_after: "custom_procurement_type",
+    in_list_view: 1,
+    in_standard_filter: 1,
+    allow_on_submit: 1,
+  },
+  {
+    dt: "Material Request",
     fieldname: "custom_department",
     label: "Department",
     fieldtype: "Data",
-    insert_after: "custom_procurement_type",
+    insert_after: "custom_request_mode",
   },
   {
     dt: "Material Request",
@@ -129,6 +141,58 @@ const CUSTOM_FIELDS = [
     options: "Request for Quotation",
     insert_after: "custom_admin_remarks",
     read_only: 1,
+    allow_on_submit: 1,
+  },
+  // Per-item engineering metadata (Items Required table). Optional; stays on
+  // the Material Request Item child so Warehouse / Procurement / RFQ inherit it.
+  {
+    dt: "Material Request Item",
+    fieldname: "custom_part_name",
+    label: "Part Name",
+    fieldtype: "Data",
+    insert_after: "description",
+    allow_on_submit: 1,
+  },
+  {
+    dt: "Material Request Item",
+    fieldname: "custom_2d_drawing",
+    label: "2D Drawing",
+    fieldtype: "Attach",
+    insert_after: "custom_part_name",
+    allow_on_submit: 1,
+  },
+  {
+    dt: "Material Request Item",
+    fieldname: "custom_engineering_attachments",
+    label: "Engineering Attachments",
+    fieldtype: "Long Text",
+    insert_after: "custom_2d_drawing",
+    allow_on_submit: 1,
+  },
+  // RFQ Item — same Part Name + attachments so MR→RFQ create can carry
+  // file URLs for Procurement / Supplier read-only visibility (no re-upload).
+  {
+    dt: "Request for Quotation Item",
+    fieldname: "custom_part_name",
+    label: "Part Name",
+    fieldtype: "Data",
+    insert_after: "description",
+    allow_on_submit: 1,
+  },
+  {
+    dt: "Request for Quotation Item",
+    fieldname: "custom_2d_drawing",
+    label: "2D Drawing",
+    fieldtype: "Attach",
+    insert_after: "custom_part_name",
+    allow_on_submit: 1,
+  },
+  {
+    dt: "Request for Quotation Item",
+    fieldname: "custom_engineering_attachments",
+    label: "Engineering Attachments",
+    fieldtype: "Long Text",
+    insert_after: "custom_2d_drawing",
     allow_on_submit: 1,
   },
 ];

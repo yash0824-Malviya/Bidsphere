@@ -9,6 +9,7 @@ import {
   getPurchaseReceipt,
   submitPurchaseReceipt,
 } from "../../api/purchasing";
+import { isWarehouseDigitalSignatureComplete } from "../../api/warehouseEsign";
 import { invalidateFinanceDashboardMetrics } from "../../api/financeWorkflow";
 import { reconcileProcurementReadyToIssue } from "../../api/materialRequestWorkflow";
 import { invalidateWarehouseStock } from "../../api/warehouseStock";
@@ -19,11 +20,14 @@ import type {
   PurchaseReceiptStatus,
 } from "../../types/erpnext";
 import EmptyState from "../../components/EmptyState";
+import ConnectionError from "../../components/ConnectionError";
 import PageHeader from "../../components/PageHeader";
 import PaginationBar from "../../components/PaginationBar";
 import { TableSkeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
 import PdfActions from "../../components/PdfActions";
+import ExportButton from "../../components/export/ExportButton";
+import type { ExportColumn } from "../../utils/export";
 import UpcomingDeliveriesPanel from "../../components/warehouse/UpcomingDeliveriesPanel";
 import { buildGrnPdf, grnPdfFilename } from "../../utils/pdf/grnPdf";
 import { canCreateGRN } from "../../config/roles";
@@ -101,7 +105,7 @@ export default function GRNPage() {
     resetKey: JSON.stringify(filters) + order_by,
   });
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["purchase-receipts", filters, page, pageSize, order_by],
     queryFn: () =>
       fetchPagedList<PurchaseReceipt>(GRN_DOCTYPE, {
@@ -137,6 +141,42 @@ export default function GRNPage() {
     return sortRows(normalized, sort, GRN_COMPARATORS);
   }, [rows, sort]);
 
+  const exportColumns = useMemo<ExportColumn<PurchaseReceipt>[]>(
+    () => [
+      { id: "name", label: "GRN Number", accessor: (r) => r.name },
+      {
+        id: "supplier",
+        label: "Supplier",
+        accessor: (r) => r.supplier_name || r.supplier,
+      },
+      {
+        id: "posting_date",
+        label: "Date",
+        type: "date",
+        accessor: (r) => r.posting_date,
+      },
+      {
+        id: "status",
+        label: "Status",
+        type: "status",
+        accessor: (r) => r.status,
+      },
+      {
+        id: "total_qty",
+        label: "Total Qty",
+        type: "number",
+        accessor: (r) => r.total_qty,
+      },
+      {
+        id: "grand_total",
+        label: "Total",
+        type: "currency",
+        accessor: (r) => r.grand_total,
+      },
+    ],
+    [],
+  );
+
   return (
     <div className="flex min-h-0 flex-col gap-3">
       <PageHeader
@@ -145,6 +185,14 @@ export default function GRNPage() {
           canCreate
             ? "Receive inbound deliveries and record goods receipts against open purchase orders."
             : "Monitor warehouse receipt records and view receipt status against open purchase orders."
+        }
+        actions={
+          <ExportButton
+            module="GRN"
+            filenamePrefix="GRN_List"
+            columns={exportColumns}
+            rows={sortedRows}
+          />
         }
       />
 
@@ -172,7 +220,7 @@ export default function GRNPage() {
               </p>
             </div>
             {canCreate && (
-              <Link to="/p2p/grn/new" className="btn-primary shrink-0">
+              <Link to="/warehouse/inventory/create-grn" className="btn-primary shrink-0">
                 <Plus className="h-4 w-4" /> New GRN
               </Link>
             )}
@@ -207,9 +255,10 @@ export default function GRNPage() {
             {isLoading ? (
               <TableSkeleton rows={6} columns={5} />
             ) : isError ? (
-              <EmptyState
-                icon={PackagePlus}
+              <ConnectionError
+                error={error}
                 title="Could not load goods receipts"
+                onRetry={() => void refetch()}
               />
             ) : sortedRows.length === 0 ? (
               <EmptyState
@@ -261,6 +310,15 @@ export default function GRNPage() {
                                   if (window.confirm(`Are you sure you want to submit GRN ${g.name}?`)) {
                                     const loadToast = toast.loading(`Submitting GRN ${g.name}...`);
                                     try {
+                                      // Match detail-page gate: signature required before submit.
+                                      const fresh = await getPurchaseReceipt(g.name);
+                                      if (!isWarehouseDigitalSignatureComplete(fresh)) {
+                                        toast.error(
+                                          "Warehouse Digital Signature is mandatory before submitting GRN. Open the GRN to complete E-Sign.",
+                                          { id: loadToast },
+                                        );
+                                        return;
+                                      }
                                       await submitPurchaseReceipt(g.name);
                                       // Goods are on-hand in ERPNext Bin now —
                                       // advance any fully-received procurement

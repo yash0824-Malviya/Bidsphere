@@ -20,6 +20,7 @@ import {
   type MaterialRequestWorkflowRecord,
 } from "../api/materialRequestWorkflow";
 import type { MaterialRequestWorkflowStatus } from "../types/materialRequestWorkflow";
+import { pickEngineeringDocs } from "./materialRequestItemFiles";
 
 /**
  * The persisted `[BidSphere:ForwardedItems]` snapshot has drifted slightly over
@@ -39,6 +40,7 @@ type RawDecision = {
 
 /** Per-item fulfillment status. Drives the quantity chips and colored badges. */
 export type ItemFulfillmentStatus =
+  | "Draft"
   | "Pending Review"
   | "Issued"
   | "Partial"
@@ -60,6 +62,10 @@ export interface ItemFulfillment {
   /** Quantity routed to procurement (RFQ/PO) to cover the shortage. */
   procurement: number;
   status: ItemFulfillmentStatus;
+  /** Optional engineering docs from the MR item row (read-only display). */
+  part_name?: string;
+  drawing_2d_url?: string;
+  attachments?: import("./materialRequestItemFiles").EngineeringAttachment[];
 }
 
 /** Roll-up fulfillment classification for a whole Material Request. */
@@ -97,6 +103,7 @@ function classifyItem(
   procurement: number,
   workflow: MaterialRequestWorkflowStatus,
 ): ItemFulfillmentStatus {
+  if (workflow === "Draft") return "Draft";
   if (issued >= requested && requested > 0) return "Issued";
   if (issued > 0) return "Partial";
   if (procurement > 0) return "Procurement";
@@ -174,6 +181,7 @@ export function computeRequestFulfillment(
       remaining,
       procurement,
       status: classifyItem(requested, issued, procurement, workflowStatus),
+      ...pickEngineeringDocs(row),
     };
   });
 
@@ -227,6 +235,8 @@ function rollupStatus(
 /** Tailwind tone for a per-item fulfillment status (green/orange/blue/gray). */
 export function itemStatusClasses(status: ItemFulfillmentStatus): string {
   switch (status) {
+    case "Draft":
+      return "bg-neutral-100 text-neutral-500";
     case "Issued":
       return "bg-emerald-100 text-emerald-700";
     case "Partial":

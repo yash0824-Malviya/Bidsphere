@@ -1,36 +1,15 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { RbacError, requireAnyAuth } from "./rbacAuth.js";
+import {
+  fetchErpFile,
+  isValidErpFilePath,
+} from "./fileProxyCore.js";
 
 /**
- * Streams a private (or public) ERPNext file back to the browser with the
- * server's API-key credentials attached.
- *
- * Background: every file the platform uploads (Legal terms/warranty/
- * insurance PDFs, invoices, GRN attachments, etc.) is stored with
- * `is_private: 1`. ERPNext only serves `/private/files/*` to a request
- * carrying a valid session cookie OR an `Authorization` header — neither of
- * which the browser ever has, because this SPA authenticates purely via a
- * server-held API key/secret (see `api/proxy.ts`), not a Frappe session
- * cookie. Every direct `window.open()`/`<a href>` to
- * `${ERPNEXT_URL}/private/files/...` therefore returned a hard
- * "403 Forbidden — You don't have permission to access this file" across
- * every module (Supplier, Legal, Finance, Warehouse, Admin) — uploaded
- * documents were completely unviewable in production.
- *
- * This endpoint fetches the file server-side (where the API key IS
- * attached) and streams the bytes straight through, so `getFullFileUrl()`
- * can point the browser at `/api/file-proxy?path=<file_url>` instead of the
- * raw ERPNext host.
+ * Streams ERPNext files (PDF / images / ZIP / CAD) with server API-key credentials.
+ * Requires a valid BidSphere access token (internal staff or supplier).
+ * Never forwards HTML (login / permission pages) to the browser.
  */
-
-const HOP_BY_HOP = new Set([
-  "connection",
-  "keep-alive",
-  "content-length",
-  "content-encoding",
-  "transfer-encoding",
-  "content-security-policy",
-  "x-frame-options",
-]);
 
 function readErpnextBaseUrl(): string {
   const raw =
@@ -50,28 +29,72 @@ function readApiCredentials(): { key: string; secret: string } | null {
   return { key, secret };
 }
 
+function extractCookie(req: VercelRequest): string | undefined {
+  const raw = req.headers.cookie;
+  if (typeof raw === "string" && raw.trim()) return raw;
+  return undefined;
+}
+
 export default async function handler(
   req: VercelRequest,
-  res: VercelResponse
+  res: VercelResponse,
 ): Promise<void> {
   if (req.method === "OPTIONS") {
     res.status(204).end();
     return;
   }
   if (req.method !== "GET" && req.method !== "HEAD") {
-    res.status(405).json({ error: "Method not allowed." });
+    res.status(405).json({
+      success: false,
+      message: "Method not allowed.",
+      status: 405,
+    });
+    return;
+  }
+
+  try {
+    requireAnyAuth(
+      req.headers as Record<string, unknown>,
+      undefined,
+      req.query as Record<string, unknown>,
+    );
+  } catch (err) {
+    if (err instanceof RbacError) {
+      res.status(err.status).json({
+        success: false,
+        message:
+          err.status === 401
+            ? "Your ERP session has expired."
+            : "You do not have permission to view this document.",
+        status: err.status,
+        detail: err.message,
+      });
+      return;
+    }
+    res.status(401).json({
+      success: false,
+      message: "Your ERP session has expired.",
+      status: 401,
+    });
     return;
   }
 
   const rawPath = req.query.path;
   const filePath = Array.isArray(rawPath) ? rawPath[0] : rawPath;
   if (!filePath || typeof filePath !== "string") {
-    res.status(400).json({ error: "Missing 'path' query parameter." });
+    res.status(400).json({
+      success: false,
+      message: "Missing 'path' query parameter.",
+      status: 400,
+    });
     return;
   }
-  // Only ever allow ERPNext's own file namespaces — never an open relay.
-  if (!/^\/?(private\/)?files\//.test(filePath)) {
-    res.status(400).json({ error: "Invalid file path." });
+  if (!isValidErpFilePath(filePath)) {
+    res.status(400).json({
+      success: false,
+      message: "Invalid file path.",
+      status: 400,
+    });
     return;
   }
 
@@ -79,35 +102,47 @@ export default async function handler(
   try {
     base = readErpnextBaseUrl();
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json({
+      success: false,
+      message: "Unable to retrieve the PDF from ERP.",
+      status: 500,
+      detail: (err as Error).message,
+    });
     return;
   }
 
   const creds = readApiCredentials();
-  const headers: Record<string, string> = {};
-  if (creds) headers.Authorization = `token ${creds.key}:${creds.secret}`;
-
-  const normalizedPath = filePath.startsWith("/") ? filePath : `/${filePath}`;
-  const targetUrl = `${base}${normalizedPath}`;
-
-  try {
-    const upstream = await fetch(targetUrl, { method: req.method, headers });
-
-    upstream.headers.forEach((value, key) => {
-      if (HOP_BY_HOP.has(key.toLowerCase())) return;
-      res.setHeader(key, value);
+  if (!creds) {
+    console.error("[file-proxy] Missing ERP_API_KEY / ERP_API_SECRET");
+    res.status(500).json({
+      success: false,
+      message: "Unable to retrieve the PDF from ERP.",
+      status: 500,
+      detail: "ERP API credentials are not configured.",
     });
-    // Encourage inline viewing (PDF/image preview) rather than forcing a
-    // download prompt, regardless of what ERPNext sent.
-    if (!res.getHeader("content-disposition")) {
-      res.setHeader("Content-Disposition", "inline");
-    }
-
-    const buffer = Buffer.from(await upstream.arrayBuffer());
-    res.status(upstream.status).send(buffer);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "File proxy request failed.";
-    console.error("[file-proxy] upstream:", targetUrl, message);
-    res.status(502).json({ error: "Unable to load the file right now. Please try again." });
+    return;
   }
+
+  const result = await fetchErpFile({
+    baseUrl: base,
+    filePath,
+    apiKey: creds.key,
+    apiSecret: creds.secret,
+    cookie: extractCookie(req),
+    method: req.method === "HEAD" ? "HEAD" : "GET",
+  });
+
+  if (!result.ok) {
+    res.status(result.status).json(result.body);
+    return;
+  }
+
+  res.setHeader("Content-Type", result.contentType || "application/octet-stream");
+  res.setHeader("Content-Disposition", "inline");
+  res.setHeader("Cache-Control", "private, max-age=60");
+  if (req.method === "HEAD") {
+    res.status(200).end();
+    return;
+  }
+  res.status(200).send(result.buffer);
 }

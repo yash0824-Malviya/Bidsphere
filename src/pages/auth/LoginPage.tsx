@@ -17,7 +17,7 @@ import {
 
 import AuthShell from "../../components/auth/AuthShell";
 import BrandLogo from "../../components/BrandLogo";
-import { getRoleHome } from "../../config/roles";
+import { safeInternalDestination } from "../../utils/rbacNavigate";
 import { logMfaEnvDiagnostics } from "../../config/mfaConfig";
 import { prefetchDashboardForRole } from "../../api/prefetchDashboard";
 import { useAuthStore, setMfaRedirectPath } from "../../store/authStore";
@@ -79,7 +79,7 @@ export default function LoginPage() {
   useEffect(() => {
     if (!hasHydrated || isVerifying) return;
     if (isAuthenticated && user) {
-      const target = savedFromPath ?? getRoleHome(user.role);
+      const target = safeInternalDestination(user.role, savedFromPath);
       navigate(target, { replace: true });
       return;
     }
@@ -110,10 +110,13 @@ export default function LoginPage() {
     try {
       const outcome = await login(username.trim(), password, rememberMe);
       const requiresMFA = outcome === "mfa";
+      const role =
+        useAuthStore.getState().user?.role ??
+        useAuthStore.getState().mfaPending?.user.role ??
+        "procurement";
       const destination = requiresMFA
         ? "/verify-otp"
-        : savedFromPath ??
-          getRoleHome(useAuthStore.getState().user?.role ?? "procurement");
+        : safeInternalDestination(role, savedFromPath);
 
       // Temporary diagnostics — compare localhost vs VM redirect decisions.
       // eslint-disable-next-line no-console
@@ -132,10 +135,10 @@ export default function LoginPage() {
 
       if (outcome === "mfa") {
         setMfaRedirectPath(
-          savedFromPath ??
-            getRoleHome(
-              useAuthStore.getState().mfaPending?.user.role ?? "procurement"
-            )
+          safeInternalDestination(
+            useAuthStore.getState().mfaPending?.user.role ?? "procurement",
+            savedFromPath,
+          ),
         );
         toast.success(t("login.credentialsVerified"));
         navigate("/verify-otp", { replace: true });

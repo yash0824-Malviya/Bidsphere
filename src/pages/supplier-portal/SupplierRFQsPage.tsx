@@ -58,24 +58,29 @@ function deriveRfqStatus(
 }
 
 export default function SupplierRFQsPage() {
-  const { supplierName, isReady } = useSupplierSession();
+  const { supplierName, erpSupplierName, isReady } = useSupplierSession();
 
-  // Debug: log supplier identity so we can verify session → query matching
+  // Debug: display name vs ERP Supplier.name (query key for RFQ child table)
   useEffect(() => {
     // eslint-disable-next-line no-console
-    console.log("[SupplierRFQsPage] Session ready:", isReady, "| Supplier:", supplierName || "(empty)");
-  }, [supplierName, isReady]);
+    console.log("[SupplierRFQsPage] Session", {
+      ready: isReady,
+      display_name: supplierName || "(empty)",
+      erp_supplier_id: erpSupplierName || "(empty)",
+      query_uses: "erpSupplierName",
+    });
+  }, [supplierName, erpSupplierName, isReady]);
 
   const rfqsQuery = useQuery({
-    queryKey: ["supplier-portal-rfqs", supplierName],
-    enabled: !!supplierName,
-    queryFn: () => getSupplierRFQs(supplierName),
+    queryKey: ["supplier-portal-rfqs", erpSupplierName],
+    enabled: !!erpSupplierName,
+    queryFn: () => getSupplierRFQs(erpSupplierName),
   });
 
   const sqsQuery = useQuery({
-    queryKey: ["supplier-portal-quotations", supplierName],
-    enabled: !!supplierName,
-    queryFn: () => getSupplierQuotations(supplierName),
+    queryKey: ["supplier-portal-quotations", erpSupplierName],
+    enabled: !!erpSupplierName,
+    queryFn: () => getSupplierQuotations(erpSupplierName),
   });
 
   const sqDetailsQuery = useQuery<SupplierQuotation[]>({
@@ -100,22 +105,22 @@ export default function SupplierRFQsPage() {
   const declinesQuery = useQuery({
     queryKey: [
       "supplier-portal-declines",
-      supplierName,
+      erpSupplierName,
       (rfqsQuery.data ?? []).map((r) => r.name).join("|"),
     ],
-    enabled: !!supplierName && (rfqsQuery.data ?? []).length > 0,
+    enabled: !!erpSupplierName && (rfqsQuery.data ?? []).length > 0,
     queryFn: () =>
       getDeclinedSuppliersByRfq((rfqsQuery.data ?? []).map((r) => r.name)),
   });
 
   const declinedRfqNames = useMemo(() => {
     const set = new Set<string>();
-    const supplierKey = supplierName.toLowerCase();
+    const supplierKey = erpSupplierName.toLowerCase();
     for (const [rfq, suppliers] of declinesQuery.data ?? new Map()) {
       if (suppliers.has(supplierKey)) set.add(rfq);
     }
     return set;
-  }, [declinesQuery.data, supplierName]);
+  }, [declinesQuery.data, erpSupplierName]);
 
   const quotedRfqNames = useMemo(() => {
     const set = new Set<string>();

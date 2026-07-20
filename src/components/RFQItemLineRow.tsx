@@ -6,6 +6,10 @@ import {
   type ItemGroupOption,
   type ItemSearchResult,
 } from "../api/sourcing";
+import {
+  Drawing2dCell,
+  PartNameCell,
+} from "./warehouse/EngineeringDocCells";
 
 export interface RFQItemLine {
   id: string;
@@ -15,6 +19,14 @@ export interface RFQItemLine {
   description: string;
   qty: number;
   uom: string;
+  /** Optional engineering docs from MR (read-only on RFQ). */
+  part_name?: string;
+  drawing_2d_url?: string;
+  attachments?: import("../utils/materialRequestItemFiles").EngineeringAttachment[];
+  /** Primary attachment convenience (maps EngineeringAttachment.file*). */
+  attachment_name?: string;
+  attachment_url?: string;
+  attachment_type?: string;
 }
 
 interface Props {
@@ -229,6 +241,15 @@ export default function RFQItemLineRow({
           readOnly
           tabIndex={-1}
           className={inputCls(false, true) + " text-center"}
+        />
+      </td>
+      <td className="px-3 py-3 align-top min-w-[140px]">
+        <PartNameCell value={row.part_name} />
+      </td>
+      <td className="px-3 py-3 align-top min-w-[120px]">
+        <Drawing2dCell
+          url={row.drawing_2d_url}
+          attachments={row.attachments}
         />
       </td>
       <td className="px-3 py-3 align-top text-right">

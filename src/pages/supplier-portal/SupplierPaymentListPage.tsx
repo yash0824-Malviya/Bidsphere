@@ -32,15 +32,24 @@ interface PaymentRow {
 }
 
 export default function SupplierPaymentListPage() {
-  const { supplierName, isReady } = useSupplierSession();
+  const { supplierName, erpSupplierName, isReady } = useSupplierSession();
   // Refresh when the shared voucher store syncs so released payments appear.
   const syncVersion = useVoucherSyncStore((s) => s.version);
+  const supplierIdentity = {
+    erpSupplierId: erpSupplierName || supplierName,
+    displayName: supplierName || undefined,
+  };
 
   // ── Voucher-workflow payments (single source of truth) ────────────────────
   const { data: workflowRows = [] } = useQuery<PaymentRow[]>({
-    queryKey: ["supplier-workflow-payments", supplierName, syncVersion],
+    queryKey: [
+      "supplier-workflow-payments",
+      supplierIdentity.erpSupplierId,
+      supplierIdentity.displayName,
+      syncVersion,
+    ],
     queryFn: async () => {
-      const payments = await getPaymentsForSupplier(supplierName);
+      const payments = await getPaymentsForSupplier(supplierIdentity);
       return payments.map((p) => ({
         id: p.payment_id,
         voucher: p.voucher_id,
@@ -55,7 +64,7 @@ export default function SupplierPaymentListPage() {
         workflow: true,
       }));
     },
-    enabled: !!supplierName,
+    enabled: !!(supplierIdentity.erpSupplierId || supplierIdentity.displayName),
     staleTime: 30_000,
   });
 

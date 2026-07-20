@@ -78,12 +78,14 @@ export const ROLE_USER_EMAILS: Record<string, AppRole> = {
 export const ERPNEXT_ROLE_MAP: Record<string, AppRole> = {
   Administrator: "admin",
   "System Manager": "admin",
+  "Finance Admin": "admin",
   "Procurement Manager": "procurement",
   "Purchase Manager": "procurement",
   "Purchase User": "procurement",
   "Finance Manager": "finance",
   "Finance Executive": "finance_executive",
   "Accounts Manager": "finance",
+  "Accounts Payable": "finance",
   "Accounts User": "finance_executive",
   "Stock Manager": "warehouse",
   "Stock User": "warehouse",
@@ -156,6 +158,7 @@ const P2P_CHILD_REGISTRY: Record<P2PChildId, P2PChildDef> = {
 const SOURCING_CHILDREN_FULL: NavChild[] = [
   { label: "All RFQs", to: "/sourcing/rfq" },
   { label: "New RFQ", to: "/sourcing/rfq/new" },
+  { label: "Upload BOM", to: "/upload-bom" },
   { label: "RFQ Template Library", to: "/sourcing/rfq-templates" },
   { label: "Legal Reviews", to: "/sourcing/legal-reviews" },
 ];
@@ -164,6 +167,7 @@ const SOURCING_CHILDREN_FULL: NavChild[] = [
 const PROCUREMENT_SOURCING_CHILDREN: NavChild[] = [
   { label: "All RFQs", to: "/sourcing/rfq" },
   { label: "New RFQ", to: "/sourcing/rfq/new" },
+  { label: "Upload BOM", to: "/upload-bom" },
   { label: "RFQ Template Library", to: "/sourcing/rfq-templates" },
   { label: "Reverse Bidding", to: "/sourcing/reverse-bidding" },
 ];
@@ -198,6 +202,7 @@ const BUDGET_CHILDREN_READONLY: NavChild[] = [
 
 const SUPPLIERS_CHILDREN: NavChild[] = [
   { label: "Supplier Directory", to: "/suppliers" },
+  { label: "Supplier Onboarding", to: "/suppliers/onboarding" },
   { label: "Supplier Performance", to: "/suppliers?tab=performance" },
 ];
 
@@ -253,8 +258,8 @@ const ROLE_NAV_CONFIG: Record<AppRole, RoleNavConfig> = {
     p2pChildren: [],
   },
   // Finance Manager — payables + budget approval. GRN access is needed so
-  // Finance can open a goods receipt from the "Invoices Awaiting Creation"
-  // queue and create the supplier invoice.
+  // Finance can open a goods receipt from the voucher queue and create a
+  // voucher (suppliers create invoices in the Supplier Portal).
   finance: {
     modules: ["dashboard", "p2p", "budget"],
     p2pChildren: ["vouchers", "invoices", "payments", "grn"],
@@ -675,6 +680,7 @@ function getAccessPrefixesForRole(role: AppRole): string[] {
         break;
       case "sourcing":
         prefixes.add("/sourcing");
+        prefixes.add("/upload-bom");
         // NOTE: `/legal` is intentionally NOT granted here. Legal Document
         // Review pages are Legal's domain — the `legal` role has its own
         // dedicated early-return block above with the correct allowlist.
@@ -732,16 +738,65 @@ export function canCreateGRN(role: AppRole | undefined): boolean {
 }
 
 /**
- * Voucher ownership is exclusively a Finance operation.
+ * Finance payables roles that may create invoices, approve invoices, and
+ * release payments:
+ *   - Finance Manager (`finance`)
+ *   - Accounts Payable (ERPNext role mapped → `finance`)
+ *   - Finance Admin / Administrator (`admin`)
  *
- * Business rule: only Finance (and Admin for support) may create, edit, submit,
- * send, release, or confirm vouchers. Procurement and Warehouse can view
- * vouchers in read-only mode — they monitor status and linked PO/GRN data, but
- * can never mutate a voucher. This single helper backs every voucher gate:
- * sidebar/button visibility, route access, and the API-level guard.
+ * Procurement Manager and Warehouse Manager are explicitly excluded.
+ */
+export function canManageInvoicesAndPayments(
+  role: AppRole | undefined,
+): boolean {
+  return role === "finance" || role === "admin";
+}
+
+/**
+ * Internal payables capability used by ERP Purchase Invoice helpers during
+ * payment release. Finance must not create supplier invoices in the UI —
+ * suppliers create those in the Supplier Portal after receiving a voucher.
+ */
+export function canCreateInvoice(role: AppRole | undefined): boolean {
+  return canManageInvoicesAndPayments(role);
+}
+
+/** Approve / reject supplier invoices. */
+export function canApproveInvoice(role: AppRole | undefined): boolean {
+  return canManageInvoicesAndPayments(role);
+}
+
+/** Release Payment / process Payment Entry. */
+export function canReleasePayment(role: AppRole | undefined): boolean {
+  return canManageInvoicesAndPayments(role);
+}
+
+/**
+ * Voucher ownership is exclusively a Finance payables operation.
+ * Alias of {@link canManageInvoicesAndPayments} for existing call sites.
  */
 export function canManageVouchers(role: AppRole | undefined): boolean {
-  return role === "finance" || role === "admin";
+  return canManageInvoicesAndPayments(role);
+}
+
+/** View existing GRN records (read-only for non-warehouse roles). */
+export function canViewGRN(role: AppRole | undefined): boolean {
+  return (
+    role === "warehouse" ||
+    role === "procurement" ||
+    role === "finance" ||
+    role === "admin"
+  );
+}
+
+/** Digitally sign a warehouse GRN — Warehouse Manager (+ Admin support). */
+export function canDigitallySignGRN(role: AppRole | undefined): boolean {
+  return role === "warehouse" || role === "admin";
+}
+
+/** Submit a draft Purchase Order — Procurement (+ Admin). */
+export function canSubmitPurchaseOrder(role: AppRole | undefined): boolean {
+  return role === "procurement" || role === "admin";
 }
 
 /** `/p2p/purchase-orders/:poId` — not list, create, new, or convert routes. */
@@ -754,9 +809,30 @@ function isPurchaseOrderDetailPath(pathname: string): boolean {
 
 /** Whether `pathname` is allowed for the given role. */
 export function canAccessPath(role: AppRole, pathname: string): boolean {
+  const path = pathname.split("?")[0];
+
+  // Supplier portal is a separate auth surface — never via internal RBAC
+  if (path === "/supplier" || path.startsWith("/supplier/")) {
+    return false;
+  }
+
+  // Admin may access every internal route
   if (role === "admin") return true;
 
-  const path = pathname.split("?")[0];
+  // Hard prefix denials — prevent cross-role URL access even if nav drifts
+  if (path === "/admin" || path.startsWith("/admin/")) return false;
+  if (path === "/warehouse" || path.startsWith("/warehouse/")) {
+    return role === "warehouse";
+  }
+  if (path === "/manufacturing" || path.startsWith("/manufacturing/")) {
+    return role === "manufacturing";
+  }
+  if (path === "/finance" || path.startsWith("/finance/")) {
+    return role === "finance";
+  }
+  if (path === "/legal" || path.startsWith("/legal/")) {
+    return role === "legal";
+  }
 
   // Warehouse — full access to warehouse sub-routes
   if (role === "warehouse") {

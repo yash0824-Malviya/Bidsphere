@@ -103,7 +103,7 @@ function DeliveryCard({
 }) {
   const meta = DELIVERY_URGENCY_META[d.urgency];
   const poHref = canCreate
-    ? `/p2p/grn/new?po=${encodeURIComponent(d.name)}`
+    ? `/warehouse/inventory/create-grn?po=${encodeURIComponent(d.name)}`
     : `/p2p/purchase-orders/${encodeURIComponent(d.name)}`;
 
   return (
@@ -153,7 +153,7 @@ function DeliveryCard({
 
       {canCreate && (
         <Link
-          to={`/p2p/grn/new?po=${encodeURIComponent(d.name)}`}
+          to={`/warehouse/inventory/create-grn?po=${encodeURIComponent(d.name)}`}
           className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary-600 px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-sm transition hover:bg-primary-700"
         >
           <PackagePlus className="h-3.5 w-3.5" />

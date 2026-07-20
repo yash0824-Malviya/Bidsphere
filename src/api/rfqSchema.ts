@@ -150,3 +150,91 @@ async function _fetchSchema(): Promise<RFQSchemaInfo> {
 
   return info;
 }
+
+/* ────────────────────────────────────────────────────────────────────────────
+ *  Safe list-field mapping (All RFQs filters)
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Logical UI filter keys → candidate ERPNext fieldnames (first match wins).
+ * Never hardcode a single `custom_*` name into list queries.
+ */
+export const RFQ_LIST_FIELD_CANDIDATES = {
+  company: ["company"],
+  transaction_date: ["transaction_date"],
+  department: ["custom_department", "department"],
+  /** Standard RFQ has no priority — only bind if a real field exists. */
+  priority: ["priority", "custom_priority"],
+  workflow_step: ["custom_workflow_step", "workflow_state"],
+} as const;
+
+export type RfqListLogicalField = keyof typeof RFQ_LIST_FIELD_CANDIDATES;
+
+export type RfqListFieldMap = {
+  [K in RfqListLogicalField]: string | null;
+};
+
+const SAFE_LIST_FIELDS = ["name", "status", "modified", "owner"] as const;
+
+let _listFieldMapPromise: Promise<RfqListFieldMap> | null = null;
+let _listFieldMap: RfqListFieldMap | null = null;
+
+function pickFirstField(
+  fieldSet: Set<string>,
+  candidates: readonly string[],
+): string | null {
+  for (const name of candidates) {
+    if (fieldSet.has(name)) return name;
+  }
+  return null;
+}
+
+/**
+ * Resolve which optional RFQ list/filter fields exist on this ERPNext site.
+ * Missing candidates become `null` — callers must omit them from `fields`
+ * and `filters` (avoids HTTP 417 Field not permitted).
+ */
+export async function getRfqListFieldMap(): Promise<RfqListFieldMap> {
+  if (_listFieldMap) return _listFieldMap;
+  if (_listFieldMapPromise) return _listFieldMapPromise;
+
+  _listFieldMapPromise = (async () => {
+    let fieldSet = new Set<string>();
+    try {
+      const schema = await getRFQSchema();
+      fieldSet = new Set(schema.allFields);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[RFQSchema] List field map: schema unavailable", err);
+    }
+
+    const map: RfqListFieldMap = {
+      company: pickFirstField(fieldSet, RFQ_LIST_FIELD_CANDIDATES.company),
+      transaction_date: pickFirstField(
+        fieldSet,
+        RFQ_LIST_FIELD_CANDIDATES.transaction_date,
+      ),
+      department: pickFirstField(fieldSet, RFQ_LIST_FIELD_CANDIDATES.department),
+      priority: pickFirstField(fieldSet, RFQ_LIST_FIELD_CANDIDATES.priority),
+      workflow_step: pickFirstField(
+        fieldSet,
+        RFQ_LIST_FIELD_CANDIDATES.workflow_step,
+      ),
+    };
+
+    // eslint-disable-next-line no-console
+    console.log("[RFQSchema] List field map:", map);
+    _listFieldMap = map;
+    return map;
+  })();
+
+  return _listFieldMapPromise;
+}
+
+/**
+ * Safe `fields=` for RFQ list queries.
+ * All RFQs page only requests always-permitted standard fields.
+ */
+export async function getRfqListQueryFields(): Promise<string[]> {
+  return [...SAFE_LIST_FIELDS];
+}

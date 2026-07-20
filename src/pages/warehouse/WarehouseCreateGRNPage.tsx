@@ -10,6 +10,7 @@ import {
   Clock,
   Eye,
   Loader2,
+  PackageCheck,
   PackagePlus,
   Search,
   Truck,
@@ -20,6 +21,7 @@ import { apiGet, COMPANY, fetchServerDate, withSilent } from "../../api/erpnext"
 import { uploadFileToERPNext } from "../../api/legalDocsStorage";
 import {
   createPurchaseReceipt,
+  getGRNsForPO,
   getIncomingPurchaseOrders,
   getPurchaseOrder,
   getPurchaseReceipt,
@@ -41,56 +43,47 @@ import { canCreateGRN } from "../../config/roles";
 import { useAuthStore } from "../../store/authStore";
 import { useDebounce } from "../../hooks/useDebounce";
 import { buildGrnPdf, grnPdfFilename } from "../../utils/pdf/grnPdf";
-import { formatCurrency, formatDate, todayIso } from "../../utils/format";
-import { formatERPNextDate } from "../../utils/erpNextDate";
+import { formatCurrency, formatDate, formatDateTime, todayIso } from "../../utils/format";
+import { toCalendarYmd, todayERPNextDate } from "../../utils/erpNextDate";
 import {
   buildUpcomingDeliveries,
   computeReceivingKpis,
   DELIVERY_URGENCY_META,
+  resolveReceiveAction,
 } from "../../utils/upcomingDeliveries";
 import type { PurchaseReceipt, PurchaseReceiptStatus } from "../../types/erpnext";
+import WarehouseReviewSignPanel from "../../components/warehouse/esign/WarehouseReviewSignPanel";
+import {
+  appendWarehouseEsignAudit,
+  buildWarehouseEsignErpFields,
+  finalizeWarehouseSignatureForReview,
+  fetchWarehouseSignerProfile,
+  hasReviewSignatureReady,
+  persistWarehouseGrnDigitalSignature,
+  restampSignedGrnPdfUrl,
+  validateWarehouseEsignForSubmit,
+} from "../../api/warehouseEsign";
+import {
+  createInitialWarehouseEsignState,
+  type WarehouseEsignState,
+} from "../../types/warehouseEsign";
 
 const REQUEST_TIMEOUT_MS = 5_000;
-const STEPS = ["Receive Items", "Attachments", "Review & Submit"] as const;
+const STEPS = [
+  "Receive Items",
+  "Attachments",
+  "Review & Submit",
+] as const;
 
-const PO_DATE_MESSAGE =
-  "Goods Receipt Posting Date cannot be earlier than the Purchase Order Posting Date.";
-
-const PO_FUTURE_MESSAGE =
-  "Purchase Order date is in the future compared to the ERPNext server date.";
-
-/** True when a GRN failure is a posting-date conflict (future date / before PO). */
+/** True when a GRN failure is a posting-date conflict from ERPNext. */
 function isDateConflictError(err: unknown): boolean {
   const raw = err instanceof Error ? err.message : String(err ?? "");
   return /future date|cannot be before Purchase Order date|posting date/i.test(raw);
 }
 
 /**
- * Explain a posting-date conflict clearly. Both ERPNext errors ("future date"
- * and "before Purchase Order date") stem from the same root cause: the Purchase
- * Order is dated later than the ERPNext server's own `today()`, so no valid
- * posting date exists. That points to a server clock/timezone mismatch — report
- * it plainly instead of showing a raw validation error.
- */
-function grnDateConflictMessage(
-  serverToday: string | null | undefined,
-  poDate: string,
-): string {
-  const svr = serverToday || "unknown";
-  if (poDate && svr !== "unknown" && poDate > svr) {
-    return `This goods receipt can't be posted yet. The Purchase Order is dated ${poDate}, which is later than the ERPNext server date (${svr}). This usually indicates a server clock or timezone mismatch. Please correct the ERPNext server date/timezone (or the Purchase Order date), then try again.`;
-  }
-  return `Posting date conflict against the ERPNext server date${
-    svr !== "unknown" ? ` (${svr})` : ""
-  }. Please verify the ERPNext server clock/timezone and the Purchase Order date, then try again.`;
-}
-
-/**
- * Surface the real ERPNext validation message whenever we have one. The axios
- * response interceptor already extracts ERPNext's human message (e.g. "Posting
- * Date 2026-07-04 cannot be before Purchase Order date 2026-07-05.") into
- * `error.message`, so we show that verbatim and only fall back to a generic
- * line for opaque failures or raw Python tracebacks (never shown to users).
+ * Surface ERPNext's human message when available; never show raw tracebacks.
+ * Posting-date conflicts are left to ERPNext — we do not invent a second client gate.
  */
 function friendlyGrnError(err: unknown): string {
   // eslint-disable-next-line no-console
@@ -100,7 +93,8 @@ function friendlyGrnError(err: unknown): string {
   const isOpaque =
     !raw ||
     /^request failed$/i.test(raw) ||
-    /Traceback \(most recent call last\)/i.test(raw);
+    /Traceback \(most recent call last\)/i.test(raw) ||
+    /frappe\.exceptions/i.test(raw);
   return isOpaque ? "Unable to create the Goods Receipt. Please try again." : raw;
 }
 
@@ -135,7 +129,11 @@ interface GrnLineRow {
   item_code: string;
   item_name?: string;
   ordered_qty: number;
+  /** Cumulative qty already received on the PO line (ERPNext `received_qty`). */
+  already_received_qty: number;
+  /** Remaining receivable qty from ERP: max(0, ordered − already_received). */
   pending_qty: number;
+  /** Qty being received on *this* GRN session (user input). */
   received_qty: number;
   accepted_qty: number;
   rejected_qty: number;
@@ -168,7 +166,8 @@ function stepClass(active: boolean, done: boolean): string {
 export default function WarehouseCreateGRNPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const role = useAuthStore((s) => s.user?.role);
+  const authUser = useAuthStore((s) => s.user);
+  const role = authUser?.role;
   const canAct = canCreateGRN(role);
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -180,15 +179,43 @@ export default function WarehouseCreateGRNPage() {
   const [step, setStep] = useState(0);
   const [poName, setPoName] = useState(initialPO);
   const [warehouse, setWarehouse] = useState("");
-  const [postingDate, setPostingDate] = useState(todayIso());
-  // Whether the user explicitly picked a posting date. When false, ERPNext is
-  // left to stamp its own server date, avoiding client-timezone future-date errors.
+  const [postingDate, setPostingDate] = useState(todayERPNextDate());
+  /** Tracks whether the user changed the date picker (value still sent as YYYY-MM-DD). */
   const [postingDateTouched, setPostingDateTouched] = useState(false);
   const [rows, setRows] = useState<GrnLineRow[]>([]);
   const [notes, setNotes] = useState("");
   const [attachments, setAttachments] = useState<AttachmentEntry[]>([]);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
   const [submittedGrnName, setSubmittedGrnName] = useState<string | null>(null);
+  const [esign, setEsign] = useState<WarehouseEsignState>(() =>
+    createInitialWarehouseEsignState({
+      fullName: "",
+      designation: "Warehouse Manager",
+    }),
+  );
+
+  /* Prefill Warehouse Manager identity for E-Sign */
+  useEffect(() => {
+    const fullName = authUser?.full_name || authUser?.email || "";
+    if (!fullName) return;
+    let cancelled = false;
+    void (async () => {
+      const profile = await fetchWarehouseSignerProfile(authUser?.name || "");
+      if (cancelled) return;
+      setEsign((prev) => ({
+        ...prev,
+        fullName: prev.fullName || fullName,
+        typedName: prev.typedName || fullName,
+        designation: prev.designation || profile.designation,
+        employeeId: prev.employeeId || profile.employeeId,
+        role: prev.role || "Warehouse Manager",
+        email: prev.email || authUser?.email || "",
+      }));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authUser?.full_name, authUser?.email, authUser?.name]);
 
   /* ---------------------------------------------------------------------- */
   /*  Upcoming Deliveries — shared by the tab list and the receive wizard    */
@@ -197,11 +224,12 @@ export default function WarehouseCreateGRNPage() {
   const incomingQuery = useQuery({
     queryKey: ["incoming-purchase-orders"],
     queryFn: getIncomingPurchaseOrders,
-    staleTime: 60_000,
+    staleTime: 15_000,
+    refetchOnWindowFocus: true,
     retry: 1,
   });
 
-  // ERPNext server date (not the browser clock) — the reference "today".
+  // Optional ERPNext server date for UI defaults only — not a hard client gate.
   const serverDateQuery = useQuery({
     queryKey: ["erpnext-server-date"],
     queryFn: fetchServerDate,
@@ -214,21 +242,92 @@ export default function WarehouseCreateGRNPage() {
     () => buildUpcomingDeliveries(incomingQuery.data ?? []),
     [incomingQuery.data]
   );
-  const receivingKpis = useMemo(
-    () => computeReceivingKpis(deliveries),
-    [deliveries]
-  );
 
   const [upcomingSearch, setUpcomingSearch] = useState("");
+  const [filterSupplier, setFilterSupplier] = useState("");
+  const [filterShipmentStatus, setFilterShipmentStatus] = useState("");
+  const [filterEta, setFilterEta] = useState("");
+  const [filterVehicle, setFilterVehicle] = useState("");
+  const [filterTracking, setFilterTracking] = useState("");
+  const [filterWarehouse, setFilterWarehouse] = useState("");
+  const [filterOverdueOnly, setFilterOverdueOnly] = useState(false);
   const debouncedUpcomingSearch = useDebounce(upcomingSearch, 300);
+
+  const upcomingSupplierOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const d of deliveries) {
+      const s = d.supplier_name ?? d.supplier;
+      if (s) set.add(s);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [deliveries]);
+
+  const upcomingWarehouseOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const d of deliveries) {
+      if (d.set_warehouse) set.add(d.set_warehouse);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [deliveries]);
+
+  const shipmentStatusOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const d of deliveries) {
+      if (d.shipment_status) set.add(String(d.shipment_status));
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [deliveries]);
+
   const filteredDeliveries = useMemo(() => {
     const q = debouncedUpcomingSearch.trim().toLowerCase();
-    if (!q) return deliveries;
     return deliveries.filter((d) => {
+      if (filterOverdueOnly && d.urgency !== "overdue") return false;
+      if (filterSupplier) {
+        const s = d.supplier_name ?? d.supplier ?? "";
+        if (s !== filterSupplier) return false;
+      }
+      if (filterShipmentStatus) {
+        // Empty shipment_status = historical PO; match filter "Pending Acceptance"
+        // only when that option is chosen — never hide by default.
+        const status = String(d.shipment_status || "").trim() || "Pending Acceptance";
+        if (status !== filterShipmentStatus) {
+          return false;
+        }
+      }
+      if (filterEta && d.displayExpectedDate !== filterEta) return false;
+      if (filterVehicle) {
+        if (!(d.vehicle_number || "").toLowerCase().includes(filterVehicle.toLowerCase())) {
+          return false;
+        }
+      }
+      if (filterTracking) {
+        if (!(d.tracking_number || "").toLowerCase().includes(filterTracking.toLowerCase())) {
+          return false;
+        }
+      }
+      if (filterWarehouse && d.set_warehouse !== filterWarehouse) return false;
+      if (!q) return true;
       const supplier = (d.supplier_name ?? d.supplier ?? "").toLowerCase();
-      return d.name.toLowerCase().includes(q) || supplier.includes(q);
+      const vehicle = (d.vehicle_number || "").toLowerCase();
+      const tracking = (d.tracking_number || "").toLowerCase();
+      return (
+        d.name.toLowerCase().includes(q) ||
+        supplier.includes(q) ||
+        vehicle.includes(q) ||
+        tracking.includes(q)
+      );
     });
-  }, [deliveries, debouncedUpcomingSearch]);
+  }, [
+    deliveries,
+    debouncedUpcomingSearch,
+    filterSupplier,
+    filterShipmentStatus,
+    filterEta,
+    filterVehicle,
+    filterTracking,
+    filterWarehouse,
+    filterOverdueOnly,
+  ]);
 
   /* ---------------------------------------------------------------------- */
   /*  GRN History                                                            */
@@ -257,6 +356,20 @@ export default function WarehouseCreateGRNPage() {
   });
 
   const grnRows = useMemo(() => grnHistoryQuery.data ?? [], [grnHistoryQuery.data]);
+
+  const deliveredTodayCount = useMemo(
+    () => grnRows.filter((g) => g.posting_date === serverToday).length,
+    [grnRows, serverToday],
+  );
+
+  const receivingKpis = useMemo(
+    () =>
+      computeReceivingKpis(deliveries, {
+        serverToday,
+        completedGrnTodayCount: deliveredTodayCount,
+      }),
+    [deliveries, serverToday, deliveredTodayCount],
+  );
 
   const [historySearch, setHistorySearch] = useState("");
   const debouncedHistorySearch = useDebounce(historySearch, 300);
@@ -341,8 +454,22 @@ export default function WarehouseCreateGRNPage() {
   const poQuery = useQuery({
     queryKey: ["purchase-order", poName],
     queryFn: () => getPurchaseOrder(poName),
-    enabled: !!poName,
+    enabled: !!poName && wizardActive,
     staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+    retry: 1,
+  });
+
+  /** Existing Purchase Receipts for this PO — used when pending is already 0. */
+  const existingGrnsQuery = useQuery({
+    queryKey: ["grns-for-po", poName],
+    queryFn: () => getGRNsForPO(poName),
+    enabled: !!poName && wizardActive,
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: "always",
     retry: 1,
   });
 
@@ -352,16 +479,19 @@ export default function WarehouseCreateGRNPage() {
       setRows([]);
       return;
     }
+    // Pending qty is derived exclusively from live ERP PO lines — never from
+    // localStorage or a previous wizard session.
     setRows(
       (po.items ?? []).map((it) => {
-        const ordered = it.qty ?? 0;
-        const alreadyReceived = it.received_qty ?? 0;
+        const ordered = Number(it.qty) || 0;
+        const alreadyReceived = Number(it.received_qty) || 0;
         const pending = Math.max(0, ordered - alreadyReceived);
         return {
           itemId: it.name ?? `${it.item_code}-${ordered}`,
           item_code: it.item_code,
           item_name: it.item_name,
           ordered_qty: ordered,
+          already_received_qty: alreadyReceived,
           pending_qty: pending,
           received_qty: 0,
           accepted_qty: 0,
@@ -380,7 +510,7 @@ export default function WarehouseCreateGRNPage() {
       setWarehouse(po.items[0].warehouse);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [poQuery.data]);
+  }, [poQuery.dataUpdatedAt, poQuery.data]);
 
   // Guard against a broken/unreachable deep link (`?po=` with no matching PO).
   useEffect(() => {
@@ -395,27 +525,33 @@ export default function WarehouseCreateGRNPage() {
     (row) => row.received_qty > 0 && row.received_qty !== row.pending_qty
   );
 
-  // Purchase Order date — ERPNext forbids a GRN posting date earlier than this.
-  const poPostingDate = selectedPO?.transaction_date ?? "";
-  // Default GRN posting date = max(server today, PO date). Never earlier than
-  // the PO date, so ERPNext's "cannot be before Purchase Order date" never fires
-  // for the default; also honours the server's own date for the future guard.
+  const submittedGrnsForPo = useMemo(
+    () => (existingGrnsQuery.data ?? []).filter((g) => g.docstatus === 1),
+    [existingGrnsQuery.data],
+  );
+  const primaryExistingGrn = submittedGrnsForPo[0];
+
+  /** True when ERP reports nothing left to receive (do not allow a new GRN). */
+  const isFullyReceivedFromErp = useMemo(() => {
+    if (!selectedPO) return false;
+    if ((selectedPO.per_received ?? 0) >= 100) return true;
+    if (rows.length === 0) return false;
+    return rows.every((r) => r.pending_qty <= 0);
+  }, [selectedPO, rows]);
+
+  // PO / local calendar days as YYYY-MM-DD only (never UTC / Date serialization).
+  const poPostingDate =
+    toCalendarYmd(selectedPO?.transaction_date) ?? "";
+  const localToday = todayERPNextDate();
+  // Default = max(local today, PO date). Always sent explicitly on create so
+  // ERPNext cannot stamp UTC nowdate() (19) while PO is 20.
   const defaultPostingDate =
-    poPostingDate && poPostingDate > serverToday ? poPostingDate : serverToday;
-  // Picker bounds: floor at the PO date; ceiling at the later of server-today
-  // and the PO date (so a future-dated PO's only valid date stays selectable).
+    poPostingDate && poPostingDate > localToday ? poPostingDate : localToday;
   const pickerMin = poPostingDate || undefined;
-  const pickerMax = defaultPostingDate > todayIso() ? defaultPostingDate : todayIso();
+  const pickerMax =
+    defaultPostingDate > localToday ? defaultPostingDate : localToday;
 
-  // The Purchase Order is dated later than the ERPNext server's own today() —
-  // ERPNext will reject ANY Purchase Receipt against it (no valid posting date
-  // exists). We only assert this once the authoritative server date is known,
-  // to avoid falsely blocking on an unresolved date.
-  const poIsFutureVsServer =
-    !!serverDateQuery.data && !!poPostingDate && poPostingDate > serverDateQuery.data;
-
-  // Keep the (untouched) posting date aligned with the computed default as soon
-  // as the server date and/or the selected PO resolve.
+  // Keep the (untouched) display value aligned with the UI default.
   useEffect(() => {
     if (!postingDateTouched) {
       setPostingDate(defaultPostingDate);
@@ -423,7 +559,6 @@ export default function WarehouseCreateGRNPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultPostingDate, postingDateTouched]);
 
-  // Diagnostics: surface the three dates as soon as the PO / server date resolve.
   useEffect(() => {
     if (!poName) return;
     // eslint-disable-next-line no-console
@@ -432,9 +567,15 @@ export default function WarehouseCreateGRNPage() {
         serverDateQuery.data ?? "(unresolved — ERPNext today() will apply)",
       purchaseOrderDate: poPostingDate || "(unknown)",
       postingDate,
-      purchaseOrderIsFuture: poIsFutureVsServer,
+      postingDateTouched,
     });
-  }, [poName, poPostingDate, serverDateQuery.data, postingDate, poIsFutureVsServer]);
+  }, [
+    poName,
+    poPostingDate,
+    serverDateQuery.data,
+    postingDate,
+    postingDateTouched,
+  ]);
 
   function updateRow(id: string, patch: Partial<GrnLineRow>) {
     setRows((prev) =>
@@ -457,6 +598,13 @@ export default function WarehouseCreateGRNPage() {
     const errors: FieldErrors = {};
 
     if (targetStep >= 1) {
+      if (isFullyReceivedFromErp) {
+        errors.submit = primaryExistingGrn
+          ? `This Purchase Order is already fully received in ERPNext (${primaryExistingGrn.name}). Open the existing GRN instead of creating another.`
+          : "This Purchase Order has no pending quantity in ERPNext. A GRN cannot be created.";
+        setFieldErrors(errors);
+        return false;
+      }
       if (!warehouse) errors.warehouse = "Choose a target warehouse.";
       const lineErrors: Record<string, string> = {};
       const activeLines = rows.filter((row) => row.received_qty > 0);
@@ -465,7 +613,10 @@ export default function WarehouseCreateGRNPage() {
       }
       for (const row of activeLines) {
         if (row.received_qty > row.pending_qty) {
-          lineErrors[row.itemId] = `Cannot receive more than the remaining ${row.pending_qty} pending on this PO line.`;
+          lineErrors[row.itemId] =
+            row.pending_qty <= 0
+              ? `This line is already fully received in ERPNext (${row.already_received_qty} of ${row.ordered_qty}). Pending quantity is 0.`
+              : `Cannot receive more than the remaining ${row.pending_qty} pending on this PO line.`;
         }
         if (row.rejected_qty > 0 && !row.rejection_reason) {
           lineErrors[row.itemId] = "Select a rejection reason when quantity is rejected.";
@@ -482,7 +633,9 @@ export default function WarehouseCreateGRNPage() {
   }
 
   function goNext() {
-    if (!validateStep(step + 1)) return;
+    if (!validateStep(step + 1)) {
+      return;
+    }
     setStep((s) => Math.min(s + 1, STEPS.length - 1));
   }
 
@@ -500,50 +653,40 @@ export default function WarehouseCreateGRNPage() {
   }
 
   /**
-   * Resolve the Posting Date fields to send to ERPNext.
-   *
-   * ERPNext enforces BOTH rules against its OWN clock: posting date ≤
-   * `frappe.utils.today()` (no future date) AND posting date ≥ the linked
-   * Purchase Order date. The client machine date is never authoritative.
-   *
-   * So by default we send NOTHING — ERPNext stamps its own `today()`, which is
-   * guaranteed to satisfy the "not future" rule and (for any non-future PO) the
-   * PO-date rule too. We only send an explicit `posting_date` when the user
-   * deliberately backdates, pinned to `00:00:00` and floored at the PO date.
+   * Always send calendar posting_date = max(UI|local today, PO date).
+   * Omitting lets ERPNext stamp server nowdate() (often UTC → 19 while PO is 20).
+   * Never use Date / toISOString / UTC — wire value is literal YYYY-MM-DD.
    */
   function resolvePostingFields(): Partial<
-    Pick<PurchaseReceipt, "posting_date" | "posting_time" | "set_posting_time">
+    Pick<PurchaseReceipt, "posting_date" | "set_posting_time">
   > {
-    let fields: Partial<
-      Pick<PurchaseReceipt, "posting_date" | "posting_time" | "set_posting_time">
-    > = {};
+    const localYmd = todayERPNextDate();
+    const poYmd = poPostingDate;
+    const floor = poYmd && poYmd > localYmd ? poYmd : localYmd;
 
-    if (postingDateTouched && postingDate) {
-      const clamped =
-        poPostingDate && postingDate < poPostingDate ? poPostingDate : postingDate;
-      const isoDate = formatERPNextDate(clamped) ?? clamped;
-      fields = {
-        posting_date: isoDate,
-        posting_time: "00:00:00",
-        set_posting_time: 1,
-      };
-    }
+    const uiRaw = postingDateTouched && postingDate ? postingDate : floor;
+    // eslint-disable-next-line no-console
+    console.log("[GRN posting_date] DatePicker / state:", postingDate);
+    // eslint-disable-next-line no-console
+    console.log("[GRN posting_date] before transform:", uiRaw);
+
+    const uiYmd = toCalendarYmd(uiRaw) ?? floor;
+    const postingYmd = uiYmd < floor ? floor : uiYmd;
 
     // eslint-disable-next-line no-console
-    console.log("[GRN Posting Date]", {
-      erpServerDate:
-        serverDateQuery.data ?? "(unresolved — ERPNext today() will apply)",
-      browserDate: todayIso(),
-      purchaseOrderDate: poPostingDate || "(unknown)",
-      selectedPostingDate: postingDateTouched ? postingDate : "(none selected)",
-      payloadPostingDate:
-        fields.posting_date ?? "(omitted — ERPNext stamps today())",
-    });
+    console.log("[GRN posting_date] after transform (wire YYYY-MM-DD):", postingYmd);
+    // eslint-disable-next-line no-console
+    console.log("[GRN posting_date] PO date:", poYmd || "(unknown)", "localToday:", localYmd);
 
-    return fields;
+    return {
+      posting_date: postingYmd,
+      set_posting_time: 1,
+    };
   }
 
-  function buildPayload(): Partial<PurchaseReceipt> {
+  function buildPayload(
+    signOverride?: WarehouseEsignState,
+  ): Partial<PurchaseReceipt> {
     if (!selectedPO) throw new Error("Purchase Order not loaded.");
 
     const rejectionNotes = rows
@@ -556,9 +699,27 @@ export default function WarehouseCreateGRNPage() {
       )
       .join("; ");
 
-    const combinedRemarks = [notes.trim(), rejectionNotes].filter(Boolean).join("\n\n");
+    const signState = signOverride ?? esign;
+    const esignSummary = signState.signatureHash
+      ? [
+          "— Warehouse Digital Signature —",
+          `Signed by: ${signState.fullName}`,
+          `Designation: ${signState.designation}`,
+          `Employee ID: ${signState.employeeId || "—"}`,
+          `Signed at: ${signState.signedAtIso || signState.signedAtDisplay}`,
+          `SHA256: ${signState.signatureHash}`,
+          signState.remarks ? `Inspection remarks: ${signState.remarks}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : "";
+
+    const combinedRemarks = [notes.trim(), rejectionNotes, esignSummary]
+      .filter(Boolean)
+      .join("\n\n");
 
     const postingFields = resolvePostingFields();
+    const esignFields = buildWarehouseEsignErpFields(signState);
 
     return {
       supplier: selectedPO.supplier,
@@ -566,6 +727,7 @@ export default function WarehouseCreateGRNPage() {
       company: selectedPO.company || COMPANY,
       currency: selectedPO.currency,
       remarks: combinedRemarks || undefined,
+      ...esignFields,
       items: rows
         .filter((row) => row.received_qty > 0)
         .map((row) => ({
@@ -588,35 +750,206 @@ export default function WarehouseCreateGRNPage() {
 
   const submitMutation = useMutation({
     mutationFn: async () => {
-      const payload = buildPayload();
+      if (!hasReviewSignatureReady(esign) && !validateWarehouseEsignForSubmit(esign).ok) {
+        throw new Error(
+          "Warehouse Digital Signature is mandatory. Capture your signature and certify received goods.",
+        );
+      }
+
+      // Ensure SHA-256 + placed flag are stamped from Review & Submit pad.
+      let signedEsign = esign;
+      if (!esign.signatureHash || !esign.placed) {
+        signedEsign = await finalizeWarehouseSignatureForReview({
+          ...esign,
+          certified: true,
+        });
+        setEsign(signedEsign);
+      }
+      if (!signedEsign.certified || !signedEsign.signatureHash) {
+        throw new Error(
+          'Please capture a signature and confirm: "I certify received goods match this GRN".',
+        );
+      }
+
+      const payload = buildPayload(signedEsign);
       // Requirement: print the EXACT payload sent to ERPNext + the dates used.
       /* eslint-disable no-console */
       console.log("[GRN Submit] Dates", {
-        erpServerDate:
-          serverDateQuery.data ?? "(unresolved — ERPNext today() will apply)",
-        browserDate: todayIso(),
+        datePickerState: postingDate,
         purchaseOrderDate: poPostingDate || "(unknown)",
-        selectedPostingDate: postingDateTouched ? postingDate : "(none selected)",
-        payloadPostingDate:
-          payload.posting_date ?? "(omitted — ERPNext stamps today())",
+        localToday: todayERPNextDate(),
+        payloadPostingDate: payload.posting_date,
+        set_posting_time: payload.set_posting_time,
       });
       console.log(
         "[GRN Submit] Exact payload sent to ERPNext:\n" +
-          JSON.stringify(payload, null, 2),
+          JSON.stringify(
+            {
+              ...payload,
+              warehouse_signature_data: payload.warehouse_signature_data
+                ? `[${String(payload.warehouse_signature_data).length} chars]`
+                : undefined,
+              warehouse_esign_envelope: payload.warehouse_esign_envelope
+                ? `[${String(payload.warehouse_esign_envelope).length} chars]`
+                : undefined,
+            },
+            null,
+            2,
+          ),
       );
       /* eslint-enable no-console */
-      const draft = await createPurchaseReceipt(payload);
-      // ERPNext echoes back the posting_date it actually stamped (== today()).
+
+      let draft: PurchaseReceipt;
+      try {
+        draft = await createPurchaseReceipt(payload);
+      } catch (err) {
+        // Custom fields may not be provisioned yet — retry without them; hash stays in remarks.
+        const message = err instanceof Error ? err.message : String(err);
+        if (!/warehouse_|Custom Field|Unknown column|ValidationError|FieldNameError/i.test(message)) {
+          throw err;
+        }
+        // eslint-disable-next-line no-console
+        console.warn("[GRN Submit] Retrying without warehouse e-sign custom fields:", message);
+        const rest: Partial<PurchaseReceipt> = { ...payload };
+        delete rest.warehouse_signed;
+        delete rest.warehouse_signed_by;
+        delete rest.warehouse_signature_type;
+        delete rest.warehouse_signature_data;
+        delete rest.warehouse_signature_style;
+        delete rest.warehouse_signature_hash;
+        delete rest.warehouse_signed_at;
+        delete rest.warehouse_ip;
+        delete rest.warehouse_browser;
+        delete rest.warehouse_device;
+        delete rest.warehouse_esign_envelope;
+        delete rest.warehouse_signer_role;
+        delete rest.warehouse_signer_email;
+        delete rest.warehouse_verification_status;
+        delete rest.warehouse_document_version;
+        delete rest.warehouse_signed_pdf_url;
+        delete rest.signed_grn_pdf;
+        delete rest.warehouse_signature;
+        delete rest.warehouse_signature_time;
+        delete rest.warehouse_signature_verified;
+        delete rest.warehouse_signature_image;
+        delete rest.warehouse_signature_name;
+        delete rest.warehouse_signature_role;
+        delete rest.warehouse_signature_employee_id;
+        delete rest.warehouse_signature_email;
+        delete rest.warehouse_signature_timestamp;
+        delete rest.warehouse_signature_ip;
+        delete rest.warehouse_signature_device;
+        delete rest.warehouse_signature_algorithm;
+        delete rest.warehouse_signature_version;
+        delete rest.warehouse_signed_pdf_hash;
+        draft = await createPurchaseReceipt(rest);
+      }
+
       // eslint-disable-next-line no-console
       console.log("[GRN Submit] ERPNext stamped posting_date =", draft.posting_date);
-      for (const entry of attachments) {
-        await uploadFileToERPNext(entry.file, "Purchase Receipt", draft.name);
+
+      // Confirm the Purchase Receipt exists before attaching files.
+      const createdName = draft.name;
+      if (!createdName) {
+        throw new Error("Purchase Receipt was created but no document name was returned.");
       }
+      try {
+        await getPurchaseReceipt(createdName);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("[GRN Submit] Purchase Receipt missing before upload:", {
+          name: createdName,
+          err,
+        });
+        throw err;
+      }
+
+      // Attachments are best-effort: PR already exists — never fail GRN create
+      // solely because upload_file returns 417 / network errors.
+      for (const entry of attachments) {
+        try {
+          await uploadFileToERPNext(entry.file, "Purchase Receipt", createdName);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error("[GRN Submit] Attachment upload failed (non-fatal):", {
+            doctype: "Purchase Receipt",
+            docname: createdName,
+            filename: entry.file.name,
+            err,
+          });
+          toast(
+            `Goods Receipt ${createdName} was created, but attachment "${entry.file.name}" could not be uploaded. You can attach it from ERPNext.`,
+            { duration: 8_000, icon: "⚠️" },
+          );
+        }
+      }
+
+      // Permanent storage: signature image + signed PDF + hashes (once only).
+      const signedSource: PurchaseReceipt = {
+        ...draft,
+        ...buildWarehouseEsignErpFields({
+          ...signedEsign,
+          verificationStatus: "verified",
+        }),
+        items: draft.items ?? [],
+      } as PurchaseReceipt;
+      let signedPdfUrl = "";
+      let pdfHash = "";
+      let signatureImageUrl = "";
+      let signatureHash = signedEsign.signatureHash || "";
+      try {
+        const stored = await persistWarehouseGrnDigitalSignature(
+          signedSource,
+          { ...signedEsign, verificationStatus: "verified" },
+          "Submitted",
+        );
+        if (!stored.signatureStored) {
+          throw new Error("Warehouse Digital Signature metadata could not be stored.");
+        }
+        signedPdfUrl = stored.fileUrl;
+        pdfHash = stored.pdfHash;
+        signatureImageUrl = stored.signatureImageUrl;
+        signatureHash = stored.signatureHash;
+        setEsign((prev) => ({
+          ...prev,
+          signedPdfUrl: stored.fileUrl || prev.signedPdfUrl,
+          signatureHash: stored.signatureHash,
+          verificationStatus: "verified",
+          locked: true,
+        }));
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("[GRN Submit] Digital Signature storage failed:", err);
+        throw new Error(
+          err instanceof Error
+            ? `Warehouse Digital Signature could not be stored: ${err.message}`
+            : "Warehouse Digital Signature could not be stored.",
+        );
+      }
+
       const submitted = await submitPurchaseReceipt(draft.name);
-      // ERPNext updates Bin stock synchronously on submit, so on-hand stock is
-      // already live here. Advance any procurement MR whose forwarded quantity
-      // is now fully received from "Procurement Required" → "Ready to Issue".
-      // Best-effort: a reconciliation failure must never fail the receipt.
+
+      // Re-stamp signature metadata after submit (PDF may still be generating).
+      try {
+        await restampSignedGrnPdfUrl(
+          submitted.name || draft.name,
+          signedPdfUrl || "",
+          {
+            pdfHash: pdfHash || undefined,
+            signatureImageUrl: signatureImageUrl || undefined,
+            signatureHash,
+            signedBy:
+              signedEsign.fullName ||
+              authUser?.full_name ||
+              "Warehouse Manager",
+            signedAt: signedEsign.signedAtIso || undefined,
+          },
+        );
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("[GRN Submit] Re-stamp signature fields failed:", err);
+      }
+
       try {
         await reconcileProcurementReadyToIssue();
       } catch (err) {
@@ -627,22 +960,33 @@ export default function WarehouseCreateGRNPage() {
     },
     onSuccess: (grn) => {
       setSubmittedGrnName(grn.name);
-      toast.success("Goods Receipt created successfully.");
+      setEsign((prev) => ({ ...prev, locked: true, verificationStatus: "verified" }));
+      appendWarehouseEsignAudit(
+        "GRN Submitted",
+        esign.fullName || authUser?.full_name || "Warehouse Manager",
+        grn.name,
+        { grnName: grn.name, targetRole: "warehouse" },
+      );
+      toast.success("Goods Receipt created and digitally signed successfully.");
       // Refresh every live-stock, inventory, GRN and procurement view so the
       // received quantities (and any MR moved to Ready to Issue) show instantly
       // — all read live from ERPNext Bin, no page reload needed.
       invalidateWarehouseStock(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["purchase-order", poName] });
+      void queryClient.invalidateQueries({ queryKey: ["incoming-purchase-orders"] });
     },
     onError: (err: unknown) => {
-      // A posting-date conflict (future date / before PO) is a server-date vs
-      // PO-date mismatch — explain it clearly. Everything else surfaces the real
-      // ERPNext message. The full exception is always logged to the console.
       // eslint-disable-next-line no-console
       console.error("[GRN Submit] error:", err);
-      const message = isDateConflictError(err)
-        ? grnDateConflictMessage(serverDateQuery.data, poPostingDate)
-        : friendlyGrnError(err);
+      if (isDateConflictError(err)) {
+        // eslint-disable-next-line no-console
+        console.error("[GRN Posting Date] ERPNext rejected posting date", {
+          erpServerDate: serverDateQuery.data ?? "(unresolved)",
+          purchaseOrderDate: poPostingDate || "(unknown)",
+          selectedPostingDate: postingDateTouched ? postingDate : "(omitted)",
+        });
+      }
+      const message = friendlyGrnError(err);
       setFieldErrors((prev) => ({ ...prev, submit: message }));
       toast.error(message);
     },
@@ -650,21 +994,11 @@ export default function WarehouseCreateGRNPage() {
 
   function handleSubmit() {
     if (!validateStep(STEPS.length - 1)) return;
-    // Never send a request ERPNext is guaranteed to reject: the PO is dated
-    // after the server's own today().
-    if (poIsFutureVsServer) {
-      setFieldErrors((prev) => ({ ...prev, submit: PO_FUTURE_MESSAGE }));
-      toast.error(PO_FUTURE_MESSAGE);
-      return;
-    }
-    // A GRN posting date can never be earlier than the Purchase Order date.
-    if (postingDateTouched && poPostingDate && postingDate < poPostingDate) {
+    // Keep picker aligned with floor; payload still clamps to max(today, PO).
+    if (postingDate && postingDate < defaultPostingDate) {
       setPostingDate(defaultPostingDate);
-      setPostingDateTouched(false);
-      setFieldErrors((prev) => ({ ...prev, submit: PO_DATE_MESSAGE }));
-      toast.error(PO_DATE_MESSAGE);
-      return;
     }
+    setFieldErrors((prev) => ({ ...prev, submit: undefined }));
     submitMutation.mutate();
   }
 
@@ -672,8 +1006,7 @@ export default function WarehouseCreateGRNPage() {
     setPoName(targetPoName);
     setStep(0);
     setWarehouse("");
-    // Reset to untouched — the effect re-derives max(server today, PO date)
-    // once the selected PO loads.
+    // Default = max(local today, PO) — always sent as YYYY-MM-DD on create.
     setPostingDate(defaultPostingDate);
     setPostingDateTouched(false);
     setRows([]);
@@ -681,6 +1014,14 @@ export default function WarehouseCreateGRNPage() {
     setAttachments([]);
     setFieldErrors({});
     setSubmittedGrnName(null);
+    setEsign(
+      createInitialWarehouseEsignState({
+        fullName: authUser?.full_name || authUser?.email || "",
+        designation: "Warehouse Manager",
+        role: "Warehouse Manager",
+        email: authUser?.email || "",
+      }),
+    );
     setWizardActive(true);
     setSearchParams(
       (prev) => {
@@ -793,7 +1134,7 @@ export default function WarehouseCreateGRNPage() {
           </p>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {STEPS.map((label, index) => (
             <div
               key={label}
@@ -815,27 +1156,6 @@ export default function WarehouseCreateGRNPage() {
           />
         )}
 
-        {poIsFutureVsServer && (
-          <div className="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
-            <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-rose-600" />
-            <div className="text-sm">
-              <p className="font-semibold text-rose-800">{PO_FUTURE_MESSAGE}</p>
-              <p className="mt-0.5 text-rose-700">
-                Purchase Order date{" "}
-                <span className="font-semibold">{formatDate(poPostingDate)}</span> is
-                after the ERPNext server date{" "}
-                <span className="font-semibold">
-                  {formatDate(serverDateQuery.data ?? "")}
-                </span>
-                . Goods can't be received until the server reaches the PO date.
-                This usually means the ERPNext server clock/timezone (or the PO
-                date) needs to be corrected. Submission is disabled to prevent an
-                invalid request.
-              </p>
-            </div>
-          </div>
-        )}
-
         {step === 0 && (
           <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
             {poQuery.isLoading ? (
@@ -844,23 +1164,73 @@ export default function WarehouseCreateGRNPage() {
                 Loading purchase order…
               </div>
             ) : selectedPO ? (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 p-4 text-sm">
-                <div>
-                  <p className="font-semibold text-slate-900">{selectedPO.name}</p>
-                  <p className="mt-1 text-slate-600">
-                    Supplier: {selectedPO.supplier_name ?? selectedPO.supplier}
-                  </p>
-                  <p className="text-slate-600">
-                    Expected items: {(selectedPO.items ?? []).length}
-                  </p>
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 p-4 text-sm">
+                  <div>
+                    <p className="font-semibold text-slate-900">{selectedPO.name}</p>
+                    <p className="mt-1 text-slate-600">
+                      Supplier: {selectedPO.supplier_name ?? selectedPO.supplier}
+                    </p>
+                    <p className="text-slate-600">
+                      Expected items: {(selectedPO.items ?? []).length}
+                      {(selectedPO.per_received ?? 0) > 0
+                        ? ` · Received ${Math.round(selectedPO.per_received ?? 0)}%`
+                        : ""}
+                      {selectedPO.status ? ` · Status: ${selectedPO.status}` : ""}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => exitWizard("upcoming")}
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                  >
+                    Change PO
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => exitWizard("upcoming")}
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-                >
-                  Change PO
-                </button>
+                {isFullyReceivedFromErp && (
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                    <p className="font-semibold">
+                      This Purchase Order is already fully received in ERPNext.
+                    </p>
+                    <p className="mt-1 text-emerald-800/90">
+                      Pending quantity is calculated from live PO lines
+                      (ordered − received). Creating another GRN is blocked to
+                      avoid double-receiving.
+                    </p>
+                    {primaryExistingGrn ? (
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            navigate(
+                              `/p2p/grn/${encodeURIComponent(primaryExistingGrn.name)}`,
+                            )
+                          }
+                          className="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800"
+                        >
+                          View GRN {primaryExistingGrn.name}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => exitWizard("upcoming")}
+                          className="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100"
+                        >
+                          Back to Upcoming Deliveries
+                        </button>
+                      </div>
+                    ) : existingGrnsQuery.isLoading ? (
+                      <p className="mt-2 text-xs text-emerald-700">
+                        Looking up existing goods receipts…
+                      </p>
+                    ) : (
+                      <p className="mt-2 text-xs text-amber-800">
+                        PO received quantities are already 100% in ERPNext, but
+                        no Purchase Receipt was found for this PO. Contact an
+                        administrator before changing quantities.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             ) : null}
 
@@ -897,10 +1267,8 @@ export default function WarehouseCreateGRNPage() {
                   onChange={(e) => {
                     let value = e.target.value;
                     setPostingDateTouched(true);
-                    // Clamp to the allowed range: never before the PO date, and
-                    // never beyond the ceiling (server today / PO date).
                     if (pickerMin && value < pickerMin) value = pickerMin;
-                    if (value > pickerMax) value = pickerMax;
+                    if (pickerMax && value > pickerMax) value = pickerMax;
                     setPostingDate(value);
                     setFieldErrors((prev) => ({ ...prev, submit: undefined }));
                   }}
@@ -908,8 +1276,8 @@ export default function WarehouseCreateGRNPage() {
                 />
                 <p className="mt-1 text-xs text-slate-400">
                   {poPostingDate
-                    ? `Cannot be earlier than the PO date (${formatDate(poPostingDate)}).`
-                    : "Defaults to today's date. Future dates are not allowed."}
+                    ? `Sent as YYYY-MM-DD = max(today, PO ${formatDate(poPostingDate)}). Never before the Purchase Order date.`
+                    : "Sent as today's local calendar date (YYYY-MM-DD)."}
                 </p>
               </div>
             </div>
@@ -942,8 +1310,9 @@ export default function WarehouseCreateGRNPage() {
                       <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
                         <th className="py-3 pr-3">Item</th>
                         <th className="py-3 px-2 text-right">Ordered</th>
+                        <th className="py-3 px-2 text-right">Already recv.</th>
                         <th className="py-3 px-2 text-right">Pending</th>
-                        <th className="py-3 px-2 text-right">Received</th>
+                        <th className="py-3 px-2 text-right">Receive now</th>
                         <th className="py-3 px-2 text-right">Accepted</th>
                         <th className="py-3 px-2 text-right">Rejected</th>
                         <th className="py-3 px-2">Rejection Reason</th>
@@ -964,20 +1333,34 @@ export default function WarehouseCreateGRNPage() {
                               {lineError && <p className="text-xs text-rose-600 mt-1">{lineError}</p>}
                             </td>
                             <td className="py-3 px-2 text-right tabular-nums">{row.ordered_qty}</td>
-                            <td className="py-3 px-2 text-right tabular-nums">{row.pending_qty}</td>
+                            <td className="py-3 px-2 text-right tabular-nums text-slate-500">
+                              {row.already_received_qty}
+                            </td>
+                            <td className="py-3 px-2 text-right tabular-nums font-medium">
+                              {row.pending_qty}
+                            </td>
                             <td className="py-3 px-2 text-right">
                               <input
                                 type="number"
                                 min={0}
                                 max={row.pending_qty}
                                 step="any"
+                                disabled={row.pending_qty <= 0 || isFullyReceivedFromErp}
+                                title={
+                                  row.pending_qty <= 0
+                                    ? "No pending quantity left on this PO line in ERPNext"
+                                    : undefined
+                                }
                                 value={row.received_qty || ""}
                                 onChange={(e) =>
                                   updateRow(row.itemId, {
-                                    received_qty: parseFloat(e.target.value) || 0,
+                                    received_qty: Math.min(
+                                      parseFloat(e.target.value) || 0,
+                                      row.pending_qty,
+                                    ),
                                   })
                                 }
-                                className="w-20 rounded border border-slate-200 px-2 py-1 text-right"
+                                className="w-20 rounded border border-slate-200 px-2 py-1 text-right disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                               />
                             </td>
                             <td className="py-3 px-2 text-right tabular-nums">{row.accepted_qty}</td>
@@ -1096,58 +1479,67 @@ export default function WarehouseCreateGRNPage() {
         )}
 
         {step === 2 && (
-          <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
-            <h2 className="text-lg font-semibold text-slate-900">Review & Submit</h2>
-            <div className="grid gap-3 sm:grid-cols-2 text-sm">
-              <div className="rounded-xl bg-slate-50 p-4">
-                <p className="text-xs uppercase tracking-wide text-slate-500">Purchase Order</p>
-                <p className="font-semibold text-slate-900">{poName}</p>
+          <div className="space-y-4">
+            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
+              <h2 className="text-lg font-semibold text-slate-900">Review & Submit</h2>
+              <div className="grid gap-3 sm:grid-cols-2 text-sm">
+                <div className="rounded-xl bg-slate-50 p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Purchase Order</p>
+                  <p className="font-semibold text-slate-900">{poName}</p>
+                </div>
+                <div className="rounded-xl bg-slate-50 p-4">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Warehouse</p>
+                  <p className="font-semibold text-slate-900">{warehouse}</p>
+                </div>
               </div>
-              <div className="rounded-xl bg-slate-50 p-4">
-                <p className="text-xs uppercase tracking-wide text-slate-500">Warehouse</p>
-                <p className="font-semibold text-slate-900">{warehouse}</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-xs uppercase text-slate-500">
+                      <th className="py-2 text-left">Item</th>
+                      <th className="py-2 text-right">Received</th>
+                      <th className="py-2 text-right">Accepted</th>
+                      <th className="py-2 text-right">Rejected</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows
+                      .filter((row) => row.received_qty > 0)
+                      .map((row) => (
+                        <tr key={row.itemId} className="border-b border-slate-100">
+                          <td className="py-2">{row.item_code}</td>
+                          <td className="py-2 text-right tabular-nums">{row.received_qty}</td>
+                          <td className="py-2 text-right tabular-nums">{row.accepted_qty}</td>
+                          <td className="py-2 text-right tabular-nums">{row.rejected_qty}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
               </div>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 text-xs uppercase text-slate-500">
-                    <th className="py-2 text-left">Item</th>
-                    <th className="py-2 text-right">Received</th>
-                    <th className="py-2 text-right">Accepted</th>
-                    <th className="py-2 text-right">Rejected</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows
-                    .filter((row) => row.received_qty > 0)
-                    .map((row) => (
-                      <tr key={row.itemId} className="border-b border-slate-100">
-                        <td className="py-2">{row.item_code}</td>
-                        <td className="py-2 text-right tabular-nums">{row.received_qty}</td>
-                        <td className="py-2 text-right tabular-nums">{row.accepted_qty}</td>
-                        <td className="py-2 text-right tabular-nums">{row.rejected_qty}</td>
-                      </tr>
-                    ))}
-                </tbody>
-              </table>
-            </div>
-            {notes && (
-              <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-700">
-                <p className="text-xs uppercase tracking-wide text-slate-500 mb-1">Remarks</p>
-                {notes}
-              </div>
-            )}
-            {attachments.length > 0 && (
-              <p className="text-sm text-slate-600">
-                {attachments.length} attachment{attachments.length === 1 ? "" : "s"} will be uploaded
-                after the GRN is created.
-              </p>
-            )}
+              {notes && (
+                <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-700">
+                  <p className="text-xs uppercase tracking-wide text-slate-500 mb-1">Remarks</p>
+                  {notes}
+                </div>
+              )}
+              {attachments.length > 0 && (
+                <p className="text-sm text-slate-600">
+                  {attachments.length} attachment{attachments.length === 1 ? "" : "s"} will be
+                  uploaded after the GRN is created.
+                </p>
+              )}
+            </section>
+
+            <WarehouseReviewSignPanel
+              value={esign}
+              onChange={setEsign}
+              disabled={submitMutation.isPending}
+            />
+
             {fieldErrors.submit && (
               <p className="text-sm text-rose-600">{fieldErrors.submit}</p>
             )}
-          </section>
+          </div>
         )}
 
         <div className="flex items-center justify-between">
@@ -1165,7 +1557,13 @@ export default function WarehouseCreateGRNPage() {
             <button
               type="button"
               onClick={goNext}
-              className="inline-flex items-center gap-1 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700"
+              disabled={isFullyReceivedFromErp}
+              title={
+                isFullyReceivedFromErp
+                  ? "This Purchase Order is already fully received — open the existing GRN instead."
+                  : undefined
+              }
+              className="inline-flex items-center gap-1 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
               Continue
               <ArrowRight className="h-4 w-4" />
@@ -1174,19 +1572,27 @@ export default function WarehouseCreateGRNPage() {
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={submitMutation.isPending || poIsFutureVsServer}
-              title={poIsFutureVsServer ? PO_FUTURE_MESSAGE : undefined}
+              disabled={
+                submitMutation.isPending ||
+                isFullyReceivedFromErp ||
+                !hasReviewSignatureReady(esign)
+              }
+              title={
+                !hasReviewSignatureReady(esign)
+                  ? "Capture your signature and certify received goods before Sign & Finalize."
+                  : undefined
+              }
               className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {submitMutation.isPending ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Submitting…
+                  Signing & Finalizing…
                 </>
               ) : (
                 <>
                   <PackagePlus className="h-4 w-4" />
-                  Submit GRN
+                  Sign & Finalize GRN
                 </>
               )}
             </button>
@@ -1195,7 +1601,8 @@ export default function WarehouseCreateGRNPage() {
 
         {submitMutation.isPending && (
           <p className="text-center text-xs text-slate-500">
-            Creating and submitting GRN in ERPNext…
+            Generating Signed GRN PDF, storing permanently, verifying SHA-256, then updating
+            inventory…
           </p>
         )}
       </div>
@@ -1218,33 +1625,32 @@ export default function WarehouseCreateGRNPage() {
         description="Track inbound purchase orders awaiting receipt and review completed goods receipt notes."
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           icon={Truck}
-          label="Upcoming Deliveries"
-          value={deliveries.length}
+          label="In Transit"
+          value={receivingKpis.inTransit}
           loading={incomingQuery.isLoading}
           tone="primary"
         />
         <StatCard
-          icon={CheckCircle2}
-          label="Completed GRNs"
-          value={grnRows.length}
+          icon={Clock}
+          label="Arriving Today"
+          value={receivingKpis.arrivingToday}
+          loading={incomingQuery.isLoading}
+          tone="warning"
+        />
+        <StatCard
+          icon={PackageCheck}
+          label="Delivered Today"
+          value={receivingKpis.deliveredToday}
           loading={grnHistoryQuery.isLoading}
           tone="accent"
         />
         <StatCard
-          icon={Clock}
-          label="Pending Receipts"
-          value={receivingKpis.incomingThisWeek}
-          loading={incomingQuery.isLoading}
-          tone="warning"
-          sub="Due within 7 days"
-        />
-        <StatCard
           icon={AlertTriangle}
-          label="Overdue Deliveries"
-          value={receivingKpis.overdueDeliveries}
+          label="Delayed Shipments"
+          value={receivingKpis.delayedShipments}
           loading={incomingQuery.isLoading}
           tone="danger"
         />
@@ -1255,18 +1661,100 @@ export default function WarehouseCreateGRNPage() {
       {tab === "upcoming" ? (
         <section className="space-y-3">
           <FilterBar>
-            <FilterField label="Search" className="min-w-[240px] flex-1">
+            <FilterField label="Search" className="min-w-[200px] flex-1">
               <SearchInput
                 value={upcomingSearch}
                 onChange={setUpcomingSearch}
-                placeholder="PO number or supplier…"
+                placeholder="PO, supplier, vehicle, tracking…"
               />
+            </FilterField>
+            <FilterField label="Supplier" className="min-w-[160px]">
+              <select
+                value={filterSupplier}
+                onChange={(e) => setFilterSupplier(e.target.value)}
+                className="select-field"
+              >
+                <option value="">All suppliers</option>
+                {upcomingSupplierOptions.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </FilterField>
+            <FilterField label="Shipment Status" className="min-w-[160px]">
+              <select
+                value={filterShipmentStatus}
+                onChange={(e) => setFilterShipmentStatus(e.target.value)}
+                className="select-field"
+              >
+                <option value="">All statuses</option>
+                {shipmentStatusOptions.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+                {!shipmentStatusOptions.includes("Pending Acceptance") && (
+                  <option value="Pending Acceptance">Pending Acceptance</option>
+                )}
+              </select>
+            </FilterField>
+            <FilterField label="ETA" className="min-w-[140px]">
+              <input
+                type="date"
+                value={filterEta}
+                onChange={(e) => setFilterEta(e.target.value)}
+                className="input-field"
+              />
+            </FilterField>
+            <FilterField label="Vehicle Number" className="min-w-[140px]">
+              <input
+                type="text"
+                value={filterVehicle}
+                onChange={(e) => setFilterVehicle(e.target.value)}
+                placeholder="Vehicle…"
+                className="input-field"
+              />
+            </FilterField>
+            <FilterField label="Tracking Number" className="min-w-[140px]">
+              <input
+                type="text"
+                value={filterTracking}
+                onChange={(e) => setFilterTracking(e.target.value)}
+                placeholder="Tracking…"
+                className="input-field"
+              />
+            </FilterField>
+            <FilterField label="Warehouse" className="min-w-[150px]">
+              <select
+                value={filterWarehouse}
+                onChange={(e) => setFilterWarehouse(e.target.value)}
+                className="select-field"
+              >
+                <option value="">All warehouses</option>
+                {upcomingWarehouseOptions.map((w) => (
+                  <option key={w} value={w}>
+                    {w}
+                  </option>
+                ))}
+              </select>
+            </FilterField>
+            <FilterField label="Overdue" className="min-w-[120px]">
+              <label className="flex h-10 items-center gap-2 text-sm text-neutral-700">
+                <input
+                  type="checkbox"
+                  checked={filterOverdueOnly}
+                  onChange={(e) => setFilterOverdueOnly(e.target.checked)}
+                  className="rounded border-neutral-300"
+                />
+                Overdue only
+              </label>
             </FilterField>
           </FilterBar>
 
           <div className="table-shell min-w-0">
             {incomingQuery.isLoading ? (
-              <TableSkeleton rows={6} columns={6} />
+              <TableSkeleton rows={6} columns={9} />
             ) : incomingQuery.isError ? (
               <ErrorState
                 title="Could not load purchase orders"
@@ -1277,16 +1765,19 @@ export default function WarehouseCreateGRNPage() {
               <EmptyState
                 icon={Truck}
                 title="No upcoming deliveries"
-                description="All approved purchase orders have been received."
+                description="No open purchase orders match the current filters."
               />
             ) : (
               <div className="overflow-x-auto">
-                <table className="data-table">
+                <table className="data-table min-w-[1100px]">
                   <thead>
                     <tr>
                       <th>PO Number</th>
                       <th>Supplier</th>
-                      <th>Expected Date</th>
+                      <th>Shipment Status</th>
+                      <th>Vehicle Number</th>
+                      <th>Tracking Number</th>
+                      <th>Expected Delivery (ETA)</th>
                       <th>Due Status</th>
                       <th className="text-right">Total Amount</th>
                       {canAct && <th className="text-right">Action</th>}
@@ -1295,16 +1786,58 @@ export default function WarehouseCreateGRNPage() {
                   <tbody>
                     {filteredDeliveries.map((d) => {
                       const meta = DELIVERY_URGENCY_META[d.urgency];
+                      const action = resolveReceiveAction(d);
                       return (
                         <tr key={d.name}>
                           <td>
-                            <span className="table-link">{d.name}</span>
+                            <div className="space-y-1">
+                              <span className="table-link">{d.name}</span>
+                              {(d.vehicle_number ||
+                                d.tracking_number ||
+                                d.dispatch_date) && (
+                                <p className="text-[11px] text-neutral-500">
+                                  {[
+                                    d.dispatch_date
+                                      ? `Dispatched ${formatDateTime(d.dispatch_date)}`
+                                      : null,
+                                    d.vehicle_number
+                                      ? `Vehicle ${d.vehicle_number}`
+                                      : null,
+                                    d.tracking_number
+                                      ? `Track ${d.tracking_number}`
+                                      : null,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" · ")}
+                                </p>
+                              )}
+                            </div>
                           </td>
                           <td className="text-neutral-600">
                             {d.supplier_name ?? d.supplier ?? "—"}
                           </td>
+                          <td>
+                            <StatusBadge
+                              status={d.shipment_status || "Open"}
+                            />
+                          </td>
                           <td className="text-neutral-600">
-                            {d.schedule_date ? formatDate(d.schedule_date) : "—"}
+                            {d.vehicle_number || "—"}
+                          </td>
+                          <td className="text-neutral-600">
+                            {d.tracking_number || "—"}
+                          </td>
+                          <td className="text-neutral-600">
+                            {d.displayExpectedDate
+                              ? formatDate(d.displayExpectedDate)
+                              : "—"}
+                            {d.expected_delivery_date &&
+                              d.schedule_date &&
+                              d.expected_delivery_date !== d.schedule_date && (
+                                <p className="text-[10px] text-neutral-400">
+                                  PO required {formatDate(d.schedule_date)}
+                                </p>
+                              )}
                           </td>
                           <td>
                             <span
@@ -1318,14 +1851,39 @@ export default function WarehouseCreateGRNPage() {
                           </td>
                           {canAct && (
                             <td className="text-right">
-                              <button
-                                type="button"
-                                onClick={() => startReceiving(d.name)}
-                                className="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-primary-700"
-                              >
-                                <PackagePlus className="h-3.5 w-3.5" />
-                                Receive Goods
-                              </button>
+                              {action.kind === "view_grn" && d.grn_name ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    navigate(
+                                      `/p2p/grn/${encodeURIComponent(d.grn_name!)}`,
+                                    )
+                                  }
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs font-semibold text-neutral-700 shadow-sm hover:bg-neutral-50"
+                                >
+                                  <Eye className="h-3.5 w-3.5" />
+                                  View GRN
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  disabled={action.disabled}
+                                  onClick={() => {
+                                    if (!action.disabled) startReceiving(d.name);
+                                  }}
+                                  title={
+                                    action.disabled
+                                      ? action.label === "Waiting for Dispatch"
+                                        ? "Supplier accepted — waiting for dispatch (In Transit)."
+                                        : "Supplier has not accepted this PO yet."
+                                      : undefined
+                                  }
+                                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-primary-700 disabled:cursor-not-allowed disabled:bg-neutral-300 disabled:text-neutral-600"
+                                >
+                                  <PackagePlus className="h-3.5 w-3.5" />
+                                  {action.label}
+                                </button>
+                              )}
                             </td>
                           )}
                         </tr>

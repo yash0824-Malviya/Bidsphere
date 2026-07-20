@@ -1,17 +1,13 @@
 import { useMemo, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import toast from "react-hot-toast";
-import { Activity, FileSearch, Search, Truck } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Activity, Eye, FileSearch, Search } from "lucide-react";
 
 import {
-  forwardToProcurement,
   getPendingMaterialRequests,
   getWarehouseProcurementRequiredRequests,
-  invalidateForwardCaches,
   selectProcurementRequiredRows,
 } from "../../services/warehouseService";
-import { useAuthStore } from "../../store/authStore";
 import EmptyState from "../../components/EmptyState";
 import ErrorState from "../../components/ErrorState";
 import { TableSkeleton } from "../../components/Skeleton";
@@ -25,35 +21,22 @@ const PRIORITY_STYLES: Record<string, string> = {
 };
 
 /**
- * Warehouse → Material Requests → Procurement Required. Live ERPNext data
- * only (no local storage / mock arrays): reviewed MRs with insufficient stock
- * that have NOT yet been forwarded (`custom_bidsphere_status =
- * "Procurement Required"` AND `custom_forwarded_to_procurement != 1`). Each
- * row has "Send to Procurement", which:
- *   1. Updates ERPNext BidSphere Status → "Forwarded to Procurement"
- *   2. Saves forwarded_to_procurement / forwarded_at / forwarded_by
- *   3. Removes the MR from this queue immediately (status changed)
- *   4. Makes it visible in Procurement's "Forwarded Material Requests"
- * The full audit trail lives in "Forwarded History" (a separate page).
+ * Warehouse → Material Requests → Procurement Required.
+ *
+ * Lists requests awaiting final warehouse processing (stock decision).
+ * There is NO "Send to Procurement" on this page — forwarding happens only via
+ * "Confirm & Process All Decisions" on the Stock Decision page.
  */
 export default function WarehouseForwardedRequestsPage() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const user = useAuthStore((s) => s.user);
   const [search, setSearch] = useState("");
-  const [forwardingMr, setForwardingMr] = useState<string | null>(null);
 
-  // Same query key as the dashboard — React Query dedupes/caches, guaranteeing
-  // identical records on both surfaces.
   const pendingQuery = useQuery({
     queryKey: ["warehouse", "pending-requests"],
     queryFn: getPendingMaterialRequests,
     retry: false,
     refetchOnWindowFocus: true,
   });
-  // Genuinely-persisted "Procurement Required" MRs recorded via the detailed
-  // review page — concatenated with `pendingQuery` so both the quick-action
-  // and detail-review paths land in the same queue.
   const persistedQuery = useQuery({
     queryKey: ["warehouse", "procurement-required-persisted"],
     queryFn: getWarehouseProcurementRequiredRequests,
@@ -73,30 +56,9 @@ export default function WarehouseForwardedRequestsPage() {
     return all.filter(
       (r) =>
         r.name.toLowerCase().includes(q) ||
-        r.department.toLowerCase().includes(q)
+        r.department.toLowerCase().includes(q),
     );
   }, [pendingQuery.data, persistedQuery.data, search]);
-
-  const forwardMutation = useMutation({
-    mutationFn: (mrName: string) =>
-      forwardToProcurement(mrName, user?.email || user?.name),
-    onMutate: (mrName: string) => setForwardingMr(mrName),
-    onSettled: () => setForwardingMr(null),
-    onSuccess: async (_res, mrName) => {
-      toast.success(`${mrName} sent to Procurement.`);
-      // eslint-disable-next-line no-console
-      console.log("[Warehouse] Refreshing list", { mr: mrName });
-      invalidateForwardCaches(queryClient);
-      // Await so the MR leaves this queue immediately (no reload needed).
-      await Promise.all([pendingQuery.refetch(), persistedQuery.refetch()]);
-    },
-    onError: (err: unknown, mrName) =>
-      toast.error(
-        err instanceof Error
-          ? err.message
-          : `Could not send ${mrName} to Procurement.`
-      ),
-  });
 
   if (pendingQuery.isError && persistedQuery.isError) {
     return (
@@ -123,8 +85,8 @@ export default function WarehouseForwardedRequestsPage() {
             Procurement Required
           </h1>
           <p className="mt-1 text-sm text-slate-500">
-            Reviewed requests with insufficient stock, awaiting "Send to
-            Procurement".
+            Pending requests awaiting final warehouse processing. Open a request
+            to review stock and confirm decisions.
           </p>
         </div>
         <Link
@@ -153,11 +115,9 @@ export default function WarehouseForwardedRequestsPage() {
         loading={loading}
         rows={rows}
         search={search}
-        busyMr={forwardMutation.isPending ? forwardingMr : null}
-        onForward={(name) => forwardMutation.mutate(name)}
         onOpen={(name) =>
           navigate(
-            `/warehouse/material-requests/review/${encodeURIComponent(name)}`
+            `/warehouse/material-requests/review/${encodeURIComponent(name)}`,
           )
         }
       />
@@ -181,15 +141,11 @@ function ProcurementRequiredTable({
   loading,
   rows,
   search,
-  busyMr,
-  onForward,
   onOpen,
 }: {
   loading: boolean;
   rows: PendingRow[];
   search: string;
-  busyMr: string | null;
-  onForward: (name: string) => void;
   onOpen: (name: string) => void;
 }) {
   return (
@@ -202,7 +158,7 @@ function ProcurementRequiredTable({
         <div className="flex flex-1 items-center justify-center p-12">
           <EmptyState
             icon={FileSearch}
-            title="No material requests awaiting procurement"
+            title="No material requests awaiting warehouse processing"
             description={
               search
                 ? "Adjust your search terms."
@@ -225,46 +181,42 @@ function ProcurementRequiredTable({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-sm">
-              {rows.map((r) => {
-                const busy = busyMr === r.name;
-                return (
-                  <tr key={r.name} className="transition-colors hover:bg-slate-50/75">
-                    <td className="px-6 py-4">
-                      <button
-                        type="button"
-                        onClick={() => onOpen(r.name)}
-                        className="font-semibold text-primary-600 hover:underline"
-                      >
-                        {r.name}
-                      </button>
-                    </td>
-                    <td className="px-6 py-4 text-slate-600">{r.department}</td>
-                    <td className="px-6 py-4 text-slate-500">
-                      {r.requiredDate ? formatDate(r.requiredDate) : "—"}
-                    </td>
-                    <td className="px-6 py-4">
-                      <PriorityPill priority={r.priority} />
-                    </td>
-                    <td className="px-6 py-4 text-right tabular-nums text-slate-700">
-                      {r.missingItems}
-                    </td>
-                    <td className="px-6 py-4 text-right font-semibold tabular-nums text-orange-700">
-                      {r.requiredQty} {r.uom}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => onForward(r.name)}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        <Truck className="h-4 w-4" />
-                        {busy ? "Sending…" : "Send to Procurement"}
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+              {rows.map((r) => (
+                <tr key={r.name} className="transition-colors hover:bg-slate-50/75">
+                  <td className="px-6 py-4">
+                    <button
+                      type="button"
+                      onClick={() => onOpen(r.name)}
+                      className="font-semibold text-primary-600 hover:underline"
+                    >
+                      {r.name}
+                    </button>
+                  </td>
+                  <td className="px-6 py-4 text-slate-600">{r.department}</td>
+                  <td className="px-6 py-4 text-slate-500">
+                    {r.requiredDate ? formatDate(r.requiredDate) : "—"}
+                  </td>
+                  <td className="px-6 py-4">
+                    <PriorityPill priority={r.priority} />
+                  </td>
+                  <td className="px-6 py-4 text-right tabular-nums text-slate-700">
+                    {r.missingItems}
+                  </td>
+                  <td className="px-6 py-4 text-right font-semibold tabular-nums text-orange-700">
+                    {r.requiredQty} {r.uom}
+                  </td>
+                  <td className="px-6 py-4 text-right">
+                    <button
+                      type="button"
+                      onClick={() => onOpen(r.name)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-primary-700 shadow-sm transition-colors hover:bg-slate-50"
+                    >
+                      <Eye className="h-4 w-4" />
+                      View Details
+                    </button>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>

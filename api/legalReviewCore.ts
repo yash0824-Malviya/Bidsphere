@@ -22,9 +22,140 @@
  *      so even a race between two concurrent requests cannot create two
  *      records for the same RFQ — MySQL rejects the second INSERT outright.
  */
+import { sanitizeErpPayloadDates } from "./erpDateSanitize.js";
 import { formatERPNextDatetime } from "../src/utils/erpNextDate.js";
 
 const DOCTYPE = "Legal Document Review";
+const RFQ_DOCTYPE = "Request for Quotation";
+
+/**
+ * Canonical Select / workflow values for Legal Document Review.
+ * Must stay aligned with `scripts/setup-legal-review-doctype.mjs` options —
+ * not arbitrary UI labels.
+ */
+export const LEGAL_REVIEW_STATUS = {
+  PENDING: "Pending",
+  APPROVED: "Approved",
+  REJECTED: "Rejected",
+} as const;
+
+export const FINANCE_REVIEW_STATUS = {
+  PENDING: "Pending",
+  APPROVED: "Approved",
+  REJECTED: "Rejected",
+} as const;
+
+/** `workflow_state` tracks the active stage after Legal decides. */
+export const LDR_WORKFLOW_STATE = {
+  PENDING_REVIEW: "Pending Review",
+  FINANCE_REVIEW: "Finance Review",
+  COMPLETED: "Completed",
+  REJECTED: "Rejected",
+} as const;
+
+/** Canonical owners written onto the LDR row during stage transitions. */
+export const LDR_OWNERS = {
+  LEGAL: "Legal Reviewer",
+  FINANCE: "Finance Manager",
+  PROCUREMENT: "Procurement",
+  NONE: "—",
+} as const;
+
+/** Fields required for Legal → Finance handoff (created at runtime if missing). */
+const FINANCE_HANDOFF_FIELDS: Array<{
+  fieldname: string;
+  label: string;
+  fieldtype: string;
+  options?: string;
+  insert_after: string;
+  in_list_view?: number;
+}> = [
+  {
+    fieldname: "workflow_state",
+    label: "Workflow State",
+    fieldtype: "Data",
+    insert_after: "review_status",
+    in_list_view: 1,
+  },
+  {
+    fieldname: "finance_status",
+    label: "Finance Status",
+    fieldtype: "Select",
+    options: `\n${FINANCE_REVIEW_STATUS.PENDING}\n${FINANCE_REVIEW_STATUS.APPROVED}\n${FINANCE_REVIEW_STATUS.REJECTED}`,
+    insert_after: "rejection_reason",
+    in_list_view: 1,
+  },
+  {
+    fieldname: "finance_approved_by",
+    label: "Finance Approved/Rejected By",
+    fieldtype: "Data",
+    insert_after: "finance_status",
+    in_list_view: 1,
+  },
+  {
+    fieldname: "finance_approved_on",
+    label: "Finance Approved/Rejected On",
+    fieldtype: "Datetime",
+    insert_after: "finance_approved_by",
+    in_list_view: 1,
+  },
+  {
+    fieldname: "finance_comments",
+    label: "Finance Comments",
+    fieldtype: "Small Text",
+    insert_after: "finance_approved_on",
+  },
+  {
+    fieldname: "finance_rejection_reason",
+    label: "Finance Rejection Reason",
+    fieldtype: "Small Text",
+    insert_after: "finance_comments",
+  },
+  {
+    fieldname: "current_owner",
+    label: "Current Owner",
+    fieldtype: "Data",
+    insert_after: "workflow_state",
+    in_list_view: 1,
+  },
+  {
+    fieldname: "next_approver",
+    label: "Next Approver",
+    fieldtype: "Data",
+    insert_after: "current_owner",
+    in_list_view: 1,
+  },
+];
+
+/** Explicit list fields — never rely on `fields=["*"]` (Frappe often drops it). */
+const WORKFLOW_LIST_FIELDS = [
+  "name",
+  "modified",
+  "sq_name",
+  "rfq_name",
+  "supplier",
+  "company",
+  "quotation_number",
+  "procurement_manager",
+  "submission_date",
+  "workflow_state",
+  "current_owner",
+  "next_approver",
+  "grand_total",
+  "review_status",
+  "approved_by",
+  "approved_on",
+  "legal_comments",
+  "rejection_reason",
+  "finance_status",
+  "finance_approved_by",
+  "finance_approved_on",
+  "finance_comments",
+  "finance_rejection_reason",
+  "esign_status",
+] as const;
+
+let schemaEnsurePromise: Promise<void> | null = null;
 
 /* ────────────────────────────────────────────────────────────────────────
  *  Privileged ERPNext client (server-side only — never bundled to browser)
@@ -80,7 +211,10 @@ async function erpFetch<T = unknown>(
       Accept: "application/json",
       "Content-Type": "application/json",
     },
-    body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
+    body:
+      init?.body !== undefined
+        ? JSON.stringify(sanitizeErpPayloadDates(init.body))
+        : undefined,
   });
 
   const text = await res.text();
@@ -167,6 +301,18 @@ export interface LegalDocumentRecord {
   finance_comments?: string;
   /** Required for a finance Reject; empty/unset when Approved. */
   finance_rejection_reason?: string;
+  /** Active queue owner — written on every stage transition. */
+  current_owner?: string;
+  /** Next approver role — written on every stage transition. */
+  next_approver?: string;
+  modified?: string;
+  /** JSON envelope for Legal PDF e-sign (future multi-role ready). */
+  esign_envelope?: string;
+  esign_status?: string;
+  esign_document_hash?: string;
+  esign_signed_file_url?: string;
+  esign_signed_by?: string;
+  esign_signed_on?: string;
 }
 
 export interface CreateLegalReviewInput {
@@ -224,6 +370,216 @@ async function getByName(
   );
 }
 
+/**
+ * Privileged workflow list — the ONLY authoritative read path for Legal and
+ * Finance queues. Uses server ERP credentials + an explicit field list so
+ * browser permission quirks / `fields=["*"]` failures can never empty the
+ * Finance queue after a successful Legal approve.
+ */
+export async function listWorkflowRecords(options?: {
+  limit?: number;
+}): Promise<LegalDocumentRecord[]> {
+  const cfg = readErpAdminConfig();
+  await ensureLegalDocumentReviewSchema(cfg);
+
+  const limit = Math.min(Math.max(options?.limit ?? 200, 1), 500);
+
+  const fetchList = (fields: readonly string[]) =>
+    erpFetch<LegalDocumentRecord[]>(
+      cfg,
+      `resource/${encodeURIComponent(DOCTYPE)}?` +
+        new URLSearchParams({
+          fields: JSON.stringify([...fields]),
+          limit_page_length: String(limit),
+          order_by: "modified desc",
+        }).toString(),
+    );
+
+  let rows: LegalDocumentRecord[];
+  try {
+    rows = await fetchList(WORKFLOW_LIST_FIELDS);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // New owner fields may not be queryable until DocType cache refreshes —
+    // retry without them so Finance queue never goes dark after Legal approve.
+    if (/Field not permitted|Unknown column|not found/i.test(msg)) {
+      const fallbackFields = WORKFLOW_LIST_FIELDS.filter(
+        (f) => f !== "current_owner" && f !== "next_approver",
+      );
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[legal-review] listWorkflowRecords retrying without owner fields:",
+        msg,
+      );
+      rows = await fetchList(fallbackFields);
+    } else {
+      throw err;
+    }
+  }
+
+  return Array.isArray(rows) ? rows : [];
+}
+
+/**
+ * Ensures Finance handoff fields exist on Legal Document Review.
+ * Missing `finance_status` is the primary cause of "leaves Legal, never
+ * appears in Finance" — ERPNext silently drops unknown fields on PUT while
+ * still accepting known ones like `review_status`.
+ */
+async function ensureLegalDocumentReviewSchemaOnce(
+  cfg: ErpAdminConfig,
+): Promise<void> {
+  const doc = await erpFetch<{
+    name?: string;
+    fields?: Array<Record<string, unknown>>;
+  }>(cfg, `resource/DocType/${encodeURIComponent(DOCTYPE)}`);
+
+  const fields = Array.isArray(doc.fields) ? [...doc.fields] : [];
+  const existingNames = new Set(
+    fields
+      .map((f) => String(f.fieldname ?? ""))
+      .filter(Boolean),
+  );
+
+  let modified = false;
+  for (const required of FINANCE_HANDOFF_FIELDS) {
+    if (existingNames.has(required.fieldname)) continue;
+    fields.push({
+      ...required,
+      parent: DOCTYPE,
+      parentfield: "fields",
+      parenttype: "DocType",
+      doctype: "DocField",
+    });
+    existingNames.add(required.fieldname);
+    modified = true;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[legal-review] Adding missing DocType field: ${required.fieldname}`,
+    );
+  }
+
+  // Keep review_status options complete so Pending/Approved/Rejected all stick.
+  const reviewStatus = fields.find((f) => f.fieldname === "review_status");
+  const expectedReviewOpts = `${LEGAL_REVIEW_STATUS.PENDING}\n${LEGAL_REVIEW_STATUS.APPROVED}\n${LEGAL_REVIEW_STATUS.REJECTED}`;
+  if (
+    reviewStatus &&
+    String(reviewStatus.options ?? "") !== expectedReviewOpts
+  ) {
+    reviewStatus.options = expectedReviewOpts;
+    modified = true;
+  }
+
+  if (!modified) return;
+
+  await erpFetch(cfg, `resource/DocType/${encodeURIComponent(DOCTYPE)}`, {
+    method: "PUT",
+    body: { fields },
+  });
+
+  try {
+    await erpFetch(cfg, "method/frappe.clear_cache", {
+      method: "POST",
+      body: {},
+    });
+  } catch {
+    /* non-fatal — field is still on DocType */
+  }
+
+  // eslint-disable-next-line no-console
+  console.log("[legal-review] Legal Document Review schema updated for Finance handoff");
+}
+
+export async function ensureLegalDocumentReviewSchema(
+  cfg?: ErpAdminConfig,
+): Promise<void> {
+  const admin = cfg ?? readErpAdminConfig();
+  if (!schemaEnsurePromise) {
+    schemaEnsurePromise = ensureLegalDocumentReviewSchemaOnce(admin).catch(
+      (err) => {
+        schemaEnsurePromise = null;
+        throw err;
+      },
+    );
+  }
+  await schemaEnsurePromise;
+}
+
+/**
+ * Best-effort RFQ custom-field sync so any legacy readers of
+ * custom_legal_status / custom_finance_status / custom_workflow_step stay
+ * aligned with Legal Document Review (source of truth).
+ */
+async function syncRfqAfterLegalApprove(
+  cfg: ErpAdminConfig,
+  rfqName: string | undefined,
+  reviewedBy: string,
+  approvedOn: string,
+): Promise<void> {
+  const name = (rfqName ?? "").trim();
+  if (!name) return;
+
+  try {
+    const meta = await erpFetch<{
+      fields?: Array<{ fieldname?: string; options?: string }>;
+    }>(cfg, `resource/DocType/${encodeURIComponent(RFQ_DOCTYPE)}`);
+    const fieldMeta = new Map(
+      (meta.fields ?? [])
+        .filter((f) => f.fieldname)
+        .map((f) => [String(f.fieldname), f] as const),
+    );
+
+    const body: Record<string, unknown> = {};
+
+    const legalField =
+      ["custom_legal_status", "custom_legal_review_status"].find((f) =>
+        fieldMeta.has(f),
+      ) ?? null;
+    if (legalField) body[legalField] = LEGAL_REVIEW_STATUS.APPROVED;
+
+    const financeField =
+      ["custom_finance_status", "custom_finance_review_status"].find((f) =>
+        fieldMeta.has(f),
+      ) ?? null;
+    if (financeField) {
+      const opts = String(fieldMeta.get(financeField)?.options ?? "");
+      // Prefer the DocType's own option vocabulary when present.
+      body[financeField] = opts.includes("Pending Finance Review")
+        ? "Pending Finance Review"
+        : FINANCE_REVIEW_STATUS.PENDING;
+    }
+
+    if (fieldMeta.has("custom_workflow_step")) {
+      const opts = String(fieldMeta.get("custom_workflow_step")?.options ?? "");
+      body.custom_workflow_step = opts.includes("Pending Finance Review")
+        ? "Pending Finance Review"
+        : LDR_WORKFLOW_STATE.FINANCE_REVIEW;
+    }
+    if (fieldMeta.has("custom_legal_reviewer")) {
+      body.custom_legal_reviewer = reviewedBy;
+    }
+    if (fieldMeta.has("custom_legal_review_date")) {
+      body.custom_legal_review_date = approvedOn;
+    }
+
+    if (Object.keys(body).length === 0) return;
+
+    await erpFetch(
+      cfg,
+      `resource/${encodeURIComponent(RFQ_DOCTYPE)}/${encodeURIComponent(name)}`,
+      { method: "PUT", body },
+    );
+    // eslint-disable-next-line no-console
+    console.log(`[legal-review] Synced RFQ ${name} after Legal approve`, body);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[legal-review] RFQ sync after Legal approve failed for ${name}:`,
+      err,
+    );
+  }
+}
+
 /* ────────────────────────────────────────────────────────────────────────
  *  Create — gated on "Supplier Selected" (called once per RFQ, ever)
  * ──────────────────────────────────────────────────────────────────────── */
@@ -232,6 +588,7 @@ export async function createLegalDocumentReview(
   input: CreateLegalReviewInput
 ): Promise<{ created: boolean; record: LegalDocumentRecord }> {
   const cfg = readErpAdminConfig();
+  await ensureLegalDocumentReviewSchema(cfg);
 
   const rfqName = (input.rfq_name ?? "").trim();
   const sqName = (input.sq_name ?? "").trim();
@@ -270,7 +627,9 @@ export async function createLegalDocumentReview(
     insurance_note: input.insurance_note ?? "",
     // Never trust a client-supplied review_status — every new record starts Pending.
     review_status: "Pending",
-    workflow_state: "Pending Review",
+    workflow_state: LDR_WORKFLOW_STATE.PENDING_REVIEW,
+    current_owner: LDR_OWNERS.LEGAL,
+    next_approver: LDR_OWNERS.LEGAL,
   };
 
   try {
@@ -330,34 +689,210 @@ export async function decideLegalDocumentReview(
     throw new LegalReviewError("rejectionReason is required to reject a review.", 400);
   }
 
-  // Fetching first both validates the record exists and gives a clean 404.
-  await getByName(cfg, name);
+  // Self-heal DocType schema before writing Finance handoff fields.
+  await ensureLegalDocumentReviewSchema(cfg);
 
+  // Fetching first both validates the record exists and gives a clean 404.
+  const existing = await getByName(cfg, name);
+
+  // Approve requires a placed electronic signature (type signature).
+  if (input.status === "Approved") {
+    const status = String(existing.esign_status ?? "").toLowerCase();
+    const hasEnvelopeSig =
+      status === "signed" ||
+      status === "locked" ||
+      (typeof existing.esign_envelope === "string" &&
+        /"role"\s*:\s*"legal"/.test(existing.esign_envelope) &&
+        /"status"\s*:\s*"(signed|locked)"/.test(existing.esign_envelope));
+    // Also accept per-doc approved flags set by a successful client burn-in
+    // when esign_* DocType fields are not yet provisioned on ERPNext.
+    const checklistSigned = Boolean(
+      existing.terms_approved ||
+        existing.warranty_approved ||
+        existing.insurance_approved,
+    );
+    if (!hasEnvelopeSig && !existing.esign_signed_by && !checklistSigned) {
+      throw new LegalReviewError(
+        "Please sign the document before approval.",
+        400,
+      );
+    }
+  }
+
+  const approvedOn = formatERPNextDatetime(new Date());
   const body: Record<string, unknown> = {
     review_status: input.status,
-    workflow_state: input.status,
     approved_by: input.reviewedBy,
-    approved_on: formatERPNextDatetime(new Date()),
+    approved_on: approvedOn,
     legal_comments: input.comments ?? "",
     rejection_reason: input.status === "Rejected" ? rejectionReason : "",
   };
 
   // The moment Legal approves, Finance Review becomes actionable on this
-  // SAME record — no separate document, no client-side transition. A Legal
-  // rejection never enters the Finance funnel, so finance_status stays unset.
+  // SAME record — no separate DocType. Rejection never enters Finance.
   if (input.status === "Approved") {
-    body.finance_status = "Pending";
+    body.finance_status = FINANCE_REVIEW_STATUS.PENDING;
+    body.workflow_state = LDR_WORKFLOW_STATE.FINANCE_REVIEW;
+    body.current_owner = LDR_OWNERS.FINANCE;
+    body.next_approver = LDR_OWNERS.FINANCE;
+    body.esign_status = "locked";
+    // Lock envelope JSON when present (best-effort; ignore parse errors).
+    if (existing.esign_envelope) {
+      try {
+        const env = JSON.parse(existing.esign_envelope) as {
+          locked?: boolean;
+          status?: string;
+          approvalStatus?: string;
+          approvalTimestamp?: string;
+          signatures?: Array<{ status?: string }>;
+          auditTrail?: unknown[];
+        };
+        env.locked = true;
+        env.status = "locked";
+        env.approvalStatus = "Approved";
+        env.approvalTimestamp = new Date().toISOString();
+        if (Array.isArray(env.signatures)) {
+          env.signatures = env.signatures.map((s) => ({
+            ...s,
+            status: "locked",
+          }));
+        }
+        if (Array.isArray(env.auditTrail)) {
+          env.auditTrail.push(
+            {
+              id: `aud_${Date.now()}`,
+              action: "approval_completed",
+              user: input.reviewedBy,
+              at: new Date().toISOString(),
+              detail: "Legal Approved",
+            },
+            {
+              id: `aud_${Date.now() + 1}`,
+              action: "moved_to_finance_review",
+              user: input.reviewedBy,
+              at: new Date().toISOString(),
+              detail: "Moved to Finance Review — Finance queue activated",
+            },
+          );
+        }
+        body.esign_envelope = JSON.stringify(env);
+      } catch {
+        /* keep prior envelope */
+      }
+    }
+  } else {
+    body.workflow_state = LDR_WORKFLOW_STATE.REJECTED;
+    body.current_owner = LDR_OWNERS.NONE;
+    body.next_approver = LDR_OWNERS.NONE;
+    if (existing.esign_envelope) {
+      try {
+        const env = JSON.parse(existing.esign_envelope) as {
+          auditTrail?: unknown[];
+          approvalStatus?: string;
+        };
+        if (Array.isArray(env.auditTrail)) {
+          env.auditTrail.push({
+            id: `aud_${Date.now()}`,
+            action: "document_rejected",
+            user: input.reviewedBy,
+            at: new Date().toISOString(),
+          });
+        }
+        env.approvalStatus = "Rejected";
+        body.esign_envelope = JSON.stringify(env);
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
-  const updated = await erpFetch<LegalDocumentRecord>(
+  await erpFetch<LegalDocumentRecord>(
     cfg,
     `resource/${encodeURIComponent(DOCTYPE)}/${encodeURIComponent(name)}`,
-    { method: "PUT", body }
+    { method: "PUT", body },
   );
 
-  // eslint-disable-next-line no-console
-  console.log(`[legal-review] ${input.status} ${name} by ${input.reviewedBy}`);
-  return updated;
+  // Re-read from ERPNext — never trust a silent field drop.
+  let verified = await getByName(cfg, name);
+
+  if (input.status === "Approved") {
+    if (verified.review_status !== LEGAL_REVIEW_STATUS.APPROVED) {
+      throw new LegalReviewError(
+        "Legal approval did not persist review_status=Approved on Legal Document Review.",
+        500,
+      );
+    }
+
+    const handoffOk =
+      verified.finance_status === FINANCE_REVIEW_STATUS.PENDING &&
+      verified.workflow_state === LDR_WORKFLOW_STATE.FINANCE_REVIEW;
+
+    if (!handoffOk) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[legal-review] Finance handoff incomplete after approve on ${name}; retrying`,
+        {
+          finance_status: verified.finance_status,
+          workflow_state: verified.workflow_state,
+          current_owner: verified.current_owner,
+          next_approver: verified.next_approver,
+        },
+      );
+      // Force schema again (cache may have been stale) and rewrite handoff fields.
+      schemaEnsurePromise = null;
+      await ensureLegalDocumentReviewSchema(cfg);
+      await erpFetch(
+        cfg,
+        `resource/${encodeURIComponent(DOCTYPE)}/${encodeURIComponent(name)}`,
+        {
+          method: "PUT",
+          body: {
+            finance_status: FINANCE_REVIEW_STATUS.PENDING,
+            workflow_state: LDR_WORKFLOW_STATE.FINANCE_REVIEW,
+            current_owner: LDR_OWNERS.FINANCE,
+            next_approver: LDR_OWNERS.FINANCE,
+          },
+        },
+      );
+      verified = await getByName(cfg, name);
+    }
+
+    if (verified.finance_status !== FINANCE_REVIEW_STATUS.PENDING) {
+      throw new LegalReviewError(
+        "Legal approval saved, but Finance handoff failed: finance_status was not set to Pending. " +
+          "Ensure the Legal Document Review DocType has a finance_status Select field " +
+          `(options: ${FINANCE_REVIEW_STATUS.PENDING}/${FINANCE_REVIEW_STATUS.APPROVED}/${FINANCE_REVIEW_STATUS.REJECTED}). ` +
+          "Run: node scripts/setup-legal-review-doctype.mjs",
+        500,
+      );
+    }
+
+    if (verified.workflow_state !== LDR_WORKFLOW_STATE.FINANCE_REVIEW) {
+      throw new LegalReviewError(
+        "Legal approval saved, but workflow_state was not set to Finance Review. " +
+          `Got: ${verified.workflow_state ?? "(empty)"}.`,
+        500,
+      );
+    }
+
+    await syncRfqAfterLegalApprove(
+      cfg,
+      verified.rfq_name,
+      input.reviewedBy,
+      approvedOn,
+    );
+
+    // eslint-disable-next-line no-console
+    console.log(
+      `[legal-review] Approved ${name} by ${input.reviewedBy} → Finance Pending ` +
+        `(workflow=${verified.workflow_state}, owner=${verified.current_owner}, next=${verified.next_approver})`,
+    );
+  } else {
+    // eslint-disable-next-line no-console
+    console.log(`[legal-review] Rejected ${name} by ${input.reviewedBy}`);
+  }
+
+  return verified;
 }
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -395,7 +930,10 @@ export async function resubmitLegalReview(
       method: "PUT",
       body: {
         review_status: "Pending",
-        workflow_state: "Pending",
+        workflow_state: LDR_WORKFLOW_STATE.PENDING_REVIEW,
+        finance_status: "",
+        current_owner: LDR_OWNERS.LEGAL,
+        next_approver: LDR_OWNERS.LEGAL,
         approved_by: "",
         approved_on: "",
         legal_comments: `Resubmitted by ${resubmittedBy}: ${remark}`,
@@ -446,6 +984,8 @@ export async function decideFinanceReview(
     );
   }
 
+  await ensureLegalDocumentReviewSchema(cfg);
+
   const updated = await erpFetch<LegalDocumentRecord>(
     cfg,
     `resource/${encodeURIComponent(DOCTYPE)}/${encodeURIComponent(name)}`,
@@ -456,13 +996,27 @@ export async function decideFinanceReview(
         finance_approved_by: input.reviewedBy,
         finance_approved_on: formatERPNextDatetime(new Date()),
         finance_comments: comments,
-        finance_rejection_reason: input.status === "Rejected" ? rejectionReason : "",
+        finance_rejection_reason:
+          input.status === "Rejected" ? rejectionReason : "",
+        workflow_state:
+          input.status === "Approved"
+            ? LDR_WORKFLOW_STATE.COMPLETED
+            : LDR_WORKFLOW_STATE.REJECTED,
+        current_owner:
+          input.status === "Approved" ? LDR_OWNERS.PROCUREMENT : LDR_OWNERS.NONE,
+        next_approver:
+          input.status === "Approved" ? LDR_OWNERS.PROCUREMENT : LDR_OWNERS.NONE,
       },
     }
   );
 
   // eslint-disable-next-line no-console
-  console.log(`[legal-review] Finance ${input.status} ${name} by ${input.reviewedBy}`);
+  console.log(`[legal-review] Finance ${input.status} ${name} by ${input.reviewedBy}`, {
+    workflow_state: updated.workflow_state,
+    finance_status: updated.finance_status,
+    current_owner: updated.current_owner,
+    next_approver: updated.next_approver,
+  });
   return updated;
 }
 
@@ -499,6 +1053,9 @@ export async function resubmitFinanceReview(
         finance_approved_on: "",
         finance_comments: `Resubmitted by ${resubmittedBy}: ${remark}`,
         finance_rejection_reason: "",
+        workflow_state: LDR_WORKFLOW_STATE.FINANCE_REVIEW,
+        current_owner: LDR_OWNERS.FINANCE,
+        next_approver: LDR_OWNERS.FINANCE,
       },
     }
   );
@@ -525,6 +1082,12 @@ const ALLOWED_FLAG_FIELDS = new Set([
   "insurance_note",
   "insurance_viewed",
   "insurance_approved",
+  "esign_envelope",
+  "esign_status",
+  "esign_document_hash",
+  "esign_signed_file_url",
+  "esign_signed_by",
+  "esign_signed_on",
 ]);
 
 export async function updateLegalDocumentFlags(
@@ -543,9 +1106,12 @@ export async function updateLegalDocumentFlags(
     throw new LegalReviewError("No updatable fields provided.", 400);
   }
 
+  // Datetime columns (e.g. esign_signed_on) must never receive ISO-8601.
+  const sanitized = sanitizeErpPayloadDates(safeUpdates);
+
   return erpFetch<LegalDocumentRecord>(
     cfg,
     `resource/${encodeURIComponent(DOCTYPE)}/${encodeURIComponent(name)}`,
-    { method: "PUT", body: safeUpdates }
+    { method: "PUT", body: sanitized }
   );
 }

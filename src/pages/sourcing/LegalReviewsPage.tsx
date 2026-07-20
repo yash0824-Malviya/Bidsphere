@@ -548,14 +548,14 @@ function MetricChip({
 }
 
 function ReviewStatusBadge({ status }: { status: LegalReviewStatus }) {
-  const Icon = STATUS_ICON[status];
-  const tone = STATUS_TONE[status];
+  const Icon = STATUS_ICON[status] ?? Clock;
+  const tone = STATUS_TONE[status] ?? "bg-neutral-100 text-neutral-700";
   return (
     <span
       className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-bold ${tone}`}
     >
       <Icon className="h-3 w-3" />
-      {status === "Pending Legal Review" ? "Pending" : status}
+      {status === "Pending Legal Review" ? "Pending" : status || "—"}
     </span>
   );
 }

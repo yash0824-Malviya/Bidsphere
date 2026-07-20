@@ -15,16 +15,22 @@ import {
   fetchProcurementQueue,
   getMaterialRequestWorkflowStatus,
   getMaterialRequestProcurementType,
-  listMaterialRequestsWorkflow,
+  getMaterialRequestMode,
+  listSubmittedMaterialRequestsCached,
   parseForwardedItemsFromMr,
   type MaterialRequestWorkflowRecord,
 } from "./materialRequestWorkflow";
+import { hydrateEngineeringDocsFromChild } from "../utils/materialRequestItemFiles";
 import {
   batchRFQToPOMap,
   fetchErpNextRFQs,
   type ErpRFQRow,
 } from "./legalReviews";
-import type { MaterialRequestProcurementType } from "../types/materialRequestWorkflow";
+import { timedDashApi } from "./dashboardPerf";
+import type {
+  MaterialRequestMode,
+  MaterialRequestProcurementType,
+} from "../types/materialRequestWorkflow";
 
 /* ─── stage model ────────────────────────────────────────────────────────── */
 
@@ -54,6 +60,10 @@ export interface ForwardedItemLine {
   remaining_qty: number;
   uom: string;
   warehouse: string;
+  /** Optional engineering docs from Material Request Item (read-only). */
+  part_name?: string;
+  drawing_2d_url?: string;
+  attachments?: import("../utils/materialRequestItemFiles").EngineeringAttachment[];
 }
 
 export interface ForwardedHistoryRow {
@@ -62,6 +72,7 @@ export interface ForwardedHistoryRow {
   warehouse: string;
   priority: string;
   procurementType: MaterialRequestProcurementType;
+  requestMode: MaterialRequestMode;
   forwardedOn: string;
   forwardedBy: string;
   requestedBy: string;
@@ -103,14 +114,8 @@ function linkedRfqOf(mr: MaterialRequestWorkflowRecord): string | null {
  */
 function isForwarded(mr: MaterialRequestWorkflowRecord): boolean {
   const status = getMaterialRequestWorkflowStatus(mr);
-  // "Procurement Required" IS a forwarded state — Warehouse recording a
-  // shortage is the single action that sends a request to Procurement (see
-  // `PROCUREMENT_QUEUE_STATUSES`); there is no separate manual "send" step.
-  if (
-    status === "Procurement Required" ||
-    status === "Forwarded to Procurement" ||
-    status === "RFQ Created"
-  )
+  // Forwarded History = actually handed to Procurement (not warehouse-only shortage).
+  if (status === "Forwarded to Procurement" || status === "RFQ Created")
     return true;
   if (Number(mr.custom_forwarded_to_procurement) === 1) return true;
   if (linkedRfqOf(mr)) return true;
@@ -136,35 +141,46 @@ function parseForwardedMeta(mr: MaterialRequestWorkflowRecord): {
   return { by: mr.modified_by || "", at: mr.modified || mr.creation || "" };
 }
 
-function buildItemLines(mr: MaterialRequestWorkflowRecord): ForwardedItemLine[] {
+async function buildItemLines(
+  mr: MaterialRequestWorkflowRecord,
+): Promise<ForwardedItemLine[]> {
   const forwarded = parseForwardedItemsFromMr(mr);
   if (forwarded.length > 0) {
-    return forwarded.map((fi) => {
-      const remaining = fi.forward_qty ?? fi.shortage_qty ?? 0;
-      const requested = fi.requested_qty ?? remaining;
-      return {
-        item_code: fi.item_code,
-        item_name: fi.item_name ?? fi.item_code,
-        requested_qty: requested,
-        available_qty: fi.issued_qty ?? Math.max(0, requested - remaining),
-        remaining_qty: remaining,
-        uom: fi.uom ?? "Nos",
-        warehouse: fi.warehouse ?? "—",
-      };
-    });
+    return Promise.all(
+      forwarded.map(async (fi) => {
+        const remaining = fi.forward_qty ?? fi.shortage_qty ?? 0;
+        const requested = fi.requested_qty ?? remaining;
+        const mrItem = (mr.items ?? []).find((i) => i.item_code === fi.item_code);
+        const eng = await hydrateEngineeringDocsFromChild(mrItem);
+        return {
+          item_code: fi.item_code,
+          item_name: fi.item_name ?? fi.item_code,
+          requested_qty: requested,
+          available_qty: fi.issued_qty ?? Math.max(0, requested - remaining),
+          remaining_qty: remaining,
+          uom: fi.uom ?? "Nos",
+          warehouse: fi.warehouse ?? "—",
+          ...eng,
+        };
+      }),
+    );
   }
-  return (mr.items ?? []).map((it) => {
-    const requested = Number(it.qty) || 0;
-    return {
-      item_code: it.item_code,
-      item_name: it.item_name ?? it.item_code,
-      requested_qty: requested,
-      available_qty: 0,
-      remaining_qty: requested,
-      uom: it.uom ?? "Nos",
-      warehouse: it.warehouse ?? "—",
-    };
-  });
+  return Promise.all(
+    (mr.items ?? []).map(async (it) => {
+      const requested = Number(it.qty) || 0;
+      const eng = await hydrateEngineeringDocsFromChild(it);
+      return {
+        item_code: it.item_code,
+        item_name: it.item_name ?? it.item_code,
+        requested_qty: requested,
+        available_qty: 0,
+        remaining_qty: requested,
+        uom: it.uom ?? "Nos",
+        warehouse: it.warehouse ?? "—",
+        ...eng,
+      };
+    }),
+  );
 }
 
 /* ─── RFQ status + stage derivation ──────────────────────────────────────── */
@@ -216,26 +232,95 @@ export async function fetchForwardedActiveQueue(): Promise<
   return queue.filter((mr) => {
     if (mr.custom_linked_rfq) return false;
     const status = getMaterialRequestWorkflowStatus(mr);
-    return status === "Procurement Required" || status === "Forwarded to Procurement";
+    return status === "Forwarded to Procurement";
   });
 }
 
 /* ─── forwarded history (every forwarded MR, never deleted) ──────────────── */
 
+async function toHistoryRow(
+  mr: MaterialRequestWorkflowRecord,
+  rfqMap: Map<string, ErpRFQRow>,
+  poMap: Map<string, string>,
+  includeItems: boolean,
+): Promise<ForwardedHistoryRow> {
+  const rfqNumber = linkedRfqOf(mr);
+  const rfq = rfqNumber ? rfqMap.get(rfqNumber) : undefined;
+  const poNumber = rfqNumber ? (poMap.get(rfqNumber) ?? null) : null;
+  const meta = parseForwardedMeta(mr);
+  const items = includeItems ? await buildItemLines(mr) : [];
+  return {
+    mrNumber: mr.name,
+    department: mr.custom_department || mr.department || "—",
+    warehouse:
+      items.find((i) => i.warehouse && i.warehouse !== "—")?.warehouse ?? "—",
+    priority: mr.custom_priority || "Medium",
+    procurementType: getMaterialRequestProcurementType(mr),
+    requestMode: getMaterialRequestMode(mr),
+    forwardedOn: meta.at,
+    forwardedBy: meta.by,
+    requestedBy: mr.custom_requested_by || mr.owner || "—",
+    requiredDate: mr.schedule_date || "",
+    rfqNumber,
+    rfqStatus: rfqStatusLabel(rfq),
+    rfqCreatedOn: rfq?.creation ?? null,
+    poNumber,
+    currentStage: deriveStage(mr, rfq, poNumber),
+    lastUpdated: mr.modified || "",
+    status: getMaterialRequestWorkflowStatus(mr),
+    totalItems: items.length,
+    remainingQty: items.reduce((s, i) => s + i.remaining_qty, 0),
+    items,
+  };
+}
+
+/**
+ * Dashboard Action Center counters — NO per-MR get_doc hydration.
+ * Uses the shared submitted-MR list + bulk RFQ/PO enrichment only.
+ */
+export async function fetchForwardedDashboardCounters(): Promise<ForwardedCounters> {
+  return timedDashApi("Action Center · forwarded counters", async () => {
+    const all = await listSubmittedMaterialRequestsCached(500);
+    const forwardedLite = all.filter(isForwarded);
+    const rfqNames = [
+      ...new Set(
+        forwardedLite.map(linkedRfqOf).filter((n): n is string => Boolean(n)),
+      ),
+    ];
+    const [rfqMap, poMap] = await Promise.all([
+      rfqNames.length > 0
+        ? timedDashApi("Action Center · RFQ map", () =>
+            fetchErpNextRFQs().catch(() => new Map<string, ErpRFQRow>()),
+          )
+        : Promise.resolve(new Map<string, ErpRFQRow>()),
+      rfqNames.length > 0
+        ? timedDashApi("Action Center · PO map", () =>
+            batchRFQToPOMap(rfqNames).catch(() => new Map<string, string>()),
+          )
+        : Promise.resolve(new Map<string, string>()),
+    ]);
+
+    const rows = await Promise.all(
+      forwardedLite.map((mr) => toHistoryRow(mr, rfqMap, poMap, false)),
+    );
+    return buildForwardedCounters(rows);
+  });
+}
+
 export async function fetchForwardedHistory(): Promise<ForwardedHistoryRow[]> {
   console.log("[Procurement] Loading forwarded history…");
 
-  const all = await listMaterialRequestsWorkflow({
-    limit: 500,
-    docstatus: 1,
-  }).catch(() => [] as MaterialRequestWorkflowRecord[]);
+  const all = await listSubmittedMaterialRequestsCached(500);
 
   const forwardedLite = all.filter(isForwarded);
 
-  // Hydrate the (bounded) forwarded subset so Warehouse + line items are exact,
-  // even for direct forwards that don't embed an items snapshot in remarks.
-  const forwarded = await Promise.all(
-    forwardedLite.map(async (doc) => {
+  // Hydrate a bounded subset for the history pages (items / warehouse).
+  // Cap keeps the N× get_doc fan-out from blocking the UI on large tenants.
+  const HYDRATE_CAP = 80;
+  const toHydrate = forwardedLite.slice(0, HYDRATE_CAP);
+  const rest = forwardedLite.slice(HYDRATE_CAP);
+  const hydrated = await Promise.all(
+    toHydrate.map(async (doc) => {
       try {
         return await fetchMaterialRequestWorkflow(doc.name);
       } catch {
@@ -243,6 +328,7 @@ export async function fetchForwardedHistory(): Promise<ForwardedHistoryRow[]> {
       }
     }),
   );
+  const forwarded = [...hydrated, ...rest];
 
   // Batch-enrich: one RFQ list fetch + one PO map for every linked RFQ.
   const rfqNames = [
@@ -259,34 +345,9 @@ export async function fetchForwardedHistory(): Promise<ForwardedHistoryRow[]> {
       : Promise.resolve(new Map<string, string>()),
   ]);
 
-  const rows = forwarded.map((mr) => {
-    const rfqNumber = linkedRfqOf(mr);
-    const rfq = rfqNumber ? rfqMap.get(rfqNumber) : undefined;
-    const poNumber = rfqNumber ? (poMap.get(rfqNumber) ?? null) : null;
-    const meta = parseForwardedMeta(mr);
-    const items = buildItemLines(mr);
-    return {
-      mrNumber: mr.name,
-      department: mr.custom_department || mr.department || "—",
-      warehouse: items.find((i) => i.warehouse && i.warehouse !== "—")?.warehouse ?? "—",
-      priority: mr.custom_priority || "Medium",
-      procurementType: getMaterialRequestProcurementType(mr),
-      forwardedOn: meta.at,
-      forwardedBy: meta.by,
-      requestedBy: mr.custom_requested_by || mr.owner || "—",
-      requiredDate: mr.schedule_date || "",
-      rfqNumber,
-      rfqStatus: rfqStatusLabel(rfq),
-      rfqCreatedOn: rfq?.creation ?? null,
-      poNumber,
-      currentStage: deriveStage(mr, rfq, poNumber),
-      lastUpdated: mr.modified || "",
-      status: getMaterialRequestWorkflowStatus(mr),
-      totalItems: items.length,
-      remainingQty: items.reduce((s, i) => s + i.remaining_qty, 0),
-      items,
-    } satisfies ForwardedHistoryRow;
-  });
+  const rows = await Promise.all(
+    forwarded.map((mr) => toHistoryRow(mr, rfqMap, poMap, true)),
+  );
 
   rows.sort((a, b) => (b.forwardedOn || "").localeCompare(a.forwardedOn || ""));
 

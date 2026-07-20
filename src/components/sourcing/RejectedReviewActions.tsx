@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { Eye, Pencil, RotateCcw } from "lucide-react";
 
+import { invalidateApprovalWorkflow } from "../../api/approvalWorkflow";
 import { resubmitFinanceReview } from "../../api/financeReviews";
 import { resubmitLegalReview } from "../../api/legalReviews";
 import { useAuthStore } from "../../store/authStore";
@@ -35,8 +36,7 @@ export default function RejectedReviewActions({
           ? "RFQ resubmitted for legal review"
           : "RFQ resubmitted for finance review"
       );
-      queryClient.invalidateQueries({ queryKey: ["legal-reviews"] });
-      queryClient.invalidateQueries({ queryKey: ["finance-reviews-all"] });
+      invalidateApprovalWorkflow(queryClient);
       queryClient.invalidateQueries({ queryKey: ["rfq", rfqName] });
       onResubmitted?.();
     },

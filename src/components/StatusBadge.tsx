@@ -100,9 +100,17 @@ const STATUS_TONES: Record<string, StatusTone> = {
 interface Props {
   status?: string | null;
   tone?: StatusTone;
+  /** Visual size — use `lg` for page hero status on detail screens. */
+  size?: "sm" | "md" | "lg";
 }
 
-export default memo(function StatusBadge({ status, tone }: Props) {
+const SIZE_CLASSES = {
+  sm: "px-2 py-0.5 text-[10px]",
+  md: "px-2.5 py-0.5 text-xs",
+  lg: "px-3.5 py-1.5 text-sm font-semibold shadow-sm ring-1 ring-inset ring-black/5",
+} as const;
+
+export default memo(function StatusBadge({ status, tone, size = "md" }: Props) {
   const { t } = useTranslation();
   const label = status?.trim() || "—";
   const resolvedTone: StatusTone = tone ?? STATUS_TONES[label] ?? "neutral";
@@ -110,7 +118,7 @@ export default memo(function StatusBadge({ status, tone }: Props) {
 
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${classes}`}
+      className={`inline-flex items-center rounded-full font-medium ${SIZE_CLASSES[size]} ${classes}`}
     >
       {translateStatus(t, label)}
     </span>

@@ -7,37 +7,37 @@ import type { ShipmentMetrics } from "../../utils/dashboardUtils";
 import { formatCurrencyCompact } from "../../utils/paymentUtils";
 
 interface Props {
-  metrics: ShipmentMetrics;
+  metrics: ShipmentMetrics | null | undefined;
   loading?: boolean;
 }
 
 function ShipmentLogisticsWidget({ metrics, loading }: Props) {
-  if (loading) {
+  if (loading || !metrics) {
     return <Skeleton className="h-[148px] w-full rounded-lg" />;
   }
 
   const cells = [
     {
       label: "In Transit",
-      value: metrics.inTransit.toLocaleString(),
+      value: (metrics.inTransit ?? 0).toLocaleString(),
       icon: Truck,
       tone: "text-primary-600",
     },
     {
       label: "Delayed",
-      value: metrics.delayed.toLocaleString(),
+      value: (metrics.delayed ?? 0).toLocaleString(),
       icon: AlertTriangle,
-      tone: metrics.delayed > 0 ? "text-red-600" : "text-neutral-600",
+      tone: (metrics.delayed ?? 0) > 0 ? "text-red-600" : "text-neutral-600",
     },
     {
       label: "Expected Today",
-      value: metrics.expectedToday.toLocaleString(),
+      value: (metrics.expectedToday ?? 0).toLocaleString(),
       icon: Package,
       tone: "text-primary",
     },
     {
       label: "Freight Cost Est.",
-      value: formatCurrencyCompact(metrics.freightCostEstimate),
+      value: formatCurrencyCompact(metrics.freightCostEstimate ?? 0),
       icon: Ship,
       tone: "text-primary",
     },

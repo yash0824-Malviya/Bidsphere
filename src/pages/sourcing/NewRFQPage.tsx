@@ -33,6 +33,11 @@ import {
   buildRFQPrefillFromMaterialRequest,
   createRFQFromMaterialRequest,
 } from "../../api/createRFQFromMaterialRequest";
+import {
+  findRfqNameForMaterialRequest,
+  getLinkedRfqName,
+  fetchMaterialRequestWorkflow,
+} from "../../api/materialRequestWorkflow";
 import { getRFQTemplates, getRFQTemplate } from "../../api/rfqTemplates";
 import { incrementLocalTemplateUsage } from "../../api/rfqTemplateStorage";
 import {
@@ -51,6 +56,10 @@ import RFQItemLineRow, {
   type RFQItemLine,
 } from "../../components/RFQItemLineRow";
 import StatusBadge from "../../components/StatusBadge";
+import {
+  Drawing2dCell,
+  PartNameCell,
+} from "../../components/warehouse/EngineeringDocCells";
 import { ErpNextDatePicker } from "../../components/ui";
 import { useDebounce } from "../../hooks/useDebounce";
 import { ownerTitleFromEmail } from "../../config/roles";
@@ -59,6 +68,7 @@ import type { Supplier } from "../../types/erpnext";
 import { isoDateOffset, todayIso, formatCurrency } from "../../utils/format";
 import { assertERPNextDate } from "../../utils/erpNextDate";
 import { generateId } from "../../utils/id";
+import { pickEngineeringDocs } from "../../utils/materialRequestItemFiles";
 
 type ItemRow = RFQItemLine;
 
@@ -270,6 +280,21 @@ export default function NewRFQPage() {
 
     (async () => {
       try {
+        // Block duplicate RFQ creation when navigating with ?mr= after an RFQ exists.
+        const mrDoc = await fetchMaterialRequestWorkflow(mrParam);
+        const existing =
+          getLinkedRfqName(mrDoc) ||
+          (await findRfqNameForMaterialRequest(mrParam));
+        if (existing) {
+          toast.error(
+            `An RFQ already exists for this Material Request (${existing}).`,
+          );
+          navigate(`/sourcing/rfq/${encodeURIComponent(existing)}`, {
+            replace: true,
+          });
+          return;
+        }
+
         const prefill = await buildRFQPrefillFromMaterialRequest(mrParam);
         const dept = prefill.department?.trim() || "General";
         // Professional title — no "RFQ from MAT-MR-xxxx".
@@ -287,15 +312,30 @@ export default function NewRFQPage() {
         });
         if (prefill.items.length > 0) {
           setItems(
-            prefill.items.map((row) => ({
-              id: generateId(),
-              item_group: row.item_group || "Unknown",
-              item_code: row.item_code,
-              item_name: row.item_name ?? row.item_code,
-              description: row.description ?? "",
-              qty: row.qty,
-              uom: row.uom ?? "Nos",
-            }))
+            prefill.items.map((row) => {
+              const docs = pickEngineeringDocs({
+                ...row,
+                attachments: row.attachments,
+              });
+              const first = docs.attachments[0];
+              return {
+                id: generateId(),
+                item_group: row.item_group || "Unknown",
+                item_code: row.item_code,
+                item_name: row.item_name ?? row.item_code,
+                description: row.description ?? "",
+                qty: row.qty,
+                uom: row.uom ?? "Nos",
+                part_name: docs.part_name ?? row.custom_part_name,
+                drawing_2d_url: docs.drawing_2d_url ?? row.custom_2d_drawing,
+                attachments: docs.attachments,
+                attachment_name:
+                  row.attachment_name ?? first?.fileName,
+                attachment_url: row.attachment_url ?? first?.fileUrl,
+                attachment_type:
+                  row.attachment_type ?? first?.fileType,
+              };
+            }),
           );
         }
         toast.success(`Items loaded from Material Request ${mrParam}`);
@@ -1164,7 +1204,7 @@ function Step2({
 
       <div className="overflow-hidden rounded-xl border border-neutral-200 shadow-sm">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] text-sm">
+          <table className="w-full min-w-[1280px] text-sm">
             <thead>
               <tr className="border-b border-neutral-200 bg-neutral-50/90 text-left text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
                 <th className="px-3 py-3 w-12">#</th>
@@ -1179,6 +1219,8 @@ function Step2({
                   Qty <span className="text-danger-500">*</span>
                 </th>
                 <th className="px-3 py-3 w-[90px] text-center">UOM</th>
+                <th className="px-3 py-3 min-w-[140px]">Part Name</th>
+                <th className="px-3 py-3 min-w-[120px]">Attachments</th>
                 <th className="px-3 py-3 w-12" />
               </tr>
             </thead>
@@ -1414,13 +1456,15 @@ function Step4({
       <div>
         <h4 className="mb-2 text-sm font-semibold text-neutral-800">Items</h4>
         <div className="overflow-x-auto rounded-xl border border-neutral-200">
-          <table className="w-full min-w-[520px] text-sm">
+          <table className="w-full min-w-[760px] text-sm">
             <thead>
               <tr className="border-b border-neutral-200 bg-neutral-50 text-left text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
                 <th className="px-3 py-2">Item</th>
                 <th className="px-3 py-2">Group</th>
                 <th className="px-3 py-2 text-right">Qty</th>
                 <th className="px-3 py-2 text-center">UOM</th>
+                <th className="px-3 py-2">Part Name</th>
+                <th className="px-3 py-2">Attachments</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-100">
@@ -1437,6 +1481,15 @@ function Step4({
                   <td className="px-3 py-2 text-neutral-600">{row.item_group || "—"}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{row.qty}</td>
                   <td className="px-3 py-2 text-center text-neutral-600">{row.uom}</td>
+                  <td className="px-3 py-2">
+                    <PartNameCell value={row.part_name} />
+                  </td>
+                  <td className="px-3 py-2">
+                    <Drawing2dCell
+                      url={row.drawing_2d_url}
+                      attachments={row.attachments}
+                    />
+                  </td>
                 </tr>
               ))}
             </tbody>

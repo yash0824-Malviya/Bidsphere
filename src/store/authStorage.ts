@@ -186,4 +186,12 @@ export function clearAllAuthStorage(): void {
   sessionStorage.removeItem(MFA_REDIRECT_KEY);
   sessionStorage.removeItem(DEMO_OTP_SESSION_KEY);
   sessionStorage.removeItem(SESSION_PROOF_KEY);
+  // Clear internal BidSphere RBAC tokens only. Supplier Portal JWTs live in a
+  // dedicated key so Finance logout does not break an active supplier session.
+  try {
+    sessionStorage.removeItem("bidsphere-access-token");
+    localStorage.removeItem("bidsphere-access-token-remember");
+  } catch {
+    /* ignore */
+  }
 }

@@ -126,8 +126,16 @@ export default function OtpVerificationPage() {
       setCountdownMs(Math.max(0, result.expiresAt - Date.now()));
       setOtpSessionReady(true);
       // eslint-disable-next-line no-console
-      console.log("[MFA] OTP session issued", result);
-      toast.success(`Verification code sent to ${email}`);
+      console.log("[MFA] OTP session issued", {
+        ...result,
+        demo: isDemoMfaEnabled(),
+      });
+      // Demo MFA never emails — avoid implying a mailbox delivery.
+      toast.success(
+        isDemoMfaEnabled()
+          ? "Enter your verification code to continue"
+          : `Verification code sent to ${email}`,
+      );
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Could not send verification code.";
@@ -324,16 +332,21 @@ export default function OtpVerificationPage() {
       setSuccess(true);
       toast.success("Identity verified — welcome back!");
 
-      const user = useAuthStore.getState().user;
+      // During MFA pending, authStore.user is null — use the pending user.
+      const pendingUser =
+        useAuthStore.getState().mfaPending?.user ??
+        getActiveMfaPending()?.user ??
+        null;
+      const role = pendingUser?.role;
       const saved = getMfaRedirectPath();
       const target =
-        user?.role && canAccessPath(user.role, saved)
+        role && canAccessPath(role, saved)
           ? saved
-          : user?.role
-            ? getRoleHome(user.role)
+          : role
+            ? getRoleHome(role)
             : "/dashboard";
 
-      if (user?.role) prefetchDashboardForRole(user.role);
+      if (role) prefetchDashboardForRole(role);
 
       window.setTimeout(() => {
         completeMfaLogin();

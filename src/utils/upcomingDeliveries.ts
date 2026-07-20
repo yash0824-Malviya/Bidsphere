@@ -4,8 +4,13 @@
  * Shared by the GRN list page (Upcoming Deliveries section), the warehouse
  * dashboard receiving KPIs, and the warehouse notification center so the
  * urgency rules stay consistent across the whole application.
+ *
+ * Expected delivery prefers supplier-confirmed ETA from PO Shipment SSoT
+ * over the original PO schedule_date.
  */
 import { differenceInCalendarDays } from "date-fns";
+
+import type { PODeliveryStatus } from "../api/poDeliveryWorkflow";
 
 export type DeliveryUrgency =
   | "overdue"
@@ -18,19 +23,35 @@ export interface IncomingPORow {
   name: string;
   supplier?: string;
   supplier_name?: string;
-  /** Expected delivery date (PO header `schedule_date`). */
+  /** Original PO header schedule_date (buyer required date). */
   schedule_date?: string;
   grand_total?: number;
   currency?: string;
   status?: string;
   per_received?: number;
   transaction_date?: string;
+  /** Supplier-confirmed ETA from PO Shipment (preferred when present). */
+  expected_delivery_date?: string;
+  vehicle_number?: string;
+  tracking_number?: string;
+  shipping_notes?: string;
+  dispatch_date?: string;
+  shipment_status?: PODeliveryStatus | string;
+  supplier_status?: string;
+  ready_for_grn?: boolean;
+  warehouse_visible?: boolean;
+  /** Set when a submitted GRN already exists for this PO. */
+  grn_name?: string;
+  /** Default warehouse hint when available on PO items. */
+  set_warehouse?: string;
 }
 
 export interface UpcomingDelivery extends IncomingPORow {
   /** Calendar days until expected delivery; negative = overdue, null = no date. */
   daysRemaining: number | null;
   urgency: DeliveryUrgency;
+  /** Single date shown in warehouse UI (supplier ETA || schedule_date). */
+  displayExpectedDate?: string;
 }
 
 export interface DeliveryUrgencyMeta {
@@ -97,6 +118,14 @@ export function formatDaysRemaining(daysRemaining: number | null): string {
   return `In ${daysRemaining} days`;
 }
 
+/** Prefer supplier-confirmed ETA; fall back to PO schedule_date. */
+export function resolveExpectedDeliveryDate(row: IncomingPORow): string | undefined {
+  const eta = (row.expected_delivery_date || "").trim();
+  if (eta) return eta;
+  const schedule = (row.schedule_date || "").trim();
+  return schedule || undefined;
+}
+
 /**
  * Map raw open POs to upcoming deliveries, sorted by nearest delivery date
  * first (most urgent / overdue at the top). POs without a delivery date are
@@ -107,9 +136,11 @@ export function buildUpcomingDeliveries(
 ): UpcomingDelivery[] {
   return rows
     .map((row) => {
-      const daysRemaining = daysUntil(row.schedule_date);
+      const displayExpectedDate = resolveExpectedDeliveryDate(row);
+      const daysRemaining = daysUntil(displayExpectedDate);
       return {
         ...row,
+        displayExpectedDate,
         daysRemaining,
         urgency: resolveDeliveryUrgency(daysRemaining),
       };
@@ -131,24 +162,94 @@ export interface ReceivingKpis {
   pendingReceipts: number;
   incomingThisWeek: number;
   overdueDeliveries: number;
+  inTransit: number;
+  arrivingToday: number;
+  deliveredToday: number;
+  delayedShipments: number;
 }
 
 /** Receiving KPI counts derived from the upcoming deliveries list. */
 export function computeReceivingKpis(
-  deliveries: UpcomingDelivery[]
+  deliveries: UpcomingDelivery[],
+  opts?: { serverToday?: string; completedGrnTodayCount?: number },
 ): ReceivingKpis {
   let incomingThisWeek = 0;
   let overdueDeliveries = 0;
+  let inTransit = 0;
+  let arrivingToday = 0;
+  let delayedShipments = 0;
 
   for (const d of deliveries) {
+    const status = String(d.shipment_status || "");
+    if (status === "In Transit") inTransit += 1;
+
     if (d.daysRemaining === null) continue;
-    if (d.daysRemaining < 0) overdueDeliveries += 1;
-    else if (d.daysRemaining <= 7) incomingThisWeek += 1;
+    if (d.daysRemaining < 0) {
+      overdueDeliveries += 1;
+      if (status === "In Transit" || status === "Accepted") delayedShipments += 1;
+    } else if (d.daysRemaining === 0) {
+      arrivingToday += 1;
+    }
+    if (d.daysRemaining >= 0 && d.daysRemaining <= 7) incomingThisWeek += 1;
   }
 
   return {
     pendingReceipts: deliveries.length,
     incomingThisWeek,
     overdueDeliveries,
+    inTransit,
+    arrivingToday,
+    deliveredToday: opts?.completedGrnTodayCount ?? 0,
+    delayedShipments,
   };
+}
+
+export type ReceiveActionKind =
+  | "disabled_pending"
+  | "waiting_dispatch"
+  | "receive"
+  | "view_shipment"
+  | "view_grn";
+
+export function resolveReceiveAction(row: UpcomingDelivery): {
+  kind: ReceiveActionKind;
+  label: string;
+  disabled: boolean;
+} {
+  if (row.grn_name) {
+    return { kind: "view_grn", label: "View GRN", disabled: false };
+  }
+
+  // No PO Shipment row yet = historical / pre-workflow open PO.
+  // Still show in Upcoming/Overdue and allow GRN (shipment workflow is additive).
+  const rawStatus = row.shipment_status;
+  if (rawStatus == null || String(rawStatus).trim() === "") {
+    return { kind: "receive", label: "Receive Goods", disabled: false };
+  }
+
+  const status = String(rawStatus);
+  if (status === "Pending Acceptance" || status === "Rejected") {
+    return {
+      kind: "disabled_pending",
+      label: status === "Rejected" ? "Rejected" : "Pending Acceptance",
+      disabled: true,
+    };
+  }
+  if (status === "Accepted") {
+    return {
+      kind: "waiting_dispatch",
+      label: "Waiting for Dispatch",
+      disabled: true,
+    };
+  }
+  if (
+    status === "In Transit" ||
+    status === "Delivered" ||
+    status === "Arrived" ||
+    status === "Partially Received"
+  ) {
+    return { kind: "receive", label: "Receive Goods", disabled: false };
+  }
+  // Completed / unknown with open qty
+  return { kind: "receive", label: "Receive Goods", disabled: false };
 }

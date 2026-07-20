@@ -7,16 +7,26 @@
 
 import { apiGet, apiPost, buildListConfig, buildResourceUrl, COMPANY } from "./erpnext";
 import {
+  extractSourceDepartmentMrName,
   fetchMaterialRequestWorkflow,
+  findRfqNameForMaterialRequest,
+  getLinkedRfqName,
   getMaterialRequestWorkflowStatus,
   markMaterialRequestRfqCreated,
   parseForwardedItemsFromMr,
 } from "./materialRequestWorkflow";
+import type { EngineeringAttachment } from "../utils/materialRequestItemFiles";
 import { disableServerScriptsFor, lookupDefaultWarehouse } from "./sourcing";
 import { assertSuppliersActive } from "./supplier";
 import type { MaterialRequestWorkflowRecord } from "./materialRequestWorkflow";
 import type { RequestForQuotation } from "../types/erpnext";
 import { assertERPNextDate, todayERPNextDate } from "../utils/erpNextDate";
+import {
+  engineeringCustomFieldsForErp,
+  hydrateEngineeringDocsFromChild,
+  type EngineeringDocs,
+} from "../utils/materialRequestItemFiles";
+import type { MaterialRequestItem } from "../types/erpnext";
 
 const RFQ_DOCTYPE = "Request for Quotation";
 const RFQ_ITEM_DOCTYPE = "Request for Quotation Item";
@@ -74,6 +84,15 @@ export interface RFQFromMaterialRequestPrefill {
     schedule_date?: string;
     material_request: string;
     material_request_item?: string;
+    custom_part_name?: string;
+    custom_2d_drawing?: string;
+    custom_engineering_attachments?: string;
+    /** Hydrated URL refs for Step 2 UI (same File URLs as Department MR). */
+    attachments?: EngineeringAttachment[];
+    /** Primary attachment convenience fields (first of `attachments`). */
+    attachment_name?: string;
+    attachment_url?: string;
+    attachment_type?: string;
   }>;
 }
 
@@ -87,39 +106,126 @@ export async function buildRFQPrefillFromMaterialRequest(
   const warehouse = await lookupDefaultWarehouse(company);
 
   const forwardedItems = parseForwardedItemsFromMr(mr);
+
+  // Warehouse "Forward to Procurement" creates a Purchase MR whose items often
+  // lacked engineering fields. Resolve the Department source MR and use its
+  // item attachments (URL refs only) when the Purchase MR row is empty.
+  const sourceMrName = extractSourceDepartmentMrName(mr);
+  let sourceItemsByCode = new Map<string, MaterialRequestItem>();
+  if (sourceMrName && sourceMrName !== mr.name) {
+    try {
+      const sourceMr = await fetchMaterialRequestWorkflow(sourceMrName);
+      for (const it of sourceMr.items ?? []) {
+        if (it.item_code) sourceItemsByCode.set(it.item_code, it);
+      }
+    } catch (err) {
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[RFQ Prefill] Could not load source Department MR for attachments:",
+          sourceMrName,
+          err,
+        );
+      }
+      sourceItemsByCode = new Map();
+    }
+  }
+
+  // Hydrate engineering docs from MR Item JSON + File DocType (URL refs only).
+  async function engBundleForMrItem(
+    mrItem: (typeof mr.items)[number] | undefined,
+    itemCode?: string,
+  ): Promise<{
+    erp: ReturnType<typeof engineeringCustomFieldsForErp>;
+    hydrated: EngineeringDocs;
+  }> {
+    let hydrated: EngineeringDocs = { attachments: [] };
+    if (mrItem) {
+      hydrated = await hydrateEngineeringDocsFromChild(mrItem);
+    }
+    if (
+      hydrated.attachments.length === 0 &&
+      itemCode &&
+      sourceItemsByCode.has(itemCode)
+    ) {
+      hydrated = await hydrateEngineeringDocsFromChild(
+        sourceItemsByCode.get(itemCode),
+      );
+    }
+    const erp = engineeringCustomFieldsForErp({
+      ...(mrItem ?? {}),
+      part_name: hydrated.part_name ?? mrItem?.custom_part_name,
+      drawing_2d_url: hydrated.drawing_2d_url ?? mrItem?.custom_2d_drawing,
+      attachments: hydrated.attachments,
+    });
+    return { erp, hydrated };
+  }
+
+  function attachmentAliases(hydrated: EngineeringDocs) {
+    const first = hydrated.attachments[0];
+    if (!first) return {};
+    return {
+      attachments: hydrated.attachments,
+      attachment_name: first.fileName,
+      attachment_url: first.fileUrl,
+      attachment_type: first.fileType,
+    };
+  }
+
   const rawItems =
     forwardedItems.length > 0
-      ? forwardedItems
-          .filter((fi) => (fi.forward_qty ?? fi.shortage_qty ?? 0) > 0)
-          .map((fi) => {
-            const mrItem = (mr.items ?? []).find(
-              (i) => i.item_code === fi.item_code,
+      ? await Promise.all(
+          forwardedItems
+            .filter((fi) => (fi.forward_qty ?? fi.shortage_qty ?? 0) > 0)
+            .map(async (fi) => {
+              const mrItem = (mr.items ?? []).find(
+                (i) => i.item_code === fi.item_code,
+              );
+              const { erp, hydrated } = await engBundleForMrItem(
+                mrItem,
+                fi.item_code,
+              );
+              return {
+                item_code: fi.item_code,
+                item_name: fi.item_name || fi.item_code,
+                description:
+                  mrItem?.description || fi.item_name || fi.item_code,
+                qty:
+                  fi.forward_qty ??
+                  fi.shortage_qty ??
+                  (Number(mrItem?.qty) || 1),
+                uom: fi.uom || mrItem?.uom || "Nos",
+                warehouse: fi.warehouse || mrItem?.warehouse || warehouse,
+                schedule_date:
+                  mrItem?.schedule_date || mr.schedule_date || today,
+                material_request: mr.name,
+                material_request_item: mrItem?.name,
+                ...erp,
+                ...attachmentAliases(hydrated),
+              };
+            }),
+        )
+      : await Promise.all(
+          (mr.items ?? []).map(async (row) => {
+            const { erp, hydrated } = await engBundleForMrItem(
+              row,
+              row.item_code,
             );
             return {
-              item_code: fi.item_code,
-              item_name: fi.item_name || fi.item_code,
-              description:
-                mrItem?.description || fi.item_name || fi.item_code,
-              qty: fi.forward_qty ?? fi.shortage_qty ?? (Number(mrItem?.qty) || 1),
-              uom: fi.uom || mrItem?.uom || "Nos",
-              warehouse: fi.warehouse || mrItem?.warehouse || warehouse,
-              schedule_date:
-                mrItem?.schedule_date || mr.schedule_date || today,
+              item_code: row.item_code,
+              item_name: row.item_name,
+              description: row.description,
+              qty: Number(row.qty) || 1,
+              uom: row.uom || "Nos",
+              warehouse: row.warehouse || warehouse,
+              schedule_date: row.schedule_date || mr.schedule_date || today,
               material_request: mr.name,
-              material_request_item: mrItem?.name,
+              material_request_item: row.name,
+              ...erp,
+              ...attachmentAliases(hydrated),
             };
-          })
-      : (mr.items ?? []).map((row) => ({
-          item_code: row.item_code,
-          item_name: row.item_name,
-          description: row.description,
-          qty: Number(row.qty) || 1,
-          uom: row.uom || "Nos",
-          warehouse: row.warehouse || warehouse,
-          schedule_date: row.schedule_date || mr.schedule_date || today,
-          material_request: mr.name,
-          material_request_item: row.name,
-        }));
+          }),
+        );
 
   // Fetch Item master records from ERPNext in bulk to resolve item_group
   const itemCodes = Array.from(new Set(rawItems.map((i) => i.item_code).filter(Boolean)));
@@ -217,12 +323,24 @@ export async function createRFQFromMaterialRequest(
 ): Promise<RequestForQuotation> {
   const mr = await fetchMaterialRequestWorkflow(input.material_request);
   const status = getMaterialRequestWorkflowStatus(mr);
-  if (
-    status !== "Forwarded to Procurement" &&
-    status !== "RFQ Created"
-  ) {
+
+  // Hard stop: one MR → one RFQ (field link, remarks tag, or RFQ Item rows).
+  const existingRfq =
+    getLinkedRfqName(mr) ||
+    (await findRfqNameForMaterialRequest(mr.name));
+  if (existingRfq) {
     throw new Error(
-      `Material Request ${mr.name} must be in "Forwarded to Procurement" status before creating an RFQ.`
+      `An RFQ already exists for this Material Request (${existingRfq}).`,
+    );
+  }
+  if (status === "RFQ Created") {
+    throw new Error(
+      "An RFQ already exists for this Material Request.",
+    );
+  }
+  if (status !== "Forwarded to Procurement") {
+    throw new Error(
+      `Material Request ${mr.name} must be in "Forwarded to Procurement" status before creating an RFQ.`,
     );
   }
   if (!input.suppliers?.length) {
@@ -261,6 +379,7 @@ export async function createRFQFromMaterialRequest(
       material_request_item: item.material_request_item,
       purchase_requisition: item.material_request,
       purchase_requisition_item: item.material_request_item,
+      ...engineeringCustomFieldsForErp(item),
     })),
     suppliers: input.suppliers.map((s) => ({
       doctype: RFQ_SUPPLIER_DOCTYPE,
@@ -283,9 +402,13 @@ export async function createRFQFromMaterialRequest(
   return created;
 }
 
-/** Validate MR is eligible for RFQ creation. */
+/** Validate MR is eligible for RFQ creation (UI gate — API re-checks). */
 export function canCreateRfqFromMaterialRequest(
   mr: MaterialRequestWorkflowRecord
 ): boolean {
-  return getMaterialRequestWorkflowStatus(mr) === "Forwarded to Procurement";
+  if (getLinkedRfqName(mr)) return false;
+  const status = getMaterialRequestWorkflowStatus(mr);
+  // "RFQ Created" means an RFQ already exists — never show Create RFQ again.
+  if (status === "RFQ Created") return false;
+  return status === "Forwarded to Procurement";
 }

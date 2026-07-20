@@ -43,6 +43,10 @@ export interface Supplier extends ErpDoc {
   supplier_name: string;
   supplier_group?: string;
   supplier_type?: SupplierType;
+  /** Custom: Direct / Indirect sourcing classification */
+  custom_sourcing_type?: string;
+  /** Custom: Link → Supplier Category */
+  custom_supplier_category?: string;
   country?: string;
   default_currency?: string;
   accounts?: PartyAccount[];
@@ -130,6 +134,12 @@ export interface MaterialRequestItem extends ErpDoc {
   cost_center?: string;
   project?: string;
   expense_account?: string;
+  /** Optional engineering part label (not Item Master). */
+  custom_part_name?: string;
+  /** Attach — primary drawing file URL (legacy / first attachment). */
+  custom_2d_drawing?: string;
+  /** Long Text JSON array of EngineeringAttachment objects. */
+  custom_engineering_attachments?: string;
 }
 
 /** ERPNext "Material Request" doctype. */
@@ -193,6 +203,17 @@ export interface RFQItem extends ErpDoc {
   purchase_requisition_item?: string;
   material_request?: string;
   material_request_item?: string;
+  /** Carried from Material Request Item (read-only downstream). */
+  custom_part_name?: string;
+  custom_2d_drawing?: string;
+  custom_engineering_attachments?: string;
+  /**
+   * Convenience aliases for the primary attachment URL ref
+   * (same File as custom_2d_drawing / first JSON entry — not a new File).
+   */
+  attachment_name?: string;
+  attachment_url?: string;
+  attachment_type?: string;
 }
 
 /** ERPNext "Request for Quotation" doctype. */
@@ -574,6 +595,51 @@ export interface PurchaseReceipt extends ErpDoc {
   per_billed?: number;
   remarks?: string;
   items: PurchaseReceiptItem[];
+  /* Warehouse Digital Signature (custom fields — see setup-warehouse-esign-fields.mjs) */
+  warehouse_signed?: 0 | 1 | boolean;
+  warehouse_signed_by?: string;
+  warehouse_signature_type?: string;
+  warehouse_signature_data?: string;
+  warehouse_signature_style?: string;
+  warehouse_signature_hash?: string;
+  warehouse_signed_at?: string;
+  warehouse_ip?: string;
+  warehouse_browser?: string;
+  warehouse_device?: string;
+  warehouse_esign_envelope?: string;
+  warehouse_signer_role?: string;
+  warehouse_signer_email?: string;
+  warehouse_verification_status?: string;
+  warehouse_document_version?: string;
+  warehouse_signed_pdf_url?: string;
+  warehouse_signed_pdf_hash?: string;
+  warehouse_signature_image?: string;
+  warehouse_signature_name?: string;
+  warehouse_signature_role?: string;
+  warehouse_signature_employee_id?: string;
+  warehouse_signature_email?: string;
+  warehouse_signature_timestamp?: string;
+  warehouse_signature_ip?: string;
+  warehouse_signature_device?: string;
+  warehouse_signature_algorithm?: string;
+  warehouse_signature_version?: string;
+  warehouse_signature_verified?: 0 | 1 | boolean;
+  /** Canonical completion fields (Sign & Finalize). */
+  signed?: 0 | 1 | boolean;
+  signed_pdf_url?: string;
+  signed_pdf_file?: string;
+  signed_pdf_path?: string;
+  signed_by?: string;
+  signed_at?: string;
+  sha256_hash?: string;
+  certificate_status?: string;
+  verification_status?: string;
+  document_integrity?: string;
+  signature_image?: string;
+  /** Legacy aliases kept for older GRNs. */
+  signed_grn_pdf?: string;
+  warehouse_signature?: string;
+  warehouse_signature_time?: string;
 }
 
 /* -------------------------------------------------------------------------- */

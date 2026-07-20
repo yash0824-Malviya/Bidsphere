@@ -323,6 +323,10 @@
   },
   "supplierNav": {
     "dashboard": "Panel",
+    "profile": "Perfil",
+    "profileDetails": "Detalles del perfil",
+    "security": "Seguridad",
+    "documents": "Documentos",
     "rfqs": "Cotizaciones",
     "myRfqs": "Mis cotizaciones",
     "submittedQuotations": "Cotizaciones enviadas",
@@ -401,7 +405,7 @@
     "awarded": "Adjudicado"
   },
   "procurementType": {
-    "label": "Tipo de compra",
+    "label": "Tipo de solicitud",
     "direct": "Directa",
     "indirect": "Indirecta",
     "all": "Todas",
@@ -409,7 +413,16 @@
     "indirectProcurement": "Compra indirecta",
     "helpDirect": "Materiales de fabricación / materia prima — se enrutan al almacén para verificación de existencias.",
     "helpIndirect": "Artículos de oficina / soporte — se enrutan a administración para aprobación.",
-    "filterLabel": "Tipo de compra"
+    "filterLabel": "Tipo de solicitud"
+  },
+  "requestMode": {
+    "label": "Modo de solicitud",
+    "existing": "Existente",
+    "new": "Nuevo",
+    "all": "Todos",
+    "filterLabel": "Modo de solicitud",
+    "helpExisting": "El artículo ya existe en el maestro / catálogo.",
+    "helpNew": "El artículo aún no existe — entrada manual; se crea un artículo provisional al enviar."
   },
   "adminReview": {
     "title": "Solicitudes indirectas pendientes",

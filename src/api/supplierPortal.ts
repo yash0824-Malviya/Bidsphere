@@ -30,6 +30,9 @@ export interface RFQRow {
   modified?: string;
   /** 0 = Draft (not yet published to suppliers), 1 = Submitted/published. */
   docstatus?: number;
+  company?: string;
+  transaction_date?: string;
+  valid_till?: string;
 }
 
 export interface PORow {
@@ -40,6 +43,7 @@ export interface PORow {
   schedule_date?: string;
   grand_total?: number;
   status?: string;
+  docstatus?: number;
   modified?: string;
 }
 
@@ -82,39 +86,128 @@ export interface PaymentSummary {
   modified?: string;
 }
 
-function supplierPOFilters(supplier: string): Filter[] {
+/**
+ * Supplier Portal PO list filters.
+ *
+ * - Match ERPNext Link field `supplier` (Supplier.name), never display name.
+ * - Include Draft (0) + Submitted (1): Procurement issues POs as Draft with
+ *   delivery status "Pending Acceptance"; suppliers must see them to Accept.
+ * - Exclude Cancelled / Closed only.
+ */
+export function buildSupplierPOFilters(erpSupplierId: string): Filter[] {
   return [
-    ["supplier", "=", supplier],
-    ["docstatus", "=", 1],
+    ["supplier", "=", erpSupplierId],
+    ["docstatus", "in", [0, 1]],
     ["status", "not in", ["Cancelled", "Closed"]],
   ];
 }
 
 const LOG = "[SupplierPortal]";
 
+/** Invited + active RFQs: Draft/Submitted, not Cancelled. No MR/BidSphere/company/valid_till filters. */
+function buildSupplierRfqFilters(erpSupplierId: string): Filter[] {
+  return [
+    ["Request for Quotation Supplier", "supplier", "=", erpSupplierId],
+    ["docstatus", "in", [0, 1]],
+    ["status", "not in", ["Cancelled"]],
+  ];
+}
+
+/** Probe which filter zeroes the list when invited RFQs unexpectedly return 0. */
+async function diagnoseEmptySupplierRfqs(erpSupplierId: string): Promise<void> {
+  const probes: Array<{ label: string; filters: Filter[] }> = [
+    { label: "no filters (sample)", filters: [] },
+    {
+      label: "docstatus+status only (no supplier)",
+      filters: [
+        ["docstatus", "in", [0, 1]],
+        ["status", "not in", ["Cancelled"]],
+      ],
+    },
+    {
+      label: "supplier child only",
+      filters: [["Request for Quotation Supplier", "supplier", "=", erpSupplierId]],
+    },
+    {
+      label: "supplier + docstatus",
+      filters: [
+        ["Request for Quotation Supplier", "supplier", "=", erpSupplierId],
+        ["docstatus", "in", [0, 1]],
+      ],
+    },
+    { label: "full filters", filters: buildSupplierRfqFilters(erpSupplierId) },
+  ];
+
+  for (const probe of probes) {
+    try {
+      const raw = await apiGet<RFQRow[]>(
+        buildResourceUrl("Request for Quotation"),
+        buildListConfig({
+          fields: ["name", "status", "docstatus", "company", "transaction_date"],
+          filters: probe.filters,
+          order_by: "modified desc",
+          limit_page_length: 5,
+        }),
+      );
+      const rows = Array.isArray(raw) ? raw : [];
+      // eslint-disable-next-line no-console
+      console.log(LOG, "RFQ diagnose", {
+        erp_supplier_id: erpSupplierId,
+        probe: probe.label,
+        filters: probe.filters,
+        count: rows.length,
+        sample: rows.map((r) => r.name),
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(LOG, "RFQ diagnose failed", { probe: probe.label, err });
+    }
+  }
+}
+
 export async function getSupplierRFQs(supplierName: string): Promise<RFQRow[]> {
+  const erpSupplierId = String(supplierName || "").trim();
+  const filters = buildSupplierRfqFilters(erpSupplierId);
+
   // eslint-disable-next-line no-console
-  console.log(LOG, "Fetching RFQs for supplier:", supplierName);
+  console.log(LOG, "My RFQs query", {
+    logged_in_supplier_id: erpSupplierId,
+    doctype: "Request for Quotation",
+    filters,
+    not_filtered: [
+      "BidSphere status",
+      "Material Request status",
+      "company",
+      "valid_till",
+    ],
+  });
+
+  if (!erpSupplierId) {
+    // eslint-disable-next-line no-console
+    console.warn(LOG, "My RFQs aborted — empty ERP supplier id");
+    return [];
+  }
 
   // Strategy 1 — Standard resource API with child-table filter.
   // Include both Draft (docstatus 0) and Submitted (docstatus 1) so
   // invited suppliers see the RFQ immediately after invitation.
-  const childFilter: Filter = [
-    "Request for Quotation Supplier",
-    "supplier",
-    "=",
-    supplierName,
-  ];
-
-  const first = await tryResourceApi(supplierName, childFilter);
+  const first = await tryResourceApi(filters);
 
   // Strategy 2 — If the resource API returned nothing (child-table
   // filters can be unreliable in some Frappe builds), retry with
   // frappe.client.get_list via POST (body data is parsed more reliably).
   if (first.rows.length === 0) {
     // eslint-disable-next-line no-console
-    console.warn(LOG, "Resource API returned 0 rows — trying frappe.client.get_list POST fallback");
-    const second = await tryGetListPost(supplierName);
+    console.warn(
+      LOG,
+      "Resource API returned 0 rows — trying frappe.client.get_list POST fallback",
+      { filters },
+    );
+    const second = await tryGetListPost(filters);
+
+    if (second.rows.length === 0) {
+      await diagnoseEmptySupplierRfqs(erpSupplierId);
+    }
 
     // Both strategies came back empty. If BOTH failed with a real error
     // (network/permission/500), this is NOT a genuine "no RFQs" state —
@@ -127,32 +220,44 @@ export async function getSupplierRFQs(supplierName: string): Promise<RFQRow[]> {
     }
 
     // eslint-disable-next-line no-console
-    console.log(LOG, `Final RFQ count for "${supplierName}":`, second.rows.length, second.rows);
+    console.log(LOG, "Final RFQ count", {
+      erp_supplier_id: erpSupplierId,
+      count: second.rows.length,
+      names: second.rows.map((r) => r.name),
+    });
     return second.rows;
   }
 
   // eslint-disable-next-line no-console
-  console.log(LOG, `Final RFQ count for "${supplierName}":`, first.rows.length, first.rows);
+  console.log(LOG, "Final RFQ count", {
+    erp_supplier_id: erpSupplierId,
+    count: first.rows.length,
+    names: first.rows.map((r) => r.name),
+  });
   return first.rows;
 }
 
 async function tryResourceApi(
-  _supplierName: string,
-  childFilter: Filter
+  filters: Filter[],
 ): Promise<{ rows: RFQRow[]; error?: unknown }> {
   try {
+    // eslint-disable-next-line no-console
+    console.log(LOG, "GET /api/resource/Request for Quotation", { filters });
     const raw = await apiGet<RFQRow[]>(
       buildResourceUrl("Request for Quotation"),
       buildListConfig({
-        fields: ["name", "status", "modified", "docstatus"],
-        filters: [
-          childFilter,
-          ["docstatus", "in", [0, 1]],
-          ["status", "not in", ["Cancelled"]],
+        fields: [
+          "name",
+          "status",
+          "modified",
+          "docstatus",
+          "company",
+          "transaction_date",
         ],
+        filters,
         order_by: "modified desc",
         limit_page_length: 100,
-      })
+      }),
     );
     const result = Array.isArray(raw) ? raw : [];
     // eslint-disable-next-line no-console
@@ -166,22 +271,28 @@ async function tryResourceApi(
 }
 
 async function tryGetListPost(
-  supplierName: string
+  filters: Filter[],
 ): Promise<{ rows: RFQRow[]; error?: unknown }> {
   try {
+    const body = {
+      doctype: "Request for Quotation",
+      fields: [
+        "name",
+        "status",
+        "modified",
+        "docstatus",
+        "company",
+        "transaction_date",
+      ],
+      filters,
+      order_by: "modified desc",
+      limit_page_length: 100,
+    };
+    // eslint-disable-next-line no-console
+    console.log(LOG, "POST /api/method/frappe.client.get_list", body);
     const raw = await apiPost<RFQRow[] | { message?: RFQRow[] }>(
       "/api/method/frappe.client.get_list",
-      {
-        doctype: "Request for Quotation",
-        fields: ["name", "status", "modified", "docstatus"],
-        filters: [
-          ["Request for Quotation Supplier", "supplier", "=", supplierName],
-          ["docstatus", "in", [0, 1]],
-          ["status", "not in", ["Cancelled"]],
-        ],
-        order_by: "modified desc",
-        limit_page_length: 100,
-      }
+      body,
     );
     if (Array.isArray(raw)) {
       // eslint-disable-next-line no-console
@@ -213,11 +324,30 @@ export async function getSupplierQuotations(
 const DASHBOARD_LIMIT = 20;
 const LIST_LIMIT = 50;
 
+/**
+ * Live Purchase Orders for a supplier portal session.
+ * @param erpSupplierId ERPNext Supplier.name (Link id) — not company display name.
+ */
 export async function getSupplierPurchaseOrders(
-  supplierName: string,
+  erpSupplierId: string,
   limit = LIST_LIMIT
 ): Promise<PORow[]> {
-  return getPurchaseOrders({
+  const supplier = String(erpSupplierId || "").trim();
+  if (!supplier) {
+    // eslint-disable-next-line no-console
+    console.warn(LOG, "getSupplierPurchaseOrders: empty erpSupplierId — returning []");
+    return [];
+  }
+
+  const filters = buildSupplierPOFilters(supplier);
+  // eslint-disable-next-line no-console
+  console.log(LOG, "getSupplierPurchaseOrders request", {
+    erp_supplier_id: supplier,
+    filters,
+    limit,
+  });
+
+  const rows = (await getPurchaseOrders({
     fields: [
       "name",
       "supplier",
@@ -225,12 +355,28 @@ export async function getSupplierPurchaseOrders(
       "transaction_date",
       "grand_total",
       "status",
+      "docstatus",
       "modified",
     ],
-    filters: supplierPOFilters(supplierName),
+    filters,
     order_by: "modified desc",
     limit_page_length: limit,
-  }) as Promise<PORow[]>;
+  })) as PORow[];
+
+  // eslint-disable-next-line no-console
+  console.log(LOG, "getSupplierPurchaseOrders response", {
+    erp_supplier_id: supplier,
+    count: rows.length,
+    records: rows.map((r) => ({
+      poNumber: r.name,
+      supplierId: r.supplier,
+      supplierName: r.supplier_name,
+      status: r.status,
+      docstatus: (r as { docstatus?: number }).docstatus,
+    })),
+  });
+
+  return rows;
 }
 
 export async function getSupplierGRNSummaries(

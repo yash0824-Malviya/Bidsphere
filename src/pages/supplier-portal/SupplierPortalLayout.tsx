@@ -1,31 +1,99 @@
 import type { ReactNode } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { LogOut, User } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Bell, LogOut, User } from "lucide-react";
 
+import { getNotificationsForViewer } from "../../api/notifications";
 import { APP_SUPPLIER_PORTAL } from "../../config/branding";
 import { useDocumentTitle } from "../../hooks/useDocumentTitle";
 import BrandLogo from "../../components/BrandLogo";
 import LanguageSwitcher from "../../components/LanguageSwitcher";
+import {
+  clearSupplierSession,
+  readSupplierSession,
+} from "../../hooks/useSupplierSession";
+import { countUnread } from "../../utils/notificationAccess";
 import SupplierPortalSidebar, {
   SupplierPortalMobileNav,
 } from "./SupplierPortalSidebar";
 
 interface Props {
   supplierName?: string;
+  statusBadge?: string;
+  unlocked?: boolean;
   children: ReactNode;
+}
+
+const LOCKED_PATH_PREFIXES = [
+  "/supplier/rfqs",
+  "/supplier/quotations",
+  "/supplier/quotation",
+  "/supplier/auctions",
+  "/supplier/purchase-orders",
+  "/supplier/delivery-schedule",
+  "/supplier/grn",
+  "/supplier/invoices",
+  "/supplier/payments",
+  "/supplier/vouchers",
+  "/supplier/po/",
+];
+
+function badgeClass(status?: string) {
+  const s = (status || "").toLowerCase();
+  if (s.includes("approved")) return "bg-emerald-50 text-emerald-700 ring-emerald-200";
+  if (s.includes("reject")) return "bg-rose-50 text-rose-700 ring-rose-200";
+  return "bg-amber-50 text-amber-800 ring-amber-200";
+}
+
+function isLockedPath(pathname: string) {
+  return LOCKED_PATH_PREFIXES.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`) || pathname.startsWith(p),
+  );
 }
 
 export default function SupplierPortalLayout({
   supplierName,
+  statusBadge,
+  unlocked: unlockedProp,
   children,
 }: Props) {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const { t } = useTranslation();
   useDocumentTitle();
 
+  const session = readSupplierSession();
+  const unlocked =
+    unlockedProp ??
+    (!!session?.unlocked ||
+      session?.authMode === "pin" ||
+      session?.displayStatus === "Approved");
+  const erpSupplierId = (
+    session?.linkedSupplier ||
+    session?.supplierName ||
+    ""
+  ).trim();
+
+  const notificationsQuery = useQuery({
+    queryKey: ["supplier-portal-notifications", erpSupplierId],
+    queryFn: () =>
+      getNotificationsForViewer({
+        role: "supplier",
+        supplierId: erpSupplierId,
+      }),
+    enabled: !!erpSupplierId,
+    refetchInterval: 5_000,
+    staleTime: 2_000,
+  });
+  const unreadCount = countUnread(notificationsQuery.data ?? []);
+
+  if (supplierName && !unlocked && isLockedPath(pathname)) {
+    return <Navigate to="/supplier/locked" replace state={{ title: "Module" }} />;
+  }
+
   function handleLogout() {
-    sessionStorage.removeItem("supplier_session");
+    clearSupplierSession();
     navigate("/supplier/login", { replace: true });
   }
 
@@ -33,17 +101,19 @@ export default function SupplierPortalLayout({
     <div className="supplier-portal-layout flex min-h-screen w-full flex-col bg-[#f8fafb] lg:flex-row">
       {supplierName && (
         <div className="hidden shrink-0 lg:block">
-          <SupplierPortalSidebar supplierName={supplierName} />
+          <SupplierPortalSidebar
+            supplierName={supplierName}
+            unlocked={unlocked}
+            statusBadge={statusBadge}
+          />
         </div>
       )}
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-30 shrink-0 bg-white shadow-sm">
           <div className="flex items-center justify-between gap-4 px-4 py-3 sm:px-5 lg:px-6">
             <Link
-              to={
-                supplierName ? "/supplier/dashboard" : "/supplier/login"
-              }
+              to={supplierName ? "/supplier/dashboard" : "/supplier/login"}
               className="flex min-w-0 items-center gap-2 lg:hidden"
             >
               <BrandLogo markOnly />
@@ -55,6 +125,29 @@ export default function SupplierPortalLayout({
             {supplierName ? (
               <div className="ml-auto flex items-center gap-2 sm:gap-3">
                 <LanguageSwitcher />
+                <Link
+                  to="/supplier/dashboard"
+                  className="relative rounded-full border border-neutral-200 p-2 text-neutral-500 hover:bg-neutral-50"
+                  aria-label={
+                    unreadCount > 0
+                      ? `Notifications, ${unreadCount} unread`
+                      : "Notifications"
+                  }
+                >
+                  <Bell className="h-4 w-4" />
+                  {unreadCount > 0 && (
+                    <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-sky-600 px-1 text-[10px] font-bold leading-none text-white">
+                      {unreadCount > 9 ? "9+" : unreadCount}
+                    </span>
+                  )}
+                </Link>
+                {statusBadge && (
+                  <span
+                    className={`hidden rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ring-inset sm:inline ${badgeClass(statusBadge)}`}
+                  >
+                    {statusBadge}
+                  </span>
+                )}
                 <span className="hidden items-center gap-1.5 rounded-full bg-accent-50 px-3 py-1 text-xs font-medium text-accent-700 ring-1 ring-inset ring-accent-200 sm:inline-flex">
                   <User className="h-3 w-3" />
                   <span className="max-w-[140px] truncate">{supplierName}</span>
@@ -77,16 +170,9 @@ export default function SupplierPortalLayout({
               </div>
             )}
           </div>
-          {supplierName && <SupplierPortalMobileNav />}
+          {supplierName && <SupplierPortalMobileNav unlocked={unlocked} />}
         </header>
-
-        <main className="page-container flex-1 px-4 py-4 sm:px-5 sm:py-6 lg:px-8">
-          <div className="mx-auto w-full max-w-6xl pb-8">{children}</div>
-        </main>
-
-        <footer className="shrink-0 border-t border-neutral-200 bg-white px-4 py-3 text-center text-[11px] text-neutral-400">
-          © Netlink Software Group · {APP_SUPPLIER_PORTAL}
-        </footer>
+        <main className="min-h-0 flex-1">{children}</main>
       </div>
     </div>
   );

@@ -2,7 +2,6 @@ import { useMemo } from "react";
 
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, Trash2 } from "lucide-react";
-import toast from "react-hot-toast";
 
 import {
   getItemStockSummary,
@@ -21,7 +20,16 @@ import {
   INDIRECT_ITEM_GROUPS,
   indirectItemCodesFor,
 } from "../../config/indirectProcurementCatalog";
-import type { MaterialRequestProcurementType } from "../../types/materialRequestWorkflow";
+import type {
+  MaterialRequestMode,
+  MaterialRequestProcurementType,
+} from "../../types/materialRequestWorkflow";
+import { usesItemMasterDropdowns } from "../../types/materialRequestWorkflow";
+import type {
+  EngineeringAttachment,
+  PendingAttachment,
+} from "../../utils/materialRequestItemFiles";
+import ItemAttachmentsField from "./ItemAttachmentsField";
 import SearchableSelect, {
   type SearchableOption,
 } from "./SearchableSelect";
@@ -40,6 +48,22 @@ export interface MaterialRequestDraftLine {
   generated?: boolean;
   /** Source BOM document name (present only for generated rows). */
   bom?: string;
+  /** Optional free-text part label (not Item Master). */
+  part_name?: string;
+  /** Persisted multi-file engineering attachments. */
+  attachments?: EngineeringAttachment[];
+  /** Local files waiting to upload after MR save. */
+  pendingAttachments?: PendingAttachment[];
+  /** True when attachments were edited and need sync. */
+  attachmentsDirty?: boolean;
+  /** @deprecated Prefer attachments[0].fileUrl — kept for sync/legacy. */
+  drawing_2d_url?: string;
+  /** @deprecated Prefer pendingAttachments. */
+  drawing_2d_file?: File;
+  /** @deprecated Prefer pendingAttachments. */
+  drawing_2d_local_url?: string;
+  /** @deprecated Prefer emptying attachments. */
+  drawing_2d_clear?: boolean;
 }
 
 const EMPTY_ITEMS: ItemSearchResult[] = [];
@@ -52,22 +76,37 @@ interface Props {
   canRemove: boolean;
   usedItemCodes: ReadonlySet<string>;
   /**
-   * Procurement Type of the parent request. Item Groups are filtered to the
-   * matching category (Direct → manufacturing, Indirect → office/support).
+   * Request Type of the parent request (Direct / Indirect).
    */
   procurementType: MaterialRequestProcurementType;
+  /**
+   * Request Mode — Existing uses catalog/ERP dropdowns for Direct;
+   * New and all Indirect modes use manual entry.
+   */
+  requestMode: MaterialRequestMode;
   /**
    * Whether warehouse stock columns (Current / Available / Status) are shown and
    * fetched. Department users never see warehouse inventory, so this is false
    * for them — no stock query runs at all.
    */
   showStock?: boolean;
+  /** When true, attachments are view/download only (no upload/delete). */
+  attachmentsReadOnly?: boolean;
+  /** Per-file delete gate for persisted attachments. */
+  canDeleteAttachment?: (att: EngineeringAttachment) => boolean;
   onChange: (patch: Partial<MaterialRequestDraftLine>) => void;
   onRemove: () => void;
 }
 
 const readOnlyCls =
   "h-10 w-full rounded-lg border border-neutral-200 bg-neutral-50 px-3 text-sm text-neutral-700";
+
+const textInputCls = (hasError: boolean) =>
+  [
+    "h-10 w-full rounded-lg border bg-white px-3 text-sm shadow-sm transition",
+    "focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20",
+    hasError ? "border-danger-400" : "border-neutral-300 text-neutral-900",
+  ].join(" ");
 
 const qtyInputCls = (hasError: boolean) =>
   [
@@ -107,25 +146,27 @@ export default function MaterialRequestItemLineRow({
   canRemove,
   usedItemCodes,
   procurementType,
+  requestMode,
   showStock = false,
+  attachmentsReadOnly = false,
+  canDeleteAttachment,
   onChange,
   onRemove,
 }: Props) {
+  const useDropdowns = usesItemMasterDropdowns(procurementType, requestMode);
   const groupError = showErrors && !row.item_group;
   const itemError = showErrors && !row.item_code;
+  const nameError = showErrors && !useDropdowns && !row.item_name.trim();
   const qtyError = showErrors && !(row.qty > 0);
 
-  // Direct and Indirect procurement are COMPLETELY isolated:
-  //   • Direct   → the live ERPNext Item Group tree, identical to the RFQ module.
-  //   • Indirect → the fixed office catalog only (Housekeeping / IT Equipment /
-  //                Stationery). It never touches the RFQ Item Group service.
+  // Direct + Existing → ERP Item Group / Item dropdowns.
+  // Indirect (any) and Direct + New → manual text entry.
   const isIndirect = procurementType === "Indirect";
 
-  // Item Groups (Direct only) — the SAME service and cache the RFQ module uses.
   const groupsQuery = useQuery<ItemGroupOption[]>({
     queryKey: ["item-groups"],
     queryFn: () => getItemGroups(),
-    enabled: !isIndirect,
+    enabled: useDropdowns && !isIndirect,
     staleTime: 5 * 60_000,
   });
 
@@ -141,31 +182,23 @@ export default function MaterialRequestItemLineRow({
     }));
   }, [isIndirect, groups]);
 
-  // Items for the selected group. Direct fetches every item in the group (RFQ
-  // parity); Indirect fetches ONLY the catalog's item codes by code, so exactly
-  // the curated office items are returned — never the RFQ list.
   const itemsQuery = useQuery<ItemSearchResult[]>({
     queryKey: ["mr-items", isIndirect ? "indirect" : "direct", row.item_group],
     queryFn: () =>
       isIndirect
         ? getItemsByCodes(indirectItemCodesFor(row.item_group))
         : getItems({ itemGroup: row.item_group, limit: 500 }),
-    enabled: !!row.item_group,
+    enabled: useDropdowns && !!row.item_group,
     staleTime: 60_000,
   });
 
-  // Warehouse stock is only fetched when stock columns are visible. Department
-  // users never trigger this query — they must not see warehouse inventory.
   const stockQuery = useQuery({
     queryKey: ["mr-item-stock", row.item_code],
     queryFn: () => getItemStockSummary(row.item_code),
-    enabled: !!row.item_code && showStock,
+    enabled: !!row.item_code && showStock && useDropdowns,
     staleTime: 30_000,
   });
 
-  // For Indirect, the catalog defines the exact item list; ERPNext data (fetched
-  // by code) enriches name/description/UOM when the item exists so submission
-  // and auto-fill use real values. Missing items still show via the fallback.
   const items = useMemo<ItemSearchResult[]>(() => {
     if (!isIndirect) return itemsQuery.data ?? EMPTY_ITEMS;
     const catalog = INDIRECT_CATALOG[row.item_group] ?? [];
@@ -195,8 +228,6 @@ export default function MaterialRequestItemLineRow({
             ? it.item_name
             : undefined,
         detail: it.description,
-        // Disabled when another row already uses this item (parent excludes the
-        // current row's own code from `usedItemCodes`).
         disabled: usedItemCodes.has(it.item_code),
       })),
     [items, usedItemCodes],
@@ -222,7 +253,6 @@ export default function MaterialRequestItemLineRow({
 
   function handleGroupSelect(opt: SearchableOption) {
     if (opt.value === row.item_group) return;
-    // Changing the group always clears the selected item (Req. 5).
     onChange({
       item_group: opt.value,
       item_code: "",
@@ -276,64 +306,121 @@ export default function MaterialRequestItemLineRow({
               BOM
             </span>
           )}
+          {requestMode === "New" && (
+            <span
+              className="rounded-full bg-amber-50 px-1.5 text-[9px] font-bold uppercase tracking-wide text-amber-700"
+              title="New item"
+            >
+              New
+            </span>
+          )}
         </div>
       </td>
 
-      {/* Item Group — cascades into Item */}
+      {/* Item Group */}
       <td className="w-[220px] px-3 py-2 align-middle">
-        <SearchableSelect
-          options={groupOptions}
-          selectedValue={row.item_group}
-          selectedLabel={selectedGroupLabel}
-          onSelect={handleGroupSelect}
-          onClear={handleGroupClear}
-          loading={groupsQuery.isLoading}
-          error={groupsQuery.isError}
-          invalid={groupError}
-          placeholder="Search item group"
-          ariaLabel={`Item group for row ${rowNumber}`}
-          emptyText="No item groups available."
-          errorText="Couldn't load item groups."
-        />
+        {useDropdowns ? (
+          <SearchableSelect
+            options={groupOptions}
+            selectedValue={row.item_group}
+            selectedLabel={selectedGroupLabel}
+            onSelect={handleGroupSelect}
+            onClear={handleGroupClear}
+            loading={groupsQuery.isLoading}
+            error={groupsQuery.isError}
+            invalid={groupError}
+            placeholder="Search item group"
+            ariaLabel={`Item group for row ${rowNumber}`}
+            emptyText="No item groups available."
+            errorText="Couldn't load item groups."
+          />
+        ) : (
+          <input
+            value={row.item_group}
+            onChange={(e) => onChange({ item_group: e.target.value })}
+            placeholder="Item group"
+            aria-invalid={groupError}
+            className={textInputCls(groupError)}
+          />
+        )}
       </td>
 
-      {/* Item — disabled until a group is selected */}
+      {/* Item code (+ name when manual) */}
       <td className="w-[300px] px-3 py-2 align-middle">
-        <SearchableSelect
-          options={itemOptions}
-          selectedValue={row.item_code}
-          selectedLabel={selectedItemLabel}
-          onSelect={handleItemSelect}
-          onClear={handleItemClear}
-          disabled={!row.item_group}
-          loading={itemsQuery.isLoading || itemsQuery.isFetching}
-          error={itemsQuery.isError}
-          invalid={itemError}
-          placeholder="Type to search item"
-          disabledPlaceholder="Select an item group first"
-          ariaLabel={`Item for row ${rowNumber}`}
-          emptyText="No items in this group."
-          errorText="Couldn't load items."
-        />
+        {useDropdowns ? (
+          <SearchableSelect
+            options={itemOptions}
+            selectedValue={row.item_code}
+            selectedLabel={selectedItemLabel}
+            onSelect={handleItemSelect}
+            onClear={handleItemClear}
+            disabled={!row.item_group}
+            loading={itemsQuery.isLoading || itemsQuery.isFetching}
+            error={itemsQuery.isError}
+            invalid={itemError}
+            placeholder="Type to search item"
+            disabledPlaceholder="Select an item group first"
+            ariaLabel={`Item for row ${rowNumber}`}
+            emptyText="No items in this group."
+            errorText="Couldn't load items."
+          />
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            <input
+              value={row.item_code}
+              onChange={(e) => onChange({ item_code: e.target.value })}
+              placeholder={
+                requestMode === "New" ? "Proposed item code" : "Item code"
+              }
+              aria-invalid={itemError}
+              className={textInputCls(itemError)}
+            />
+            <input
+              value={row.item_name}
+              onChange={(e) => onChange({ item_name: e.target.value })}
+              placeholder="Item name"
+              aria-invalid={nameError}
+              className={textInputCls(nameError)}
+            />
+          </div>
+        )}
       </td>
 
       <td className="w-[360px] px-3 py-2 align-middle">
-        <input
-          readOnly
-          value={row.description}
-          placeholder="Auto-filled from item"
-          className={readOnlyCls}
-          tabIndex={-1}
-        />
+        {useDropdowns ? (
+          <input
+            readOnly
+            value={row.description}
+            placeholder="Auto-filled from item"
+            className={readOnlyCls}
+            tabIndex={-1}
+          />
+        ) : (
+          <input
+            value={row.description}
+            onChange={(e) => onChange({ description: e.target.value })}
+            placeholder="Description"
+            className={textInputCls(false)}
+          />
+        )}
       </td>
 
       <td className="w-[90px] px-3 py-2 align-middle text-center">
-        <input
-          readOnly
-          value={row.uom}
-          className={`${readOnlyCls} text-center`}
-          tabIndex={-1}
-        />
+        {useDropdowns ? (
+          <input
+            readOnly
+            value={row.uom}
+            className={`${readOnlyCls} text-center`}
+            tabIndex={-1}
+          />
+        ) : (
+          <input
+            value={row.uom}
+            onChange={(e) => onChange({ uom: e.target.value })}
+            placeholder="UOM"
+            className={`${textInputCls(false)} text-center`}
+          />
+        )}
       </td>
 
       <td className="w-[90px] px-3 py-2 align-middle">
@@ -351,42 +438,70 @@ export default function MaterialRequestItemLineRow({
         />
       </td>
 
+      {/* Optional Part Name — free text, not Item Master */}
+      <td className="w-[180px] px-3 py-2 align-middle">
+        <input
+          value={row.part_name ?? ""}
+          onChange={(e) => onChange({ part_name: e.target.value })}
+          placeholder="Optional"
+          aria-label={`Part name for row ${rowNumber}`}
+          className={textInputCls(false)}
+        />
+      </td>
+
+      {/* Optional multi-file engineering attachments for this item row */}
+      <td className="min-w-[240px] px-3 py-2 align-top">
+        <ItemAttachmentsField
+          rowNumber={rowNumber}
+          attachments={row.attachments ?? []}
+          pending={row.pendingAttachments ?? []}
+          readOnly={attachmentsReadOnly}
+          canDeleteAttachment={canDeleteAttachment}
+          onChange={(next) =>
+            onChange({
+              attachments: next.attachments,
+              pendingAttachments: next.pendingAttachments,
+              attachmentsDirty: next.attachmentsDirty,
+              drawing_2d_url: next.attachments[0]?.fileUrl,
+              drawing_2d_clear:
+                next.attachments.length === 0 &&
+                next.pendingAttachments.length === 0,
+            })
+          }
+        />
+      </td>
+
       {showStock && (
         <>
-          <td className="w-[110px] px-3 py-2 align-middle text-right tabular-nums text-sm text-neutral-700">
-            {stockQuery.isLoading && row.item_code ? (
-              <Loader2 className="ml-auto h-4 w-4 animate-spin text-neutral-400" />
+          <td className="w-[90px] px-3 py-2 align-middle text-right tabular-nums text-sm text-neutral-700">
+            {stockQuery.isLoading ? (
+              <Loader2 className="ml-auto h-3.5 w-3.5 animate-spin text-neutral-400" />
             ) : stock ? (
-              formatQty(stock.current_stock)
+              formatQty(stock.actual_qty)
             ) : (
-              "-"
+              "—"
             )}
           </td>
-
-          <td className="w-[110px] px-3 py-2 align-middle text-right tabular-nums text-sm font-medium text-neutral-900">
-            {stock ? formatQty(stock.available_qty) : "-"}
+          <td className="w-[90px] px-3 py-2 align-middle text-right tabular-nums text-sm text-neutral-700">
+            {stock ? formatQty(stock.available_qty) : "—"}
           </td>
-
-          <td className="w-[120px] px-3 py-2 align-middle">
-            <div className="flex items-center">
-              <StockStatusBadge status={stockStatus} />
-            </div>
+          <td className="w-[110px] px-3 py-2 align-middle">
+            <StockStatusBadge status={stockStatus} />
           </td>
         </>
       )}
 
-      <td className="w-[50px] px-2 py-2 align-middle">
-        <div className="flex items-center justify-center">
+      <td className="w-[48px] px-2 py-2 align-middle">
+        {canRemove && (
           <button
             type="button"
             onClick={onRemove}
-            disabled={!canRemove}
-            className="rounded-lg p-2 text-neutral-400 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-30"
-            title="Remove line"
+            className="rounded-md p-1.5 text-neutral-400 hover:bg-red-50 hover:text-red-600"
+            aria-label={`Remove row ${rowNumber}`}
           >
             <Trash2 className="h-4 w-4" />
           </button>
-        </div>
+        )}
       </td>
     </tr>
   );

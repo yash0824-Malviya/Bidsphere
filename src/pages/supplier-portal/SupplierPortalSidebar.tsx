@@ -5,14 +5,17 @@ import {
   ChevronDown,
   ChevronRight,
   CreditCard,
+  FileText,
   Gavel,
   HelpCircle,
   LayoutDashboard,
   LifeBuoy,
+  Lock,
   Mail,
   Receipt,
   ShoppingCart,
   Truck,
+  UserRound,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { TFunction } from "i18next";
@@ -23,45 +26,77 @@ import { APP_NAME, APP_SUPPLIER_PORTAL, COMPANY_NAME } from "../../config/brandi
 interface NavChild {
   labelKey: string;
   to: string;
+  lockedUntilApproved?: boolean;
 }
 
 interface NavGroup {
   labelKey: string;
   icon: LucideIcon;
   to: string;
+  lockedUntilApproved?: boolean;
   children?: NavChild[];
 }
 
 const NAV: NavGroup[] = [
   { labelKey: "supplierNav.dashboard", icon: LayoutDashboard, to: "/supplier/dashboard" },
   {
+    labelKey: "supplierNav.profile",
+    icon: UserRound,
+    to: "/supplier/profile",
+    children: [
+      { labelKey: "supplierNav.profileDetails", to: "/supplier/profile" },
+      { labelKey: "supplierNav.documents", to: "/supplier/profile?tab=documents" },
+      { labelKey: "supplierNav.security", to: "/supplier/security" },
+    ],
+  },
+  {
     labelKey: "supplierNav.rfqs",
     icon: Receipt,
     to: "/supplier/rfqs",
+    lockedUntilApproved: true,
     children: [
-      { labelKey: "supplierNav.myRfqs", to: "/supplier/rfqs" },
-      { labelKey: "supplierNav.submittedQuotations", to: "/supplier/quotations" },
+      { labelKey: "supplierNav.myRfqs", to: "/supplier/rfqs", lockedUntilApproved: true },
+      {
+        labelKey: "supplierNav.submittedQuotations",
+        to: "/supplier/quotations",
+        lockedUntilApproved: true,
+      },
     ],
   },
-  { labelKey: "supplierNav.liveAuctions", icon: Gavel, to: "/supplier/auctions" },
+  {
+    labelKey: "supplierNav.liveAuctions",
+    icon: Gavel,
+    to: "/supplier/auctions",
+    lockedUntilApproved: true,
+  },
   {
     labelKey: "supplierNav.orders",
     icon: ShoppingCart,
     to: "/supplier/purchase-orders",
+    lockedUntilApproved: true,
     children: [
-      { labelKey: "supplierNav.purchaseOrders", to: "/supplier/purchase-orders" },
-      { labelKey: "supplierNav.deliverySchedule", to: "/supplier/delivery-schedule" },
-      { labelKey: "supplierNav.goodsReceipts", to: "/supplier/grn" },
+      {
+        labelKey: "supplierNav.purchaseOrders",
+        to: "/supplier/purchase-orders",
+        lockedUntilApproved: true,
+      },
+      {
+        labelKey: "supplierNav.deliverySchedule",
+        to: "/supplier/delivery-schedule",
+        lockedUntilApproved: true,
+      },
+      { labelKey: "supplierNav.goodsReceipts", to: "/supplier/grn", lockedUntilApproved: true },
     ],
   },
   {
     labelKey: "supplierNav.finance",
     icon: CreditCard,
     to: "/supplier/vouchers",
+    lockedUntilApproved: true,
     children: [
-      { labelKey: "supplierNav.vouchers", to: "/supplier/vouchers" },
-      { labelKey: "supplierNav.invoices", to: "/supplier/invoices" },
-      { labelKey: "supplierNav.payments", to: "/supplier/payments" },
+      { labelKey: "supplierNav.vouchers", to: "/supplier/vouchers", lockedUntilApproved: true },
+      { labelKey: "supplierNav.invoices", to: "/supplier/invoices", lockedUntilApproved: true },
+      { labelKey: "supplierNav.payments", to: "/supplier/payments", lockedUntilApproved: true },
     ],
   },
   {
@@ -76,7 +111,8 @@ const NAV: NavGroup[] = [
 ];
 
 function isActive(pathname: string, to: string): boolean {
-  return pathname === to || pathname.startsWith(`${to}/`);
+  const pathOnly = to.split("?")[0];
+  return pathname === pathOnly || pathname.startsWith(`${pathOnly}/`);
 }
 
 function groupActive(pathname: string, group: NavGroup): boolean {
@@ -86,9 +122,14 @@ function groupActive(pathname: string, group: NavGroup): boolean {
 
 interface Props {
   supplierName: string;
+  unlocked?: boolean;
+  statusBadge?: string;
 }
 
-export default function SupplierPortalSidebar({ supplierName }: Props) {
+export default function SupplierPortalSidebar({
+  supplierName,
+  unlocked = true,
+}: Props) {
   const { pathname } = useLocation();
   const { t } = useTranslation();
 
@@ -108,7 +149,13 @@ export default function SupplierPortalSidebar({ supplierName }: Props) {
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
         {NAV.map((group) => (
-          <SidebarGroup key={group.labelKey} group={group} pathname={pathname} t={t} />
+          <SidebarGroup
+            key={group.labelKey}
+            group={group}
+            pathname={pathname}
+            t={t}
+            unlocked={unlocked}
+          />
         ))}
       </nav>
 
@@ -123,33 +170,43 @@ function SidebarGroup({
   group,
   pathname,
   t,
+  unlocked,
 }: {
   group: NavGroup;
   pathname: string;
   t: TFunction;
+  unlocked: boolean;
 }) {
   const hasChildren = (group.children?.length ?? 0) > 0;
   const active = groupActive(pathname, group);
   const [open, setOpen] = useState(active && hasChildren);
+  const locked = !!group.lockedUntilApproved && !unlocked;
+  const Icon = group.icon;
 
   useEffect(() => {
     if (active && hasChildren) setOpen(true);
   }, [active, hasChildren]);
 
-  const Icon = group.icon;
+  const label = (
+    <>
+      <Icon className="h-4 w-4 shrink-0" />
+      <span className="flex-1">{t(group.labelKey, group.labelKey.replace("supplierNav.", ""))}</span>
+      {locked && <Lock className="h-3.5 w-3.5 opacity-70" />}
+    </>
+  );
 
   if (!hasChildren) {
     return (
       <Link
-        to={group.to}
+        to={locked ? "/supplier/locked" : group.to}
+        state={locked ? { title: t(group.labelKey) } : undefined}
         className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition ${
           active
             ? "bg-primary/20 text-white shadow-[inset_3px_0_0_0_#0ea5e9]"
             : "text-slate-400 hover:bg-slate-800 hover:text-white"
-        }`}
+        } ${locked ? "opacity-70" : ""}`}
       >
-        <Icon className="h-4 w-4 shrink-0" />
-        {t(group.labelKey)}
+        {label}
       </Link>
     );
   }
@@ -160,13 +217,10 @@ function SidebarGroup({
         type="button"
         onClick={() => setOpen((v) => !v)}
         className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] font-medium transition ${
-          active
-            ? "bg-primary/15 text-white"
-            : "text-slate-400 hover:bg-slate-800 hover:text-white"
+          active ? "bg-primary/15 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"
         }`}
       >
-        <Icon className="h-4 w-4 shrink-0" />
-        <span className="flex-1">{t(group.labelKey)}</span>
+        {label}
         {open ? (
           <ChevronDown className="h-3.5 w-3.5 opacity-60" />
         ) : (
@@ -177,17 +231,20 @@ function SidebarGroup({
         <div className="ml-4 mt-0.5 space-y-0.5 border-l border-white/10 pl-3">
           {group.children!.map((child) => {
             const childActive = isActive(pathname, child.to);
+            const childLocked = !!child.lockedUntilApproved && !unlocked;
             return (
               <Link
                 key={child.to}
-                to={child.to}
-                className={`block rounded-md px-3 py-1.5 text-[12px] font-medium transition ${
+                to={childLocked ? "/supplier/locked" : child.to}
+                state={childLocked ? { title: t(child.labelKey) } : undefined}
+                className={`flex items-center justify-between rounded-md px-3 py-1.5 text-[12px] font-medium transition ${
                   childActive
                     ? "bg-primary/25 text-white"
                     : "text-slate-400 hover:bg-slate-800 hover:text-white"
-                }`}
+                } ${childLocked ? "opacity-70" : ""}`}
               >
-                {t(child.labelKey)}
+                <span>{t(child.labelKey)}</span>
+                {childLocked && <Lock className="h-3 w-3" />}
               </Link>
             );
           })}
@@ -197,16 +254,36 @@ function SidebarGroup({
   );
 }
 
-export function SupplierPortalMobileNav() {
+export function SupplierPortalMobileNav({ unlocked = true }: { unlocked?: boolean }) {
   const { pathname } = useLocation();
   const { t } = useTranslation();
   const tabs = [
     { label: t("supplierNav.home"), to: "/supplier/dashboard", icon: LayoutDashboard },
-    { label: t("supplierNav.rfqs"), to: "/supplier/rfqs", icon: Receipt },
-    { label: t("supplierNav.auctions"), to: "/supplier/auctions", icon: Gavel },
-    { label: t("supplierNav.orders"), to: "/supplier/purchase-orders", icon: ShoppingCart },
-    { label: t("supplierNav.grn"), to: "/supplier/grn", icon: Truck },
-    { label: t("supplierNav.finance"), to: "/supplier/vouchers", icon: CreditCard },
+    { label: t("supplierNav.profile", "Profile"), to: "/supplier/profile", icon: UserRound },
+    {
+      label: t("supplierNav.rfqs"),
+      to: unlocked ? "/supplier/rfqs" : "/supplier/locked",
+      icon: Receipt,
+      locked: !unlocked,
+    },
+    {
+      label: t("supplierNav.auctions"),
+      to: unlocked ? "/supplier/auctions" : "/supplier/locked",
+      icon: Gavel,
+      locked: !unlocked,
+    },
+    {
+      label: t("supplierNav.orders"),
+      to: unlocked ? "/supplier/purchase-orders" : "/supplier/locked",
+      icon: ShoppingCart,
+      locked: !unlocked,
+    },
+    {
+      label: t("supplierNav.finance"),
+      to: unlocked ? "/supplier/vouchers" : "/supplier/locked",
+      icon: CreditCard,
+      locked: !unlocked,
+    },
     { label: t("supplierNav.help"), to: "/supplier/help-desk", icon: HelpCircle },
   ];
 
@@ -217,7 +294,7 @@ export function SupplierPortalMobileNav() {
         const Icon = tab.icon;
         return (
           <Link
-            key={tab.to}
+            key={tab.to + tab.label}
             to={tab.to}
             className={`inline-flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium ${
               active
@@ -227,6 +304,7 @@ export function SupplierPortalMobileNav() {
           >
             <Icon className="h-3.5 w-3.5" />
             {tab.label}
+            {"locked" in tab && tab.locked ? <Lock className="h-3 w-3" /> : null}
           </Link>
         );
       })}

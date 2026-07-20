@@ -401,7 +401,7 @@
     "awarded": "Adjudicado"
   },
   "procurementType": {
-    "label": "Tipo de compra",
+    "label": "Tipo de solicitud",
     "direct": "Directa",
     "indirect": "Indirecta",
     "all": "Todas",
@@ -409,7 +409,16 @@
     "indirectProcurement": "Compra indirecta",
     "helpDirect": "Materiales de fabricación / materia prima — se envían al almacén para revisión de existencias.",
     "helpIndirect": "Artículos de oficina / soporte — se envían a administración para aprobación.",
-    "filterLabel": "Tipo de compra"
+    "filterLabel": "Tipo de solicitud"
+  },
+  "requestMode": {
+    "label": "Modo de solicitud",
+    "existing": "Existente",
+    "new": "Nuevo",
+    "all": "Todos",
+    "filterLabel": "Modo de solicitud",
+    "helpExisting": "El artículo ya existe en el maestro / catálogo.",
+    "helpNew": "El artículo aún no existe — entrada manual; se crea un artículo provisional al enviar."
   },
   "adminReview": {
     "title": "Solicitudes indirectas pendientes",

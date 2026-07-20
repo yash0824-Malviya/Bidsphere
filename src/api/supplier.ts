@@ -23,6 +23,9 @@ const SUPPLIER_GROUP_DOCTYPE = "Supplier Group";
 /**
  * List suppliers, optionally filtered.
  *
+ * No default status / group / sourcing / portal filters — callers that need
+ * active-only must pass `[["disabled", "=", 0]]` explicitly.
+ *
  * @example
  * await getSuppliers({
  *   filters: [["disabled", "=", 0]],
@@ -42,15 +45,18 @@ export async function getSuppliers(filters?: ListParams): Promise<Supplier[]> {
         "disabled",
         "modified",
       ],
-      filters: [["disabled", "=", 0]],
       order_by: "supplier_name asc",
-      limit_page_length: 100,
+      // High ceiling so directory / pickers are not silently truncated.
+      limit_page_length: 500,
       ...filters,
     })
   );
 }
 
-/** Server-side paginated Supplier directory for the "Suppliers" list page. */
+/**
+ * Server-side paginated Supplier list.
+ * Does not apply any default filters — every matching Supplier is eligible.
+ */
 export async function getSuppliersPaged(options: {
   fields: string[];
   filters?: Filter[] | Record<string, FilterValue>;

@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Clock,
@@ -14,8 +14,10 @@ import {
   type AnalyticsKpi,
   type ProcurementAnalytics,
 } from "../../api/procurementAnalytics";
+import { timedDashApi } from "../../api/dashboardPerf";
 import { DASHBOARD_QUERY_OPTIONS } from "../../api/queryPresets";
 import AnalyticsKpiCard from "./analytics/AnalyticsKpiCard";
+import DashboardWidgetError from "./DashboardWidgetError";
 import { Skeleton } from "../Skeleton";
 import type { AnalyticsChartKey } from "./analytics/ProcurementAnalyticsCharts";
 
@@ -43,27 +45,27 @@ const KPI_META: Record<AnalyticsKpiKey, KpiMeta> = {
   costSavings: {
     icon: TrendingDown,
     title: "Cost Savings",
-    description: "Estimated RFQ cost vs final order",
+    description: "Highest quote − lowest quote",
   },
   budgetUtilisation: {
     icon: PieChart,
     title: "Budget Utilisation",
-    description: "Actual spend of allocated budget",
+    description: "Allocated · Spent · Remaining · Forecast",
   },
   rfqTurnaround: {
     icon: Clock,
     title: "RFQ Turnaround",
-    description: "Avg. time from open to close",
+    description: "Average RFQ closed − created (completed only)",
   },
   supplierResponse: {
     icon: Users,
     title: "Supplier Response Rate",
-    description: "Quotations received vs invited",
+    description: "Responded / Invited",
   },
   cycleTime: {
     icon: RefreshCw,
     title: "Procurement Cycle Time",
-    description: "Material request to purchase order",
+    description: "PO submitted − Material Request submitted",
   },
   onTimeDelivery: {
     icon: Truck,
@@ -71,6 +73,22 @@ const KPI_META: Record<AnalyticsKpiKey, KpiMeta> = {
     description: "Receipts delivered by required date",
   },
 };
+
+/** Primary dashboard analytics row (clean enterprise layout). */
+export const PRIMARY_DASHBOARD_ANALYTICS: AnalyticsKpiKey[] = [
+  "costSavings",
+  "budgetUtilisation",
+  "supplierResponse",
+  "onTimeDelivery",
+];
+
+/** Charts shown on the main Procurement Dashboard. */
+export const PRIMARY_DASHBOARD_CHARTS: AnalyticsChartKey[] = [
+  "monthlySpend",
+  "budgetVsActual",
+  "supplierResponse",
+  "rfqTurnaround",
+];
 
 const ALL_KEYS: AnalyticsKpiKey[] = [
   "costSavings",
@@ -91,6 +109,8 @@ interface Props {
   /** Optional section heading; hidden when omitted. */
   title?: string;
   subtitle?: string;
+  /** Right-side header action (e.g. View More Analytics). */
+  headerAction?: ReactNode;
   /** Defer the (heavy) analytics fetch until the host is ready. Defaults true. */
   enabled?: boolean;
 }
@@ -101,37 +121,66 @@ export default function ProcurementAnalyticsSection({
   charts,
   title = "Procurement Analytics",
   subtitle = "Procurement Performance Dashboard",
+  headerAction,
   enabled = true,
 }: Props) {
   const query = useQuery<ProcurementAnalytics>({
     queryKey: ["procurement-analytics"],
-    queryFn: fetchProcurementAnalytics,
+    queryFn: () =>
+      timedDashApi("Supplier Analytics (full)", () =>
+        fetchProcurementAnalytics(),
+      ),
     enabled,
     ...DASHBOARD_QUERY_OPTIONS,
   });
 
-  // `isPending` (not `isLoading`) stays true while the query is deferred/idle,
-  // so the cards keep their skeletons instead of flashing "No data".
-  const loading = query.isPending;
+  // Pending only while actively fetching — never after error (avoids eternal skeletons).
+  const loading = query.isPending && !query.isError;
   const data = query.data;
 
   const cols =
     kpis.length >= 6
       ? "grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6"
-      : kpis.length >= 3
-        ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
-        : "grid-cols-1 sm:grid-cols-2";
+      : kpis.length === 4
+        ? "grid-cols-1 sm:grid-cols-2 xl:grid-cols-4"
+        : kpis.length >= 3
+          ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
+          : "grid-cols-1 sm:grid-cols-2";
+
+  if (query.isError) {
+    return (
+      <section className="flex flex-col gap-4">
+        {title ? (
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h2 className="text-base font-bold text-neutral-900">{title}</h2>
+              {subtitle ? (
+                <p className="text-xs text-neutral-500">{subtitle}</p>
+              ) : null}
+            </div>
+            {headerAction}
+          </div>
+        ) : null}
+        <DashboardWidgetError
+          title="Unable to load dashboard data"
+          error={query.error}
+          onRetry={() => void query.refetch()}
+        />
+      </section>
+    );
+  }
 
   return (
     <section className="flex flex-col gap-4">
       {title ? (
-        <div className="flex items-end justify-between">
+        <div className="flex items-end justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold text-neutral-800">{title}</h2>
+            <h2 className="text-base font-bold text-neutral-900">{title}</h2>
             {subtitle ? (
-              <p className="text-xs text-neutral-400">{subtitle}</p>
+              <p className="text-xs text-neutral-500">{subtitle}</p>
             ) : null}
           </div>
+          {headerAction}
         </div>
       ) : null}
 

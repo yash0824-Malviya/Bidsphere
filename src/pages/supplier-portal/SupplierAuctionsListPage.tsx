@@ -22,10 +22,13 @@ export default function SupplierAuctionsListPage() {
   const navigate = useNavigate();
 
   const query = useQuery({
+    // Shared with LiveAuctionStartedNotifier for instant list refresh.
     queryKey: ["supplier-auctions", supplierName],
     enabled: !!supplierName,
     queryFn: () => getSupplierAuctions(supplierName),
-    refetchInterval: 15_000,
+    refetchInterval: 2_000,
+    staleTime: 1_000,
+    refetchOnWindowFocus: true,
   });
 
   if (isReady && !isAuthenticated) {

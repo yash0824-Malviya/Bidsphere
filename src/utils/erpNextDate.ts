@@ -8,6 +8,9 @@ export const ERP_NEXT_DATETIME_FORMAT = "YYYY-MM-DD HH:mm:ss";
 export const US_DISPLAY_DATE_FORMAT = "MM/DD/YYYY";
 export const UK_DISPLAY_DATE_FORMAT = "DD/MM/YYYY";
 export const ERP_NEXT_ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** MariaDB/Frappe Datetime — no `T`, milliseconds, or `Z`. */
+export const ERP_NEXT_DATETIME_RE =
+  /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
 
 export const GRN_POSTING_DATE_PO_ERROR =
   "Posting Date must be on or after Purchase Order Date.";
@@ -83,17 +86,43 @@ export function parseERPNextDateInput(
   return separated?.isValid() ? separated.startOf("day") : null;
 }
 
+/**
+ * Extract a calendar `YYYY-MM-DD` with NO timezone / Date / toISOString path.
+ * Prefer this for GRN `posting_date` and PO `transaction_date` on the wire.
+ */
+export function toCalendarYmd(
+  value: string | Date | null | undefined,
+): string | null {
+  if (value == null || value === "") return null;
+
+  if (typeof value === "string") {
+    const raw = value.trim();
+    // Already calendar / ERP date (optionally followed by time) — take the day only.
+    if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+      const ymd = raw.slice(0, 10);
+      return ERP_NEXT_ISO_DATE_RE.test(ymd) ? ymd : null;
+    }
+    // Display formats only — never `new Date(raw)` / toISOString.
+    const parsed = parseERPNextDateInput(raw);
+    return parsed?.isValid() ? parsed.format(ERP_NEXT_DATE_FORMAT) : null;
+  }
+
+  // Date instance: local calendar components only (never toISOString / getUTC*).
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, "0");
+    const d = String(value.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  return null;
+}
+
 /** Format any supported date input as YYYY-MM-DD for ERPNext API payloads. */
 export function formatERPNextDate(
   value: string | Date | null | undefined
 ): string | null {
-  const parsed =
-    value instanceof Date
-      ? dayjs(value).startOf("day")
-      : parseERPNextDateInput(value);
-
-  if (!parsed?.isValid()) return null;
-  return parsed.format(ERP_NEXT_DATE_FORMAT);
+  return toCalendarYmd(value);
 }
 
 /**
@@ -111,9 +140,82 @@ export function formatERPNextDatetime(
   value: string | Date | null | undefined
 ): string | null {
   if (value == null || value === "") return null;
+  // Already ERP-safe — return as-is (avoids timezone re-shift).
+  if (typeof value === "string" && ERP_NEXT_DATETIME_RE.test(value.trim())) {
+    return value.trim();
+  }
   const parsed = dayjs(value);
   if (!parsed.isValid()) return null;
-  return parsed.format(ERP_NEXT_DATETIME_FORMAT);
+  const formatted = parsed.format(ERP_NEXT_DATETIME_FORMAT);
+  // Hard guarantee: never leak ISO-8601 into MariaDB Datetime columns.
+  if (
+    formatted.includes("T") ||
+    formatted.includes("Z") ||
+    /\.\d{3}/.test(formatted)
+  ) {
+    return formatted.replace("T", " ").replace(/Z$/i, "").replace(/\.\d{3}/, "");
+  }
+  return formatted;
+}
+
+/** Ensure a value is `YYYY-MM-DD HH:mm:ss` before writing to ERPNext Datetime. */
+export function assertERPNextDatetime(
+  value: string | Date | null | undefined,
+  fieldName: string,
+): string {
+  const formatted = formatERPNextDatetime(value);
+  if (!formatted || !ERP_NEXT_DATETIME_RE.test(formatted)) {
+    throw new Error(
+      `${fieldName} must be a valid datetime in YYYY-MM-DD HH:mm:ss format for ERPNext.`,
+    );
+  }
+  return formatted;
+}
+
+/**
+ * Normalize PO Shipment / delivery schedule date fields for ERPNext.
+ * - Datetime fields → `YYYY-MM-DD HH:mm:ss`
+ * - Date fields → `YYYY-MM-DD`
+ * Never passes ISO-8601 (`T` / ms / `Z`) through to MariaDB.
+ */
+export function sanitizePoShipmentDates<
+  T extends {
+    supplier_acceptance_date?: string | null;
+    rejected_date?: string | null;
+    dispatch_date?: string | null;
+    expected_delivery_date?: string | null;
+  },
+>(input: T): T {
+  const out = { ...input };
+
+  if (out.supplier_acceptance_date != null && out.supplier_acceptance_date !== "") {
+    out.supplier_acceptance_date = assertERPNextDatetime(
+      out.supplier_acceptance_date,
+      "supplier_acceptance_date",
+    );
+  }
+  if (out.rejected_date != null && out.rejected_date !== "") {
+    out.rejected_date = assertERPNextDatetime(out.rejected_date, "rejected_date");
+  }
+  if (out.dispatch_date != null && out.dispatch_date !== "") {
+    out.dispatch_date = assertERPNextDatetime(out.dispatch_date, "dispatch_date");
+  }
+  if (
+    out.expected_delivery_date != null &&
+    out.expected_delivery_date !== ""
+  ) {
+    out.expected_delivery_date = assertERPNextDate(
+      out.expected_delivery_date,
+      "expected_delivery_date",
+    );
+  }
+
+  return out;
+}
+
+/** Current timestamp in ERPNext Datetime format (never ISO-8601). */
+export function nowERPNextDatetime(): string {
+  return formatERPNextDatetime(new Date()) ?? dayjs().format(ERP_NEXT_DATETIME_FORMAT);
 }
 
 /** Format ISO / API date for US display (MM/DD/YYYY). */
@@ -211,8 +313,9 @@ export function resolveGrnPostingDate(
   return ideal;
 }
 
+/** Local business calendar today as YYYY-MM-DD — never UTC / toISOString. */
 export function todayERPNextDate(): string {
-  return formatERPNextDate(new Date()) ?? "";
+  return toCalendarYmd(new Date()) ?? "";
 }
 
 export function erpNextDateOffset(days: number): string {
@@ -321,23 +424,42 @@ export function logRfqToPoDateContext(input: {
 }
 
 /**
- * Build a Purchase Receipt payload with ISO dates only.
+ * Build a Purchase Receipt payload.
  *
- * CRITICAL: `set_posting_time: 1` is required to make ERPNext honour
- * the `posting_date` we send.  Without it ERPNext silently replaces
- * the date with the server's `nowdate()`, which may differ due to
- * timezone and cause a spurious "before Purchase Order date" error.
+ * `posting_date` must already be calendar `YYYY-MM-DD`. Never convert via
+ * `Date` / `toISOString` / UTC. `set_posting_time: 1` is required so ERPNext
+ * honours the client calendar day (Desk "Edit Posting Date").
  */
 export function buildGrnPayload<
-  T extends { posting_date?: string; set_posting_time?: 0 | 1 }
->(data: T): T & { set_posting_time: 1 } {
-  const payload = { ...data, set_posting_time: 1 as const };
-  if (payload.posting_date) {
-    payload.posting_date = assertERPNextDate(
-      payload.posting_date,
-      "posting_date"
-    );
+  T extends {
+    posting_date?: string;
+    posting_time?: string;
+    set_posting_time?: 0 | 1;
+  },
+>(data: T): T {
+  const payload = { ...data };
+
+  if (payload.posting_date != null && payload.posting_date !== "") {
+    const ymd = toCalendarYmd(payload.posting_date);
+    if (!ymd) {
+      throw new Error(
+        "posting_date must be a valid calendar date in YYYY-MM-DD format for ERPNext.",
+      );
+    }
+    // eslint-disable-next-line no-console
+    console.log("[buildGrnPayload] posting_date before:", payload.posting_date);
+    payload.posting_date = ymd;
+    // eslint-disable-next-line no-console
+    console.log("[buildGrnPayload] posting_date after (wire):", payload.posting_date);
+    payload.set_posting_time = 1;
+    // Do not send posting_time — midnight + TZ quirks are not needed for Date fields.
+    delete payload.posting_time;
+  } else {
+    delete payload.posting_date;
+    delete payload.set_posting_time;
+    delete payload.posting_time;
   }
+
   return payload;
 }
 

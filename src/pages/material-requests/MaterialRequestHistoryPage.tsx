@@ -10,6 +10,10 @@ import {
 } from "../../api/forwardedMaterialRequests";
 import ErrorState from "../../components/ErrorState";
 import { TableSkeleton } from "../../components/Skeleton";
+import {
+  Drawing2dCell,
+  PartNameCell,
+} from "../../components/warehouse/EngineeringDocCells";
 import MaterialRequestStatusModal from "../../components/warehouse/MaterialRequestStatusModal";
 import ForwardedFilterBar, {
   EMPTY_FORWARDED_FILTERS,
@@ -73,6 +77,8 @@ export default function MaterialRequestHistoryPage() {
       if (filters.warehouse && r.warehouse !== filters.warehouse) return false;
       if (filters.priority && r.priority !== filters.priority) return false;
       if (filters.procurementType && r.procurementType !== filters.procurementType)
+        return false;
+      if (filters.requestMode && r.requestMode !== filters.requestMode)
         return false;
       if (filters.status && r.currentStage !== filters.status) return false;
       if (dateFloor && r.forwardedOn) {
@@ -299,20 +305,22 @@ function HistoryRow({
 
 function ItemsDrawer({ row }: { row: ForwardedHistoryRow }) {
   return (
-    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white">
+    <div className="overflow-x-auto overflow-hidden rounded-lg border border-neutral-200 bg-white">
       <table className="min-w-full text-xs">
         <thead className="bg-neutral-100 text-neutral-600">
           <tr>
             <th className="px-4 py-2 text-left font-semibold">Item Code</th>
             <th className="px-4 py-2 text-left font-semibold">Item Name</th>
             <th className="px-4 py-2 text-right font-semibold">Requested Qty</th>
+            <th className="px-4 py-2 text-left font-semibold">Part Name</th>
+            <th className="px-4 py-2 text-left font-semibold">Attachments</th>
             <th className="px-4 py-2 text-right font-semibold">Available Qty</th>
             <th className="px-4 py-2 text-right font-semibold">Remaining Qty</th>
             <th className="px-4 py-2 text-left font-semibold">Warehouse</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-neutral-100">
-          {row.items.map((item, idx) => (
+          {(row.items ?? []).map((item, idx) => (
             <tr key={`${row.mrNumber}__${item.item_code}__${idx}`} className="hover:bg-neutral-50/80">
               <td className="whitespace-nowrap px-4 py-2 font-mono font-medium text-neutral-800">
                 {item.item_code}
@@ -320,6 +328,15 @@ function ItemsDrawer({ row }: { row: ForwardedHistoryRow }) {
               <td className="px-4 py-2 text-neutral-700">{item.item_name}</td>
               <td className="whitespace-nowrap px-4 py-2 text-right tabular-nums text-neutral-700">
                 {item.requested_qty}
+              </td>
+              <td className="px-4 py-2">
+                <PartNameCell value={item.part_name} />
+              </td>
+              <td className="px-4 py-2">
+                <Drawing2dCell
+                  url={item.drawing_2d_url}
+                  attachments={item.attachments}
+                />
               </td>
               <td className="whitespace-nowrap px-4 py-2 text-right tabular-nums text-neutral-600">
                 {item.available_qty}

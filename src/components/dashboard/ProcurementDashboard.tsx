@@ -11,33 +11,41 @@ import {
   Package,
   ShoppingCart,
   Truck,
+  UserPlus,
   Users,
 } from "lucide-react";
 
 import {
-  fetchDashboardAnalytics,
   fetchProcurementDashboardKpis,
+  fetchProcurementSecondaryAnalytics,
 } from "../../api/dashboard";
+import { dashPerfLog, timedDashApi } from "../../api/dashboardPerf";
+import {
+  fetchProcurementActionCenterCounts,
+  logDashboardWidget,
+} from "../../api/procurementDashboardTruth";
 import { DASHBOARD_QUERY_OPTIONS } from "../../api/queryPresets";
 import {
   fetchProcurementQueue,
+  getLinkedRfqName,
+  getMaterialRequestMode,
   getMaterialRequestProcurementType,
   getMaterialRequestWorkflowStatus,
   parseForwardedItemsFromMr,
   type MaterialRequestWorkflowRecord,
 } from "../../api/materialRequestWorkflow";
 import { canCreateRfqFromMaterialRequest } from "../../api/createRFQFromMaterialRequest";
-import {
-  buildForwardedCounters,
-  fetchForwardedHistory,
-} from "../../api/forwardedMaterialRequests";
+import { fetchForwardedDashboardCounters } from "../../api/forwardedMaterialRequests";
 import { syncMaterialRequestSlaBatch } from "../../api/slaIntegration";
 import { useSlaVisible } from "../../hooks/useSlaVisible";
-import type { MaterialRequestProcurementType } from "../../types/materialRequestWorkflow";
+import type {
+  MaterialRequestMode,
+  MaterialRequestProcurementType,
+} from "../../types/materialRequestWorkflow";
 import ProcurementTypeBadge from "../ProcurementTypeBadge";
+import RequestModeBadge from "../RequestModeBadge";
 import { getDashboardConfig } from "../../config/dashboardRoles";
 import {
-  computeMonthlySpendTrend,
   buildActivityFeed,
   buildTopSuppliersWithTrend,
 } from "../../utils/dashboardUtils";
@@ -45,11 +53,14 @@ import { formatCurrencyCompact, formatDate } from "../../utils/format";
 import { Skeleton } from "../Skeleton";
 import StatusBadge from "../StatusBadge";
 import CompactActivityFeed from "./CompactActivityFeed";
+import DashboardWidgetError from "./DashboardWidgetError";
 import TopSuppliersPanel from "./TopSuppliersPanel";
 
-const AdminSpendCharts = lazy(() => import("./AdminSpendCharts"));
 const ProcurementAnalyticsSection = lazy(
   () => import("./ProcurementAnalyticsSection"),
+);
+const ProcurementExtendedAnalyticsDrawer = lazy(
+  () => import("./ProcurementExtendedAnalyticsDrawer"),
 );
 const SlaCountdownWidgetLazy = lazy(() => import("../sla/SlaCountdownWidget"));
 
@@ -86,6 +97,7 @@ interface ForwardedRow {
   mr: MaterialRequestWorkflowRecord;
   name: string;
   procurementType: MaterialRequestProcurementType;
+  requestMode: MaterialRequestMode;
   department: string;
   requestDate: string;
   priority: string;
@@ -135,13 +147,14 @@ function buildForwardedRows(
     }
 
     const status = getMaterialRequestWorkflowStatus(mr);
-    const linkedRfq = mr.custom_linked_rfq || null;
+    const linkedRfq = getLinkedRfqName(mr) || null;
     const hasRfq = status === "RFQ Created" || Boolean(linkedRfq);
 
     return {
       mr,
       name: mr.name,
       procurementType: getMaterialRequestProcurementType(mr),
+      requestMode: getMaterialRequestMode(mr),
       department: mr.custom_department || mr.department || "—",
       requestDate: formatDate(mr.transaction_date),
       priority: mr.custom_priority || "Medium",
@@ -150,7 +163,7 @@ function buildForwardedRows(
       statusLabel: hasRfq ? "RFQ Created" : "Forwarded to Procurement",
       hasRfq,
       linkedRfq,
-      canCreateRfq: !linkedRfq && canCreateRfqFromMaterialRequest(mr),
+      canCreateRfq: canCreateRfqFromMaterialRequest(mr),
     };
   });
 }
@@ -161,59 +174,79 @@ export default function ProcurementDashboard({ greetingName }: Props) {
   const config = getDashboardConfig("procurement");
   const secondaryReady = useAfterFirstPaint(true);
   const slaVisible = useSlaVisible();
+  const [extendedOpen, setExtendedOpen] = useState(false);
 
   useEffect(() => {
-    if (import.meta.env.DEV) {
-      console.log("[Dashboard] ProcurementDashboard mount", {
-        t: Math.round(performance.now()),
-      });
-    }
+    dashPerfLog("Dashboard mounted");
   }, []);
 
   // ── KPI-critical: one parallel snapshot (counts + spend) ───────────────────
   const kpisQuery = useQuery({
     queryKey: ["procurement-dashboard-kpis"],
-    queryFn: fetchProcurementDashboardKpis,
+    queryFn: () =>
+      timedDashApi("KPI snapshot (all parallel)", () =>
+        fetchProcurementDashboardKpis(),
+      ),
     ...DASHBOARD_QUERY_OPTIONS,
   });
 
   useEffect(() => {
-    if (!import.meta.env.DEV) return;
-    if (kpisQuery.isSuccess && kpisQuery.dataUpdatedAt) {
-      console.log("[Dashboard] KPI cards ready (interactive)", {
-        t: Math.round(performance.now()),
+    if (kpisQuery.isSuccess && kpisQuery.dataUpdatedAt && kpisQuery.data) {
+      dashPerfLog("KPI cards ready (interactive)", {
         fromCache: kpisQuery.isFetched && !kpisQuery.isFetching,
       });
+      // Action Center reuses the same truth snapshot — log for audit parity.
+      logDashboardWidget("Action Center · Pending Quotations", {
+        value: kpisQuery.data.pendingQuotations,
+        source: "procurement-dashboard-kpis (truth)",
+      });
+      logDashboardWidget("Action Center · Pending Purchase Orders", {
+        value: kpisQuery.data.pendingPurchaseOrders,
+        source: "procurement-dashboard-kpis (truth)",
+      });
     }
-  }, [kpisQuery.isSuccess, kpisQuery.dataUpdatedAt, kpisQuery.isFetched, kpisQuery.isFetching]);
+  }, [kpisQuery.isSuccess, kpisQuery.dataUpdatedAt, kpisQuery.isFetched, kpisQuery.isFetching, kpisQuery.data]);
 
-  // ── Deferred analytics — charts / top suppliers / activity feed ────────────
+  // Charts must not wait forever if KPIs fail — start after first paint.
+  const chartsReady = secondaryReady && (kpisQuery.isFetched || kpisQuery.isError);
   const analyticsQuery = useQuery({
-    queryKey: ["dashboard-analytics"],
-    queryFn: fetchDashboardAnalytics,
-    enabled: secondaryReady,
+    queryKey: ["procurement-dashboard-charts"],
+    queryFn: () =>
+      timedDashApi("Charts + Recent RFQs/POs", () =>
+        fetchProcurementSecondaryAnalytics(),
+      ),
+    enabled: chartsReady,
     ...DASHBOARD_QUERY_OPTIONS,
   });
 
-  // ── Deferred table — forwarded material request queue ──────────────────────
+  // Forwarded MR table — hydrate only enough rows for the dashboard preview.
   const queueQuery = useQuery({
-    queryKey: ["mr-procurement-queue"],
-    queryFn: fetchProcurementQueue,
+    queryKey: ["mr-procurement-queue", "dashboard"],
+    queryFn: () =>
+      timedDashApi("Action Center · MR queue", () =>
+        fetchProcurementQueue({ hydrateLimit: 20 }),
+      ),
     enabled: secondaryReady,
     ...DASHBOARD_QUERY_OPTIONS,
   });
 
-  // ── Deferred — forwarded history (drives the tracking counters) ────────────
-  const historyQuery = useQuery({
-    queryKey: ["mr-forwarded-history"],
-    queryFn: fetchForwardedHistory,
+  // Counters only — no N× get_doc (history pages keep the full query).
+  const countersQuery = useQuery({
+    queryKey: ["mr-forwarded-counters"],
+    queryFn: () => fetchForwardedDashboardCounters(),
     enabled: secondaryReady,
     ...DASHBOARD_QUERY_OPTIONS,
   });
 
   const forwardedCounters = useMemo(
-    () => buildForwardedCounters(historyQuery.data ?? []),
-    [historyQuery.data],
+    () =>
+      countersQuery.data ?? {
+        forwardedRequests: 0,
+        rfqsPending: 0,
+        rfqsCreatedToday: 0,
+        historyCount: 0,
+      },
+    [countersQuery.data],
   );
 
   useEffect(() => {
@@ -226,17 +259,13 @@ export default function ProcurementDashboard({ greetingName }: Props) {
   const analytics = analyticsQuery.data;
 
   // KPI grid only waits on the lightweight snapshot — never heavy analytics.
-  const loading = kpisQuery.isLoading && !kpisQuery.data;
-  const analyticsLoading = analyticsQuery.isPending;
+  const loading = kpisQuery.isLoading && !kpisQuery.data && !kpisQuery.isError;
+  const analyticsLoading =
+    analyticsQuery.isPending && !analyticsQuery.isError && chartsReady;
 
   const ytdSpend = kpis?.ytdSpend ?? 0;
   const pendingQuotations = kpis?.pendingQuotations ?? 0;
   const pendingPos = kpis?.pendingPurchaseOrders ?? 0;
-
-  const monthlySpend = useMemo(
-    () => computeMonthlySpendTrend(analytics?.invoices ?? []),
-    [analytics?.invoices],
-  );
 
   const topSuppliers = useMemo(
     () =>
@@ -267,6 +296,32 @@ export default function ProcurementDashboard({ greetingName }: Props) {
     () => forwardedRows.filter((r) => !r.hasRfq).length,
     [forwardedRows],
   );
+
+  const actionCenterQuery = useQuery({
+    queryKey: ["procurement-action-center"],
+    queryFn: () =>
+      timedDashApi("Action Center counts", () =>
+        fetchProcurementActionCenterCounts({
+          materialRequestsWaitingForRfq: mrWaitingForRfq,
+        }),
+      ),
+    enabled: secondaryReady && !queueQuery.isPending,
+    ...DASHBOARD_QUERY_OPTIONS,
+  });
+
+  // Keep MR-waiting count in sync with the queue table (same source of truth).
+  const actionCenter = useMemo(() => {
+    const base = actionCenterQuery.data;
+    if (!base) return null;
+    return {
+      ...base,
+      materialRequestsWaitingForRfq: mrWaitingForRfq,
+      quotationsWaitingReview:
+        kpis?.pendingQuotations ?? base.quotationsWaitingReview,
+      purchaseOrdersWaitingApproval:
+        kpis?.pendingPurchaseOrders ?? base.purchaseOrdersWaitingApproval,
+    };
+  }, [actionCenterQuery.data, mrWaitingForRfq, kpis]);
 
   const kpiCards = useMemo<
     Array<{
@@ -319,6 +374,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
         to: "/suppliers?status=active",
         accent: "bg-primary-50 text-primary-600",
       },
+      // Active = ERPNext Supplier.disabled = 0 (approved/enabled in Supplier Master)
     ],
     [kpis, ytdSpend, pendingQuotations, pendingPos],
   );
@@ -354,6 +410,12 @@ export default function ProcurementDashboard({ greetingName }: Props) {
             <Skeleton key={i} className="h-[78px] rounded-xl" />
           ))}
         </div>
+      ) : kpisQuery.isError ? (
+        <DashboardWidgetError
+          title="Unable to load dashboard data"
+          error={kpisQuery.error}
+          onRetry={() => void kpisQuery.refetch()}
+        />
       ) : (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {kpiCards.map((c) => {
@@ -383,26 +445,131 @@ export default function ProcurementDashboard({ greetingName }: Props) {
         </div>
       )}
 
-      {/* ── Procurement Analytics: live KPIs + trend charts (lazy) ─────── */}
-      {secondaryReady ? (
+      {/* ── Analytics KPIs + charts (clean 4-card row) ─────────────────── */}
+      {chartsReady ? (
         <Suspense
           fallback={
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <Skeleton key={i} className="h-24 rounded-xl" />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-[132px] rounded-xl" />
               ))}
             </div>
           }
         >
-          <ProcurementAnalyticsSection enabled />
+          <ProcurementAnalyticsSection
+            enabled={chartsReady}
+            title="Procurement Analytics"
+            subtitle="Live performance from ERPNext"
+            kpis={[
+              "costSavings",
+              "budgetUtilisation",
+              "supplierResponse",
+              "onTimeDelivery",
+            ]}
+            charts={[
+              "monthlySpend",
+              "budgetVsActual",
+              "supplierResponse",
+              "rfqTurnaround",
+            ]}
+            showCharts
+            headerAction={
+              <button
+                type="button"
+                onClick={() => setExtendedOpen(true)}
+                className="inline-flex items-center gap-1 text-xs font-semibold text-primary-600 transition hover:text-primary-700"
+              >
+                View More Analytics
+                <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+            }
+          />
         </Suspense>
       ) : (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-24 rounded-xl" />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-[132px] rounded-xl" />
           ))}
         </div>
       )}
+
+      {extendedOpen ? (
+        <Suspense fallback={null}>
+          <ProcurementExtendedAnalyticsDrawer
+            open={extendedOpen}
+            onClose={() => setExtendedOpen(false)}
+          />
+        </Suspense>
+      ) : null}
+
+      {/* ── Action Center (below charts) ───────────────────────────────── */}
+      <section className="card p-4 sm:p-5">
+        <div className="mb-3">
+          <h2 className="text-base font-bold text-neutral-900">Action Center</h2>
+          <p className="text-xs text-neutral-500">
+            Items that need your attention right now
+          </p>
+        </div>
+
+        {actionCenterQuery.isError ? (
+          <DashboardWidgetError
+            title="Unable to load dashboard data"
+            error={actionCenterQuery.error}
+            onRetry={() => void actionCenterQuery.refetch()}
+          />
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <AttentionTile
+              label="Material Requests waiting for RFQ"
+              value={
+                queueQuery.isPending && !queueQuery.isError
+                  ? null
+                  : actionCenter?.materialRequestsWaitingForRfq ?? null
+              }
+              icon={Package}
+              to="/material-requests/procurement"
+              accent="bg-rose-50 text-rose-600"
+            />
+            <AttentionTile
+              label="Quotations waiting for review"
+              value={
+                kpis
+                  ? pendingQuotations
+                  : actionCenterQuery.isPending
+                    ? null
+                    : actionCenter?.quotationsWaitingReview ?? null
+              }
+              icon={FileText}
+              to="/sourcing/rfq?preset=open"
+              accent="bg-amber-50 text-amber-600"
+            />
+            <AttentionTile
+              label="Purchase Orders waiting for approval"
+              value={
+                kpis
+                  ? pendingPos
+                  : actionCenterQuery.isPending
+                    ? null
+                    : actionCenter?.purchaseOrdersWaitingApproval ?? null
+              }
+              icon={ClipboardCheck}
+              to="/p2p/purchase-orders?preset=pending"
+              accent="bg-emerald-50 text-emerald-600"
+            />
+            <AttentionTile
+              label="Suppliers pending approval"
+              value={
+                actionCenterQuery.isPending
+                  ? null
+                  : actionCenter?.suppliersWaitingApproval ?? 0
+              }
+              icon={UserPlus}
+              to="/suppliers/onboarding"
+              accent="bg-sky-50 text-sky-600"
+            />
+          </div>
+        )}
+      </section>
 
       {/* ── SLA countdowns for procurement-owned stages (lazy) ─────────── */}
       {slaVisible && secondaryReady ? (
@@ -414,82 +581,32 @@ export default function ProcurementDashboard({ greetingName }: Props) {
         </Suspense>
       ) : null}
 
-      {/* ── Section 2: Action Center ───────────────────────────────────── */}
-      <section className="card p-4 sm:p-5">
-        <div className="mb-3 flex items-center justify-between">
-          <div>
-            <h2 className="text-base font-bold text-neutral-900">Action Center</h2>
-            <p className="text-xs text-neutral-500">
-              Items that need your attention right now
-            </p>
-          </div>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-3">
-          <AttentionTile
-            label="Material Requests waiting for RFQ"
-            value={!secondaryReady || queueQuery.isPending ? null : mrWaitingForRfq}
-            icon={Package}
-            to="/material-requests/procurement"
-            accent="text-blue-700 bg-blue-50"
-          />
-          <AttentionTile
-            label="Quotations waiting for review"
-            value={kpis ? pendingQuotations : null}
-            icon={FileText}
-            to="/sourcing/rfq?preset=open"
-            accent="text-amber-700 bg-amber-50"
-          />
-          <AttentionTile
-            label="Purchase Orders waiting for approval"
-            value={kpis ? pendingPos : null}
-            icon={ClipboardCheck}
-            to="/p2p/purchase-orders?preset=pending"
-            accent="text-emerald-700 bg-emerald-50"
-          />
-        </div>
-
-        <div className="mt-4 grid gap-2 sm:grid-cols-3">
-          <QuickAction label="Create RFQ" to="/sourcing/rfq/new" icon={FileSearch} />
-          <QuickAction
-            label="Review Quotations"
-            to="/sourcing/rfq?preset=open"
-            icon={FileText}
-          />
-          <QuickAction
-            label="Approve PO"
-            to="/p2p/purchase-orders?preset=pending"
-            icon={ClipboardCheck}
-          />
-        </div>
-      </section>
-
       {/* ── Forwarded tracking counters ────────────────────────────────── */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <AttentionTile
           label="Forwarded Requests"
-          value={historyQuery.isPending ? null : forwardedCounters.forwardedRequests}
+          value={countersQuery.isPending ? null : forwardedCounters.forwardedRequests}
           icon={Truck}
           to="/material-requests/procurement"
           accent="bg-amber-50 text-amber-600"
         />
         <AttentionTile
           label="RFQs Pending"
-          value={historyQuery.isPending ? null : forwardedCounters.rfqsPending}
+          value={countersQuery.isPending ? null : forwardedCounters.rfqsPending}
           icon={FileSearch}
           to="/material-requests/history"
           accent="bg-blue-50 text-blue-600"
         />
         <AttentionTile
           label="RFQs Created Today"
-          value={historyQuery.isPending ? null : forwardedCounters.rfqsCreatedToday}
+          value={countersQuery.isPending ? null : forwardedCounters.rfqsCreatedToday}
           icon={FileText}
           to="/material-requests/history"
           accent="bg-emerald-50 text-emerald-600"
         />
         <AttentionTile
           label="History Count"
-          value={historyQuery.isPending ? null : forwardedCounters.historyCount}
+          value={countersQuery.isPending ? null : forwardedCounters.historyCount}
           icon={ClipboardCheck}
           to="/material-requests/history"
           accent="bg-primary-50 text-primary-600"
@@ -530,7 +647,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-100">
-              {queueQuery.isPending ? (
+              {queueQuery.isPending && !queueQuery.isError ? (
                 Array.from({ length: 4 }).map((_, i) => (
                   <tr key={i}>
                     <td colSpan={8} className="px-4 py-2">
@@ -538,6 +655,16 @@ export default function ProcurementDashboard({ greetingName }: Props) {
                     </td>
                   </tr>
                 ))
+              ) : queueQuery.isError ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-4">
+                    <DashboardWidgetError
+                      title="Unable to load dashboard data"
+                      error={queueQuery.error}
+                      onRetry={() => void queueQuery.refetch()}
+                    />
+                  </td>
+                </tr>
               ) : forwardedRows.length === 0 ? (
                 <tr>
                   <td
@@ -562,6 +689,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
                           type={row.procurementType}
                           withIcon={false}
                         />
+                        <RequestModeBadge mode={row.requestMode} />
                       </div>
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-neutral-700">
@@ -613,25 +741,30 @@ export default function ProcurementDashboard({ greetingName }: Props) {
         </div>
       </section>
 
-      {/* ── Section 4: Analytics ───────────────────────────────────────── */}
-      <Suspense
-        fallback={
-          <div className="dashboard-grid-2">
-            <Skeleton className="min-h-[300px] rounded-xl" />
-            <Skeleton className="min-h-[300px] rounded-xl" />
-          </div>
-        }
-      >
-        <AdminSpendCharts monthlySpend={monthlySpend} loading={analyticsLoading} />
-      </Suspense>
+      {analyticsQuery.isError ? (
+        <DashboardWidgetError
+          title="Top suppliers unavailable"
+          onRetry={() => void analyticsQuery.refetch()}
+        />
+      ) : (
+        <TopSuppliersPanel
+          rows={topSuppliers}
+          loading={!chartsReady || analyticsLoading}
+        />
+      )}
 
-      <TopSuppliersPanel rows={topSuppliers} loading={analyticsLoading} />
-
-      <CompactActivityFeed
-        items={activityFeed}
-        loading={analyticsLoading}
-        title="Recent Procurement Activity"
-      />
+      {analyticsQuery.isError ? (
+        <DashboardWidgetError
+          title="Recent activity unavailable"
+          onRetry={() => void analyticsQuery.refetch()}
+        />
+      ) : (
+        <CompactActivityFeed
+          items={activityFeed}
+          loading={!chartsReady || analyticsLoading}
+          title="Recent Procurement Activity"
+        />
+      )}
     </div>
   );
 }
@@ -672,30 +805,6 @@ const AttentionTile = memo(function AttentionTile({
           Review <ArrowRight className="h-3 w-3" />
         </span>
       </div>
-    </Link>
-  );
-});
-
-const QuickAction = memo(function QuickAction({
-  label,
-  to,
-  icon: Icon,
-}: {
-  label: string;
-  to: string;
-  icon: LucideIcon;
-}) {
-  return (
-    <Link
-      to={to}
-      className="group flex items-center gap-2.5 rounded-xl border border-neutral-200/80 bg-white px-3 py-2.5 shadow-sm transition-all hover:border-primary-300 hover:shadow-md"
-    >
-      <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-primary-50 text-primary-600 transition-colors group-hover:bg-primary-600 group-hover:text-white">
-        <Icon className="h-4 w-4" />
-      </span>
-      <span className="truncate text-sm font-semibold text-neutral-700 transition-colors group-hover:text-neutral-900">
-        {label}
-      </span>
     </Link>
   );
 });

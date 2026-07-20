@@ -34,9 +34,8 @@ import {
 import PaymentMethodFields from "../../components/payments/PaymentMethodFields";
 import PaymentSummaryPanel from "../../components/payments/PaymentSummaryPanel";
 import PaymentTraceability from "../../components/payments/PaymentTraceability";
-import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
-import { Skeleton } from "../../components/Skeleton";
+import { AppLoading, EnterpriseError } from "../../components/enterprise";
 import StatusBadge from "../../components/StatusBadge";
 import { ErpNextDatePicker } from "../../components/ui";
 import { formatCurrency } from "../../utils/format";
@@ -71,6 +70,8 @@ export default function PaymentDetailPage() {
     data: payment,
     isLoading,
     isError,
+    error,
+    refetch,
   } = useQuery({
     queryKey: ["payment-entry", name],
     queryFn: () => getPaymentEntry(name),
@@ -189,32 +190,16 @@ export default function PaymentDetailPage() {
   });
 
   if (isLoading) {
-    return (
-      <div>
-        <BackLink />
-        <div className="mt-4 space-y-3">
-          <Skeleton className="h-8 w-64" />
-          <Skeleton className="h-4 w-40" />
-          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <Skeleton key={i} className="h-16 rounded-xl" />
-            ))}
-          </div>
-        </div>
-      </div>
-    );
+    return <AppLoading variant="document" />;
   }
 
   if (isError || !payment) {
     return (
-      <div>
-        <BackLink />
-        <EmptyState
-          icon={CreditCard}
-          title="Payment not found"
-          description={`Could not load Payment Entry "${name}". It may have been deleted or you may not have access.`}
-        />
-      </div>
+      <EnterpriseError
+        error={error ?? new Error("not found")}
+        onRetry={() => void refetch()}
+        onBack={() => window.history.back()}
+      />
     );
   }
 

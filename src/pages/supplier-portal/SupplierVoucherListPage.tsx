@@ -15,13 +15,22 @@ import { useSupplierSession } from "../../hooks/useSupplierSession";
 import SupplierPortalLayout from "./SupplierPortalLayout";
 
 export default function SupplierVoucherListPage() {
-  const { supplierName, isReady } = useSupplierSession();
+  const { supplierName, erpSupplierName, isReady } = useSupplierSession();
   const syncVersion = useVoucherSyncStore((s) => s.version);
+  const supplierIdentity = {
+    erpSupplierId: erpSupplierName || supplierName,
+    displayName: supplierName || undefined,
+  };
 
   const { data: vouchers = [] } = useQuery({
-    queryKey: ["supplier-vouchers", supplierName, syncVersion],
-    queryFn: () => getVouchersForSupplier(supplierName),
-    enabled: !!supplierName,
+    queryKey: [
+      "supplier-vouchers",
+      supplierIdentity.erpSupplierId,
+      supplierIdentity.displayName,
+      syncVersion,
+    ],
+    queryFn: () => getVouchersForSupplier(supplierIdentity),
+    enabled: !!(supplierIdentity.erpSupplierId || supplierIdentity.displayName),
     staleTime: 30_000,
   });
 

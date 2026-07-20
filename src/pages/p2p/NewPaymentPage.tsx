@@ -34,6 +34,8 @@ import PageHeader from "../../components/PageHeader";
 import { ErpNextDatePicker } from "../../components/ui";
 import type { PaymentEntry, PurchaseInvoice } from "../../types/erpnext";
 import { formatCurrency, todayIso } from "../../utils/format";
+import { canReleasePayment } from "../../config/roles";
+import { useAuthStore } from "../../store/authStore";
 import { assertERPNextDate } from "../../utils/erpNextDate";
 import { generateId } from "../../utils/id";
 import {
@@ -56,6 +58,8 @@ function NewPaymentPageInner() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
+  const role = useAuthStore((s) => s.user?.role);
+  const canAct = canReleasePayment(role);
 
   const [invoiceName, setInvoiceName] = useState(
     searchParams.get("invoice") ?? ""
@@ -391,6 +395,23 @@ function NewPaymentPageInner() {
     // eslint-disable-next-line no-console
     console.log("Final API Payload", payload);
     createMutation.mutate(payload);
+  }
+
+  if (!canAct) {
+    return (
+      <div>
+        <BackLink />
+        <PageHeader
+          title="Record Supplier Payment"
+          description="Enterprise Accounts Payable disbursement against an open invoice."
+        />
+        <div className="card mt-4 border border-amber-200 bg-amber-50 p-6 text-sm text-amber-900 shadow-sm">
+          Access denied. Only Finance Manager, Accounts Payable, or Finance Admin
+          can release payments. Procurement Managers have read-only access to
+          Purchase Orders and invoices.
+        </div>
+      </div>
+    );
   }
 
   if (invoicesLoading || accountsLoading || modesLoading) {

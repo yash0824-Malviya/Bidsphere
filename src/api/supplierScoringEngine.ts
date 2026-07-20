@@ -23,6 +23,7 @@ import type {
   SupplierScoreRow,
 } from "../types/erpnext";
 import type { AIQuotation } from "./ai";
+import { nowERPDateTime } from "../utils/erpDate";
 import type { HistoricalPerformanceMap } from "./supplierPerformance";
 
 /* -------------------------------------------------------------------------- */
@@ -137,7 +138,7 @@ export function scoreSuppliers(
   if (quotations.length === 0) {
     return {
       weights,
-      scored_at: new Date().toISOString(),
+      scored_at: nowERPDateTime(),
       suppliers: [],
     };
   }
@@ -312,7 +313,7 @@ export function scoreSuppliers(
 
   return {
     weights,
-    scored_at: new Date().toISOString(),
+    scored_at: nowERPDateTime(),
     suppliers,
   };
 }

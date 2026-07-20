@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import toast from "react-hot-toast";
@@ -12,10 +13,13 @@ import {
   Send,
 } from "lucide-react";
 
-import EmptyState from "../../components/EmptyState";
+import { AppLoading, EnterpriseError } from "../../components/enterprise";
 import PageHeader from "../../components/PageHeader";
 import VoucherHistory from "../../components/VoucherHistory";
 import VoucherStatusBadge from "../../components/VoucherStatusBadge";
+import WarehouseVerificationCard from "../../components/warehouse/WarehouseVerificationCard";
+import { getPurchaseReceipt } from "../../api/purchasing";
+import { appendWarehouseEsignAudit } from "../../api/warehouseEsign";
 import { getVoucherById, sendVoucherToSupplier } from "../../api/vouchers";
 import { useVoucherSyncStore } from "../../store/voucherSyncStore";
 import PdfActions from "../../components/PdfActions";
@@ -29,6 +33,7 @@ import {
 } from "../../utils/pdf/voucherDocPdf";
 import { useAuthStore } from "../../store/authStore";
 import { formatCurrency, formatDate } from "../../utils/format";
+import LineEngineeringDocsCell from "../../components/attachments/LineEngineeringDocsCell";
 
 export default function VoucherDetailPage() {
   const { id = "" } = useParams();
@@ -49,49 +54,47 @@ export default function VoucherDetailPage() {
     enabled: !!voucherId,
   });
 
+  const grnName = voucher?.grn_reference?.trim() || "";
+  const {
+    data: linkedGrn,
+    isLoading: grnLoading,
+  } = useQuery({
+    queryKey: ["purchase-receipt", grnName],
+    queryFn: () => getPurchaseReceipt(grnName),
+    enabled: !!grnName,
+    staleTime: 0,
+    refetchOnMount: "always",
+  });
+
+  useEffect(() => {
+    if (!linkedGrn || !user) return;
+    if (user.role !== "finance" && user.role !== "admin") return;
+    const key = `bidsphere:finance-viewed-signed-grn:${linkedGrn.name}`;
+    try {
+      if (sessionStorage.getItem(key)) return;
+      sessionStorage.setItem(key, "1");
+    } catch {
+      /* ignore */
+    }
+    appendWarehouseEsignAudit(
+      "Finance viewed signed GRN",
+      user.full_name || user.email || "Finance",
+      linkedGrn.name,
+      { targetRole: "finance", grnName: linkedGrn.name },
+    );
+  }, [linkedGrn, user]);
+
   if (isLoading) {
-    return (
-      <div>
-        <BackLink />
-        <EmptyState icon={FileText} title="Loading voucher…" description="" />
-      </div>
-    );
+    return <AppLoading variant="document" />;
   }
 
-  if (isError) {
+  if (isError || !voucher) {
     return (
-      <div>
-        <BackLink />
-        <EmptyState
-          icon={FileText}
-          title="Could not load this voucher"
-          description={
-            error instanceof Error
-              ? error.message
-              : "ERPNext returned an error while loading this Voucher. Please retry."
-          }
-        />
-        <button
-          type="button"
-          onClick={() => refetch()}
-          className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50"
-        >
-          Retry
-        </button>
-      </div>
-    );
-  }
-
-  if (!voucher) {
-    return (
-      <div>
-        <BackLink />
-        <EmptyState
-          icon={FileText}
-          title="Voucher not found"
-          description="It may have been removed."
-        />
-      </div>
+      <EnterpriseError
+        error={error ?? new Error("not found")}
+        onRetry={() => void refetch()}
+        onBack={() => window.history.back()}
+      />
     );
   }
 
@@ -170,6 +173,26 @@ export default function VoucherDetailPage() {
         />
       </div>
 
+      <div className="mt-4">
+        {grnName ? (
+          grnLoading ? (
+            <div className="rounded-xl border border-neutral-200 bg-white px-4 py-6 text-sm text-neutral-500 shadow-sm">
+              Loading linked signed GRN…
+            </div>
+          ) : linkedGrn ? (
+            <WarehouseVerificationCard grn={linkedGrn} />
+          ) : (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+              Linked GRN {grnName} could not be loaded. Voucher inventory reference may be incomplete.
+            </div>
+          )
+        ) : (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+            This voucher has no linked GRN. Warehouse verification cannot be shown.
+          </div>
+        )}
+      </div>
+
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           {/* Items */}
@@ -184,24 +207,33 @@ export default function VoucherDetailPage() {
                 <thead className="bg-neutral-50 text-left text-xs font-medium uppercase tracking-wider text-neutral-500">
                   <tr>
                     <th className="px-4 py-2">Item</th>
+                    <th className="px-4 py-2 min-w-[160px]">Attachments</th>
                     <th className="px-4 py-2 text-right">Qty</th>
                     <th className="px-4 py-2 text-right">Rate</th>
                     <th className="px-4 py-2 text-right">Amount</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-200">
-                  {voucher.items.map((it) => (
+                  {(voucher.items ?? []).map((it) => (
                     <tr key={it.item_code}>
-                      <td className="px-4 py-2 font-medium text-neutral-900">
+                      <td className="px-4 py-2 font-medium text-neutral-900 align-top">
                         {it.item_name}
                       </td>
-                      <td className="px-4 py-2 text-right tabular-nums">
+                      <td className="px-4 py-2 align-top">
+                        <LineEngineeringDocsCell
+                          lookup={{
+                            item_code: it.item_code,
+                            purchase_order: voucher.po_reference || undefined,
+                          }}
+                        />
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums align-top">
                         {it.qty} {it.uom}
                       </td>
-                      <td className="px-4 py-2 text-right tabular-nums">
+                      <td className="px-4 py-2 text-right tabular-nums align-top">
                         {formatCurrency(it.rate)}
                       </td>
-                      <td className="px-4 py-2 text-right tabular-nums">
+                      <td className="px-4 py-2 text-right tabular-nums align-top">
                         {formatCurrency(it.amount)}
                       </td>
                     </tr>
@@ -210,7 +242,7 @@ export default function VoucherDetailPage() {
                 <tfoot className="bg-neutral-50">
                   <tr>
                     <td
-                      colSpan={3}
+                      colSpan={4}
                       className="px-4 py-2 text-right text-xs font-semibold uppercase text-neutral-600"
                     >
                       Total
