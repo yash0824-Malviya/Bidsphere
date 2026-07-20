@@ -5,7 +5,6 @@ import {
   ChevronDown,
   ChevronRight,
   CreditCard,
-  FileText,
   Gavel,
   HelpCircle,
   LayoutDashboard,
@@ -14,7 +13,6 @@ import {
   Mail,
   Receipt,
   ShoppingCart,
-  Truck,
   UserRound,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";

@@ -21,6 +21,8 @@ const DELIVERY_BADGE_STYLES: Record<PODeliveryStatus, string> = {
   Accepted: "bg-primary-100 text-primary-700",
   Rejected: "bg-danger-100 text-danger-700",
   "In Transit": "bg-purple-100 text-purple-700",
+  Delivered: "bg-emerald-100 text-emerald-700",
+  Arrived: "bg-teal-100 text-teal-700",
   "Partially Received": "bg-accent-100 text-accent-700",
   Completed: "bg-success-100 text-success-700",
 };

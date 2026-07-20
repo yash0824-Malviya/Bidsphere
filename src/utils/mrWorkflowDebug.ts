@@ -27,8 +27,8 @@ export function logMrWorkflowStage(
   const bidsphere = (d.custom_bidsphere_status as string | undefined) ?? null;
   const payload: MrDebugFields = {
     stage,
-    name: (d.name as string | undefined) ?? null,
-    mr_number: (d.name as string | undefined) ?? null,
+    name: (d.name as string | undefined) ?? undefined,
+    mr_number: (d.name as string | undefined) ?? undefined,
     status: (d.status as string | undefined) ?? null,
     workflow_state: (d.workflow_state as string | undefined) ?? null,
     bidsphere_status: bidsphere,

@@ -123,7 +123,7 @@ function buildHistory(doc: LegalDocumentSet): ReviewHistoryEntry[] {
       rejectionReason: doc.rejection_reason,
     });
   }
-  if (doc.finance_status && doc.finance_status !== "Pending" && doc.finance_status !== "") {
+  if (doc.finance_status && doc.finance_status !== "Pending") {
     history.push({
       stage: "Finance",
       status: doc.finance_status,

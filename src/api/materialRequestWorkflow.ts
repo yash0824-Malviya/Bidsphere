@@ -2439,13 +2439,8 @@ export async function fetchProcurementQueue(opts?: {
   });
 
   const forwardedStatusValues = [
-    "Forwarded to Procurement",
-    "Procurement Review",
-    "Procurement Pending",
-    "RFQ Pending",
-    "RFQ Requested",
+    ...FORWARDED_ERP_STATUS_VALUES,
     "Waiting for RFQ",
-    "RFQ Created",
   ] as const;
 
   const [byStoredStatus, byForwardFlag, allSubmitted, purchaseDrafts] =

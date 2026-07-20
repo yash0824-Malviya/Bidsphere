@@ -105,7 +105,7 @@ export default function SupplierPortalProfilePage() {
   const [editableSteps, setEditableSteps] = useState<string[] | null>(null);
   const [discussionUnread, setDiscussionUnread] = useState(0);
   const [saving, setSaving] = useState(false);
-  const [docType, setDocType] = useState(DOCUMENT_TYPES[0]);
+  const [docType, setDocType] = useState<string>(DOCUMENT_TYPES[0]);
   const [uploading, setUploading] = useState(false);
   const [categoryOptions, setCategoryOptions] = useState<SupplierCategoryRow[]>([]);
   /** UI-only phase — does not change workflow / API. */

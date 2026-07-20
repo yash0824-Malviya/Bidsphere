@@ -170,16 +170,6 @@ function formatCompactDuration(totalHours: number): string {
   return `${minutes}m`;
 }
 
-/** @deprecated alias — prefer formatCompactDuration */
-function formatCycleDuration(hours: number): string {
-  return formatCompactDuration(hours);
-}
-
-/** @deprecated alias — prefer formatCompactDuration */
-function formatDaysHours(totalHours: number): string {
-  return formatCompactDuration(totalHours);
-}
-
 function monthKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
@@ -382,8 +372,7 @@ async function computeBudget(opts?: {
     getBudgetDashboard({ maxBudgets: 8 }),
     sumPendingPoCommitment(),
   ]);
-  const { totalBudget, consumedBudget, availableBudget, utilizationPct } =
-    data.kpis;
+  const { totalBudget, consumedBudget, utilizationPct } = data.kpis;
 
   const chart: BudgetActualPoint[] = (data.rows ?? [])
     .slice()

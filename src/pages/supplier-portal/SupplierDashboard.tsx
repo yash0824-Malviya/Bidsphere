@@ -1,4 +1,4 @@
-import { useMemo, type ElementType } from "react";
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -18,6 +18,7 @@ import {
   TrendingUp,
   Truck,
   Wallet,
+  type LucideIcon,
 } from "lucide-react";
 import {
   Bar,
@@ -522,7 +523,7 @@ function UnlockedDashboard({
   const kpis: Array<{
     title: string;
     value: number;
-    icon: ElementType;
+    icon: LucideIcon;
     accent: string;
     to: string;
   }> = [
@@ -570,7 +571,7 @@ function UnlockedDashboard({
     },
   ];
 
-  const quickActions: Array<{ label: string; to: string; icon: ElementType; hint: string }> = [
+  const quickActions: Array<{ label: string; to: string; icon: LucideIcon; hint: string }> = [
     { label: "My RFQs", to: "/supplier/rfqs", icon: FileText, hint: "Respond to invitations" },
     { label: "Live Auctions", to: "/supplier/auctions", icon: Gavel, hint: "Place competitive bids" },
     { label: "Purchase Orders", to: "/supplier/purchase-orders", icon: Truck, hint: "Track active orders" },

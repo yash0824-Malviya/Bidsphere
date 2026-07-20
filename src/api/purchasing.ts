@@ -1669,6 +1669,27 @@ export async function getPurchaseReceipt(
 }
 
 /**
+ * Update an existing Purchase Receipt (GRN).
+ * When `allowSignedEsignFields` is set, only allowlisted e-sign fields may be
+ * written on an already-signed GRN (see warehouseSignatureIntegrity).
+ */
+export async function updatePurchaseReceipt(
+  name: string,
+  data: Partial<PurchaseReceipt> | Record<string, unknown>,
+  opts?: { allowSignedEsignFields?: boolean },
+): Promise<PurchaseReceipt> {
+  const endpoint = buildResourceUrl(PRECEIPT_DOCTYPE, name);
+  if (opts?.allowSignedEsignFields) {
+    const { assertSignedGrnMutationAllowed } = await import(
+      "./warehouseSignatureIntegrity"
+    );
+    const fresh = await apiGet<PurchaseReceipt>(endpoint);
+    assertSignedGrnMutationAllowed(fresh, data);
+  }
+  return apiPut<PurchaseReceipt>(endpoint, data);
+}
+
+/**
  * Create a Purchase Receipt (GRN). Dates are normalized to YYYY-MM-DD.
  *
  * Future-date policy is enforced server-side by a Before Validate Server

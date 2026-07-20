@@ -2,6 +2,7 @@ import { useMemo } from "react";
 
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, Trash2 } from "lucide-react";
+import toast from "react-hot-toast";
 
 import {
   getItemStockSummary,
@@ -477,7 +478,7 @@ export default function MaterialRequestItemLineRow({
             {stockQuery.isLoading ? (
               <Loader2 className="ml-auto h-3.5 w-3.5 animate-spin text-neutral-400" />
             ) : stock ? (
-              formatQty(stock.actual_qty)
+              formatQty(stock.current_stock)
             ) : (
               "—"
             )}

@@ -14,7 +14,6 @@ import {
   deriveAuctionStatus,
   getSupplierAuctions,
 } from "../api/reverseBidding";
-import { APP_NAME } from "../config/branding";
 import type { AuctionStatus, ReverseBidding } from "../types/reverseBidding";
 import {
   markAuctionStartedNotified,
@@ -122,7 +121,6 @@ function showBrowserNotification(
     const n = new Notification("Reverse Auction Started", {
       body: `RFQ ${rfq} is now live. Click to participate.`,
       tag: `auction-started-${doc.name}`,
-      renotify: false,
     });
     // eslint-disable-next-line no-console
     console.log("[Auction Notify] Browser notification shown", {

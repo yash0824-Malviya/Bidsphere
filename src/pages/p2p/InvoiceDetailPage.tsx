@@ -6,7 +6,6 @@ import {
   BadgeCheck,
   CreditCard,
   Download,
-  FileText,
   Printer,
   Receipt,
 } from "lucide-react";

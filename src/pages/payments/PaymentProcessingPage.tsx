@@ -66,13 +66,15 @@ function isPaymentAlreadyCompleted(
 ): boolean {
   if (!voucher) return false;
 
+  const payment = voucher.payment;
+  const paymentStatus = payment?.status;
   const voucherPaid =
     voucher.status === "payment_confirmed" ||
     voucher.status === "payment_received" ||
     voucher.invoice?.status === "paid" ||
-    !!voucher.payment ||
-    voucher.payment?.status === "Paid" ||
-    voucher.payment?.status === "Completed";
+    payment != null ||
+    paymentStatus === "Paid" ||
+    paymentStatus === "Completed";
 
   if (voucherPaid) return true;
 
@@ -189,7 +191,7 @@ export default function PaymentProcessingPage() {
   });
 
   const alreadyPaid = useMemo(
-    () => isPaymentAlreadyCompleted(voucher, erpInvoice),
+    () => isPaymentAlreadyCompleted(voucher ?? undefined, erpInvoice),
     [voucher, erpInvoice],
   );
 

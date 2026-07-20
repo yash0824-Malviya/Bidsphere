@@ -373,11 +373,11 @@ export function buildWarehouseEsignErpFields(
       placement: state.placement,
       typedName: state.typedName,
       fontId: state.fontId,
-      signatureType: state.signatureType,
+      signatureType: state.signatureType ?? undefined,
       signatureDataUrl:
         state.signatureType === "typed" ? null : state.signatureDataUrl,
-      signatureHash: state.signatureHash,
-      signedAtIso: state.signedAtIso,
+      signatureHash: state.signatureHash ?? undefined,
+      signedAtIso: state.signedAtIso ?? undefined,
       certified: state.certified,
       verificationStatus,
       documentVersion: version,
@@ -1661,11 +1661,8 @@ export async function verifyWarehouseGrnSignature(
       String(grn.document_integrity || summary.documentIntegrity || "")
         .toLowerCase() === "verified" ||
       certOk;
-    const passed =
-      metaStatus !== "invalid" &&
-      metaStatus !== "failed" &&
-      (Boolean(storedHash) || certOk) &&
-      integrityOk;
+    // metaStatus is already narrowed to "verified" in this branch.
+    const passed = (Boolean(storedHash) || certOk) && integrityOk;
     return {
       signed: true,
       valid: passed,

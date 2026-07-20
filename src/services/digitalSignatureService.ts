@@ -7,7 +7,10 @@
  */
 import { sha256Hex } from "../api/legalEsign";
 import { createNotification } from "../api/notifications";
-import type { NotificationTargetRole } from "../types/notification";
+import type {
+  NotificationModule,
+  NotificationTargetRole,
+} from "../types/notification";
 import {
   nowERPDateTime,
   toERPDateTime,
@@ -54,7 +57,11 @@ export function normalizeSignatureTimestamp(
 export async function hashSignaturePayload(
   payload: string | Uint8Array | ArrayBuffer,
 ): Promise<string> {
-  return sha256Hex(payload);
+  const bytes =
+    typeof payload === "string"
+      ? new TextEncoder().encode(payload)
+      : payload;
+  return sha256Hex(bytes);
 }
 
 export async function hashCanonicalJson(value: unknown): Promise<string> {
@@ -149,7 +156,7 @@ export function createSignatureAuditEntry(
     documentType?: string;
     documentName?: string;
     notifyRole?: NotificationTargetRole;
-    module?: string;
+    module?: NotificationModule;
     routePath?: string;
   },
 ): SignatureAuditEntry {
@@ -167,12 +174,14 @@ export function createSignatureAuditEntry(
     createNotification({
       title: action,
       description: detail || action,
-      module: opts.module || "GRN",
+      module: opts.module ?? "GRN",
       event_type: `digital_signature_${action.toLowerCase().replace(/\s+/g, "_")}`,
       target_role: opts.notifyRole,
       document_type: opts.documentType || "Purchase Receipt",
       document_name: opts.documentName,
-      route_path: opts.routePath,
+      route_path:
+        opts.routePath ??
+        `/warehouse/grn/${encodeURIComponent(opts.documentName)}`,
     });
   }
 

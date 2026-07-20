@@ -583,6 +583,8 @@ export interface PurchaseReceipt extends ErpDoc {
   posting_date: string;
   posting_time?: string;
   set_posting_time?: 0 | 1;
+  /** Header default warehouse for received items. */
+  set_warehouse?: string;
   company: string;
   currency?: string;
   conversion_rate?: number;

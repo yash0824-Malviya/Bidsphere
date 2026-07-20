@@ -30,6 +30,10 @@ export function ensurePdfFont(doc: jsPDF): Promise<void> {
   return fontReady;
 }
 
-export function setPdfBodyFont(doc: jsPDF, style: "normal" | "bold" = "normal"): void {
-  doc.setFont("Roboto", style);
+export function setPdfBodyFont(
+  doc: jsPDF,
+  style: "normal" | "bold" | "italic" = "normal",
+): void {
+  // Roboto VFS only registers normal/bold; map italic to normal for layout.
+  doc.setFont("Roboto", style === "italic" ? "normal" : style);
 }

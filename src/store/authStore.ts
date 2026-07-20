@@ -27,7 +27,6 @@ import {
   type SessionProof,
 } from "./authStorage";
 import {
-  clearAccessToken,
   hydrateAccessTokenFromRemember,
   writeAccessToken,
   readAccessToken,

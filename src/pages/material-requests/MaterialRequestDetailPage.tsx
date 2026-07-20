@@ -813,9 +813,6 @@ export default function MaterialRequestDetailPage() {
 
   const isDraftDoc = (mr.docstatus ?? 0) === 0;
   const isDraftWorkflow = workflowStatus === "Draft";
-  // ERP draft document OR BidSphere Status still Draft (orphaned submit where
-  // docstatus=1 but workflow was never advanced).
-  const isDraft = isDraftDoc || isDraftWorkflow;
   // MRs are created through the shared integration token, so `owner` is the API
   // user — the real requester is tracked in custom_requested_by/requested_by.
   // Match against all three so Submit/Edit/Delete render for the requester.

@@ -8,7 +8,6 @@ import {
   CheckCircle2,
   Clock,
   Eye,
-  FileText,
   Receipt,
   Send,
 } from "lucide-react";

@@ -569,6 +569,8 @@ export function getDeliveryStatusCounts(): Record<PODeliveryStatus, number> {
     Accepted: 0,
     Rejected: 0,
     "In Transit": 0,
+    Delivered: 0,
+    Arrived: 0,
     "Partially Received": 0,
     Completed: 0,
   };
