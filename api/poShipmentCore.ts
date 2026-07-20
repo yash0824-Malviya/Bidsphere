@@ -218,11 +218,13 @@ function isReadyForGrnStatus(status: string): boolean {
   return (READY_FOR_GRN_STATUSES as readonly string[]).includes(status);
 }
 
-function deriveSupplierStatus(status: ShipmentStatus, accepted?: boolean): string {
+function deriveSupplierStatus(status: ShipmentStatus, _accepted?: boolean): string {
   if (status === SHIPMENT_STATUS.REJECTED) return "Rejected";
   if (status === SHIPMENT_STATUS.PENDING_ACCEPTANCE) return "Pending";
-  if (accepted || status !== SHIPMENT_STATUS.PENDING_ACCEPTANCE) return "Accepted";
-  return "Pending";
+  // Remaining ShipmentStatus values are post-acceptance. Historically this was
+  // `accepted || status !== PENDING_ACCEPTANCE`, which is always true after the
+  // pending early-return (the trailing "Pending" return was unreachable).
+  return "Accepted";
 }
 
 async function doctypeExists(cfg: ErpAdminConfig): Promise<boolean> {
