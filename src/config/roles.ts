@@ -23,6 +23,7 @@ import { canAccessMaterialRequestPath } from "./materialRequestPermissions";
 export type AppRole =
   | "admin"
   | "procurement"
+  | "procurement_team"
   | "finance"
   | "finance_executive"
   | "warehouse"
@@ -33,6 +34,7 @@ export type AppRole =
 export const ROLE_LABELS: Record<AppRole, string> = {
   admin: "Administrator",
   procurement: "Procurement Manager",
+  procurement_team: "Procurement Team",
   finance: "Finance Manager",
   finance_executive: "Finance Executive",
   warehouse: "Warehouse Manager",
@@ -45,6 +47,7 @@ export const ROLE_LABELS: Record<AppRole, string> = {
 export const ROLE_HOME: Record<AppRole, string> = {
   admin: "/admin",
   procurement: "/dashboard",
+  procurement_team: "/dashboard",
   finance: "/dashboard",
   finance_executive: "/budget",
   warehouse: "/warehouse/dashboard",
@@ -62,6 +65,7 @@ export const ROLE_HOME: Record<AppRole, string> = {
 export const ROLE_USER_EMAILS: Record<string, AppRole> = {
   "admin@netlink.com": "admin",
   "procurement@netlink.com": "procurement",
+  "procurement.team@netlink.com": "procurement_team",
   "finance@netlink.com": "finance",
   "finance.executive@netlink.com": "finance_executive",
   "warehouse@netlink.com": "warehouse",
@@ -81,7 +85,9 @@ export const ERPNEXT_ROLE_MAP: Record<string, AppRole> = {
   "Finance Admin": "admin",
   "Procurement Manager": "procurement",
   "Purchase Manager": "procurement",
-  "Purchase User": "procurement",
+  /** Operational PO ownership after Manager approves the RFQ → PO path. */
+  "Procurement Team": "procurement_team",
+  "Purchase User": "procurement_team",
   "Finance Manager": "finance",
   "Finance Executive": "finance_executive",
   "Accounts Manager": "finance",
@@ -115,16 +121,21 @@ type NavModuleId =
   | "suppliers"
   | "inventory"
   | "budget"
+  | "reports"
   | "admin-audit";
 
 type P2PChildId =
   | "requisitions"
   | "purchase-orders"
   | "new-po"
+  | "po-amendments"
+  | "supplier-confirmation"
+  | "delivery-tracking"
   | "grn"
   | "vouchers"
   | "invoices"
-  | "payments";
+  | "payments"
+  | "total-spend";
 
 interface P2PChildDef {
   label: string;
@@ -149,13 +160,46 @@ const P2P_CHILD_REGISTRY: Record<P2PChildId, P2PChildDef> = {
     to: "/p2p/purchase-orders/create",
     access: "/p2p/purchase-orders",
   },
+  "po-amendments": {
+    label: "PO Amendments",
+    to: "/p2p/purchase-orders?focus=amendments",
+    access: "/p2p/purchase-orders",
+  },
+  "supplier-confirmation": {
+    label: "Supplier Confirmation",
+    to: "/p2p/purchase-orders?focus=confirmation",
+    access: "/p2p/purchase-orders",
+  },
+  "delivery-tracking": {
+    label: "Delivery Tracking",
+    to: "/p2p/purchase-orders?focus=delivery",
+    access: "/p2p/purchase-orders",
+  },
   grn: { label: "GRN", to: "/p2p/grn", access: "/p2p/grn" },
   vouchers: { label: "Vouchers", to: "/p2p/vouchers", access: "/p2p/vouchers" },
   invoices: { label: "Invoices", to: "/p2p/invoices", access: "/p2p/invoices" },
   payments: { label: "Payments", to: "/p2p/payments", access: "/p2p/payments" },
+  "total-spend": {
+    label: "Reports",
+    to: "/p2p/total-spend",
+    access: "/p2p/total-spend",
+  },
+};
+
+/** Display-label overrides for P2P children (role-specific naming only). */
+const P2P_LABEL_OVERRIDES: Partial<
+  Record<AppRole, Partial<Record<P2PChildId, string>>>
+> = {
+  procurement_team: {
+    grn: "GRN Monitoring (Read Only)",
+  },
 };
 
 const SOURCING_CHILDREN_FULL: NavChild[] = [
+  { label: "All RFIs", to: "/sourcing/rfi" },
+  { label: "Create RFI", to: "/sourcing/rfi/new" },
+  { label: "All RFPs", to: "/sourcing/rfp" },
+  { label: "Create RFP", to: "/sourcing/rfp/new" },
   { label: "All RFQs", to: "/sourcing/rfq" },
   { label: "New RFQ", to: "/sourcing/rfq/new" },
   { label: "Upload BOM", to: "/upload-bom" },
@@ -165,6 +209,10 @@ const SOURCING_CHILDREN_FULL: NavChild[] = [
 
 /** Procurement — full RFx workspace (no standalone quotations module). */
 const PROCUREMENT_SOURCING_CHILDREN: NavChild[] = [
+  { label: "All RFIs", to: "/sourcing/rfi" },
+  { label: "Create RFI", to: "/sourcing/rfi/new" },
+  { label: "All RFPs", to: "/sourcing/rfp" },
+  { label: "Create RFP", to: "/sourcing/rfp/new" },
   { label: "All RFQs", to: "/sourcing/rfq" },
   { label: "New RFQ", to: "/sourcing/rfq/new" },
   { label: "Upload BOM", to: "/upload-bom" },
@@ -206,6 +254,12 @@ const SUPPLIERS_CHILDREN: NavChild[] = [
   { label: "Supplier Performance", to: "/suppliers?tab=performance" },
 ];
 
+/** Procurement Team — directory + performance only (no onboarding). */
+const SUPPLIERS_CHILDREN_TEAM: NavChild[] = [
+  { label: "Supplier Directory", to: "/suppliers" },
+  { label: "Supplier Performance", to: "/suppliers?tab=performance" },
+];
+
 const MODULE_ICONS: Record<NavModuleId, LucideIcon> = {
   dashboard: LayoutDashboard,
   sourcing: FileSearch,
@@ -214,6 +268,7 @@ const MODULE_ICONS: Record<NavModuleId, LucideIcon> = {
   suppliers: Users,
   inventory: Boxes,
   budget: Wallet,
+  reports: ClipboardCheck,
   "admin-audit": Shield,
 };
 
@@ -246,11 +301,17 @@ const ROLE_NAV_CONFIG: Record<AppRole, RoleNavConfig> = {
     modules: ["admin-audit"],
     p2pChildren: [],
   },
-  // Procurement Manager — sourcing → PO → GRN → voucher → invoice workflow,
-  // plus suppliers, budget (read-only), and forwarded material requests.
+  // Procurement Manager — RFQ lifecycle through PO Approval only.
+  // Operational Purchase Order work is owned by Procurement Team.
   procurement: {
-    modules: ["dashboard", "sourcing", "p2p", "material_requests", "suppliers", "budget"],
-    p2pChildren: ["purchase-orders", "new-po", "grn", "vouchers", "invoices"],
+    modules: ["dashboard", "sourcing", "material_requests", "suppliers", "budget"],
+    p2pChildren: [],
+  },
+  // Procurement Team — PO create/manage + read-only GRN. No invoices/vouchers/
+  // onboarding; amendments / confirmation / delivery tracking stay omitted.
+  procurement_team: {
+    modules: ["dashboard", "p2p", "suppliers", "reports"],
+    p2pChildren: ["new-po", "purchase-orders", "grn"],
   },
   // Warehouse Manager — module under redevelopment; dashboard placeholder only.
   warehouse: {
@@ -291,12 +352,37 @@ function normalizeEmail(value: string): string {
   return value.trim().toLowerCase();
 }
 
+/** True when the account is a known role mailbox (email → AppRole map). */
+export function isKnownRoleMailbox(emailOrName?: string | null): boolean {
+  if (!emailOrName) return false;
+  const key = normalizeEmail(emailOrName);
+  return Boolean(ROLE_USER_EMAILS[key]);
+}
+
 /**
- * Resolve BidSphere role from ERPNext user profile.
+ * Display name for the authenticated user.
+ * Known role mailboxes use ROLE_LABELS[role] so profile/UI never show a
+ * mismatched ERPNext full_name (e.g. Team user labeled as Manager).
+ */
+export function displayNameForAuthenticatedUser(user: {
+  email?: string | null;
+  name?: string | null;
+  full_name?: string | null;
+  role?: AppRole | null;
+}): string {
+  const email = normalizeEmail(user.email || user.name || "");
+  const mappedRole = ROLE_USER_EMAILS[email];
+  if (mappedRole) return ROLE_LABELS[mappedRole];
+  if (user.role && ROLE_LABELS[user.role]) return user.full_name?.trim() || ROLE_LABELS[user.role];
+  return user.full_name?.trim() || user.email || user.name || "—";
+}
+
+/**
+ * Resolve BidSphere role from the authenticated user.
  *
  * Priority:
- * 1. Check if the user's ERPNext roles (fetched from API) map to a known AppRole
- * 2. Check the hardcoded email → role map
+ * 1. Known role mailbox (email → AppRole) — authoritative for demo/role accounts
+ * 2. ERPNext roles mapped via ERPNEXT_ROLE_MAP
  * 3. Fall back to "procurement"
  */
 export function resolveRoleFromUser(user: {
@@ -311,7 +397,7 @@ export function resolveRoleFromUser(user: {
     return "admin";
   }
 
-  // Try hardcoded email map first (fastest path for known users)
+  // Known role mailboxes always win (keeps Manager vs Team distinct).
   const emailRole = ROLE_USER_EMAILS[email] ?? ROLE_USER_EMAILS[name];
   if (emailRole) return emailRole;
 
@@ -343,6 +429,7 @@ export function resolveFromErpNextRoles(erpRoles: string[]): AppRole | null {
     "manufacturing",
     "warehouse",
     "procurement",
+    "procurement_team",
     "department",
   ];
   const resolved = new Set<AppRole>();
@@ -383,9 +470,10 @@ export function ownerTitleFromEmail(email?: string | null): string {
 /* ─── Sidebar generation (dynamic, no hardcoded per-role menus) ─────────── */
 
 function buildP2PChildren(role: AppRole): NavChild[] {
+  const overrides = P2P_LABEL_OVERRIDES[role];
   return ROLE_NAV_CONFIG[role].p2pChildren.map((id) => {
     const def = P2P_CHILD_REGISTRY[id];
-    return { label: def.label, to: def.to };
+    return { label: overrides?.[id] ?? def.label, to: def.to };
   });
 }
 
@@ -413,10 +501,21 @@ function buildNavItem(id: NavModuleId, role: AppRole): NavItem {
     }
     case "p2p":
       return {
-        label: "P2P Core",
+        // Procurement Team uses "Purchase Orders"; Finance keeps "P2P Core".
+        label: role === "procurement_team" ? "Purchase Orders" : "P2P Core",
         to: "/p2p",
         icon: MODULE_ICONS.p2p,
         children: buildP2PChildren(role),
+      };
+    case "reports":
+      return {
+        label: "Reports",
+        // Team gets operational reports only — never Total Spend financial detail.
+        to:
+          role === "procurement_team"
+            ? "/reports/operations"
+            : "/p2p/total-spend",
+        icon: MODULE_ICONS.reports,
       };
     case "material_requests": {
       const children =
@@ -443,7 +542,10 @@ function buildNavItem(id: NavModuleId, role: AppRole): NavItem {
         label: "Suppliers",
         to: "/suppliers",
         icon: MODULE_ICONS.suppliers,
-        children: SUPPLIERS_CHILDREN,
+        children:
+          role === "procurement_team"
+            ? SUPPLIERS_CHILDREN_TEAM
+            : SUPPLIERS_CHILDREN,
       };
     case "inventory":
       return {
@@ -545,7 +647,18 @@ export function getNavGroupsForRole(role: AppRole): NavGroup[] {
             icon: PackageCheck,
             children: [
               { label: "Ready to Issue", to: "/warehouse/issue-items" },
-              { label: "Issued History", to: "/warehouse/material-requests/issued" },
+              {
+                label: "Pending Department Acceptance",
+                to: "/warehouse/issue-items/pending-acceptance",
+              },
+              {
+                label: "Issue Receipts",
+                to: "/warehouse/issue-items/receipts",
+              },
+              {
+                label: "Issued History",
+                to: "/warehouse/material-requests/issued",
+              },
             ],
           },
           {
@@ -582,10 +695,21 @@ export function getNavGroupsForRole(role: AppRole): NavGroup[] {
           },
           {
             label: "Issued Items",
-            to: "/material-requests/list?f=received",
+            to: "/department/issued-items",
             icon: PackageCheck,
             children: [
-              { label: "Received Items", to: "/material-requests/list?f=received" },
+              {
+                label: "Pending Acceptance",
+                to: "/department/issued-items/pending-acceptance",
+              },
+              {
+                label: "Accepted Items",
+                to: "/department/issued-items/accepted-items",
+              },
+              {
+                label: "Issue Receipts",
+                to: "/department/issued-items/issue-receipts",
+              },
             ],
           },
           { label: "Notifications", to: "/notifications", icon: Bell },
@@ -672,7 +796,12 @@ export function getNavGroupsForRole(role: AppRole): NavGroup[] {
 function getAccessPrefixesForRole(role: AppRole): string[] {
   const config = ROLE_NAV_CONFIG[role] ?? ROLE_NAV_CONFIG.procurement;
   // Dashboard + Support are reachable for every authenticated role.
-  const prefixes = new Set<string>(["/dashboard", "/support", "/notifications"]);
+  const prefixes = new Set<string>([
+    "/dashboard",
+    "/support",
+    "/notifications",
+    "/account",
+  ]);
 
   for (const id of config.modules) {
     switch (id) {
@@ -704,6 +833,13 @@ function getAccessPrefixesForRole(role: AppRole): string[] {
         // read-only Budget Dashboard/Monitoring access, but must NOT be
         // able to open Finance Review detail pages by direct URL.
         if (role === "finance") prefixes.add("/finance");
+        break;
+      case "reports":
+        if (role === "procurement_team") {
+          prefixes.add("/reports/operations");
+        } else {
+          prefixes.add("/p2p/total-spend");
+        }
         break;
       case "admin-audit":
         prefixes.add("/admin");
@@ -783,7 +919,7 @@ export function canManageVouchers(role: AppRole | undefined): boolean {
 export function canViewGRN(role: AppRole | undefined): boolean {
   return (
     role === "warehouse" ||
-    role === "procurement" ||
+    role === "procurement_team" ||
     role === "finance" ||
     role === "admin"
   );
@@ -794,9 +930,23 @@ export function canDigitallySignGRN(role: AppRole | undefined): boolean {
   return role === "warehouse" || role === "admin";
 }
 
-/** Submit a draft Purchase Order — Procurement (+ Admin). */
+/**
+ * Operational Purchase Order ownership (create / edit / submit / amend /
+ * supplier confirmation / delivery tracking). Held by Procurement Team after
+ * Procurement Manager completes RFQ → PO Approval. Admin retains support access.
+ */
+export function canManagePurchaseOrders(role: AppRole | undefined): boolean {
+  return role === "procurement_team" || role === "admin";
+}
+
+/** Submit a draft Purchase Order — Procurement Team (+ Admin). */
 export function canSubmitPurchaseOrder(role: AppRole | undefined): boolean {
-  return role === "procurement" || role === "admin";
+  return canManagePurchaseOrders(role);
+}
+
+/** Monitor GRN / Invoice / Voucher without mutating finance/warehouse docs. */
+export function canMonitorPayablesReadOnly(role: AppRole | undefined): boolean {
+  return role === "procurement_team" || role === "admin";
 }
 
 /** `/p2p/purchase-orders/:poId` — not list, create, new, or convert routes. */
@@ -807,9 +957,26 @@ function isPurchaseOrderDetailPath(pathname: string): boolean {
   return segment !== "create" && segment !== "new" && segment !== "convert";
 }
 
-/** Whether `pathname` is allowed for the given role. */
-export function canAccessPath(role: AppRole, pathname: string): boolean {
+/** Focus deep-links removed from Procurement Team navigation. */
+const PROCUREMENT_TEAM_BLOCKED_PO_FOCUS = new Set([
+  "amendments",
+  "confirmation",
+  "delivery",
+]);
+
+/**
+ * Whether `pathname` is allowed for the given role.
+ * Optional `search` (e.g. `?focus=confirmation`) is checked for Team deep-link denials.
+ */
+export function canAccessPath(
+  role: AppRole,
+  pathname: string,
+  search = "",
+): boolean {
   const path = pathname.split("?")[0];
+  const query =
+    search ||
+    (pathname.includes("?") ? pathname.slice(pathname.indexOf("?")) : "");
 
   // Supplier portal is a separate auth surface — never via internal RBAC
   if (path === "/supplier" || path.startsWith("/supplier/")) {
@@ -818,6 +985,9 @@ export function canAccessPath(role: AppRole, pathname: string): boolean {
 
   // Admin may access every internal route
   if (role === "admin") return true;
+
+  // Account / profile module — available to every authenticated internal role
+  if (path === "/account" || path.startsWith("/account/")) return true;
 
   // Hard prefix denials — prevent cross-role URL access even if nav drifts
   if (path === "/admin" || path.startsWith("/admin/")) return false;
@@ -834,6 +1004,74 @@ export function canAccessPath(role: AppRole, pathname: string): boolean {
     return role === "legal";
   }
 
+  // Procurement Manager — financial Total Spend only under /p2p; no PO ops pages.
+  if (role === "procurement") {
+    if (path === "/p2p/total-spend" || path.startsWith("/p2p/total-spend/")) {
+      return true;
+    }
+    if (path === "/p2p" || path.startsWith("/p2p/")) {
+      return false;
+    }
+  }
+
+  // Procurement Team — PO list/create + read-only GRN + supplier directory/performance.
+  if (role === "procurement_team") {
+    if (
+      path === "/dashboard" ||
+      path.startsWith("/support") ||
+      path.startsWith("/notifications")
+    ) {
+      return true;
+    }
+    // Operational reports hub + detail reports (non-financial only).
+    if (
+      path === "/reports/operations" ||
+      path.startsWith("/reports/operations/")
+    ) {
+      return true;
+    }
+    // Block other /reports/* financial surfaces if added later.
+    if (path === "/reports" || path.startsWith("/reports/")) {
+      return false;
+    }
+    // Financial spend / invoice reports are Manager-only.
+    if (path === "/p2p/total-spend" || path.startsWith("/p2p/total-spend/")) {
+      return false;
+    }
+    // Supplier Onboarding is Manager-owned — block Team direct URL access.
+    if (
+      path === "/suppliers/onboarding" ||
+      path.startsWith("/suppliers/onboarding/")
+    ) {
+      return false;
+    }
+    if (path === "/suppliers" || path.startsWith("/suppliers/")) return true;
+    if (path === "/p2p") return true;
+    if (path.startsWith("/p2p/purchase-orders")) {
+      // Block removed operational deep-links (pages remain for other roles).
+      const focus = new URLSearchParams(
+        query.startsWith("?") ? query.slice(1) : query,
+      ).get("focus");
+      if (focus && PROCUREMENT_TEAM_BLOCKED_PO_FOCUS.has(focus)) {
+        return false;
+      }
+      return true;
+    }
+    // GRN monitor only — create blocked. Invoices / vouchers are Manager/Finance.
+    if (path === "/p2p/grn/new") return false;
+    if (path === "/p2p/grn" || path.startsWith("/p2p/grn/")) return true;
+    if (path === "/p2p/invoices" || path.startsWith("/p2p/invoices/")) {
+      return false;
+    }
+    if (path === "/p2p/vouchers" || path.startsWith("/p2p/vouchers/")) {
+      return false;
+    }
+    if (path === "/p2p/payments" || path.startsWith("/p2p/payments/")) {
+      return false;
+    }
+    return false;
+  }
+
   // Warehouse — full access to warehouse sub-routes
   if (role === "warehouse") {
     const allowed = [
@@ -843,6 +1081,7 @@ export function canAccessPath(role: AppRole, pathname: string): boolean {
       "/warehouse/material-requests/pending",
       "/warehouse/material-requests/review",
       "/warehouse/material-requests/issued",
+      "/warehouse/material-issue-receipts",
       "/warehouse/material-requests/forwarded",
       "/warehouse/material-requests/history",
       "/warehouse/issue-items",
@@ -877,7 +1116,7 @@ export function canAccessPath(role: AppRole, pathname: string): boolean {
     return false;
   }
 
-  // Department User — dashboard + own material requests only.
+  // Department User — dashboard + own material requests + Issued Items.
   if (role === "department") {
     if (
       path.startsWith("/support") ||
@@ -885,6 +1124,13 @@ export function canAccessPath(role: AppRole, pathname: string): boolean {
       path === "/dashboard"
     ) {
       return true;
+    }
+    // Issued Items module (Pending Acceptance / Accepted / Issue Receipts)
+    if (path === "/department" || path.startsWith("/department/")) {
+      return (
+        path === "/department/issued-items" ||
+        path.startsWith("/department/issued-items/")
+      );
     }
     if (path.startsWith("/material-requests")) {
       return canAccessMaterialRequestPath(role, path);

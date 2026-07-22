@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useRef, type ReactNode } from "react";
+import { Link, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { Bell, LogOut, User } from "lucide-react";
@@ -19,14 +19,18 @@ import SupplierPortalSidebar, {
 } from "./SupplierPortalSidebar";
 
 interface Props {
+  /** Optional override — defaults to the active supplier session display name. */
   supplierName?: string;
   statusBadge?: string;
   unlocked?: boolean;
-  children: ReactNode;
+  /** When omitted (route layout mode), renders `<Outlet />`. */
+  children?: ReactNode;
 }
 
 const LOCKED_PATH_PREFIXES = [
   "/supplier/rfqs",
+  "/supplier/rfis",
+  "/supplier/rfps",
   "/supplier/quotations",
   "/supplier/quotation",
   "/supplier/auctions",
@@ -52,18 +56,37 @@ function isLockedPath(pathname: string) {
   );
 }
 
+/**
+ * Shared Supplier Portal chrome: Sidebar + Header + Page Content.
+ * Mount once via React Router (Outlet). Page components render content only.
+ */
 export default function SupplierPortalLayout({
-  supplierName,
-  statusBadge,
+  supplierName: supplierNameProp,
+  statusBadge: statusBadgeProp,
   unlocked: unlockedProp,
   children,
 }: Props) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { t } = useTranslation();
+  const mainRef = useRef<HTMLElement>(null);
   useDocumentTitle();
 
+  // Sidebar/header stay mounted; reset only the content pane on route change.
+  useEffect(() => {
+    mainRef.current?.scrollTo({ top: 0 });
+  }, [pathname]);
+
   const session = readSupplierSession();
+  const supplierName =
+    (supplierNameProp ||
+      session?.companyName ||
+      session?.supplierName ||
+      "").trim();
+  const statusBadge =
+    statusBadgeProp ??
+    session?.displayStatus ??
+    (session?.unlocked || session?.authMode === "pin" ? "Approved" : undefined);
   const unlocked =
     unlockedProp ??
     (!!session?.unlocked ||
@@ -88,30 +111,33 @@ export default function SupplierPortalLayout({
   });
   const unreadCount = countUnread(notificationsQuery.data ?? []);
 
-  if (supplierName && !unlocked && isLockedPath(pathname)) {
-    return <Navigate to="/supplier/locked" replace state={{ title: "Module" }} />;
-  }
-
   function handleLogout() {
     clearSupplierSession();
     navigate("/supplier/login", { replace: true });
   }
 
+  const lockedRedirect =
+    !!supplierName && !unlocked && isLockedPath(pathname) ? (
+      <Navigate to="/supplier/locked" replace state={{ title: "Module" }} />
+    ) : null;
+
+  const content = lockedRedirect ?? children ?? <Outlet />;
+
   return (
-    <div className="supplier-portal-layout flex min-h-screen w-full flex-col bg-[#f8fafb] lg:flex-row">
-      {supplierName && (
-        <div className="hidden shrink-0 lg:block">
+    <div className="supplier-portal-layout flex min-h-screen w-full flex-col bg-[#f8fafb] lg:h-screen lg:flex-row lg:overflow-hidden">
+      {supplierName ? (
+        <div className="hidden h-full shrink-0 lg:block">
           <SupplierPortalSidebar
             supplierName={supplierName}
             unlocked={unlocked}
             statusBadge={statusBadge}
           />
         </div>
-      )}
+      ) : null}
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 shrink-0 bg-white shadow-sm">
-          <div className="flex items-center justify-between gap-4 px-4 py-3 sm:px-5 lg:px-6">
+        <header className="z-30 shrink-0 bg-white shadow-sm">
+          <div className="flex items-center justify-between gap-4 px-4 py-3 sm:px-5 lg:px-8">
             <Link
               to={supplierName ? "/supplier/dashboard" : "/supplier/login"}
               className="flex min-w-0 items-center gap-2 lg:hidden"
@@ -136,7 +162,7 @@ export default function SupplierPortalLayout({
                 >
                   <Bell className="h-4 w-4" />
                   {unreadCount > 0 && (
-                    <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-sky-600 px-1 text-[10px] font-bold leading-none text-white">
+                    <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary-600 px-1 text-[10px] font-bold leading-none text-white">
                       {unreadCount > 9 ? "9+" : unreadCount}
                     </span>
                   )}
@@ -170,9 +196,13 @@ export default function SupplierPortalLayout({
               </div>
             )}
           </div>
-          {supplierName && <SupplierPortalMobileNav unlocked={unlocked} />}
+          {supplierName ? <SupplierPortalMobileNav unlocked={unlocked} /> : null}
         </header>
-        <main className="min-h-0 flex-1">{children}</main>
+
+        {/* Content: 24px gap from sidebar (lg:pl-6) · 32px page padding */}
+        <main ref={mainRef} className="min-h-0 flex-1 overflow-y-auto lg:pl-6">
+          <div className="box-border w-full p-8">{content}</div>
+        </main>
       </div>
     </div>
   );

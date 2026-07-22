@@ -18,6 +18,7 @@ import Placeholder from "./components/Placeholder";
 import ProtectedRoute from "./components/ProtectedRoute";
 import SupplierPortalGuard from "./components/SupplierPortalGuard";
 import SlaEngine from "./components/sla/SlaEngine";
+import SupplierPortalLayout from "./pages/supplier-portal/SupplierPortalLayout";
 
 // Eager — first-paint critical routes. Per the performance policy these are
 // NOT lazy loaded so the primary workspace renders without a chunk fetch.
@@ -79,6 +80,22 @@ const InvoiceDetailRoutePage = lazy(
 const TotalSpendDetailsPage = lazy(
   () => import("./pages/p2p/TotalSpendDetailsPage")
 );
+const OperationalReportsPage = lazy(
+  () => import("./pages/reports/OperationalReportsPage")
+);
+const PurchaseOrderReportPage = lazy(
+  () => import("./pages/reports/PurchaseOrderReportPage")
+);
+const PoStatusReportPage = lazy(
+  () => import("./pages/reports/PoStatusReportPage")
+);
+const DeliveryReportPage = lazy(
+  () => import("./pages/reports/DeliveryReportPage")
+);
+const GrnReportPage = lazy(() => import("./pages/reports/GrnReportPage"));
+const SupplierPerformanceReportPage = lazy(
+  () => import("./pages/reports/SupplierPerformanceReportPage")
+);
 const PaymentsPage = lazy(() => import("./pages/p2p/PaymentsPage"));
 const NewPaymentPage = lazy(() => import("./pages/p2p/NewPaymentPage"));
 const PaymentDetailPage = lazy(() => import("./pages/p2p/PaymentDetailPage"));
@@ -123,6 +140,18 @@ const NewRFQPage = lazy(() => import("./pages/sourcing/NewRFQPage"));
 const RFQDetailPage = lazy(() => import("./pages/sourcing/RFQDetailPage"));
 const RFQTemplatesPage = lazy(() => import("./pages/sourcing/RFQTemplatesPage"));
 const UploadBomPage = lazy(() => import("./pages/sourcing/UploadBomPage"));
+const RFIListPage = lazy(() => import("./pages/sourcing/RFIListPage"));
+const NewRFIPage = lazy(() => import("./pages/sourcing/NewRFIPage"));
+const RFIDetailPage = lazy(() => import("./pages/sourcing/RFIDetailPage"));
+const RFIResponseDetailPage = lazy(
+  () => import("./pages/sourcing/RFIResponseDetailPage")
+);
+const RFPListPage = lazy(() => import("./pages/sourcing/RFPListPage"));
+const NewRFPPage = lazy(() => import("./pages/sourcing/NewRFPPage"));
+const RFPDetailPage = lazy(() => import("./pages/sourcing/RFPDetailPage"));
+const RFPResponseDetailPage = lazy(
+  () => import("./pages/sourcing/RFPResponseDetailPage")
+);
 const ReverseBiddingListPage = lazy(
   () => import("./pages/sourcing/ReverseBiddingListPage")
 );
@@ -156,6 +185,18 @@ const SupplierPOPage = lazy(
 );
 const SupplierRFQsPage = lazy(
   () => import("./pages/supplier-portal/SupplierRFQsPage")
+);
+const SupplierRFIsPage = lazy(
+  () => import("./pages/supplier-portal/SupplierRFIsPage")
+);
+const SupplierRFIDetailPage = lazy(
+  () => import("./pages/supplier-portal/SupplierRFIDetailPage")
+);
+const SupplierRFPsPage = lazy(
+  () => import("./pages/supplier-portal/SupplierRFPsPage")
+);
+const SupplierRFPDetailPage = lazy(
+  () => import("./pages/supplier-portal/SupplierRFPDetailPage")
 );
 const SupplierQuotationsPage = lazy(
   () => import("./pages/supplier-portal/SupplierQuotationsPage")
@@ -251,6 +292,24 @@ const WarehouseMaterialIssueDetailPage = lazy(
 const WarehouseIssueItemsPage = lazy(
   () => import("./pages/warehouse/WarehouseIssueItemsPage")
 );
+const WarehouseMaterialIssuePage = lazy(
+  () => import("./pages/warehouse/WarehouseMaterialIssuePage")
+);
+const WarehouseIssueReceiptsPage = lazy(
+  () => import("./pages/warehouse/WarehouseIssueReceiptsPage")
+);
+const WarehouseMaterialIssueReceiptPage = lazy(
+  () => import("./pages/warehouse/WarehouseMaterialIssueReceiptPage")
+);
+const DepartmentMaterialIssueConfirmPage = lazy(
+  () => import("./pages/material-requests/DepartmentMaterialIssueConfirmPage")
+);
+const DepartmentIssuedItemsPage = lazy(
+  () => import("./pages/material-requests/DepartmentIssuedItemsPage"),
+);
+const MaterialIssueReceiptVerifyPage = lazy(
+  () => import("./pages/verify/MaterialIssueReceiptVerifyPage")
+);
 const WarehouseForwardedRequestsPage = lazy(
   () => import("./pages/warehouse/WarehouseForwardedRequestsPage")
 );
@@ -273,6 +332,10 @@ const WarehouseGRNListPage = lazy(
   () => import("./pages/warehouse/WarehouseGRNListPage")
 );
 const HelpDeskPage = lazy(() => import("./pages/support/HelpDeskPage"));
+const MyProfilePage = lazy(() => import("./pages/account/MyProfilePage"));
+const ChangePasswordPage = lazy(
+  () => import("./pages/account/ChangePasswordPage")
+);
 const BudgetDashboardPage = lazy(() => import("./pages/budget/BudgetDashboardPage"));
 const BudgetPlansPage = lazy(() => import("./pages/budget/BudgetPlansPage"));
 const BudgetMonitoringPage = lazy(() => import("./pages/budget/BudgetMonitoringPage"));
@@ -388,6 +451,10 @@ function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/verify-otp" element={<OtpVerificationPage />} />
+          <Route
+            path="/verify/material-issue-receipt/:token"
+            element={<MaterialIssueReceiptVerifyPage />}
+          />
 
           {/*
             Public Supplier Portal — outside ProtectedRoute / MainLayout.
@@ -404,46 +471,53 @@ function App() {
             element={<SupplierOnboardingPublicPage />}
           />
           <Route element={<SupplierPortalGuard />}>
-            <Route path="/supplier/change-password" element={<SupplierChangePasswordPage />} />
-            <Route path="/supplier/security" element={<SupplierSecurityPage />} />
-            <Route path="/supplier/profile" element={<SupplierPortalProfilePage />} />
-            <Route path="/supplier/locked" element={<SupplierLockedPage />} />
-            <Route path="/supplier/dashboard" element={<SupplierDashboard />} />
-            <Route path="/supplier/rfqs" element={<SupplierRFQsPage />} />
-            <Route path="/supplier/quotations" element={<SupplierQuotationsPage />} />
-            <Route path="/supplier/quotations/:id" element={<SupplierQuotationDetailPage />} />
-            <Route path="/supplier/quotation/:sqName/legal-docs" element={<SupplierLegalUploadPage />} />
-            <Route path="/supplier/purchase-orders" element={<SupplierPOListPage />} />
-            <Route path="/supplier/delivery-schedule" element={<SupplierDeliverySchedulePage />} />
-            <Route path="/supplier/grn" element={<SupplierGRNListPage />} />
-            <Route path="/supplier/grn/:id" element={<SupplierGRNDetailPage />} />
-            <Route path="/supplier/invoices" element={<SupplierInvoiceListPage />} />
-            <Route
-              path="/supplier/invoices/:id"
-              element={<SupplierInvoiceDetailPage />}
-            />
-            <Route path="/supplier/payments" element={<SupplierPaymentListPage />} />
-            <Route
-              path="/supplier/payments/:id"
-              element={<SupplierPaymentDetailPage />}
-            />
-            <Route path="/supplier/vouchers" element={<SupplierVoucherListPage />} />
-            <Route
-              path="/supplier/vouchers/:id"
-              element={<SupplierVoucherDetailPage />}
-            />
-            <Route path="/supplier/help-desk" element={<SupplierHelpDeskPage />} />
-            <Route
-              path="/supplier/contact-support"
-              element={<SupplierContactSupportPage />}
-            />
-            <Route path="/supplier/rfq/:rfqName" element={<SupplierRFQPage />} />
-            <Route path="/supplier/po/:poName" element={<SupplierPOPage />} />
-            <Route path="/supplier/auctions" element={<SupplierAuctionsListPage />} />
-            <Route
-              path="/supplier/auctions/:auctionName"
-              element={<SupplierAuctionPage />}
-            />
+            {/* One shared shell — sidebar + header persist across supplier pages */}
+            <Route element={<SupplierPortalLayout />}>
+              <Route path="/supplier/change-password" element={<SupplierChangePasswordPage />} />
+              <Route path="/supplier/security" element={<SupplierSecurityPage />} />
+              <Route path="/supplier/profile" element={<SupplierPortalProfilePage />} />
+              <Route path="/supplier/locked" element={<SupplierLockedPage />} />
+              <Route path="/supplier/dashboard" element={<SupplierDashboard />} />
+              <Route path="/supplier/rfqs" element={<SupplierRFQsPage />} />
+              <Route path="/supplier/rfis" element={<SupplierRFIsPage />} />
+              <Route path="/supplier/rfis/:id" element={<SupplierRFIDetailPage />} />
+              <Route path="/supplier/rfps" element={<SupplierRFPsPage />} />
+              <Route path="/supplier/rfps/:id" element={<SupplierRFPDetailPage />} />
+              <Route path="/supplier/quotations" element={<SupplierQuotationsPage />} />
+              <Route path="/supplier/quotations/:id" element={<SupplierQuotationDetailPage />} />
+              <Route path="/supplier/quotation/:sqName/legal-docs" element={<SupplierLegalUploadPage />} />
+              <Route path="/supplier/purchase-orders" element={<SupplierPOListPage />} />
+              <Route path="/supplier/delivery-schedule" element={<SupplierDeliverySchedulePage />} />
+              <Route path="/supplier/grn" element={<SupplierGRNListPage />} />
+              <Route path="/supplier/grn/:id" element={<SupplierGRNDetailPage />} />
+              <Route path="/supplier/invoices" element={<SupplierInvoiceListPage />} />
+              <Route
+                path="/supplier/invoices/:id"
+                element={<SupplierInvoiceDetailPage />}
+              />
+              <Route path="/supplier/payments" element={<SupplierPaymentListPage />} />
+              <Route
+                path="/supplier/payments/:id"
+                element={<SupplierPaymentDetailPage />}
+              />
+              <Route path="/supplier/vouchers" element={<SupplierVoucherListPage />} />
+              <Route
+                path="/supplier/vouchers/:id"
+                element={<SupplierVoucherDetailPage />}
+              />
+              <Route path="/supplier/help-desk" element={<SupplierHelpDeskPage />} />
+              <Route
+                path="/supplier/contact-support"
+                element={<SupplierContactSupportPage />}
+              />
+              <Route path="/supplier/rfq/:rfqName" element={<SupplierRFQPage />} />
+              <Route path="/supplier/po/:poName" element={<SupplierPOPage />} />
+              <Route path="/supplier/auctions" element={<SupplierAuctionsListPage />} />
+              <Route
+                path="/supplier/auctions/:auctionName"
+                element={<SupplierAuctionPage />}
+              />
+            </Route>
           </Route>
 
           <Route
@@ -497,6 +571,73 @@ function App() {
               path="/material-requests/issued"
               element={<MaterialRequestIssuedPage />}
             />
+            {/* Department Issued Items — canonical routes */}
+            <Route
+              path="/department/issued-items"
+              element={
+                <Navigate
+                  to="/department/issued-items/pending-acceptance"
+                  replace
+                />
+              }
+            />
+            <Route
+              path="/department/issued-items/pending-acceptance"
+              element={<DepartmentIssuedItemsPage mode="pending" />}
+            />
+            <Route
+              path="/department/issued-items/accepted-items"
+              element={<DepartmentIssuedItemsPage mode="accepted" />}
+            />
+            <Route
+              path="/department/issued-items/issue-receipts"
+              element={<DepartmentIssuedItemsPage mode="all" />}
+            />
+            <Route
+              path="/department/issued-items/receipts/:name"
+              element={<DepartmentMaterialIssueConfirmPage />}
+            />
+            {/* Legacy Issued Items / receipt paths → department module */}
+            <Route
+              path="/material-requests/receipts"
+              element={
+                <Navigate
+                  to="/department/issued-items/pending-acceptance"
+                  replace
+                />
+              }
+            />
+            <Route
+              path="/material-requests/receipts/:name"
+              element={<DepartmentMaterialIssueConfirmPage />}
+            />
+            <Route
+              path="/material-requests/issued-items/pending"
+              element={
+                <Navigate
+                  to="/department/issued-items/pending-acceptance"
+                  replace
+                />
+              }
+            />
+            <Route
+              path="/material-requests/issued-items/accepted"
+              element={
+                <Navigate
+                  to="/department/issued-items/accepted-items"
+                  replace
+                />
+              }
+            />
+            <Route
+              path="/material-requests/issued-items/receipts"
+              element={
+                <Navigate
+                  to="/department/issued-items/issue-receipts"
+                  replace
+                />
+              }
+            />
             <Route
               path="/material-requests/:name"
               element={<MaterialRequestDetailPage />}
@@ -537,6 +678,30 @@ function App() {
               element={<InvoiceDetailRoutePage />}
             />
             <Route path="/p2p/total-spend" element={<TotalSpendDetailsPage />} />
+            <Route
+              path="/reports/operations"
+              element={<OperationalReportsPage />}
+            />
+            <Route
+              path="/reports/operations/purchase-orders"
+              element={<PurchaseOrderReportPage />}
+            />
+            <Route
+              path="/reports/operations/po-status"
+              element={<PoStatusReportPage />}
+            />
+            <Route
+              path="/reports/operations/deliveries"
+              element={<DeliveryReportPage />}
+            />
+            <Route
+              path="/reports/operations/grn"
+              element={<GrnReportPage />}
+            />
+            <Route
+              path="/reports/operations/supplier-performance"
+              element={<SupplierPerformanceReportPage />}
+            />
 
             <Route path="/p2p/payments" element={<PaymentsPage />} />
             <Route path="/p2p/payments/new" element={<NewPaymentPage />} />
@@ -567,6 +732,20 @@ function App() {
             <Route path="/sourcing/rfq" element={<RFQListPage />} />
             <Route path="/sourcing/rfq/new" element={<NewRFQPage />} />
             <Route path="/sourcing/rfq/:id" element={<RFQDetailPage />} />
+            <Route path="/sourcing/rfi" element={<RFIListPage />} />
+            <Route path="/sourcing/rfi/new" element={<NewRFIPage />} />
+            <Route
+              path="/sourcing/rfi/:id/responses/:responseId"
+              element={<RFIResponseDetailPage />}
+            />
+            <Route path="/sourcing/rfi/:id" element={<RFIDetailPage />} />
+            <Route path="/sourcing/rfp" element={<RFPListPage />} />
+            <Route path="/sourcing/rfp/new" element={<NewRFPPage />} />
+            <Route
+              path="/sourcing/rfp/:id/responses/:responseId"
+              element={<RFPResponseDetailPage />}
+            />
+            <Route path="/sourcing/rfp/:id" element={<RFPDetailPage />} />
             <Route path="/upload-bom" element={<UploadBomPage />} />
             <Route
               path="/sourcing/upload-bom"
@@ -632,6 +811,10 @@ function App() {
               element={<WarehouseMaterialIssueDetailPage />}
             />
             <Route
+              path="/warehouse/material-issue-receipts/:name"
+              element={<WarehouseMaterialIssueReceiptPage />}
+            />
+            <Route
               path="/warehouse/material-requests/forwarded"
               element={<WarehouseForwardedRequestsPage />}
             />
@@ -642,6 +825,20 @@ function App() {
             <Route
               path="/warehouse/issue-items"
               element={<WarehouseIssueItemsPage />}
+            />
+            <Route
+              path="/warehouse/issue-items/pending-acceptance"
+              element={
+                <WarehouseIssueReceiptsPage mode="pending-acceptance" />
+              }
+            />
+            <Route
+              path="/warehouse/issue-items/receipts"
+              element={<WarehouseIssueReceiptsPage mode="all" />}
+            />
+            <Route
+              path="/warehouse/issue-items/:mrName"
+              element={<WarehouseMaterialIssuePage />}
             />
             <Route
               path="/warehouse/inventory/stock-overview"
@@ -705,6 +902,37 @@ function App() {
 
             {/* Notifications */}
             <Route path="/notifications" element={<NotificationCenterPage />} />
+
+            {/* Account — profile + change password only; Help uses /support/help-desk */}
+            <Route
+              path="/account"
+              element={<Navigate to="/account/profile" replace />}
+            />
+            <Route path="/account/profile" element={<MyProfilePage />} />
+            <Route
+              path="/account/change-password"
+              element={<ChangePasswordPage />}
+            />
+            <Route
+              path="/account/help"
+              element={<Navigate to="/support/help-desk" replace />}
+            />
+            <Route
+              path="/account/activity"
+              element={<Navigate to="/account/profile" replace />}
+            />
+            <Route
+              path="/account/settings"
+              element={<Navigate to="/account/profile" replace />}
+            />
+            <Route
+              path="/account/security"
+              element={<Navigate to="/account/change-password" replace />}
+            />
+            <Route
+              path="/account/preferences"
+              element={<Navigate to="/account/profile" replace />}
+            />
 
             {/* Support */}
             <Route

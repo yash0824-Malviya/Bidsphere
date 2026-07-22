@@ -5,6 +5,8 @@ import {
   ChevronDown,
   ChevronRight,
   CreditCard,
+  FileQuestion,
+  FileText,
   Gavel,
   HelpCircle,
   LayoutDashboard,
@@ -59,6 +61,24 @@ const NAV: NavGroup[] = [
         to: "/supplier/quotations",
         lockedUntilApproved: true,
       },
+    ],
+  },
+  {
+    labelKey: "supplierNav.rfis",
+    icon: FileQuestion,
+    to: "/supplier/rfis",
+    lockedUntilApproved: true,
+    children: [
+      { labelKey: "supplierNav.myRfis", to: "/supplier/rfis", lockedUntilApproved: true },
+    ],
+  },
+  {
+    labelKey: "supplierNav.rfps",
+    icon: FileText,
+    to: "/supplier/rfps",
+    lockedUntilApproved: true,
+    children: [
+      { labelKey: "supplierNav.myRfps", to: "/supplier/rfps", lockedUntilApproved: true },
     ],
   },
   {
@@ -132,7 +152,7 @@ export default function SupplierPortalSidebar({
   const { t } = useTranslation();
 
   return (
-    <aside className="hidden h-full w-[260px] shrink-0 flex-col border-r border-neutral-200 bg-slate-900 text-slate-300 lg:flex">
+    <aside className="hidden h-full w-[300px] shrink-0 flex-col overflow-hidden border-r border-neutral-800 bg-sidebar text-sidebar-text lg:flex">
       <div className="border-b border-white/5 px-4 py-5">
         <Link to="/supplier/dashboard" className="flex items-center gap-2.5">
           <BrandLogo size="xs" markOnly />
@@ -200,7 +220,7 @@ function SidebarGroup({
         state={locked ? { title: t(group.labelKey) } : undefined}
         className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition ${
           active
-            ? "bg-primary/20 text-white shadow-[inset_3px_0_0_0_#0ea5e9]"
+            ? "bg-primary/20 text-white shadow-[inset_3px_0_0_0_#0098EA]"
             : "text-slate-400 hover:bg-slate-800 hover:text-white"
         } ${locked ? "opacity-70" : ""}`}
       >
@@ -226,26 +246,28 @@ function SidebarGroup({
         )}
       </button>
       {open && (
-        <div className="ml-4 mt-0.5 space-y-0.5 border-l border-white/10 pl-3">
-          {group.children!.map((child) => {
-            const childActive = isActive(pathname, child.to);
-            const childLocked = !!child.lockedUntilApproved && !unlocked;
-            return (
-              <Link
-                key={child.to}
-                to={childLocked ? "/supplier/locked" : child.to}
-                state={childLocked ? { title: t(child.labelKey) } : undefined}
-                className={`flex items-center justify-between rounded-md px-3 py-1.5 text-[12px] font-medium transition ${
-                  childActive
-                    ? "bg-primary/25 text-white"
-                    : "text-slate-400 hover:bg-slate-800 hover:text-white"
-                } ${childLocked ? "opacity-70" : ""}`}
-              >
-                <span>{t(child.labelKey)}</span>
-                {childLocked && <Lock className="h-3 w-3" />}
-              </Link>
-            );
-          })}
+        <div className="mt-1.5 mr-2 ml-5 border-l border-white/15 pl-3">
+          <div className="space-y-1">
+            {group.children!.map((child) => {
+              const childActive = isActive(pathname, child.to);
+              const childLocked = !!child.lockedUntilApproved && !unlocked;
+              return (
+                <Link
+                  key={child.to}
+                  to={childLocked ? "/supplier/locked" : child.to}
+                  state={childLocked ? { title: t(child.labelKey) } : undefined}
+                  className={`mx-2 flex items-center justify-between px-2.5 py-1.5 text-[12px] font-medium transition-[background-color] duration-150 ease-in-out ${
+                    childActive
+                      ? "rounded-[10px] bg-primary/25 text-white"
+                      : "rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white"
+                  } ${childLocked ? "opacity-70" : ""}`}
+                >
+                  <span>{t(child.labelKey)}</span>
+                  {childLocked && <Lock className="h-3 w-3" />}
+                </Link>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

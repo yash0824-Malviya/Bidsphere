@@ -132,6 +132,20 @@ export function toEnterpriseUserMessage(
     return "This request is taking longer than expected. Please wait a moment and try again.";
   }
   if (kind === "empty") {
+    // Keep actionable bid-history naming errors instead of the generic empty copy.
+    if (/Reverse Bids|document name|bid history/i.test(raw)) {
+      return looksTechnical(raw)
+        ? "Could not save your bid. Please try again or contact your administrator."
+        : raw;
+    }
+    // Preserve file upload / view / download failures — do not hide the real cause.
+    if (
+      /view failed|download failed|file upload|uploaded file|file proxy|file_url|attachment/i.test(
+        raw,
+      )
+    ) {
+      return raw.length <= 220 ? raw : raw.slice(0, 220);
+    }
     return "This document hasn't been created yet or is not available.";
   }
   if (kind === "permission") {

@@ -5,77 +5,54 @@ import { translateStatus } from "../i18n/statusLabels";
 
 type StatusTone = "neutral" | "info" | "warning" | "success" | "danger";
 
-/** Exact badge colors from the Netlink design system. */
-const STATUS_STYLES: Record<string, string> = {
-  Completed: "bg-success-100 text-success-500",
-  "To Receive and Bill": "bg-warning-100 text-warning-500",
-  "To Bill": "bg-primary-100 text-primary-700",
-  Cancelled: "bg-danger-100 text-danger-500",
-  Draft: "bg-neutral-100 text-neutral-500",
-  Paid: "bg-success-100 text-success-500",
-  Partial: "bg-warning-100 text-warning-500",
-  Failed: "bg-danger-100 text-danger-500",
-  Voided: "bg-neutral-100 text-neutral-600",
-  Scheduled: "bg-primary-100 text-primary-700",
-  Processing: "bg-primary-100 text-primary-700",
-  Unpaid: "bg-warning-100 text-warning-500",
-  Overdue: "bg-danger-100 text-danger-500",
-  Submitted: "bg-primary-100 text-primary-700",
-  Approved: "bg-success-100 text-success-500",
-  Rejected: "bg-red-100 text-red-700",
-  Pending: "bg-warning-100 text-warning-500",
-  "Pending Acceptance": "bg-warning-100 text-warning-600",
-  "Pending Supplier Acceptance": "bg-warning-100 text-warning-600",
-  "To Receive": "bg-warning-100 text-warning-500",
-  Accepted: "bg-warning-100 text-warning-600",
-  "In Transit": "bg-primary-100 text-primary-700",
-  "Partially Received": "bg-success-100 text-success-600",
-  Delivered: "bg-success-100 text-success-500",
-  Closed: "bg-neutral-100 text-neutral-500",
-  Ordered: "bg-primary-100 text-primary-700",
-  "Partly Paid": "bg-warning-100 text-warning-500",
-  "On Hold": "bg-neutral-100 text-neutral-500",
-  Active: "bg-success-100 text-success-500",
-  Inactive: "bg-neutral-100 text-neutral-500",
-  "Below Reorder": "bg-danger-100 text-danger-500",
-  "Admin Review": "bg-purple-100 text-purple-700",
-  "Under Warehouse Review": "bg-amber-100 text-amber-700",
-  "Stock Available": "bg-teal-100 text-teal-700",
-  "Material Issued": "bg-emerald-100 text-emerald-700",
-  "Procurement Required": "bg-blue-100 text-blue-700",
-  // Legacy label — retained so pre-migration records still render sensibly.
-  "Forwarded to Procurement": "bg-blue-100 text-blue-700",
-  "RFQ Created": "bg-indigo-100 text-indigo-700",
-};
-
+/**
+ * Badge colors (enterprise design system):
+ * Green = Completed · Yellow = Pending · Red = Rejected · Gray = Draft
+ */
 const TONE_CLASSES: Record<StatusTone, string> = {
-  neutral: "bg-neutral-100 text-neutral-500",
+  neutral: "badge-draft",
   info: "bg-primary-100 text-primary-700",
-  warning: "bg-warning-100 text-warning-500",
-  success: "bg-success-100 text-success-500",
-  danger: "bg-danger-100 text-danger-500",
+  warning: "badge-pending",
+  success: "badge-completed",
+  danger: "badge-rejected",
 };
 
 const STATUS_TONES: Record<string, StatusTone> = {
   Draft: "neutral",
+  Published: "success",
+  "Under Review": "warning",
+  "Waiting Warehouse Signature": "warning",
+  "Waiting Department Signature": "warning",
+  "Pending Department Acceptance": "warning",
+  "Waiting for Department Acceptance": "warning",
+  "Waiting for Acceptance": "warning",
+  "Partially Issued": "warning",
+  "Material Receipt Confirmed": "success",
+  Confirmed: "success",
+  "Acceptance Rejected": "danger",
+  Tampered: "danger",
+  "Not Found": "neutral",
   Pending: "warning",
   "Pending Acceptance": "warning",
   "Pending Supplier Acceptance": "warning",
-  Submitted: "info",
-  Accepted: "warning",
+  Submitted: "success",
+  New: "info",
+  Awarded: "success",
+  "Clarification Requested": "warning",
+  Accepted: "success",
   "In Transit": "info",
   "Partially Received": "success",
   Approved: "success",
+  Success: "success",
   Rejected: "danger",
   Cancelled: "danger",
-  Closed: "neutral",
+  Closed: "danger",
   Completed: "success",
   "On Hold": "neutral",
   "To Receive": "warning",
   "To Bill": "info",
   "To Receive and Bill": "warning",
   Delivered: "success",
-  "Return Issued": "neutral",
   Paid: "success",
   Partial: "warning",
   Failed: "danger",
@@ -85,16 +62,20 @@ const STATUS_TONES: Record<string, StatusTone> = {
   Unpaid: "warning",
   "Partly Paid": "warning",
   Overdue: "danger",
-  Return: "neutral",
-  "Debit Note Issued": "neutral",
-  "Internal Transfer": "info",
   Ordered: "info",
+  Active: "success",
+  Inactive: "neutral",
+  "Below Reorder": "danger",
+  "Admin Review": "info",
   "Under Warehouse Review": "warning",
   "Stock Available": "info",
   "Material Issued": "success",
   "Procurement Required": "info",
   "Forwarded to Procurement": "info",
+  "Awaiting RFQ Creation": "warning",
   "RFQ Created": "info",
+  "RFQ In Progress": "info",
+  "Purchase Order Created": "success",
 };
 
 interface Props {
@@ -105,21 +86,19 @@ interface Props {
 }
 
 const SIZE_CLASSES = {
-  sm: "px-2 py-0.5 text-[10px]",
-  md: "px-2.5 py-0.5 text-xs",
-  lg: "px-3.5 py-1.5 text-sm font-semibold shadow-sm ring-1 ring-inset ring-black/5",
+  sm: "h-5 px-1.5 text-[11px]",
+  md: "",
+  lg: "h-7 px-2.5 text-[13px]",
 } as const;
 
 export default memo(function StatusBadge({ status, tone, size = "md" }: Props) {
   const { t } = useTranslation();
   const label = status?.trim() || "—";
   const resolvedTone: StatusTone = tone ?? STATUS_TONES[label] ?? "neutral";
-  const classes = STATUS_STYLES[label] ?? TONE_CLASSES[resolvedTone];
+  const classes = TONE_CLASSES[resolvedTone];
 
   return (
-    <span
-      className={`inline-flex items-center rounded-full font-medium ${SIZE_CLASSES[size]} ${classes}`}
-    >
+    <span className={`status-badge ${SIZE_CLASSES[size]} ${classes}`}>
       {translateStatus(t, label)}
     </span>
   );

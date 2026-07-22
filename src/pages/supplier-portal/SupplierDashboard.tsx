@@ -8,6 +8,7 @@ import {
   Circle,
   ClipboardList,
   CreditCard,
+  FileQuestion,
   FileText,
   Gavel,
   Inbox,
@@ -45,6 +46,10 @@ import {
 } from "../../api/reverseBidding";
 import { getSupplierPerformance } from "../../api/supplierPerformance";
 import { getNotificationsForViewer } from "../../api/notifications";
+import {
+  deriveSupplierRfiFacingStatus,
+  getSupplierRFIs,
+} from "../../api/rfi";
 import { APP_SUPPLIER_PORTAL, COMPANY_NAME } from "../../config/branding";
 import { Skeleton, TableSkeleton } from "../../components/Skeleton";
 import { formatCurrency, formatDate, formatDateTime } from "../../utils/format";
@@ -53,7 +58,6 @@ import {
   writeSupplierSession,
   readSupplierSession,
 } from "../../hooks/useSupplierSession";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 
 /* ─── Helpers (UI derivation only — no API changes) ──────────────────────── */
 
@@ -109,7 +113,7 @@ function priorityClass(priority: string) {
 function statusTone(status?: string) {
   const s = (status || "").toLowerCase();
   if (s.includes("submit") || s.includes("open"))
-    return "bg-sky-50 text-sky-800 ring-sky-200";
+    return "bg-primary-50 text-primary-800 ring-primary-200";
   if (s.includes("draft")) return "bg-slate-50 text-slate-600 ring-slate-200";
   if (s.includes("cancel") || s.includes("clos"))
     return "bg-neutral-100 text-neutral-600 ring-neutral-200";
@@ -214,7 +218,7 @@ function buildActivity(
 function activityDot(tone: ActivityItem["tone"]) {
   if (tone === "success") return "bg-emerald-500";
   if (tone === "warning") return "bg-amber-500";
-  if (tone === "info") return "bg-sky-500";
+  if (tone === "info") return "bg-primary-500";
   return "bg-slate-400";
 }
 
@@ -291,6 +295,14 @@ export default function SupplierDashboard() {
     staleTime: 30_000,
   });
 
+  const rfiQuery = useQuery({
+    queryKey: ["supplier-portal-rfis", erpSupplierName],
+    queryFn: () => getSupplierRFIs(erpSupplierName),
+    enabled: isAuthenticated && unlocked && !!erpSupplierName,
+    staleTime: 15_000,
+    refetchOnMount: "always",
+  });
+
   if (!isReady || !isAuthenticated) return null;
 
   const record = profileQuery.data?.record;
@@ -316,12 +328,8 @@ export default function SupplierDashboard() {
 
   if (!unlocked) {
     return (
-      <SupplierPortalLayout
-        supplierName={supplierName}
-        statusBadge={status}
-        unlocked={false}
-      >
-        <div className="mx-auto max-w-5xl space-y-4 px-4 py-5 sm:px-6">
+      
+        <div className="flex w-full flex-col gap-6">
           <div
             className="overflow-hidden rounded-2xl border border-slate-200 p-6 text-white shadow-sm sm:p-7"
             style={{
@@ -416,7 +424,7 @@ export default function SupplierDashboard() {
             </div>
           )}
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
@@ -428,6 +436,7 @@ export default function SupplierDashboard() {
       auctionsQuery={auctionsQuery}
       performanceQuery={performanceQuery}
       notificationsQuery={notificationsQuery}
+      rfiQuery={rfiQuery}
     />
   );
 }
@@ -441,6 +450,7 @@ function UnlockedDashboard({
   auctionsQuery,
   performanceQuery,
   notificationsQuery,
+  rfiQuery,
 }: {
   supplierName: string;
   status: string;
@@ -452,6 +462,7 @@ function UnlockedDashboard({
   notificationsQuery: ReturnType<
     typeof useQuery<ReturnType<typeof getNotificationsForViewer>>
   >;
+  rfiQuery: ReturnType<typeof useQuery<Awaited<ReturnType<typeof getSupplierRFIs>>>>;
 }) {
   const data = dashQuery.data;
   const rfqs = data?.rfqs ?? [];
@@ -520,6 +531,60 @@ function UnlockedDashboard({
     return Math.round(parts.reduce((a, b) => a + b, 0) / parts.length);
   })();
 
+  const rfiRows = rfiQuery.data ?? [];
+  const rfiFacing = rfiRows.map((r) => deriveSupplierRfiFacingStatus(r));
+  const rfiKpis: Array<{
+    title: string;
+    value: number;
+    icon: LucideIcon;
+    accent: string;
+    to: string;
+  }> = [
+    {
+      title: "Total RFIs",
+      value: rfiRows.length,
+      icon: FileQuestion,
+      accent: "from-[#0B3D91] to-[#146CE8]",
+      to: "/supplier/rfis",
+    },
+    {
+      title: "Draft",
+      value: rfiFacing.filter((s) => s === "Draft").length,
+      icon: ClipboardList,
+      accent: "from-slate-500 to-slate-600",
+      to: "/supplier/rfis",
+    },
+    {
+      title: "In Progress",
+      value: rfiFacing.filter((s) => s === "In Progress").length,
+      icon: Inbox,
+      accent: "from-sky-500 to-sky-600",
+      to: "/supplier/rfis",
+    },
+    {
+      title: "Submitted",
+      value: rfiFacing.filter((s) => s === "Submitted" || s === "Under Review")
+        .length,
+      icon: Send,
+      accent: "from-emerald-500 to-emerald-600",
+      to: "/supplier/rfis",
+    },
+    {
+      title: "Approved",
+      value: rfiFacing.filter((s) => s === "Approved").length,
+      icon: CheckCircle2,
+      accent: "from-primary-500 to-primary-600",
+      to: "/supplier/rfis",
+    },
+    {
+      title: "Rejected",
+      value: rfiFacing.filter((s) => s === "Rejected").length,
+      icon: Bell,
+      accent: "from-rose-500 to-rose-600",
+      to: "/supplier/rfis",
+    },
+  ];
+
   const kpis: Array<{
     title: string;
     value: number;
@@ -545,7 +610,7 @@ function UnlockedDashboard({
       title: "Submitted Quotations",
       value: submittedCount,
       icon: Send,
-      accent: "from-sky-500 to-sky-600",
+      accent: "from-primary-500 to-primary-600",
       to: "/supplier/quotations",
     },
     {
@@ -572,6 +637,8 @@ function UnlockedDashboard({
   ];
 
   const quickActions: Array<{ label: string; to: string; icon: LucideIcon; hint: string }> = [
+    { label: "My RFIs", to: "/supplier/rfis", icon: FileQuestion, hint: "Answer information requests" },
+    { label: "My RFPs", to: "/supplier/rfps", icon: FileText, hint: "Submit proposals" },
     { label: "My RFQs", to: "/supplier/rfqs", icon: FileText, hint: "Respond to invitations" },
     { label: "Live Auctions", to: "/supplier/auctions", icon: Gavel, hint: "Place competitive bids" },
     { label: "Purchase Orders", to: "/supplier/purchase-orders", icon: Truck, hint: "Track active orders" },
@@ -581,12 +648,8 @@ function UnlockedDashboard({
   ];
 
   return (
-    <SupplierPortalLayout
-      supplierName={supplierName}
-      statusBadge={status}
-      unlocked
-    >
-      <div className="mx-auto w-full max-w-[1400px] space-y-4 px-4 py-4 sm:px-5 lg:px-6 lg:py-5">
+    
+      <div className="flex w-full flex-col gap-6">
         {/* Welcome */}
         <section
           className="relative overflow-hidden rounded-2xl border border-slate-200/80 px-5 py-5 text-white shadow-sm sm:px-6 sm:py-6"
@@ -596,7 +659,7 @@ function UnlockedDashboard({
           }}
         >
           <div className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-white/10 blur-2xl" />
-          <div className="pointer-events-none absolute -bottom-20 right-24 h-40 w-40 rounded-full bg-sky-300/20 blur-2xl" />
+          <div className="pointer-events-none absolute -bottom-20 right-24 h-40 w-40 rounded-full bg-primary-300/20 blur-2xl" />
           <div className="relative flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="min-w-0">
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-100">
@@ -643,7 +706,7 @@ function UnlockedDashboard({
                   <Link
                     key={kpi.title}
                     to={kpi.to}
-                    className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm no-underline transition hover:-translate-y-0.5 hover:border-sky-200 hover:shadow-md"
+                    className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm no-underline transition hover:-translate-y-0.5 hover:border-primary-200 hover:shadow-md"
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
@@ -663,6 +726,51 @@ function UnlockedDashboard({
                   </Link>
                 );
               })}
+        </section>
+
+        {/* RFI history KPIs — remain after submission */}
+        <section>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-slate-900">RFI Overview</h2>
+            <Link
+              to="/supplier/rfis"
+              className="text-[11px] font-semibold text-primary-700 no-underline hover:underline"
+            >
+              View My RFIs
+            </Link>
+          </div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+            {rfiQuery.isLoading
+              ? Array.from({ length: 6 }).map((_, i) => (
+                  <Skeleton key={i} className="h-[88px] rounded-xl" />
+                ))
+              : rfiKpis.map((kpi) => {
+                  const Icon = kpi.icon;
+                  return (
+                    <Link
+                      key={kpi.title}
+                      to={kpi.to}
+                      className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm no-underline transition hover:-translate-y-0.5 hover:border-primary-200 hover:shadow-md"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                            {kpi.title}
+                          </p>
+                          <p className="mt-1.5 text-2xl font-bold tabular-nums text-slate-900">
+                            {kpi.value}
+                          </p>
+                        </div>
+                        <div
+                          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br ${kpi.accent} text-white shadow-sm`}
+                        >
+                          <Icon className="h-4 w-4" />
+                        </div>
+                      </div>
+                    </Link>
+                  );
+                })}
+          </div>
         </section>
 
         {/* Quick actions */}
@@ -1029,7 +1137,7 @@ function UnlockedDashboard({
           </div>
         </section>
       </div>
-    </SupplierPortalLayout>
+    
   );
 }
 
