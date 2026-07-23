@@ -9,6 +9,7 @@ import { getBreadcrumbs, isDashboardRoute } from "../../utils/routes";
 import GlobalSearch from "../GlobalSearch";
 import LanguageSwitcher from "../LanguageSwitcher";
 import NotificationsBell from "../NotificationsBell";
+import UserProfileMenu from "./UserProfileMenu";
 
 export default function Header() {
   const { t } = useTranslation();
@@ -25,16 +26,16 @@ export default function Header() {
   } = useLayout();
 
   return (
-    <header className="sticky top-0 z-30 border-b border-neutral-200 bg-white/95 backdrop-blur-sm">
-      <div className="flex flex-wrap items-center gap-3 px-6 py-3.5">
+    <header className="sticky top-0 z-30 border-b border-[#E8EDF5] bg-white">
+      <div className="flex h-14 items-center gap-3 px-6">
         {sidebarMode === "drawer" && (
           <button
             type="button"
             onClick={toggleMobileNav}
-            className="btn-icon-touch inline-flex items-center justify-center rounded-lg border border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50 md:hidden"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#E8EDF5] bg-white text-neutral-700 hover:bg-neutral-50 md:hidden"
             aria-label="Open navigation menu"
           >
-            <Menu className="h-5 w-5" />
+            <Menu className="h-4 w-4" />
           </button>
         )}
 
@@ -42,7 +43,7 @@ export default function Header() {
           <div className="min-w-0 flex-1 md:flex-none">
             <nav
               aria-label="Breadcrumb"
-              className="hidden items-center gap-1 text-xs text-neutral-500 sm:flex"
+              className="hidden items-center gap-1.5 text-[13px] text-neutral-500 sm:flex"
             >
               <Link
                 to="/dashboard"
@@ -76,31 +77,32 @@ export default function Header() {
           </div>
         )}
 
-        <div className="ml-auto flex items-center gap-2 sm:gap-3">
+        <div className="ml-auto flex items-center gap-3">
           <button
             type="button"
             onClick={toggleMobileSearch}
-            className="btn-icon-touch inline-flex items-center justify-center rounded-lg border border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50 md:hidden"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#E8EDF5] bg-white text-neutral-700 hover:bg-neutral-50 md:hidden"
             aria-label={mobileSearchOpen ? "Close search" : "Open search"}
           >
             {mobileSearchOpen ? (
-              <X className="h-5 w-5" />
+              <X className="h-4 w-4" />
             ) : (
-              <Search className="h-5 w-5" />
+              <Search className="h-4 w-4" />
             )}
           </button>
 
-          <div className="hidden flex-1 justify-end md:flex md:max-w-md lg:max-w-lg">
+          <div className="hidden w-[280px] md:block lg:w-[320px]">
             <GlobalSearch />
           </div>
 
           <LanguageSwitcher />
           <NotificationsBell />
+          <UserProfileMenu />
         </div>
       </div>
 
       {mobileSearchOpen && (
-        <div className="border-t border-neutral-100 px-6 py-3 md:hidden">
+        <div className="border-t border-[#E8EDF5] px-6 py-2.5 md:hidden">
           <GlobalSearch onSelect={() => setMobileSearchOpen(false)} />
         </div>
       )}

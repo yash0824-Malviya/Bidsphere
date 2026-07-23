@@ -325,7 +325,7 @@ export default function SupplierOnboardingDetailPage() {
     {
       label: "Submitted",
       active: ["Submitted", "Under Review"].includes(String(record.status)),
-      tone: "bg-sky-50 text-sky-800 border-sky-200",
+      tone: "bg-primary-50 text-primary-800 border-primary-200",
     },
     {
       label: "Approved",

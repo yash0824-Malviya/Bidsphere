@@ -5,11 +5,12 @@ import { ArrowRight, Truck } from "lucide-react";
 import { getSupplierGRNSummaries } from "../../api/supplierPortal";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
+import PaginationBar from "../../components/PaginationBar";
 import StatusBadge from "../../components/StatusBadge";
 import { TableSkeleton } from "../../components/Skeleton";
+import { useClientPagination } from "../../hooks/usePagination";
 import { formatDate } from "../../utils/format";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 
 export default function SupplierGRNListPage() {
   const { supplierName, isReady } = useSupplierSession();
@@ -22,18 +23,31 @@ export default function SupplierGRNListPage() {
 
   const rows = grnQuery.data ?? [];
 
+  const {
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+    totalRecords,
+    totalPages,
+    pageRows,
+  } = useClientPagination(rows, {
+    defaultPageSize: 10,
+    resetKey: supplierName,
+  });
+
   if (!isReady) {
     return (
-      <SupplierPortalLayout>
+      
         <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
           Loading…
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
   return (
-    <SupplierPortalLayout supplierName={supplierName}>
+    
       <PageHeader
         title="Goods Receipts (GRN)"
         description="Goods receipt notes recorded against your purchase orders."
@@ -59,6 +73,7 @@ export default function SupplierGRNListPage() {
             description="When Netlink records receipt of goods against your POs, they will appear here."
           />
         ) : (
+          <>
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-neutral-200 text-sm">
               <thead className="bg-neutral-50 text-left text-xs font-medium uppercase tracking-wider text-neutral-500">
@@ -73,7 +88,7 @@ export default function SupplierGRNListPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-200">
-                {rows.map((grn) => (
+                {pageRows.map((grn) => (
                   <tr key={grn.name} className="hover:bg-accent-50/40">
                     <td className="px-4 py-3 font-medium text-neutral-900">
                       {grn.name}
@@ -109,8 +124,18 @@ export default function SupplierGRNListPage() {
               </tbody>
             </table>
           </div>
+          <PaginationBar
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={totalRecords}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            recordLabel="records"
+          />
+          </>
         )}
       </section>
-    </SupplierPortalLayout>
+    
   );
 }

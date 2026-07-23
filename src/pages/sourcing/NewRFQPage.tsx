@@ -28,16 +28,14 @@ import {
 
 import { apiGet, ENV_DEFAULTS } from "../../api/erpnext";
 import { queryClient } from "../../queryClient";
-import { createRFQ, getItemGroups } from "../../api/sourcing";
+import { createRFQ, getItemGroups, updateRFQ } from "../../api/sourcing";
 import {
+  ActiveRfqExistsError,
   buildRFQPrefillFromMaterialRequest,
   createRFQFromMaterialRequest,
 } from "../../api/createRFQFromMaterialRequest";
-import {
-  findRfqNameForMaterialRequest,
-  getLinkedRfqName,
-  fetchMaterialRequestWorkflow,
-} from "../../api/materialRequestWorkflow";
+import { fetchMaterialRequestWorkflow } from "../../api/materialRequestWorkflow";
+import { findActiveRfqForMaterialRequest } from "../../api/mrRfqAction";
 import { getRFQTemplates, getRFQTemplate } from "../../api/rfqTemplates";
 import { incrementLocalTemplateUsage } from "../../api/rfqTemplateStorage";
 import {
@@ -136,6 +134,7 @@ export default function NewRFQPage() {
   const [validTill, setValidTill] = useState(isoDateOffset(7));
   // Supplier-facing Terms & Conditions (goes into message_for_supplier).
   const [supplierTerms, setSupplierTerms] = useState("");
+  const [requireCostBreakdown, setRequireCostBreakdown] = useState(false);
   // Internal procurement notes — never sent to suppliers.
   const [internalNotes, setInternalNotes] = useState("");
   // Read-only Material Request context (only when created from an MR).
@@ -280,11 +279,12 @@ export default function NewRFQPage() {
 
     (async () => {
       try {
-        // Block duplicate RFQ creation when navigating with ?mr= after an RFQ exists.
+        // One MR → one active RFQ. Cancelled / Rejected do not redirect.
         const mrDoc = await fetchMaterialRequestWorkflow(mrParam);
-        const existing =
-          getLinkedRfqName(mrDoc) ||
-          (await findRfqNameForMaterialRequest(mrParam));
+        const existing = await findActiveRfqForMaterialRequest(
+          mrParam,
+          mrDoc,
+        );
         if (existing) {
           toast.error(
             `An RFQ already exists for this Material Request (${existing}).`,
@@ -596,6 +596,24 @@ export default function NewRFQPage() {
         incrementLocalTemplateUsage(appliedTemplate.name);
       }
 
+      // Custom field — written after create so createRFQ stays on stock fields.
+      if (requireCostBreakdown) {
+        try {
+          await updateRFQ(created.name, {
+            custom_require_cost_breakdown: 1,
+          });
+        } catch (flagErr) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            "[RFQ] Could not set custom_require_cost_breakdown:",
+            flagErr,
+          );
+          toast.error(
+            "RFQ created, but Require Cost Breakdown could not be saved. Enable it on the RFQ if needed.",
+          );
+        }
+      }
+
       toast.success(`RFQ ${created.name} created`);
       // Creating an RFQ (especially from a forwarded MR) moves the request out
       // of "awaiting RFQ" — keep the Warehouse & procurement dashboards live.
@@ -605,6 +623,13 @@ export default function NewRFQPage() {
       void queryClient.invalidateQueries({ queryKey: ["material-requests-workflow"] });
       navigate(`/sourcing/rfq/${encodeURIComponent(created.name)}`);
     } catch (err) {
+      if (err instanceof ActiveRfqExistsError) {
+        toast.error(err.message);
+        navigate(`/sourcing/rfq/${encodeURIComponent(err.rfqName)}`, {
+          replace: true,
+        });
+        return;
+      }
       // The axios interceptor already raises a toast and logs detail to
       // the console — re-emit a contextual error here in case the error
       // came from our payload validation rather than the network.
@@ -820,6 +845,8 @@ export default function NewRFQPage() {
             internalNotes={internalNotes}
             setInternalNotes={setInternalNotes}
             warehouseRemarks={mrContext?.warehouse_remarks ?? ""}
+            requireCostBreakdown={requireCostBreakdown}
+            setRequireCostBreakdown={setRequireCostBreakdown}
           />
         )}
 
@@ -856,6 +883,7 @@ export default function NewRFQPage() {
             totalItems={totalItems}
             totalQty={totalQty}
             mrContext={mrContext}
+            requireCostBreakdown={requireCostBreakdown}
           />
         )}
 
@@ -973,6 +1001,8 @@ interface Step1Props {
   internalNotes: string;
   setInternalNotes: (v: string) => void;
   warehouseRemarks: string;
+  requireCostBreakdown: boolean;
+  setRequireCostBreakdown: (v: boolean) => void;
 }
 
 const FIELD_CLASS =
@@ -988,6 +1018,8 @@ function Step1({
   internalNotes,
   setInternalNotes,
   warehouseRemarks,
+  requireCostBreakdown,
+  setRequireCostBreakdown,
 }: Step1Props) {
   return (
     <div className="space-y-5 p-5">
@@ -1062,6 +1094,25 @@ function Step1({
           Shared with suppliers in the quotation request.
         </p>
       </div>
+
+      {/* Cost Breakdown requirement — supplier quotation module */}
+      <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-neutral-200 bg-neutral-50/60 px-3.5 py-3">
+        <input
+          type="checkbox"
+          checked={requireCostBreakdown}
+          onChange={(e) => setRequireCostBreakdown(e.target.checked)}
+          className="mt-0.5 h-4 w-4 rounded border-neutral-300 text-primary-600 focus:ring-primary-500"
+        />
+        <span>
+          <span className="block text-sm font-medium text-neutral-800">
+            Require Cost Breakdown
+          </span>
+          <span className="mt-0.5 block text-xs text-neutral-500">
+            Invited suppliers must provide a cost breakdown (manual or Excel)
+            with their quotation. Hidden when disabled.
+          </span>
+        </span>
+      </label>
 
       {/* Internal Procurement Notes — never sent to suppliers */}
       <div>
@@ -1399,6 +1450,7 @@ interface Step4Props {
   totalItems: number;
   totalQty: number;
   mrContext: MrContext | null;
+  requireCostBreakdown: boolean;
 }
 
 function Step4({
@@ -1411,6 +1463,7 @@ function Step4({
   totalItems,
   totalQty,
   mrContext,
+  requireCostBreakdown,
 }: Step4Props) {
   const detailRows: Array<{ label: string; value: string }> = [
     { label: "RFQ Title", value: title || "—" },
@@ -1418,6 +1471,10 @@ function Step4({
     { label: "Total Items", value: String(totalItems) },
     { label: "Total Quantity", value: String(totalQty) },
     { label: "Suppliers Invited", value: String(selectedSuppliers.length) },
+    {
+      label: "Cost Breakdown",
+      value: requireCostBreakdown ? "Required" : "Not required",
+    },
   ];
   if (mrContext) {
     detailRows.splice(

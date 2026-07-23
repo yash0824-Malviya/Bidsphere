@@ -1,14 +1,14 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 
 /** Standard page-size choices offered across every paginated list page. */
-export const PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
+export const PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
 export type PageSizeOption = (typeof PAGE_SIZE_OPTIONS)[number];
 
 export const DEFAULT_PAGE_SIZE: PageSizeOption = 10;
 
 export interface UsePaginationOptions {
-  /** Defaults to 10 per the Procurement System pagination spec. */
+  /** Defaults to 10 per the enterprise pagination spec. */
   defaultPageSize?: PageSizeOption;
   /** URL query param name for the page number. */
   pageParam?: string;
@@ -16,9 +16,7 @@ export interface UsePaginationOptions {
   pageSizeParam?: string;
   /**
    * Opaque value representing the current filters/search/sort. Whenever this
-   * changes (e.g. the user types a search term or picks a status filter),
-   * pagination resets to page 1 — otherwise a filter change could strand the
-   * user on a now-empty page. Pass something stable, e.g. `JSON.stringify(filters)`.
+   * changes, pagination resets to page 1.
    */
   resetKey?: unknown;
 }
@@ -31,13 +29,11 @@ export interface UsePaginationResult {
 }
 
 /**
- * Page + page-size state for a server-paginated list, persisted in the URL
- * query string (`?page=2&pageSize=20` by default) so it survives a refresh
- * or back/forward navigation. Multiple tables on the same route can each get
- * their own independent state via distinct `pageParam`/`pageSizeParam` names.
+ * Page + page-size state persisted in the URL query string so it survives
+ * refresh and browser back/forward navigation.
  */
 export function usePagination(
-  options: UsePaginationOptions = {}
+  options: UsePaginationOptions = {},
 ): UsePaginationResult {
   const {
     defaultPageSize = DEFAULT_PAGE_SIZE,
@@ -49,7 +45,8 @@ export function usePagination(
   const [searchParams, setSearchParams] = useSearchParams();
 
   const rawPage = Number(searchParams.get(pageParam));
-  const page = Number.isFinite(rawPage) && rawPage >= 1 ? Math.floor(rawPage) : 1;
+  const page =
+    Number.isFinite(rawPage) && rawPage >= 1 ? Math.floor(rawPage) : 1;
 
   const rawPageSize = Number(searchParams.get(pageSizeParam));
   const pageSize = (PAGE_SIZE_OPTIONS as readonly number[]).includes(rawPageSize)
@@ -63,7 +60,7 @@ export function usePagination(
         params.set(pageParam, String(Math.max(1, Math.floor(next) || 1)));
         return params;
       },
-      { replace: true }
+      { replace: true },
     );
   };
 
@@ -72,13 +69,10 @@ export function usePagination(
       (prev) => {
         const params = new URLSearchParams(prev);
         params.set(pageSizeParam, String(next));
-        // Changing page size while sitting on, say, page 5 of a 10-per-page
-        // list is almost always disorienting once page size jumps — always
-        // land back on page 1.
         params.set(pageParam, "1");
         return params;
       },
-      { replace: true }
+      { replace: true },
     );
   };
 
@@ -98,4 +92,42 @@ export function usePagination(
   }, [resetKey]);
 
   return { page, pageSize, setPage, setPageSize };
+}
+
+export interface UseClientPaginationResult<T> extends UsePaginationResult {
+  totalRecords: number;
+  totalPages: number;
+  /** Safe current page clamped to totalPages. */
+  currentPage: number;
+  pageRows: T[];
+}
+
+/**
+ * Client-side pagination helper: URL-backed page state + sliced rows.
+ * Use when the API returns the full list and the UI pages locally.
+ */
+export function useClientPagination<T>(
+  rows: readonly T[],
+  options: UsePaginationOptions = {},
+): UseClientPaginationResult<T> {
+  const { page, pageSize, setPage, setPageSize } = usePagination(options);
+  const totalRecords = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize) || 1);
+  const currentPage = Math.min(Math.max(1, page), totalPages);
+  const pageRows = useMemo(
+    () =>
+      rows.slice((currentPage - 1) * pageSize, currentPage * pageSize) as T[],
+    [rows, currentPage, pageSize],
+  );
+
+  return {
+    page,
+    pageSize,
+    setPage,
+    setPageSize,
+    totalRecords,
+    totalPages,
+    currentPage,
+    pageRows,
+  };
 }

@@ -279,6 +279,7 @@ const MODULE_COLORS: Record<string, string> = {
 
 const ROLE_COLORS: Record<string, string> = {
   "Procurement Manager": "bg-blue-50 text-blue-700",
+  "Procurement Team": "bg-sky-50 text-sky-700",
   "Finance Manager": "bg-emerald-50 text-emerald-700",
   "Legal Reviewer": "bg-violet-50 text-violet-700",
   "Warehouse Manager": "bg-amber-50 text-amber-700",

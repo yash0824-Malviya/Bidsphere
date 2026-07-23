@@ -1014,6 +1014,71 @@ export async function fetchProcurementDashboardKpis(): Promise<ProcurementDashbo
   return snapshot;
 }
 
+/**
+ * Operational KPI snapshot for Procurement Team dashboard.
+ * Reuses existing count APIs only — no workflow/permission changes.
+ */
+export interface ProcurementTeamDashboardKpis {
+  newPurchaseOrders: number;
+  pendingSupplierConfirmations: number;
+  activeDeliveries: number;
+  pendingGrns: number;
+  pendingInvoices: number;
+  completedPos: number;
+}
+
+export async function fetchProcurementTeamDashboardKpis(): Promise<ProcurementTeamDashboardKpis> {
+  const today = format(new Date(), "yyyy-MM-dd");
+  const monthStart = format(startOfMonth(new Date()), "yyyy-MM-dd");
+  const results = await Promise.allSettled([
+    getExactCount("Purchase Order", [["transaction_date", "=", today]]),
+    getExactCount("Purchase Order", [
+      ["docstatus", "=", 1],
+      ["status", "=", "To Receive and Bill"],
+      ["per_received", "=", 0],
+    ]),
+    getExactCount("Purchase Order", [
+      ["docstatus", "=", 1],
+      ["status", "in", ["To Receive and Bill", "To Receive"]],
+    ]),
+    getExactCount("Purchase Receipt", [["status", "=", "To Bill"]]),
+    getExactCount("Purchase Invoice", [
+      ["docstatus", "=", 1],
+      ["outstanding_amount", ">", 0],
+    ]),
+    getExactCount("Purchase Order", [
+      ["docstatus", "=", 1],
+      ["status", "in", ["Completed", "Closed"]],
+      ["modified", ">=", monthStart],
+    ]),
+  ]);
+
+  const num = (i: number, fallback = 0) => {
+    const r = results[i];
+    return r?.status === "fulfilled" && typeof r.value === "number"
+      ? r.value
+      : fallback;
+  };
+
+  // Fallback if per_received filter is unavailable on site.
+  let pendingConfirmations = num(1);
+  if (results[1]?.status === "rejected") {
+    pendingConfirmations = await getExactCount("Purchase Order", [
+      ["docstatus", "=", 1],
+      ["status", "=", "To Receive and Bill"],
+    ]).catch(() => 0);
+  }
+
+  return {
+    newPurchaseOrders: num(0),
+    pendingSupplierConfirmations: pendingConfirmations,
+    activeDeliveries: num(2),
+    pendingGrns: num(3),
+    pendingInvoices: num(4),
+    completedPos: num(5),
+  };
+}
+
 /** Cap for procurement chart aggregates — 12 months of trend, not full ledger. */
 const PROCUREMENT_CHART_LIMIT = 1500;
 

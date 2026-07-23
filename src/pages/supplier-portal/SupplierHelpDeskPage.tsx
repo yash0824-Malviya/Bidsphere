@@ -16,7 +16,6 @@ import PageHeader from "../../components/PageHeader";
 import FaqAccordion from "../../components/support/FaqAccordion";
 import { APP_NAME, APP_SUPPLIER_PORTAL } from "../../config/branding";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 
 interface WorkflowStep {
   step: number;
@@ -153,16 +152,16 @@ export default function SupplierHelpDeskPage() {
 
   if (!isReady) {
     return (
-      <SupplierPortalLayout>
+      
         <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
           Loading…
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
   return (
-    <SupplierPortalLayout supplierName={supplierName}>
+    
       <PageHeader
         title="Help"
         description={`Workflow guides and answers for using the ${APP_SUPPLIER_PORTAL}.`}
@@ -254,6 +253,6 @@ export default function SupplierHelpDeskPage() {
           </div>
         </div>
       </div>
-    </SupplierPortalLayout>
+    
   );
 }

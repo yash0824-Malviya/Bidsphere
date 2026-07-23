@@ -16,9 +16,22 @@ import { useOptionalLayout } from "../../contexts/LayoutContext";
 const BIDSPHERE_ROLE_MAP: Record<string, { module: string; level: string }> = {
   Administrator: { module: "All Modules", level: "Full Access" },
   "System Manager": { module: "All Modules", level: "Full Access" },
-  "Procurement Manager": { module: "Sourcing, P2P", level: "Create / Edit / Submit" },
-  "Purchase Manager": { module: "Sourcing, P2P", level: "Create / Edit / Submit" },
-  "Purchase User": { module: "Sourcing, P2P", level: "Read / Create" },
+  "Procurement Manager": {
+    module: "Sourcing, RFQ → PO Approval",
+    level: "Create / Edit / Approve",
+  },
+  "Purchase Manager": {
+    module: "Sourcing, RFQ → PO Approval",
+    level: "Create / Edit / Approve",
+  },
+  "Procurement Team": {
+    module: "Purchase Orders",
+    level: "Create / Edit / Submit PO",
+  },
+  "Purchase User": {
+    module: "Purchase Orders",
+    level: "Create / Edit / Submit PO",
+  },
   "Finance Manager": { module: "Finance, Budget", level: "Approve / Submit" },
   "Accounts Manager": { module: "Finance", level: "Full Finance Access" },
   "Accounts User": { module: "Finance", level: "Read / Create" },

@@ -42,6 +42,8 @@ export interface WarehouseMaterialRequestItem {
 
 export interface WarehouseMaterialRequest {
   name: string;
+  /** ERPNext Material Request.company — Stock Entry warehouses must match. */
+  company: string;
   department: string;
   requested_by: string;
   request_date: string;
@@ -67,12 +69,18 @@ export interface WarehouseMaterialIssued {
   department: string;
   /** Human display name of the issuer — never an email / "Administrator". */
   issued_by: string;
+  /** Receiver role/name from Material Issue audit tag when present. */
+  received_by?: string;
   issue_date: string;
   /** Source warehouse the stock was issued from (empty when unknown). */
   warehouse: string;
   /** Full ISO timestamp (creation) for activity feeds — date + time. */
   issued_at?: string;
   status: MaterialIssueStatus;
+  /** Full Issue | Partial Issue when audit tag present. */
+  issue_type?: "Full Issue" | "Partial Issue";
+  total_items?: number;
+  total_quantity?: number;
 }
 
 export interface MaterialIssueDetailItem {
@@ -99,6 +107,20 @@ export interface MaterialIssueDetail {
   /** Stock Entry document name (same as `name`) — surfaced explicitly for UI. */
   stock_entry_number: string;
   items: MaterialIssueDetailItem[];
+  received_by?: string;
+  issue_type?: "Full Issue" | "Partial Issue";
+  audit?: {
+    created_by: string;
+    issue_time: string;
+    warehouse: string;
+    receiver: string;
+    browser: string;
+    device: string;
+  };
+  /** Machine tags retained for admin Audit Information only — never shown in slip body. */
+  audit_payload?: string;
+  /** Enterprise bullet remarks for Issue Slip (no raw JSON). */
+  remarks_bullets?: string[];
 }
 
 export interface WarehouseForwardedRequest {
@@ -125,14 +147,28 @@ import {
   WAREHOUSE_PENDING_STATUSES,
 } from "../api/materialRequestWorkflow";
 import { fetchWarehouseStockSummary } from "../api/warehouseStock";
+import { getItemStockAcrossWarehouses } from "../api/warehouseInventoryService";
+import { enhanceMrStatusFromReceipts } from "../api/materialIssueReceipt";
 import { getMaterialRequest } from "../api/purchasing";
-import { apiGet, buildListConfig, buildResourceUrl, COMPANY } from "../api/erpnext";
+import {
+  apiGet,
+  buildListConfig,
+  buildResourceUrl,
+  COMPANY,
+  type Filter,
+} from "../api/erpnext";
 import { hydrateEngineeringDocsFromChild } from "../utils/materialRequestItemFiles";
 import type { EngineeringAttachment } from "../utils/materialRequestItemFiles";
 import {
   logMrFilterTable,
   logMrWorkflowStage,
 } from "../utils/mrWorkflowDebug";
+import { parseMaterialIssueAudit } from "../api/materialIssue";
+import {
+  cleanBusinessWarehouseRemarks,
+  splitMaterialIssueRemarksForDisplay,
+} from "../utils/materialIssueRemarksDisplay";
+import { nonNegativeQty } from "../utils/inventoryStock";
 
 /** True when the ERPNext response indicates the caller lacks permission. */
 function isForbidden(err: unknown): boolean {
@@ -159,6 +195,47 @@ function logWidgetFailure(widget: string, err: unknown): void {
     console.error(
       `[Warehouse Dashboard] Failed to load "${widget}" (status: ${status ?? "n/a"}):`,
       err
+    );
+  }
+}
+
+/** Structured ERP list-query log — surfaces invalid-field errors immediately. */
+function logErpListQuery(input: {
+  doctype: string;
+  fields?: string[];
+  filters?: unknown;
+  order_by?: string;
+  response?: unknown;
+  error?: unknown;
+}): void {
+  const payload = {
+    doctype: input.doctype,
+    fields: input.fields ?? null,
+    filters: input.filters ?? null,
+    order_by: input.order_by ?? null,
+    response: input.error
+      ? undefined
+      : Array.isArray(input.response)
+        ? { count: input.response.length, sample: input.response.slice(0, 3) }
+        : input.response,
+    error: input.error
+      ? input.error instanceof Error
+        ? input.error.message
+        : String(input.error)
+      : undefined,
+  };
+  // eslint-disable-next-line no-console
+  console.log("[Warehouse ERP query]", payload);
+  if (
+    payload.error &&
+    /Field not permitted in query/i.test(payload.error)
+  ) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[Warehouse ERP query] INVALID FIELD on DocType "${input.doctype}". ` +
+        `Requested fields=${JSON.stringify(input.fields)}. ` +
+        `Remove the field from the list query (Material Request uses custom_department, not department).`,
+      payload,
     );
   }
 }
@@ -274,7 +351,7 @@ export async function getPendingMaterialRequests(): Promise<WarehouseMaterialReq
 
       const items = (mr.items || []).map((item: any) => {
         const stock = stockMap.get(item.item_code);
-        const avail = stock ? stock.available_qty : 0;
+        const avail = nonNegativeQty(stock?.available_qty);
         return {
           item_code: item.item_code,
           description: item.description || "",
@@ -293,6 +370,7 @@ export async function getPendingMaterialRequests(): Promise<WarehouseMaterialReq
 
       return {
         name: mr.name,
+        company: String(mr.company || COMPANY || "").trim(),
         department: mr.custom_department || mr.department || "General",
         requested_by: mr.custom_requested_by || mr.owner || "System",
         request_date: mr.transaction_date || mr.modified?.split("T")[0] || "",
@@ -437,6 +515,7 @@ export async function getWarehouseProcurementRequiredRequests(): Promise<
 
     return {
       name: mr.name,
+      company: String(mr.company || COMPANY || "").trim(),
       department: mr.custom_department || mr.department || "General",
       requested_by: mr.custom_requested_by || mr.owner || "System",
       request_date: mr.transaction_date || mr.modified?.split("T")[0] || "",
@@ -454,25 +533,38 @@ export async function getWarehouseProcurementRequiredRequests(): Promise<
 }
 
 export async function getMaterialRequestDetail(
-  mrNumber: string
+  mrNumber: string,
+  opts?: {
+    /**
+     * When false, skip nested checkMaterialRequestStock (Review page runs its
+     * own Stock Decision check). Default true for other callers.
+     */
+    includeStockCheck?: boolean;
+  },
 ): Promise<WarehouseMaterialRequest | null> {
   if (!mrNumber) return null;
   const mr = (await getMaterialRequest(mrNumber)) as any;
   if (!mr) return null;
 
   let stockLines: any[] = [];
-  try {
-    const stockCheck = await checkMaterialRequestStock(mr.name);
-    stockLines = stockCheck.lines;
-  } catch {
-    // ignore stock check failure
+  if (opts?.includeStockCheck !== false) {
+    try {
+      const stockCheck = await checkMaterialRequestStock(mr.name);
+      stockLines = stockCheck.lines;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[getMaterialRequestDetail] stock check failed (continuing without stock):",
+        err,
+      );
+    }
   }
   const stockMap = new Map(stockLines.map((l) => [l.item_code, l]));
 
   const items = await Promise.all(
     (mr.items || []).map(async (item: any) => {
       const stock = stockMap.get(item.item_code);
-      const avail = stock ? stock.available_qty : 0;
+      const avail = Math.max(0, stock ? Number(stock.available_qty) || 0 : 0);
       // Prefer child JSON / Attach fields; fall back to File DocType links
       // when upload succeeded but custom_engineering_attachments was empty.
       const eng = await hydrateEngineeringDocsFromChild(item);
@@ -496,14 +588,20 @@ export async function getMaterialRequestDetail(
     }),
   );
 
+  const rawStatus =
+    normalizeWorkflowStatus(mr.custom_bidsphere_status) ||
+    workflowStatusFromStandardFields(mr);
   return {
     name: mr.name,
+    company: String(mr.company || COMPANY || "").trim(),
     department: mr.custom_department || mr.department || "General",
     requested_by: mr.custom_requested_by || mr.owner || "System",
     request_date: mr.transaction_date || mr.modified?.split("T")[0] || "",
     required_date: mr.schedule_date || "",
     priority: mr.custom_priority || "Medium",
-    status: normalizeWorkflowStatus(mr.custom_bidsphere_status) || workflowStatusFromStandardFields(mr),
+    status: (normalizeWorkflowStatus(
+      enhanceMrStatusFromReceipts(mr.name, rawStatus),
+    ) || rawStatus) as typeof rawStatus,
     procurement_type: resolveProcurementType(mr.custom_procurement_type),
     request_mode: resolveRequestMode(mr.custom_request_mode),
     items_count: mr.items ? mr.items.length : 0,
@@ -523,9 +621,9 @@ export async function getInventorySummary(): Promise<WarehouseItem[]> {
       category: row.category,
       uom: row.uom,
       status: row.status as "In Stock" | "Low Stock" | "Out of Stock",
-      available_qty: row.available_qty,
-      reserved_qty: row.reserved_qty,
-      reorder_level: row.reorder_level,
+      available_qty: nonNegativeQty(row.available_qty),
+      reserved_qty: nonNegativeQty(row.reserved_qty),
+      reorder_level: nonNegativeQty(row.reorder_level),
       warehouse: row.warehouse,
     }));
   } catch (err) {
@@ -539,11 +637,7 @@ export async function getInventorySummary(): Promise<WarehouseItem[]> {
  *  blocking the rest of the dashboard. */
 /** Strip the machine-only `[BidSphere:…]` snapshot embedded in remarks. */
 function cleanIssueRemarks(raw?: string): string {
-  if (!raw) return "";
-  return raw
-    .replace(/\[BidSphere:ForwardedItems:\[.*?\]\]/gs, "")
-    .replace(/\[BidSphere:[^\]]*\]/gs, "")
-    .trim();
+  return cleanBusinessWarehouseRemarks(raw);
 }
 
 /** Extract an MR number from free-text remarks as a last resort. */
@@ -604,28 +698,49 @@ export async function getIssuedMaterials(options?: {
   includeCancelled?: boolean;
 }): Promise<WarehouseMaterialIssued[]> {
   try {
-    const stockEntries = await apiGet<any[]>(buildResourceUrl("Stock Entry"), {
-      ...buildListConfig({
-        fields: [
-          "name",
-          "posting_date",
-          "creation",
-          "owner",
-          "remarks",
-          "docstatus",
-          "from_warehouse",
-        ],
-        filters: [
-          ["purpose", "=", "Material Issue"],
-          options?.includeCancelled
-            ? ["docstatus", "in", [1, 2]]
-            : ["docstatus", "=", 1],
-        ],
-        limit_page_length: 200,
+    const seFields = [
+      "name",
+      "posting_date",
+      "creation",
+      "owner",
+      "remarks",
+      "docstatus",
+      "from_warehouse",
+    ];
+    const seFilters: Filter[] = [
+      ["purpose", "=", "Material Issue"],
+      options?.includeCancelled
+        ? ["docstatus", "in", [1, 2]]
+        : ["docstatus", "=", 1],
+    ];
+    let stockEntries: any[];
+    try {
+      stockEntries = await apiGet<any[]>(buildResourceUrl("Stock Entry"), {
+        ...buildListConfig({
+          fields: seFields,
+          filters: seFilters,
+          limit_page_length: 200,
+          order_by: "posting_date desc",
+        }),
+        timeout: 5000,
+      });
+      logErpListQuery({
+        doctype: "Stock Entry",
+        fields: seFields,
+        filters: seFilters,
         order_by: "posting_date desc",
-      }),
-      timeout: 5000,
-    });
+        response: stockEntries,
+      });
+    } catch (err) {
+      logErpListQuery({
+        doctype: "Stock Entry",
+        fields: seFields,
+        filters: seFilters,
+        order_by: "posting_date desc",
+        error: err,
+      });
+      throw err;
+    }
 
     if (!stockEntries || stockEntries.length === 0) return [];
 
@@ -634,19 +749,28 @@ export async function getIssuedMaterials(options?: {
     // Stock Entry Detail child rows → MR link, issued qty, source warehouse.
     const mrByParent = new Map<string, string>();
     const issuedQtyByParent = new Map<string, number>();
+    const itemCountByParent = new Map<string, number>();
     const warehouseByParent = new Map<string, string>();
+    const detailFields = ["parent", "material_request", "qty", "s_warehouse"];
+    const detailFilters: Filter[] = [["parent", "in", seNames]];
     try {
       const details = await apiGet<any[]>(
         buildResourceUrl("Stock Entry Detail"),
         {
           ...buildListConfig({
-            fields: ["parent", "material_request", "qty", "s_warehouse"],
-            filters: [["parent", "in", seNames]],
+            fields: detailFields,
+            filters: detailFilters,
             limit_page_length: 2000,
           }),
           timeout: 5000,
         },
       );
+      logErpListQuery({
+        doctype: "Stock Entry Detail",
+        fields: detailFields,
+        filters: detailFilters,
+        response: details,
+      });
       for (const d of details ?? []) {
         if (!d.parent) continue;
         if (d.material_request && !mrByParent.has(d.parent)) {
@@ -656,16 +780,27 @@ export async function getIssuedMaterials(options?: {
           d.parent,
           (issuedQtyByParent.get(d.parent) ?? 0) + (Number(d.qty) || 0),
         );
+        itemCountByParent.set(
+          d.parent,
+          (itemCountByParent.get(d.parent) ?? 0) + 1,
+        );
         if (d.s_warehouse && !warehouseByParent.has(d.parent)) {
           warehouseByParent.set(d.parent, d.s_warehouse);
         }
       }
     } catch (err) {
+      logErpListQuery({
+        doctype: "Stock Entry Detail",
+        fields: detailFields,
+        filters: detailFilters,
+        error: err,
+      });
       // eslint-disable-next-line no-console
       console.warn("[getIssuedMaterials] Could not fetch Stock Entry Detail:", err);
     }
 
     // Resolve MR names for department + requested-qty lookups.
+    // Department lives on Material Request as custom_department (not `department`).
     const mrNames = Array.from(
       new Set(
         stockEntries
@@ -677,35 +812,57 @@ export async function getIssuedMaterials(options?: {
     const deptByMr = new Map<string, string>();
     const requestedQtyByMr = new Map<string, number>();
     if (mrNames.length > 0) {
+      const mrFields = ["name", "custom_department"];
+      const mrFilters: Filter[] = [["name", "in", mrNames]];
       try {
         const mrs = await apiGet<any[]>(buildResourceUrl("Material Request"), {
           ...buildListConfig({
-            fields: ["name", "custom_department", "department"],
-            filters: [["name", "in", mrNames]],
+            fields: mrFields,
+            filters: mrFilters,
             limit_page_length: mrNames.length,
           }),
           timeout: 5000,
         });
+        logErpListQuery({
+          doctype: "Material Request",
+          fields: mrFields,
+          filters: mrFilters,
+          response: mrs,
+        });
         for (const mr of mrs ?? []) {
-          const dept = (mr.custom_department || mr.department || "").trim();
+          const dept = String(mr.custom_department || "").trim();
           if (mr.name && dept) deptByMr.set(mr.name, dept);
         }
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn("[getIssuedMaterials] Could not fetch Material Requests:", err);
+        logErpListQuery({
+          doctype: "Material Request",
+          fields: mrFields,
+          filters: mrFilters,
+          error: err,
+        });
+        // Do not suppress — rethrow invalid-field / hard ERP errors.
+        throw err;
       }
+      const mrItemFields = ["parent", "qty"];
+      const mrItemFilters: Filter[] = [["parent", "in", mrNames]];
       try {
         const mrItems = await apiGet<any[]>(
           buildResourceUrl("Material Request Item"),
           {
             ...buildListConfig({
-              fields: ["parent", "qty"],
-              filters: [["parent", "in", mrNames]],
+              fields: mrItemFields,
+              filters: mrItemFilters,
               limit_page_length: 2000,
             }),
             timeout: 5000,
           },
         );
+        logErpListQuery({
+          doctype: "Material Request Item",
+          fields: mrItemFields,
+          filters: mrItemFilters,
+          response: mrItems,
+        });
         for (const it of mrItems ?? []) {
           if (!it.parent) continue;
           requestedQtyByMr.set(
@@ -714,6 +871,12 @@ export async function getIssuedMaterials(options?: {
           );
         }
       } catch (err) {
+        logErpListQuery({
+          doctype: "Material Request Item",
+          fields: mrItemFields,
+          filters: mrItemFilters,
+          error: err,
+        });
         // eslint-disable-next-line no-console
         console.warn("[getIssuedMaterials] Could not fetch MR items:", err);
       }
@@ -727,6 +890,7 @@ export async function getIssuedMaterials(options?: {
       const mrName = mrByParent.get(se.name) || mrFromRemarks(se.remarks) || "";
       const requested = mrName ? requestedQtyByMr.get(mrName) : undefined;
       const issued = issuedQtyByParent.get(se.name) ?? 0;
+      const audit = parseMaterialIssueAudit(se.remarks);
 
       let status: MaterialIssueStatus;
       if (se.docstatus === 2) {
@@ -737,15 +901,23 @@ export async function getIssuedMaterials(options?: {
         status = "Fully Issued";
       }
 
+      const issue_type =
+        audit?.issue_type ||
+        (status === "Partially Issued" ? "Partial Issue" : "Full Issue");
+
       return {
         name: se.name,
         mr_name: mrName,
         department: mrName ? deptByMr.get(mrName) ?? "" : "",
         issued_by: resolveIssuerName(se.owner, nameByEmail),
+        received_by: audit?.receiver || "",
         issue_date: se.posting_date || "",
         warehouse: warehouseByParent.get(se.name) || se.from_warehouse || "",
         issued_at: se.creation || se.posting_date || "",
         status,
+        issue_type,
+        total_items: itemCountByParent.get(se.name) ?? 0,
+        total_quantity: issued,
       };
     });
   } catch (error) {
@@ -832,6 +1004,18 @@ export async function getMaterialIssueDetail(
   const warehouse =
     detailItems.find((i) => i.warehouse)?.warehouse || se.from_warehouse || "";
 
+  const audit = parseMaterialIssueAudit(se.remarks);
+  const remarksDisplay = splitMaterialIssueRemarksForDisplay(se.remarks, {
+    items: detailItems.map((it) => ({
+      item_code: it.item_code,
+      item_name: it.item_name,
+      requested_qty: it.requested_qty ?? undefined,
+      issued_qty: it.issued_qty,
+      remaining_qty: it.remaining_qty ?? undefined,
+      uom: it.uom,
+    })),
+  });
+
   return {
     name: se.name,
     mr_name: mrName,
@@ -840,9 +1024,16 @@ export async function getMaterialIssueDetail(
     issued_by: resolveIssuerName(se.owner, nameByEmail),
     issue_date: se.posting_date || "",
     status,
-    remarks: cleanIssueRemarks(se.remarks),
+    remarks: remarksDisplay.prose || cleanIssueRemarks(se.remarks),
+    remarks_bullets: remarksDisplay.bullets,
     stock_entry_number: se.name,
     items: detailItems,
+    received_by: audit?.receiver,
+    issue_type:
+      audit?.issue_type ||
+      (status === "Partially Issued" ? "Partial Issue" : "Full Issue"),
+    audit: audit?.audit,
+    audit_payload: remarksDisplay.audit.json_payload,
   };
 }
 
@@ -1072,40 +1263,11 @@ export interface ItemStockBreakdownRow {
 
 export async function getItemStockBreakdown(itemCode: string): Promise<ItemStockBreakdownRow[]> {
   try {
-    // Fetch Netlink warehouses first to prevent cross-company stock data leak
-    const list = await apiGet<any[]>("/api/resource/Warehouse", {
-      params: {
-        filters: JSON.stringify([
-          ["company", "=", COMPANY],
-          ["is_group", "=", 0],
-          ["disabled", "=", 0],
-        ]),
-        fields: JSON.stringify(["name"]),
-        limit_page_length: 500,
-      },
-    });
-    const netlinkWhNames = Array.isArray(list) ? list.map((w) => w.name) : [];
-    if (netlinkWhNames.length === 0) return [];
-
-    const bins = await apiGet<any[]>(
-      buildResourceUrl("Bin"),
-      {
-        ...buildListConfig({
-          fields: ["warehouse", "actual_qty", "reserved_qty"],
-          filters: [
-            ["item_code", "=", itemCode],
-            ["warehouse", "in", netlinkWhNames],
-          ],
-          limit_page_length: 50,
-        }),
-        timeout: 5000,
-      }
-    );
-
-    return bins.map((bin) => ({
+    const across = await getItemStockAcrossWarehouses(itemCode);
+    return across.by_warehouse.map((bin) => ({
       warehouse: bin.warehouse,
-      available_qty: bin.actual_qty ?? 0,
-      reserved_qty: bin.reserved_qty ?? 0,
+      available_qty: bin.available_qty,
+      reserved_qty: bin.reserved_qty,
       reorder_level: 0,
     }));
   } catch (err) {

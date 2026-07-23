@@ -1,6 +1,10 @@
 import type { AxiosError, AxiosResponse } from "axios";
 import erpnext, { apiGet } from "./erpnext";
-import { resolveRoleFromUser, type AppRole } from "../config/roles";
+import {
+  displayNameForAuthenticatedUser,
+  resolveRoleFromUser,
+  type AppRole,
+} from "../config/roles";
 import { writeAccessToken } from "../utils/accessToken";
 
 export interface LoginResponse {
@@ -181,44 +185,49 @@ export async function loginWithPassword(
     }
   }
 
-  const fullName =
+  const erpFullName =
     payload?.full_name ||
     (typeof msg === "object" && msg?.full_name ? msg.full_name : undefined) ||
     usr;
 
-  if (import.meta.env.DEV) {
-    // eslint-disable-next-line no-console
-    console.log("[Auth] Login successful for:", usr, "fullName:", fullName);
+  const email = payload?.email || (usr.includes("@") ? usr : `${usr}@erpnext`);
+
+  // Always resolve the UI role on the client. Known role mailboxes
+  // (procurement@ vs procurement.team@) are authoritative so a stale or
+  // incomplete server role cannot collapse Team into Manager.
+  let erpnextRoles: string[] = [];
+  try {
+    erpnextRoles = await fetchUserRoles(usr);
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.log("[Auth] ERPNext roles for", usr, ":", erpnextRoles);
+    }
+  } catch (roleErr) {
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn("[Auth] Could not fetch ERPNext roles:", roleErr);
+    }
   }
 
-  // Prefer server-resolved role + access token (RBAC). Fall back to client
-  // resolution when talking to an older auth backend.
-  let role: AppRole =
-    payload?.role ??
-    resolveRoleFromUser({
-      name: usr,
-      email: usr.includes("@") ? usr : `${usr}@erpnext`,
-      erpnext_roles: [],
-    });
+  const role: AppRole = resolveRoleFromUser({
+    name: payload?.name || usr,
+    email,
+    erpnext_roles: erpnextRoles,
+  });
 
-  if (!payload?.role) {
-    let erpnextRoles: string[] = [];
-    try {
-      erpnextRoles = await fetchUserRoles(usr);
-      if (import.meta.env.DEV) {
-        // eslint-disable-next-line no-console
-        console.log("[Auth] ERPNext roles for", usr, ":", erpnextRoles);
-      }
-    } catch (roleErr) {
-      if (import.meta.env.DEV) {
-        // eslint-disable-next-line no-console
-        console.warn("[Auth] Could not fetch ERPNext roles:", roleErr);
-      }
-    }
-    role = resolveRoleFromUser({
-      name: usr,
-      email: usr.includes("@") ? usr : `${usr}@erpnext`,
-      erpnext_roles: erpnextRoles,
+  const fullName = displayNameForAuthenticatedUser({
+    email,
+    name: payload?.name || usr,
+    full_name: erpFullName,
+    role,
+  });
+
+  if (import.meta.env.DEV) {
+    // eslint-disable-next-line no-console
+    console.log("[Auth] Login successful for:", usr, {
+      fullName,
+      role,
+      serverRole: payload?.role,
     });
   }
 
@@ -233,7 +242,7 @@ export async function loginWithPassword(
 
   return {
     name: payload?.name || usr,
-    email: payload?.email || (usr.includes("@") ? usr : `${usr}@erpnext`),
+    email,
     full_name: fullName,
     role,
   };

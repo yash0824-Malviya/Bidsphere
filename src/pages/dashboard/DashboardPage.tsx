@@ -10,6 +10,9 @@ import type { AppRole } from "../../config/roles";
 const FinanceDashboard = lazy(() => import("../../components/dashboard/FinanceDashboard"));
 const LegalDashboard = lazy(() => import("../../components/dashboard/LegalDashboard"));
 const ProcurementDashboard = lazy(() => import("../../components/dashboard/ProcurementDashboard"));
+const ProcurementTeamDashboard = lazy(
+  () => import("../../components/dashboard/ProcurementTeamDashboard"),
+);
 
 function DashFallback() {
   return (
@@ -39,6 +42,14 @@ export default function DashboardPage() {
 
   if (role === "department") {
     return <DepartmentUserDashboard greetingName={greetingName} />;
+  }
+
+  if (role === "procurement_team") {
+    return (
+      <Suspense fallback={<DashFallback />}>
+        <ProcurementTeamDashboard />
+      </Suspense>
+    );
   }
 
   if (role === "procurement") {

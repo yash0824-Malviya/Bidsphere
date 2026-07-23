@@ -267,7 +267,7 @@ export default function LegalReviewsListPage() {
     !!stageFilter;
 
   return (
-    <div className="mx-auto max-w-7xl space-y-4">
+    <div className="flex w-full flex-col gap-6">
       {/* Tabs — always visible */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div

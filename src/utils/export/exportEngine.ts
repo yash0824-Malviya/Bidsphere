@@ -113,7 +113,7 @@ async function exportPdf<T>(
       overflow: "linebreak",
     },
     headStyles: {
-      fillColor: [20, 108, 232],
+      fillColor: [0, 152, 234],
       textColor: 255,
       fontStyle: "bold",
     },

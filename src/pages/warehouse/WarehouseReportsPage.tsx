@@ -59,9 +59,11 @@ export default function WarehouseReportsPage() {
 
     const items = inventoryQuery.data.map((item) => {
       const cost = itemCosts[item.item_code] || 10;
-      const totalCost = item.available_qty * cost;
+      const available = Math.max(0, Number(item.available_qty) || 0);
+      const totalCost = available * cost;
       return {
         ...item,
+        available_qty: available,
         cost,
         totalCost,
       };
@@ -77,7 +79,7 @@ export default function WarehouseReportsPage() {
 
   if (isError) {
     return (
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <div className="w-full">
         <div className="rounded-2xl border border-slate-100 bg-white p-8 shadow-sm">
           <ErrorState
             title="Unable to load Warehouse data."
@@ -90,7 +92,7 @@ export default function WarehouseReportsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-6 animate-in fade-in duration-300">
+    <div className="flex w-full flex-col gap-6 animate-in fade-in duration-300">
       {/* Actions toolbar */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
         <div>
@@ -233,7 +235,8 @@ export default function WarehouseReportsPage() {
                             <td className="py-3 px-4 text-slate-700">{item.item_name}</td>
                             <td className="py-3 px-4 text-slate-600">{item.warehouse}</td>
                             <td className="py-3 px-4 text-right font-medium text-slate-900 tabular-nums">
-                              {item.available_qty} {item.uom}
+                              {Math.max(0, Number(item.available_qty) || 0)}{" "}
+                              {item.uom}
                             </td>
                             <td className="py-3 px-4 text-right text-slate-500 tabular-nums">
                               {item.reorder_level} {item.uom}
@@ -293,7 +296,10 @@ export default function WarehouseReportsPage() {
                         <tr key={item.item_code} className="hover:bg-slate-50/25">
                           <td className="py-3 px-4 font-mono font-semibold text-slate-900">{item.item_code}</td>
                           <td className="py-3 px-4 text-slate-700">{item.item_name}</td>
-                          <td className="py-3 px-4 text-right tabular-nums">{item.available_qty} {item.uom}</td>
+                          <td className="py-3 px-4 text-right tabular-nums">
+                            {Math.max(0, Number(item.available_qty) || 0)}{" "}
+                            {item.uom}
+                          </td>
                           <td className="py-3 px-4 text-right font-mono tabular-nums">${item.cost.toFixed(2)}</td>
                           <td className="py-3 px-4 text-right font-bold font-mono text-slate-800 tabular-nums">
                             ${item.totalCost.toLocaleString("en-US", { minimumFractionDigits: 2 })}

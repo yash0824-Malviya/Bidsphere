@@ -186,7 +186,7 @@ export default function WarehouseSignaturePad({
           type="button"
           disabled={disabled || !dirty}
           onClick={handleSave}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-40"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-700 disabled:opacity-40"
         >
           <Save className="h-3.5 w-3.5" />
           {saveLabel}

@@ -94,7 +94,7 @@ export default function SupplierForgotPasswordPage() {
               <ArrowLeft className="h-3.5 w-3.5" />
               Back to sign in
             </Link>
-            <div className="mb-6 flex h-11 w-11 items-center justify-center rounded-xl bg-[#0ea5e9] text-white shadow-md shadow-[#0ea5e9]/25">
+            <div className="mb-6 flex h-11 w-11 items-center justify-center rounded-xl bg-[#0098EA] text-white shadow-md shadow-[#0098EA]/25">
               {step === "request" ? (
                 <Mail className="h-5 w-5" />
               ) : (
@@ -136,7 +136,7 @@ export default function SupplierForgotPasswordPage() {
             ) : (
               <form className="mt-6 space-y-4" onSubmit={(e) => void onReset(e)}>
                 {issuedOtp ? (
-                  <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+                  <div className="rounded-lg border border-primary-200 bg-primary-50 px-3 py-2 text-xs text-primary-900">
                     Demo / no SMTP: your OTP is{" "}
                     <span className="font-mono font-bold tracking-widest">{issuedOtp}</span>
                     . It expires in 10 minutes.

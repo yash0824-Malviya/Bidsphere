@@ -1,6 +1,8 @@
-import { Eye, Scale, X } from "lucide-react";
+import { useState } from "react";
+import { Calculator, Eye, Scale, X } from "lucide-react";
 
 import { formatCurrency } from "../../utils/format";
+import CostBreakdownComparisonModal from "./CostBreakdownComparisonModal";
 
 export interface ComparisonItem {
   item_code: string;
@@ -47,6 +49,7 @@ export default function CompareQuotationsModal({
   onClose: () => void;
   canViewQuotation?: boolean;
 }) {
+  const [costBreakdownOpen, setCostBreakdownOpen] = useState(false);
   const safeItems = items ?? [];
   const safeQuotes = quotes ?? [];
   const lowestUnitPriceByItem = new Map<string, number>();
@@ -85,14 +88,26 @@ export default function CompareQuotationsModal({
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-neutral-500 hover:bg-neutral-100"
-            aria-label="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            {safeQuotes.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setCostBreakdownOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50"
+              >
+                <Calculator className="h-3.5 w-3.5 text-primary-600" />
+                View Cost Breakdown
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-neutral-500 hover:bg-neutral-100"
+              aria-label="Close"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         {safeQuotes.length === 0 ? (
@@ -233,6 +248,13 @@ export default function CompareQuotationsModal({
           </div>
         )}
       </div>
+
+      {costBreakdownOpen && (
+        <CostBreakdownComparisonModal
+          rfqName={rfqName}
+          onClose={() => setCostBreakdownOpen(false)}
+        />
+      )}
     </div>
   );
 }

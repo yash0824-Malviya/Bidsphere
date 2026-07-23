@@ -34,6 +34,8 @@ import { FEATURE_FLAGS } from "../config/featureFlags";
 
 import { useDebounce } from "../hooks/useDebounce";
 
+import { useAuthStore } from "../store/authStore";
+
 
 
 interface BaseHit {
@@ -119,6 +121,14 @@ export default function GlobalSearch({ onSelect }: Props) {
 
   const navigate = useNavigate();
 
+  const role = useAuthStore((s) => s.user?.role);
+
+  /** Procurement Team must not surface Invoice Coordination in search. */
+  const hideInvoices = role === "procurement_team";
+
+  /** Team has no Material Request module — hide those hits too. */
+  const hideRequisitions = role === "procurement_team";
+
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -189,7 +199,7 @@ export default function GlobalSearch({ onSelect }: Props) {
 
   const { data, isFetching } = useQuery<SearchResults>({
 
-    queryKey: ["global-search", trimmed],
+    queryKey: ["global-search", trimmed, role],
 
     enabled: trimmed.length >= 2,
 
@@ -247,7 +257,9 @@ export default function GlobalSearch({ onSelect }: Props) {
 
           }).catch(() => [] as DocHit[]),
 
-          apiGet<DocHit[]>("/api/resource/Purchase Invoice", {
+          hideInvoices
+            ? Promise.resolve([] as DocHit[])
+            : apiGet<DocHit[]>("/api/resource/Purchase Invoice", {
 
             params: {
 
@@ -263,7 +275,7 @@ export default function GlobalSearch({ onSelect }: Props) {
 
           }).catch(() => [] as DocHit[]),
 
-          FEATURE_FLAGS.showMaterialRequests
+          !hideRequisitions && FEATURE_FLAGS.showMaterialRequests
 
             ? apiGet<DocHit[]>("/api/resource/Material Request", {
 
@@ -347,29 +359,37 @@ export default function GlobalSearch({ onSelect }: Props) {
 
     },
 
-    {
+    ...(!hideInvoices
 
-      key: "invoices",
+      ? [
 
-      label: t("nav.invoices"),
+          {
 
-      icon: Receipt,
+            key: "invoices" as keyof SearchResults,
 
-      hits: (data?.invoices ?? []).map((p) => ({
+            label: t("nav.invoices"),
 
-        name: p.name,
+            icon: Receipt,
 
-        primary: p.name,
+            hits: (data?.invoices ?? []).map((p) => ({
 
-        secondary: [p.supplier, p.status].filter(Boolean).join(" • "),
+              name: p.name,
 
-        to: `/p2p/invoices?q=${encodeURIComponent(p.name)}`,
+              primary: p.name,
 
-      })),
+              secondary: [p.supplier, p.status].filter(Boolean).join(" • "),
 
-    },
+              to: `/p2p/invoices?q=${encodeURIComponent(p.name)}`,
 
-    ...(FEATURE_FLAGS.showMaterialRequests
+            })),
+
+          },
+
+        ]
+
+      : []),
+
+    ...(!hideRequisitions && FEATURE_FLAGS.showMaterialRequests
 
       ? [
 
@@ -420,7 +440,7 @@ export default function GlobalSearch({ onSelect }: Props) {
 
   return (
 
-    <div ref={wrapperRef} className="relative w-full max-w-md">
+    <div ref={wrapperRef} className="relative w-full">
 
       <div className="relative">
 

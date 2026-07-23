@@ -7,14 +7,15 @@ import { getSupplierPaymentSummaries } from "../../api/supplierPortal";
 import { getPaymentsForSupplier, getVoucherById } from "../../api/vouchers";
 import { useVoucherSyncStore } from "../../store/voucherSyncStore";
 import EmptyState from "../../components/EmptyState";
-import PdfActions from "../../components/PdfActions";
-import { buildVoucherPaymentPdf } from "../../utils/pdf/voucherDocPdf";
 import PageHeader from "../../components/PageHeader";
+import PaginationBar from "../../components/PaginationBar";
+import PdfActions from "../../components/PdfActions";
 import { TableSkeleton } from "../../components/Skeleton";
+import { useClientPagination } from "../../hooks/usePagination";
+import { buildVoucherPaymentPdf } from "../../utils/pdf/voucherDocPdf";
 import { formatCurrency, formatDate } from "../../utils/format";
 import { getPaymentModeLabel } from "../../utils/usPaymentMethods";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 
 /** Unified shape so workflow + ERPNext payments render in one ledger. */
 interface PaymentRow {
@@ -103,13 +104,26 @@ export default function SupplierPaymentListPage() {
     return out;
   }, [workflowRows, erpRows]);
 
+  const {
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+    totalRecords,
+    totalPages,
+    pageRows,
+  } = useClientPagination(rows, {
+    defaultPageSize: 10,
+    resetKey: syncVersion,
+  });
+
   if (!isReady) {
     return (
-      <SupplierPortalLayout>
+      
         <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
           Loading…
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
@@ -118,7 +132,7 @@ export default function SupplierPaymentListPage() {
   const isEmpty = !loading && rows.length === 0;
 
   return (
-    <SupplierPortalLayout supplierName={supplierName}>
+    
       <PageHeader
         title="Payments"
         description="Payment entries released against your invoices."
@@ -144,6 +158,7 @@ export default function SupplierPaymentListPage() {
             description="Payments released for your invoices will appear here once Finance confirms them."
           />
         ) : (
+          <>
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-neutral-200 text-sm">
               <thead className="bg-neutral-50 text-left text-xs font-medium uppercase tracking-wider text-neutral-500">
@@ -162,7 +177,7 @@ export default function SupplierPaymentListPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-200">
-                {rows.map((payment) => (
+                {pageRows.map((payment) => (
                   <tr key={payment.id} className="hover:bg-accent-50/40">
                     <td className="px-4 py-3 font-medium text-neutral-900">
                       {payment.id}
@@ -226,8 +241,18 @@ export default function SupplierPaymentListPage() {
               </tbody>
             </table>
           </div>
+          <PaginationBar
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={totalRecords}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            recordLabel="records"
+          />
+          </>
         )}
       </section>
-    </SupplierPortalLayout>
+    
   );
 }

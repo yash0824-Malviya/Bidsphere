@@ -199,7 +199,10 @@ export default function GRNDetailPage() {
     setPdfLoading(true);
     setPdfError(null);
     const preferStoredPdf =
-      role === "finance" || role === "procurement" || role === "admin" || isGrnReadOnly;
+      role === "finance" ||
+      role === "procurement_team" ||
+      role === "admin" ||
+      isGrnReadOnly;
     void (async () => {
       try {
         let bytes: ArrayBuffer | null = null;
@@ -307,7 +310,7 @@ export default function GRNDetailPage() {
             targetRole:
               role === "finance" || role === "admin"
                 ? "finance"
-                : role === "procurement"
+                : role === "procurement" || role === "procurement_team"
                   ? "procurement"
                   : "warehouse",
             grnName: name,
@@ -1680,8 +1683,8 @@ function DocActionBtn({
       }
       className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-45 ${
         primary
-          ? "bg-sky-600 text-white hover:bg-sky-700 disabled:hover:bg-sky-600"
-          : "border border-neutral-200 bg-white text-neutral-700 hover:border-sky-200 hover:bg-sky-50 hover:text-sky-800"
+          ? "bg-primary-600 text-white hover:bg-primary-700 disabled:hover:bg-primary-600"
+          : "border border-neutral-200 bg-white text-neutral-700 hover:border-primary-200 hover:bg-primary-50 hover:text-primary-800"
       }`}
     >
       <Icon className="h-3.5 w-3.5" />

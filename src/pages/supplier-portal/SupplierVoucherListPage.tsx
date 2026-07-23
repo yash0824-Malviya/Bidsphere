@@ -4,7 +4,9 @@ import { ArrowRight, FileText } from "lucide-react";
 
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
+import PaginationBar from "../../components/PaginationBar";
 import VoucherStatusBadge from "../../components/VoucherStatusBadge";
+import { useClientPagination } from "../../hooks/usePagination";
 import {
   getVouchersForSupplier,
   supplierVoucherStatusLabel,
@@ -12,7 +14,6 @@ import {
 import { useVoucherSyncStore } from "../../store/voucherSyncStore";
 import { formatCurrency, formatDate } from "../../utils/format";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 
 export default function SupplierVoucherListPage() {
   const { supplierName, erpSupplierName, isReady } = useSupplierSession();
@@ -34,18 +35,31 @@ export default function SupplierVoucherListPage() {
     staleTime: 30_000,
   });
 
+  const {
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+    totalRecords,
+    totalPages,
+    pageRows,
+  } = useClientPagination(vouchers, {
+    defaultPageSize: 10,
+    resetKey: syncVersion,
+  });
+
   if (!isReady) {
     return (
-      <SupplierPortalLayout>
+      
         <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
           Loading…
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
   return (
-    <SupplierPortalLayout supplierName={supplierName}>
+    
       <PageHeader
         title="Vouchers"
         description="Vouchers issued to your company by Netlink. Review and raise an invoice."
@@ -71,6 +85,7 @@ export default function SupplierVoucherListPage() {
             description="Vouchers sent to your company by Netlink will appear here."
           />
         ) : (
+          <>
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-neutral-200 text-sm">
               <thead className="bg-neutral-50 text-left text-xs font-medium uppercase tracking-wider text-neutral-500">
@@ -84,7 +99,7 @@ export default function SupplierVoucherListPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-200">
-                {vouchers.map((v) => (
+                {pageRows.map((v) => (
                   <tr key={v.id} className="hover:bg-accent-50/40">
                     <td className="px-4 py-3 font-medium text-neutral-900">
                       {v.id}
@@ -118,8 +133,18 @@ export default function SupplierVoucherListPage() {
               </tbody>
             </table>
           </div>
+          <PaginationBar
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={totalRecords}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            recordLabel="records"
+          />
+          </>
         )}
       </section>
-    </SupplierPortalLayout>
+    
   );
 }

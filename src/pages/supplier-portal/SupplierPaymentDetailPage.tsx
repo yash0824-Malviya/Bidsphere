@@ -24,7 +24,6 @@ import {
   paymentDisplayStatus,
   supplierOwnsRecord,
 } from "../../utils/supplierPortalUtils";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 
 export default function SupplierPaymentDetailPage() {
   const { id = "" } = useParams<{ id: string }>();
@@ -43,35 +42,35 @@ export default function SupplierPaymentDetailPage() {
 
   if (!isReady || isLoading) {
     return (
-      <SupplierPortalLayout>
+      
         <div className="space-y-4">
           <Skeleton className="h-6 w-48" />
           <Skeleton className="h-32 w-full" />
           <Skeleton className="h-64 w-full" />
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
   if (isError || !payment) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <BackLink />
         <EmptyState
           icon={CreditCard}
           title="Payment not found"
           description={`"${name}" may have been deleted or you may not have access.`}
         />
-      </SupplierPortalLayout>
+      
     );
   }
 
   if (!supplierOwnsRecord(supplierName, payment)) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <BackLink />
         <SupplierAccessDenied description="This payment does not belong to your supplier account." />
-      </SupplierPortalLayout>
+      
     );
   }
 
@@ -79,7 +78,7 @@ export default function SupplierPaymentDetailPage() {
   const references = payment.references ?? [];
 
   return (
-    <SupplierPortalLayout supplierName={supplierName}>
+    
       <BackLink />
 
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -219,7 +218,7 @@ export default function SupplierPaymentDetailPage() {
         This is a read-only view. Contact Netlink accounts payable for payment
         queries.
       </p>
-    </SupplierPortalLayout>
+    
   );
 }
 

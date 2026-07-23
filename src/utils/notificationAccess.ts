@@ -65,7 +65,8 @@ export function isModuleAllowedForRole(
   if (role === "supplier") {
     return SUPPLIER_ALLOWED_MODULES.has(module);
   }
-  if (!ROLE_ALLOWED_MODULES[role].has(module)) {
+  const allowed = ROLE_ALLOWED_MODULES[role];
+  if (!allowed?.has(module)) {
     return false;
   }
   if (role === "finance" && (WAREHOUSE_MODULES.has(module) || PROCUREMENT_MODULES.has(module))) {
@@ -76,6 +77,13 @@ export function isModuleAllowedForRole(
   }
   return true;
 }
+
+/** PO-ops modules Team may receive even when the event was targeted at Manager. */
+const PROCUREMENT_TEAM_SHARED_TARGET_MODULES = new Set<NotificationModule>([
+  "Purchase Order",
+  "PO Ready for GRN",
+  "GRN",
+]);
 
 /** Whether a notification is visible to the current viewer. */
 export function canViewNotification(
@@ -107,6 +115,16 @@ export function canViewNotification(
   }
 
   if (notification.target_role !== viewer.role) {
+    // Procurement Team shares PO-ops alerts that were historically targeted
+    // at "procurement" (Manager). RFQ / Budget / Legal targets stay Manager-only
+    // because those modules are not in the Team allow-list above.
+    if (
+      viewer.role === "procurement_team" &&
+      notification.target_role === "procurement" &&
+      PROCUREMENT_TEAM_SHARED_TARGET_MODULES.has(notification.module)
+    ) {
+      return true;
+    }
     return false;
   }
 

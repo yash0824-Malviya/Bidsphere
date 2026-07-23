@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
@@ -30,6 +30,10 @@ import {
 
 import { checkQuotationStatus, createSupplierQuotation, getRFQ } from "../../api/sourcing";
 import {
+  attachCostBreakdownToQuotation,
+  rfqRequiresCostBreakdown,
+} from "../../api/costBreakdown";
+import {
   declineRfq,
   getSupplierResponse,
   type SupplierRfqResponse,
@@ -41,6 +45,9 @@ import NoQuoteDialog, {
 import { uploadFileToERPNext, getFullFileUrl } from "../../api/legalDocsStorage";
 import { AppLoading, EnterpriseError } from "../../components/enterprise";
 import EngineeringDocumentsPanel from "../../components/supplier-portal/EngineeringDocumentsPanel";
+import CostBreakdownPanel, {
+  type CostBreakdownPanelHandle,
+} from "../../components/supplier-portal/CostBreakdownPanel";
 import {
   Drawing2dCell,
   PartNameCell,
@@ -58,7 +65,6 @@ import {
   pickEngineeringDocs,
   type EngineeringDocs,
 } from "../../utils/materialRequestItemFiles";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 import {
   Select,
   SelectContent,
@@ -324,6 +330,8 @@ export default function SupplierRFQPage() {
   const [notes, setNotes] = useState("");
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [costBreakdownReady, setCostBreakdownReady] = useState(false);
+  const costBreakdownRef = useRef<CostBreakdownPanelHandle>(null);
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
   const [additionalOpen, setAdditionalOpen] = useState(true);
   const [dragOverDoc, setDragOverDoc] = useState<string | null>(null);
@@ -598,27 +606,40 @@ export default function SupplierRFQPage() {
     ].filter(Boolean).length;
   }, [legalDraft]);
 
+  const requiresCostBreakdown = !!rfq && rfqRequiresCostBreakdown(rfq);
   const pricingComplete = lines.length > 0 && lines.every((l) => l.unit_price > 0);
+  const costBreakdownComplete = !requiresCostBreakdown || costBreakdownReady;
   const additionalComplete = !!(paymentTerms.trim() && validityDate);
   const documentsComplete = allDocsUploaded;
   const reviewComplete = acceptedTerms;
 
   const completionPct = useMemo(() => {
+    const pricingWeight = requiresCostBreakdown ? 22 : 30;
+    const costWeight = requiresCostBreakdown ? 8 : 0;
     const pricingScore = lines.length
-      ? (lines.filter((l) => l.unit_price > 0).length / lines.length) * 30
+      ? (lines.filter((l) => l.unit_price > 0).length / lines.length) *
+        pricingWeight
       : 0;
+    const costScore = requiresCostBreakdown && costBreakdownReady ? costWeight : 0;
     let additionalScore = 0;
     if (paymentTerms.trim()) additionalScore += 10;
     if (validityDate) additionalScore += 10;
     const docScore = (uploadedDocsCount / 3) * 30;
     const reviewScore = acceptedTerms ? 20 : 0;
-    return Math.min(100, Math.round(pricingScore + additionalScore + docScore + reviewScore));
+    return Math.min(
+      100,
+      Math.round(
+        pricingScore + costScore + additionalScore + docScore + reviewScore,
+      ),
+    );
   }, [
     lines,
     paymentTerms,
     validityDate,
     uploadedDocsCount,
     acceptedTerms,
+    requiresCostBreakdown,
+    costBreakdownReady,
   ]);
 
   const submitBlockers = useMemo(() => {
@@ -628,6 +649,9 @@ export default function SupplierRFQPage() {
       issues.push(
         `Enter unit price for ${unpriced.length} item${unpriced.length === 1 ? "" : "s"}`
       );
+    }
+    if (requiresCostBreakdown && !costBreakdownReady) {
+      issues.push("Complete and validate the Cost Breakdown");
     }
     if (!paymentTerms.trim()) issues.push("Payment terms are required");
     if (!validityDate) issues.push("Quote validity date is required");
@@ -645,13 +669,24 @@ export default function SupplierRFQPage() {
     allDocsUploaded,
     uploadedDocsCount,
     acceptedTerms,
+    requiresCostBreakdown,
+    costBreakdownReady,
   ]);
 
   const canSubmit = submitBlockers.length === 0 && !submitting;
 
-  const workflowSteps = useMemo(
-    () => [
+  const workflowSteps = useMemo(() => {
+    const steps = [
       { id: "section-pricing", label: "Pricing", complete: pricingComplete },
+    ];
+    if (requiresCostBreakdown) {
+      steps.push({
+        id: "section-cost-breakdown",
+        label: "Cost Breakdown",
+        complete: costBreakdownComplete,
+      });
+    }
+    steps.push(
       {
         id: "section-additional",
         label: "Additional Information",
@@ -663,9 +698,16 @@ export default function SupplierRFQPage() {
         label: "Review & Submit",
         complete: reviewComplete,
       },
-    ],
-    [pricingComplete, additionalComplete, documentsComplete, reviewComplete]
-  );
+    );
+    return steps;
+  }, [
+    pricingComplete,
+    requiresCostBreakdown,
+    costBreakdownComplete,
+    additionalComplete,
+    documentsComplete,
+    reviewComplete,
+  ]);
 
   const activeStepId = useMemo(() => {
     const next = workflowSteps.find((s) => !s.complete);
@@ -704,6 +746,24 @@ export default function SupplierRFQPage() {
     if (!validityDate) {
       toast.error("Please choose a quote validity date.");
       return;
+    }
+    if (requiresCostBreakdown) {
+      if (!costBreakdownRef.current?.isReady()) {
+        toast.error("Please complete the Cost Breakdown before submitting.");
+        scrollToSection("section-cost-breakdown");
+        return;
+      }
+      try {
+        await costBreakdownRef.current.save({ status: "Draft" });
+      } catch (cbErr) {
+        toast.error(
+          cbErr instanceof Error
+            ? cbErr.message
+            : "Failed to save Cost Breakdown.",
+        );
+        scrollToSection("section-cost-breakdown");
+        return;
+      }
     }
 
     // eslint-disable-next-line no-console
@@ -798,6 +858,19 @@ export default function SupplierRFQPage() {
       const quoteStatus = (result as { status?: string }).status ?? "Draft";
       setSubmittedQuote({ name: quoteName, status: quoteStatus });
 
+      if (quoteName && requiresCostBreakdown) {
+        try {
+          await attachCostBreakdownToQuotation(
+            rfq.name,
+            supplierName,
+            quoteName,
+          );
+        } catch (linkErr) {
+          // eslint-disable-next-line no-console
+          console.warn("[CostBreakdown] attach to SQ failed:", linkErr);
+        }
+      }
+
       toast.success(
         quoteStatus === "Submitted"
           ? `Quotation ${quoteName} submitted!`
@@ -880,11 +953,11 @@ export default function SupplierRFQPage() {
 
   if (!session) {
     return (
-      <SupplierPortalLayout>
+      
         <div className="flex min-h-[40vh] items-center justify-center">
           <Loader2 className="h-5 w-5 animate-spin text-neutral-400" />
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
@@ -892,7 +965,7 @@ export default function SupplierRFQPage() {
   if (submittedQuote) {
     const isSubmitted = submittedQuote.status === "Submitted";
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <div className="mx-auto max-w-lg py-16 text-center">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-accent-100">
             <CheckCircle2 className="h-7 w-7 text-accent-600" />
@@ -935,27 +1008,27 @@ export default function SupplierRFQPage() {
             Back to Dashboard
           </button>
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
   if (rfqQuery.isLoading) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <AppLoading variant="document" />
-      </SupplierPortalLayout>
+      
     );
   }
 
   if (rfqQuery.isError || !rfq) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <EnterpriseError
           error={rfqQuery.error ?? new Error("not found")}
           onRetry={() => void rfqQuery.refetch()}
           onBack={() => window.history.back()}
         />
-      </SupplierPortalLayout>
+      
     );
   }
 
@@ -964,7 +1037,7 @@ export default function SupplierRFQPage() {
   const isPublished = (rfq as { docstatus?: number }).docstatus === 1;
   if (!isPublished) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <BackToDashboard />
         <div className="rounded-2xl border border-warning-200 bg-warning-50 p-6 text-center">
           <ShieldAlert className="mx-auto h-6 w-6 text-warning-600" />
@@ -976,13 +1049,13 @@ export default function SupplierRFQPage() {
             able to view it and submit a quotation once the buyer opens it.
           </p>
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
   if (!isInvited) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <BackToDashboard />
         <div className="rounded-2xl border border-warning-200 bg-warning-50 p-6 text-center">
           <ShieldAlert className="mx-auto h-6 w-6 text-warning-600" />
@@ -994,26 +1067,26 @@ export default function SupplierRFQPage() {
             believe this is an error, please contact the buyer.
           </p>
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
   /* ── Checking status spinner ──────────────────────────────────────── */
   if (checkingStatus) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <div className="flex min-h-[40vh] items-center justify-center gap-2">
           <Loader2 className="h-5 w-5 animate-spin text-neutral-400" />
           <span className="text-sm text-neutral-500">Checking quotation status…</span>
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
   /* ── Read-only view: Supplier declined (No Quote) ─────────────────── */
   if (declined) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <BackToDashboard />
 
         <div className="mb-4 rounded-2xl border border-warning-200 bg-warning-50 p-5">
@@ -1080,7 +1153,7 @@ export default function SupplierRFQPage() {
             </div>
           )}
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
@@ -1093,7 +1166,7 @@ export default function SupplierRFQPage() {
       : subData.grand_total ?? 0;
 
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <BackToDashboard />
 
         {/* Status banner */}
@@ -1315,7 +1388,7 @@ export default function SupplierRFQPage() {
             Back to Dashboard
           </Link>
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
@@ -1330,11 +1403,11 @@ export default function SupplierRFQPage() {
       : undefined;
 
   return (
-    <SupplierPortalLayout supplierName={supplierName}>
+    
       {/* Content scrolls above a sticky footer so Submit is never clipped */}
-      <div className="flex h-[calc(100dvh-7.5rem)] flex-col overflow-hidden sm:h-[calc(100dvh-4rem)] lg:h-[calc(100dvh-3.75rem)]">
+      <div className="-mb-8 flex h-[calc(100dvh-7.5rem)] flex-col overflow-hidden sm:h-[calc(100dvh-4rem)] lg:h-[calc(100dvh-3.75rem)]">
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          <div className="mx-auto w-full max-w-6xl px-4 pb-3 pt-4 sm:px-5 lg:px-6">
+          <div className="flex w-full flex-col gap-6 pb-3">
         <BackToDashboard />
 
         {/* Compact RFQ header */}
@@ -1432,6 +1505,20 @@ export default function SupplierRFQPage() {
                 ))}
               </div>
             </section>
+
+            {requiresCostBreakdown && (
+              <CostBreakdownPanel
+                ref={costBreakdownRef}
+                rfqName={rfq.name}
+                supplier={supplierName}
+                items={lines.map((l) => ({
+                  item_code: l.item_code,
+                  item_name: l.item_name,
+                }))}
+                readOnly={!!alreadySubmitted}
+                onReadyChange={setCostBreakdownReady}
+              />
+            )}
 
             {/* Additional information — collapsible */}
             <section
@@ -1664,7 +1751,7 @@ export default function SupplierRFQPage() {
 
       {/* Sticky bottom action bar — Quote Total + actions in one footer */}
       <div className="sticky bottom-0 z-40 shrink-0 border-t border-neutral-200 bg-white/95 shadow-[0_-6px_24px_rgba(15,23,42,0.08)] backdrop-blur-md supports-[backdrop-filter]:bg-white/90">
-        <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 px-4 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:px-5 lg:px-6">
+        <div className="flex w-full flex-col gap-2 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
           <div className="flex flex-col gap-2.5 md:flex-row md:items-center md:justify-between md:gap-4">
             <div className="min-w-0 shrink-0">
               <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
@@ -1734,7 +1821,7 @@ export default function SupplierRFQPage() {
         onClose={() => setNoQuoteOpen(false)}
         onSubmit={handleDecline}
       />
-    </SupplierPortalLayout>
+    
   );
 }
 

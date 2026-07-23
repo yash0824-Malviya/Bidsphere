@@ -195,11 +195,11 @@ export interface RFQListRow {
  * List Requests for Quotation using a deliberately small, always-permitted
  * field set. The detail page fills in everything else via `getRFQ()`.
  */
-export async function getRFQs(): Promise<RFQListRow[]> {
+export async function getRFQs(opts?: { limit?: number }): Promise<RFQListRow[]> {
   return getList<RFQListRow>(RFQ_DOCTYPE, {
     fields: [...SAFE_RFQ_FIELDS],
     order_by: "modified desc, name desc",
-    limit_page_length: 50,
+    limit_page_length: opts?.limit ?? 50,
   });
 }
 

@@ -234,7 +234,12 @@ export default function InventoryPage() {
       apiGet<Bin[]>("/api/resource/Bin", {
         params: {
           filters: JSON.stringify([["item_code", "in", itemCodes]]),
-          fields: JSON.stringify(["item_code", "warehouse", "actual_qty"]),
+          fields: JSON.stringify([
+            "item_code",
+            "warehouse",
+            "actual_qty",
+            "reserved_qty",
+          ]),
           limit_page_length: 1000,
         },
       }),
@@ -245,7 +250,9 @@ export default function InventoryPage() {
     const map = new Map<string, number>();
     for (const b of binsQuery.data ?? []) {
       if (!b.item_code) continue;
-      map.set(b.item_code, (map.get(b.item_code) ?? 0) + (b.actual_qty ?? 0));
+      // Available = ERPNext actual on-hand (never actual − reserved / MR qty).
+      const available = Math.max(0, Number(b.actual_qty) || 0);
+      map.set(b.item_code, (map.get(b.item_code) ?? 0) + available);
     }
     return map;
   }, [binsQuery.data]);

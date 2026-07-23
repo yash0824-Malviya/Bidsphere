@@ -29,6 +29,10 @@
       "destination": "/api/supplier-voucher?action=$1"
     },
     {
+      "source": "/api/stock-check",
+      "destination": "/api/stock-check"
+    },
+    {
       "source": "/api/file-proxy",
       "destination": "/api/file-proxy"
     },

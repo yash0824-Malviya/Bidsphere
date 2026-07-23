@@ -21,6 +21,11 @@ import {
 } from "../api/materialRequestWorkflow";
 import type { MaterialRequestWorkflowStatus } from "../types/materialRequestWorkflow";
 import { pickEngineeringDocs } from "./materialRequestItemFiles";
+import {
+  issuedQtyByItemFromMaterialIssueTag,
+  issuedQtyByItemFromMirRemarks,
+  issuedQtyByItemFromReceipts,
+} from "./warehouseIssueFulfillmentSync";
 
 /**
  * The persisted `[BidSphere:ForwardedItems]` snapshot has drifted slightly over
@@ -127,28 +132,45 @@ export function computeRequestFulfillment(
   const workflowStatus = getMaterialRequestWorkflowStatus(mr);
   const decisions = parseForwardedItemsFromMr(mr) as unknown as RawDecision[];
   const decisionByCode = new Map(decisions.map((d) => [d.item_code, d]));
+  const remarks = mr.custom_warehouse_remarks ?? mr.remarks ?? "";
+  const issuedFromTag = issuedQtyByItemFromMaterialIssueTag(remarks);
+  const issuedFromMir = issuedQtyByItemFromMirRemarks(remarks);
+  const issuedFromReceipts = issuedQtyByItemFromReceipts(mr.name);
 
   const isTerminalIssued =
-    workflowStatus === "Material Issued" || workflowStatus === "Completed";
+    workflowStatus === "Material Issued" ||
+    workflowStatus === "Pending Department Acceptance" ||
+    workflowStatus === "Completed";
 
   const items: ItemFulfillment[] = (mr.items ?? []).map((row) => {
     const requested = num(row.qty);
     const decision = decisionByCode.get(row.item_code);
+    const liveIssued = Math.max(
+      issuedFromTag.get(row.item_code) || 0,
+      issuedFromMir.get(row.item_code) || 0,
+      issuedFromReceipts.get(row.item_code) || 0,
+    );
 
-    // Prefer the recorded warehouse decision (SSoT). Fall back to the workflow
-    // status when no decision snapshot exists yet (e.g. a fully-issued MR that
-    // predates per-line tagging is treated as fully issued).
+    // Prefer the recorded warehouse decision (SSoT), then overlay live
+    // Material Issue / Receipt quantities so Issued ≠ Procurement after issue.
     let issued: number;
     let procurement: number;
     let available: number | null;
 
     if (decision) {
-      issued = num(decision.issued_qty ?? decision.issue_qty);
+      issued = Math.max(
+        num(decision.issued_qty ?? decision.issue_qty),
+        liveIssued,
+      );
       procurement = num(decision.forward_qty ?? decision.shortage_qty);
       available =
         decision.available_qty === undefined || decision.available_qty === null
           ? null
           : num(decision.available_qty);
+    } else if (liveIssued > 0) {
+      issued = liveIssued;
+      procurement = 0;
+      available = null;
     } else if (isTerminalIssued) {
       issued = requested;
       procurement = 0;
@@ -169,6 +191,13 @@ export function computeRequestFulfillment(
 
     issued = Math.min(issued, requested);
     const remaining = Math.max(0, requested - issued);
+    // Units already issued from warehouse stock must not stay under Procurement.
+    if (issued > 0 && procurement > 0) {
+      procurement = Math.min(procurement, remaining);
+    }
+    if (issued >= requested && requested > 0) {
+      procurement = 0;
+    }
 
     return {
       item_code: row.item_code,
@@ -226,7 +255,13 @@ function rollupStatus(
   const fullyIssued =
     items.length > 0 && items.every((it) => it.remaining === 0 && it.issued > 0);
 
-  if (fullyIssued || workflow === "Material Issued") return "Fully Issued";
+  if (
+    fullyIssued ||
+    workflow === "Material Issued" ||
+    workflow === "Pending Department Acceptance"
+  ) {
+    return "Fully Issued";
+  }
   if (anyIssued && anyProcurement) return "Partially Fulfilled";
   if (anyProcurement) return "Sent to Procurement";
   return "Pending Review";

@@ -222,7 +222,7 @@ export default function SignedGrnPdfViewer({
       <div className="relative flex min-h-[360px] flex-1 items-start justify-center overflow-auto p-4">
         {(loading || rendering) && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/60">
-            <Loader2 className="h-6 w-6 animate-spin text-sky-600" />
+            <Loader2 className="h-6 w-6 animate-spin text-primary-600" />
           </div>
         )}
         {hardError ? (
@@ -258,7 +258,7 @@ function ToolbarBtn({
       aria-label={label}
       disabled={disabled}
       onClick={onClick}
-      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-sky-50 hover:text-sky-700 disabled:opacity-40"
+      className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-primary-50 hover:text-primary-700 disabled:opacity-40"
     >
       <Icon className="h-3.5 w-3.5" />
     </button>

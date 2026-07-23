@@ -62,7 +62,7 @@ export default function WarehouseForwardedRequestsPage() {
 
   if (pendingQuery.isError && persistedQuery.isError) {
     return (
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <div className="w-full">
         <div className="rounded-2xl border border-slate-100 bg-white p-8 shadow-sm">
           <ErrorState
             title="Unable to load Material Requests."
@@ -78,7 +78,7 @@ export default function WarehouseForwardedRequestsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
+    <div className="flex w-full flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-xl font-bold text-slate-900">

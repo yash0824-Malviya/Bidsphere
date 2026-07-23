@@ -5,10 +5,12 @@ import { ArrowRight, Clock, Eye, FileText, Plus, Search } from "lucide-react";
 
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
+import PaginationBar from "../../components/PaginationBar";
 import { TableSkeleton } from "../../components/Skeleton";
 import VoucherStatusBadge from "../../components/VoucherStatusBadge";
 import { getAllVouchers, getVoucheredGRNRefs } from "../../api/vouchers";
 import { canManageVouchers } from "../../config/roles";
+import { useClientPagination } from "../../hooks/usePagination";
 import { useAuthStore } from "../../store/authStore";
 import { useVoucherSyncStore } from "../../store/voucherSyncStore";
 import {
@@ -102,8 +104,20 @@ export default function VouchersPage() {
   const showAwaiting = stateFilter !== "created";
   const showCreated = stateFilter !== "awaiting";
 
-  const awaitingVisible = showAwaiting ? filteredAwaiting : [];
-  const createdVisible = showCreated ? filteredVouchers : [];
+  const filterKey = `${q}|${stateFilter}`;
+  const awaitingPagination = useClientPagination(filteredAwaiting, {
+    defaultPageSize: 10,
+    resetKey: filterKey,
+    pageParam: "awaitingPage",
+  });
+  const createdPagination = useClientPagination(filteredVouchers, {
+    defaultPageSize: 10,
+    resetKey: filterKey,
+    pageParam: "createdPage",
+  });
+
+  const awaitingVisible = showAwaiting ? awaitingPagination.pageRows : [];
+  const createdVisible = showCreated ? createdPagination.pageRows : [];
   const nothingToShow =
     !isLoading && awaitingVisible.length === 0 && createdVisible.length === 0;
 
@@ -213,7 +227,7 @@ export default function VouchersPage() {
                   </h2>
                 </div>
                 <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
-                  {awaitingVisible.length} pending
+                  {awaitingPagination.totalRecords} pending
                 </span>
               </div>
 
@@ -278,6 +292,15 @@ export default function VouchersPage() {
                   </tbody>
                 </table>
               </div>
+              <PaginationBar
+                currentPage={awaitingPagination.currentPage}
+                totalPages={awaitingPagination.totalPages}
+                totalRecords={awaitingPagination.totalRecords}
+                pageSize={awaitingPagination.pageSize}
+                onPageChange={awaitingPagination.setPage}
+                onPageSizeChange={awaitingPagination.setPageSize}
+                recordLabel="goods receipts"
+              />
             </section>
           )}
 
@@ -294,7 +317,7 @@ export default function VouchersPage() {
                   </h2>
                 </div>
                 <span className="rounded-full bg-primary-50 px-2.5 py-1 text-xs font-semibold text-primary-700">
-                  {createdVisible.length} total
+                  {createdPagination.totalRecords} total
                 </span>
               </div>
 
@@ -343,6 +366,15 @@ export default function VouchersPage() {
                   </tbody>
                 </table>
               </div>
+              <PaginationBar
+                currentPage={createdPagination.currentPage}
+                totalPages={createdPagination.totalPages}
+                totalRecords={createdPagination.totalRecords}
+                pageSize={createdPagination.pageSize}
+                onPageChange={createdPagination.setPage}
+                onPageSizeChange={createdPagination.setPageSize}
+                recordLabel="vouchers"
+              />
             </section>
           )}
         </div>

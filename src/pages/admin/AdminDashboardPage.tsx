@@ -909,7 +909,7 @@ function DepartmentSpendChart({
           <XAxis dataKey="label" tick={{ fontSize: 9, fill: "#94a3b8" }} tickLine={false} axisLine={false} interval={0} angle={-20} textAnchor="end" height={40} />
           <YAxis tick={{ fontSize: 9, fill: "#94a3b8" }} tickLine={false} axisLine={false} tickFormatter={(v) => formatCurrencyCompact(Number(v))} width={48} />
           <Tooltip formatter={(v) => formatCurrencyCompact(Number(v))} contentStyle={{ fontSize: 11, borderRadius: 8 }} />
-          <Bar dataKey="allocated" name={allocatedLabel} fill="#0ea5e9" radius={[3, 3, 0, 0]} />
+          <Bar dataKey="allocated" name={allocatedLabel} fill="#0098EA" radius={[3, 3, 0, 0]} />
           <Bar dataKey="consumed" name={consumedLabel} fill="#f59e0b" radius={[3, 3, 0, 0]} />
         </BarChart>
       </ResponsiveContainer>

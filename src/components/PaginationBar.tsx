@@ -1,13 +1,8 @@
-import {
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
-} from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { PAGE_SIZE_OPTIONS } from "../hooks/usePagination";
 
-interface PaginationBarProps {
+export interface PaginationBarProps {
   /** 1-based current page. */
   currentPage: number;
   totalPages: number;
@@ -16,14 +11,16 @@ interface PaginationBarProps {
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
   pageSizeOptions?: readonly number[];
+  /** Noun used in the summary, e.g. "quotations". Defaults to "records". */
+  recordLabel?: string;
   className?: string;
 }
 
 /**
- * Shared "Showing X–Y of Z records" pagination control used by every
- * server-paginated list page in the Procurement System. Renders bottom-right
- * per the design spec: record-range summary, page-size selector, and
- * First/Previous/page-numbers/Next/Last controls.
+ * Shared enterprise pagination control for every Bidsphere list/table.
+ *
+ * Layout: Showing 1–10 of 243 records · < Previous · 1 2 3 … · Next > · Rows/page
+ * Hidden automatically when totalRecords <= pageSize (or zero).
  */
 export default function PaginationBar({
   currentPage,
@@ -33,9 +30,10 @@ export default function PaginationBar({
   onPageChange,
   onPageSizeChange,
   pageSizeOptions = PAGE_SIZE_OPTIONS,
+  recordLabel = "records",
   className = "",
 }: PaginationBarProps) {
-  if (totalRecords === 0) return null;
+  if (totalRecords <= 0 || totalRecords <= pageSize) return null;
 
   const safeTotalPages = Math.max(1, totalPages);
   const page = Math.min(Math.max(1, currentPage), safeTotalPages);
@@ -50,26 +48,128 @@ export default function PaginationBar({
 
   return (
     <div
-      className={`flex flex-col gap-3 border-t border-neutral-200 bg-neutral-50/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-end ${className}`}
+      className={`flex flex-col gap-3 border-t border-[#E8EDF5] bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${className}`}
     >
-      <p className="text-xs text-neutral-500 sm:mr-auto">
-        Showing <span className="font-semibold text-neutral-800">{startRecord}</span>
-        –<span className="font-semibold text-neutral-800">{endRecord}</span> of{" "}
-        <span className="font-semibold text-neutral-800">{totalRecords}</span> records
+      <p className="text-[13px] text-[#64748B]">
+        Showing{" "}
+        <span className="font-semibold text-[#111827]">{startRecord}</span>–
+        <span className="font-semibold text-[#111827]">{endRecord}</span> of{" "}
+        <span className="font-semibold text-[#111827]">{totalRecords}</span>{" "}
+        {recordLabel}
       </p>
 
-      <div className="flex items-center gap-1.5">
+      {/* Mobile: Previous | Page x/y | Next */}
+      <div className="flex items-center justify-between gap-2 sm:hidden">
+        <button
+          type="button"
+          onClick={() => goTo(page - 1)}
+          disabled={page === 1}
+          className="inline-flex h-9 items-center gap-1 rounded-[10px] border border-[#E8EDF5] bg-white px-3 text-[13px] font-medium text-[#334155] transition hover:bg-[#F8FAFC] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <ChevronLeft className="h-4 w-4" />
+          Previous
+        </button>
+        <span className="text-[13px] font-medium tabular-nums text-[#64748B]">
+          Page {page}/{safeTotalPages}
+        </span>
+        <button
+          type="button"
+          onClick={() => goTo(page + 1)}
+          disabled={page === safeTotalPages}
+          className="inline-flex h-9 items-center gap-1 rounded-[10px] border border-[#E8EDF5] bg-white px-3 text-[13px] font-medium text-[#334155] transition hover:bg-[#F8FAFC] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Next
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      </div>
+
+      {/* Desktop controls */}
+      <div className="hidden items-center gap-3 sm:flex">
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => goTo(page - 1)}
+            disabled={page === 1}
+            className="inline-flex h-9 items-center gap-1 rounded-[10px] border border-[#E8EDF5] bg-white px-3 text-[13px] font-medium text-[#334155] transition hover:bg-[#F8FAFC] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            Previous
+          </button>
+
+          <div className="mx-1 flex items-center gap-0.5">
+            {pageWindow.map((p, i) =>
+              p === "…" ? (
+                <span
+                  key={`ellipsis-${i}`}
+                  className="px-1.5 text-[13px] text-[#94A3B8]"
+                  aria-hidden
+                >
+                  …
+                </span>
+              ) : (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => goTo(p)}
+                  aria-current={p === page ? "page" : undefined}
+                  className={`inline-flex h-9 min-w-[2.25rem] items-center justify-center rounded-[10px] px-2 text-[13px] font-semibold transition ${
+                    p === page
+                      ? "bg-[#146CE8] text-white shadow-sm"
+                      : "text-[#334155] hover:bg-[#F1F5F9]"
+                  }`}
+                >
+                  {p}
+                </button>
+              ),
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => goTo(page + 1)}
+            disabled={page === safeTotalPages}
+            className="inline-flex h-9 items-center gap-1 rounded-[10px] border border-[#E8EDF5] bg-white px-3 text-[13px] font-medium text-[#334155] transition hover:bg-[#F8FAFC] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Next
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 border-l border-[#E8EDF5] pl-3">
+          <label
+            htmlFor="pagination-page-size"
+            className="whitespace-nowrap text-[12px] font-medium text-[#64748B]"
+          >
+            Rows per page
+          </label>
+          <select
+            id="pagination-page-size"
+            value={pageSize}
+            onChange={(e) => onPageSizeChange(Number(e.target.value))}
+            className="h-9 min-w-[4.5rem] rounded-[10px] border border-[#E8EDF5] bg-white px-2 text-[13px] font-medium text-[#111827] outline-none transition hover:bg-[#F8FAFC] focus:border-[#146CE8] focus:ring-2 focus:ring-[#146CE8]/15"
+          >
+            {pageSizeOptions.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Mobile page-size */}
+      <div className="flex items-center justify-end gap-2 sm:hidden">
         <label
-          htmlFor="pagination-page-size"
-          className="text-xs font-medium text-neutral-500"
+          htmlFor="pagination-page-size-mobile"
+          className="text-[12px] font-medium text-[#64748B]"
         >
           Rows per page
         </label>
         <select
-          id="pagination-page-size"
+          id="pagination-page-size-mobile"
           value={pageSize}
           onChange={(e) => onPageSizeChange(Number(e.target.value))}
-          className="select-field h-8 min-w-0 py-0 text-xs"
+          className="h-9 min-w-[4.5rem] rounded-[10px] border border-[#E8EDF5] bg-white px-2 text-[13px] font-medium text-[#111827] outline-none"
         >
           {pageSizeOptions.map((n) => (
             <option key={n} value={n}>
@@ -78,108 +178,16 @@ export default function PaginationBar({
           ))}
         </select>
       </div>
-
-      <div className="flex items-center gap-1">
-        <NavButton
-          label="First"
-          icon={ChevronsLeft}
-          onClick={() => goTo(1)}
-          disabled={page === 1}
-        />
-        <NavButton
-          label="Previous"
-          icon={ChevronLeft}
-          onClick={() => goTo(page - 1)}
-          disabled={page === 1}
-          showLabel
-        />
-
-        <div className="flex items-center gap-0.5">
-          {pageWindow.map((p, i) =>
-            p === "…" ? (
-              <span
-                key={`ellipsis-${i}`}
-                className="px-1.5 text-xs text-neutral-400"
-                aria-hidden
-              >
-                …
-              </span>
-            ) : (
-              <button
-                key={p}
-                type="button"
-                onClick={() => goTo(p)}
-                aria-current={p === page ? "page" : undefined}
-                className={`h-8 min-w-[2rem] rounded-lg px-2 text-xs font-semibold transition ${
-                  p === page
-                    ? "bg-primary-600 text-white shadow-sm"
-                    : "text-neutral-600 hover:bg-neutral-100"
-                }`}
-              >
-                {p}
-              </button>
-            )
-          )}
-        </div>
-
-        <NavButton
-          label="Next"
-          icon={ChevronRight}
-          onClick={() => goTo(page + 1)}
-          disabled={page === safeTotalPages}
-          showLabel
-          trailingIcon
-        />
-        <NavButton
-          label="Last"
-          icon={ChevronsRight}
-          onClick={() => goTo(safeTotalPages)}
-          disabled={page === safeTotalPages}
-        />
-      </div>
     </div>
   );
 }
 
-function NavButton({
-  label,
-  icon: Icon,
-  onClick,
-  disabled,
-  showLabel = false,
-  trailingIcon = false,
-}: {
-  label: string;
-  icon: typeof ChevronLeft;
-  onClick: () => void;
-  disabled: boolean;
-  showLabel?: boolean;
-  trailingIcon?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={label}
-      title={label}
-      className="inline-flex h-8 items-center gap-1 rounded-lg border border-neutral-200 bg-white px-2 text-xs font-semibold text-neutral-600 transition hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40"
-    >
-      {!trailingIcon && <Icon className="h-3.5 w-3.5" />}
-      {showLabel && <span className="hidden sm:inline">{label}</span>}
-      {trailingIcon && <Icon className="h-3.5 w-3.5" />}
-    </button>
-  );
-}
+/** Alias for clearer imports on future tables. */
+export { PaginationBar as Pagination };
 
-/**
- * Builds a windowed page-number list with ellipses, e.g. for page 5 of 20:
- * `[1, "…", 3, 4, 5, 6, 7, "…", 20]`. Always keeps the first and last page
- * visible plus up to 2 neighbours on either side of the current page.
- */
 function buildPageWindow(
   current: number,
-  total: number
+  total: number,
 ): Array<number | "…"> {
   if (total <= 7) {
     return Array.from({ length: total }, (_, i) => i + 1);

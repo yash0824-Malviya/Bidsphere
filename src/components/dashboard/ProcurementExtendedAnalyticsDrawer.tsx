@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { Clock, RefreshCw, X } from "lucide-react";
 import {
-  fetchProcurementAnalytics,
+  fetchProcurementAnalyticsPrimary,
+  fetchProcurementAnalyticsTurnaround,
   type AnalyticsKpi,
 } from "../../api/procurementAnalytics";
 import { timedDashApi } from "../../api/dashboardPerf";
@@ -17,28 +18,44 @@ interface Props {
 
 /**
  * Drawer for RFQ Turnaround + Procurement Cycle Time.
- * Reuses the shared ["procurement-analytics"] React Query cache — no extra ERP call
- * when the main dashboard analytics have already loaded.
+ * Reuses the same primary + turnaround React Query keys as the dashboard
+ * section — no extra ERP call when those caches are warm.
  */
 export default function ProcurementExtendedAnalyticsDrawer({
   open,
   onClose,
 }: Props) {
-  const query = useQuery({
-    queryKey: ["procurement-analytics"],
+  const primaryQuery = useQuery({
+    queryKey: ["procurement-analytics", "primary"],
     queryFn: () =>
-      timedDashApi("Supplier Analytics (full)", () =>
-        fetchProcurementAnalytics(),
+      timedDashApi("Analytics API (primary KPIs)", () =>
+        fetchProcurementAnalyticsPrimary(),
       ),
     enabled: open,
     ...DASHBOARD_QUERY_OPTIONS,
   });
 
+  const turnaroundQuery = useQuery({
+    queryKey: ["procurement-analytics", "turnaround"],
+    queryFn: () =>
+      timedDashApi("Analytics API (turnaround joins)", () =>
+        fetchProcurementAnalyticsTurnaround(),
+      ),
+    enabled: open && primaryQuery.isSuccess,
+    ...DASHBOARD_QUERY_OPTIONS,
+  });
+
   if (!open) return null;
 
-  const loading = query.isPending && !query.isError;
-  const turnaround: AnalyticsKpi | null = query.data?.rfqTurnaround ?? null;
-  const cycle: AnalyticsKpi | null = query.data?.cycleTime ?? null;
+  const loading =
+    (primaryQuery.isPending || turnaroundQuery.isPending) &&
+    !primaryQuery.isError &&
+    !turnaroundQuery.isError;
+  const turnaround: AnalyticsKpi | null =
+    turnaroundQuery.data?.rfqTurnaround ?? null;
+  const cycle: AnalyticsKpi | null = turnaroundQuery.data?.cycleTime ?? null;
+  const queryError = primaryQuery.error ?? turnaroundQuery.error;
+  const isError = primaryQuery.isError || turnaroundQuery.isError;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -77,11 +94,14 @@ export default function ProcurementExtendedAnalyticsDrawer({
         </header>
 
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
-          {query.isError ? (
+          {isError ? (
             <DashboardWidgetError
               title="Unable to load dashboard data"
-              error={query.error}
-              onRetry={() => void query.refetch()}
+              error={queryError}
+              onRetry={() => {
+                void primaryQuery.refetch();
+                void turnaroundQuery.refetch();
+              }}
             />
           ) : loading ? (
             <div className="grid gap-3">

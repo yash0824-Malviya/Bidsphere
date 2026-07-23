@@ -18,6 +18,7 @@ import {
   buildResourceUrl,
   COMPANY,
   fetchPagedList,
+  withSilent,
   type PagedListResult,
 } from "./erpnext";
 import { getRFQ, getSupplierQuotations } from "./sourcing";
@@ -730,10 +731,45 @@ function isTimestampConflict(err: unknown): boolean {
   return /timestamp|has been modified|modified after|409|conflict/i.test(msg);
 }
 
+/**
+ * Frappe treats child `name` values starting with `new-` as inserts on save.
+ * Required when child DocTypes still use autoname "prompt" / "Set by user"
+ * (see scripts/setup-reverse-bidding-naming.mjs).
+ */
+function newChildRowName(doctype: string): string {
+  const slug = doctype.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const rand =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID().replace(/-/g, "").slice(0, 12)
+      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  return `new-${slug}-${rand}`;
+}
+
+/** Strip read-only meta and ensure every child row has a usable `name`. */
+function prepareChildRowsForPut<T extends { name?: string; doctype?: string }>(
+  rows: T[] | undefined,
+): T[] {
+  return (rows ?? []).map((row) => {
+    const next: T = { ...row };
+    const rec = next as Record<string, unknown>;
+    delete rec.creation;
+    delete rec.modified;
+    delete rec.modified_by;
+    delete rec.owner;
+    delete rec.docstatus;
+    const existing = typeof next.name === "string" ? next.name.trim() : "";
+    if (!existing) {
+      next.name = newChildRowName(String(next.doctype || "child"));
+    }
+    return next;
+  });
+}
+
 async function patchReverseBidding(
   name: string,
   patch: Record<string, unknown>,
-  knownModified?: string
+  knownModified?: string,
+  opts?: { silent?: boolean },
 ): Promise<ReverseBidding> {
   let modified = knownModified;
   if (!modified) {
@@ -743,16 +779,139 @@ async function patchReverseBidding(
   const url = buildResourceUrl(RB_DOCTYPE, name);
   const body: Record<string, unknown> = { ...patch };
   if (modified) body.modified = modified;
+
+  // Normalize child tables so new rows always carry a `new-*` name.
+  if (Array.isArray(body.bid_history)) {
+    body.bid_history = prepareChildRowsForPut(
+      body.bid_history as ReverseBid[],
+    );
+  }
+  if (Array.isArray(body.bid_items)) {
+    body.bid_items = prepareChildRowsForPut(
+      body.bid_items as ReverseBidItem[],
+    );
+  }
+  if (Array.isArray(body.invited_suppliers)) {
+    body.invited_suppliers = prepareChildRowsForPut(
+      body.invited_suppliers as ReverseBiddingSupplier[],
+    );
+  }
+
+  const cfg = opts?.silent ? withSilent() : undefined;
+  // eslint-disable-next-line no-console
+  console.log("[ReverseBidding] PATCH", {
+    endpoint: url,
+    auctionId: name,
+    modified,
+    childCounts: {
+      bid_history: Array.isArray(body.bid_history)
+        ? body.bid_history.length
+        : undefined,
+      bid_items: Array.isArray(body.bid_items)
+        ? body.bid_items.length
+        : undefined,
+      invited_suppliers: Array.isArray(body.invited_suppliers)
+        ? body.invited_suppliers.length
+        : undefined,
+    },
+  });
+
   try {
-    return await apiPut<ReverseBidding>(url, body);
+    const saved = await apiPut<ReverseBidding>(url, body, cfg);
+    // eslint-disable-next-line no-console
+    console.log("[ReverseBidding] PATCH ok", {
+      auctionId: saved?.name ?? name,
+      modified: saved?.modified,
+    });
+    return saved;
   } catch (err) {
     // The 5s live-refresh can bump `modified` between our read and write,
     // producing a TimestampMismatchError. Re-read the freshest stamp and
     // retry once so a legitimate write is never silently dropped.
-    if (!isTimestampConflict(err)) throw err;
+    if (!isTimestampConflict(err)) {
+      // eslint-disable-next-line no-console
+      console.error("[ReverseBidding] PATCH failed", {
+        auctionId: name,
+        endpoint: url,
+        error: err instanceof Error ? err.message : err,
+        response:
+          err && typeof err === "object" && "response" in err
+            ? (err as { response?: { status?: number; data?: unknown } }).response
+                ?.data
+            : undefined,
+      });
+      throw err;
+    }
     const fresh = await apiGet<ReverseBidding>(url);
-    return apiPut<ReverseBidding>(url, { ...patch, modified: fresh.modified });
+    return apiPut<ReverseBidding>(
+      url,
+      { ...body, modified: fresh.modified },
+      cfg,
+    );
   }
+}
+
+/**
+ * Ensure the supplier has Reverse Bid Item rows on the auction.
+ * Creates them from the RFQ + quotations when missing (never invents prices
+ * beyond quotation seed rates).
+ */
+async function ensureSupplierBidSheet(
+  doc: ReverseBidding,
+  supplier: string,
+): Promise<ReverseBidding> {
+  const ownItems = (doc.bid_items ?? []).filter((i) =>
+    sameSupplier(i.supplier, supplier),
+  );
+  if (ownItems.length > 0) return doc;
+  if (!doc.rfq) {
+    throw new Error(
+      "This auction has no RFQ link, so an item bid sheet cannot be created.",
+    );
+  }
+
+  // eslint-disable-next-line no-console
+  console.log("[ReverseBidding] Creating missing bid sheet for supplier", {
+    auctionId: doc.name,
+    rfqId: doc.rfq,
+    supplierId: supplier,
+  });
+
+  const [rfq, quotations] = await Promise.all([
+    getRFQ(doc.rfq),
+    getSupplierQuotations(doc.rfq),
+  ]);
+  if ((rfq.items ?? []).length === 0) {
+    throw new Error("RFQ has no items — cannot build a bid sheet.");
+  }
+
+  const seeded = buildBidItemsFromQuotations(
+    rfq.items ?? [],
+    quotations,
+    [supplier],
+  ).map((row) => ({
+    ...row,
+    name: newChildRowName(RB_ITEM_DOCTYPE),
+  }));
+
+  if (seeded.length === 0) {
+    throw new Error(
+      "Could not create bid sheet rows for your supplier on this auction.",
+    );
+  }
+
+  const live = deriveAuctionStatus(doc) === "Live";
+  const merged = recomputeItemState(
+    [...(doc.bid_items ?? []), ...seeded],
+    { live },
+  );
+
+  return patchReverseBidding(
+    doc.name,
+    { bid_items: merged },
+    doc.modified,
+    { silent: true },
+  );
 }
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -1245,7 +1404,39 @@ export function validateBid(
 }
 
 export async function submitBid(input: SubmitBidInput): Promise<ReverseBidding> {
-  const doc = await getReverseBidding(input.auctionName);
+  const auctionName = String(input.auctionName || "").trim();
+  if (!auctionName) throw new Error("Auction document name is missing.");
+
+  // eslint-disable-next-line no-console
+  console.log("[ReverseBidding] submitBid start", {
+    auctionId: auctionName,
+    supplierId: input.supplier,
+    amount: input.amount,
+    endpoint: buildResourceUrl(RB_DOCTYPE, auctionName),
+  });
+
+  let doc: ReverseBidding;
+  try {
+    doc = await getReverseBidding(auctionName);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[ReverseBidding] submitBid — auction not found", {
+      auctionId: auctionName,
+      error: err instanceof Error ? err.message : err,
+    });
+    throw new Error(
+      `Reverse auction "${auctionName}" was not found. Refresh and try again.`,
+    );
+  }
+
+  // eslint-disable-next-line no-console
+  console.log("[ReverseBidding] submitBid loaded", {
+    auctionId: doc.name,
+    rfqId: doc.rfq,
+    supplierId: input.supplier,
+    auctionStatus: doc.auction_status,
+  });
+
   const check = validateBid(doc, input.supplier, input.amount);
   if (!check.ok) throw new Error(check.reason ?? "Invalid bid.");
 
@@ -1260,6 +1451,7 @@ export async function submitBid(input: SubmitBidInput): Promise<ReverseBidding> 
 
   const newBid: ReverseBid = {
     doctype: RB_BID_DOCTYPE,
+    name: newChildRowName(RB_BID_DOCTYPE),
     supplier: input.supplier,
     bid_amount: input.amount,
     previous_rate: previous,
@@ -1293,14 +1485,16 @@ export async function submitBid(input: SubmitBidInput): Promise<ReverseBidding> 
   const lowest = Math.min(...bidValues(ranked));
 
   // Optimistic concurrency: PUT with the modified stamp we validated against.
+  // Silent: page owns the toast (avoids interceptor + page duplicate).
   return patchReverseBidding(
-    input.auctionName,
+    auctionName,
     {
       invited_suppliers: ranked,
       bid_history: history,
       lowest_bid: Number.isFinite(lowest) ? lowest : doc.lowest_bid,
     },
-    doc.modified
+    doc.modified,
+    { silent: true },
   );
 }
 
@@ -1394,7 +1588,54 @@ export function validateItemBid(
 export async function submitItemBids(
   input: SubmitItemBidsInput
 ): Promise<ReverseBidding> {
-  const doc = await getReverseBidding(input.auctionName);
+  const auctionName = String(input.auctionName || "").trim();
+  const supplier = String(input.supplier || "").trim();
+  if (!auctionName) throw new Error("Auction document name is missing.");
+  if (!supplier) throw new Error("Supplier identity is missing.");
+
+  const endpoint = buildResourceUrl(RB_DOCTYPE, auctionName);
+  // eslint-disable-next-line no-console
+  console.log("[ReverseBidding] submitItemBids start", {
+    auctionId: auctionName,
+    supplierId: supplier,
+    itemCount: input.items?.length ?? 0,
+    requestedDocumentName: auctionName,
+    doctype: RB_DOCTYPE,
+    endpoint,
+  });
+
+  let doc: ReverseBidding;
+  try {
+    doc = await getReverseBidding(auctionName);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[ReverseBidding] submitItemBids — auction GET failed", {
+      auctionId: auctionName,
+      endpoint,
+      error: err instanceof Error ? err.message : err,
+      response:
+        err && typeof err === "object" && "response" in err
+          ? (err as { response?: { data?: unknown } }).response?.data
+          : undefined,
+    });
+    throw new Error(
+      `Reverse auction "${auctionName}" was not found. Refresh and try again.`,
+    );
+  }
+
+  // eslint-disable-next-line no-console
+  console.log("[ReverseBidding] submitItemBids loaded auction", {
+    auctionId: doc.name,
+    rfqId: doc.rfq,
+    supplierId: supplier,
+    auctionStatus: doc.auction_status,
+    bidItems: (doc.bid_items ?? []).length,
+    historyRows: (doc.bid_history ?? []).length,
+  });
+
+  // Create Reverse Bid Item rows for this supplier when the sheet is missing.
+  doc = await ensureSupplierBidSheet(doc, supplier);
+
   const clean = (input.items ?? []).filter(
     (i) => i.item_code && Number.isFinite(i.rate) && i.rate > 0
   );
@@ -1404,7 +1645,7 @@ export async function submitItemBids(
 
   // Validate every submitted line before writing anything.
   for (const line of clean) {
-    const v = validateItemBid(doc, input.supplier, line.item_code, line.rate);
+    const v = validateItemBid(doc, supplier, line.item_code, line.rate);
     if (!v.ok) {
       throw new Error(`${line.item_code}: ${v.reason ?? "Invalid bid."}`);
     }
@@ -1417,14 +1658,14 @@ export async function submitItemBids(
   // Round number for this supplier = highest prior round + 1 (history now holds
   // one row per item, so count rounds not rows).
   const prevMaxRound = (doc.bid_history ?? [])
-    .filter((b) => sameSupplier(b.supplier, input.supplier))
+    .filter((b) => sameSupplier(b.supplier, supplier))
     .reduce((m, b) => Math.max(m, b.round_number ?? 0), 0);
   const round = prevMaxRound + 1;
 
   // Capture each item's price BEFORE this bid, to record the reduction.
   const prevRateByItem = new Map<string, { rate: number; name: string }>();
   for (const it of doc.bid_items ?? []) {
-    if (sameSupplier(it.supplier, input.supplier)) {
+    if (sameSupplier(it.supplier, supplier)) {
       prevRateByItem.set(it.item_code, {
         rate: it.current_rate ?? 0,
         name: it.item_name ?? it.item_code,
@@ -1434,7 +1675,7 @@ export async function submitItemBids(
 
   // Apply new rates to this supplier's item rows.
   let items = (doc.bid_items ?? []).map((it) => {
-    if (!sameSupplier(it.supplier, input.supplier)) return it;
+    if (!sameSupplier(it.supplier, supplier)) return it;
     const newRate = rateByItem.get(it.item_code);
     if (newRate == null) return it;
     return {
@@ -1453,7 +1694,7 @@ export async function submitItemBids(
   const totals = supplierTotalsFromItems(items);
   const invited = (doc.invited_suppliers ?? []).map((s) => {
     const total = totals.get(s.supplier);
-    if (sameSupplier(s.supplier, input.supplier)) {
+    if (sameSupplier(s.supplier, supplier)) {
       return {
         ...s,
         current_bid: total ?? s.current_bid,
@@ -1472,6 +1713,8 @@ export async function submitItemBids(
 
   // Append one immutable history row per submitted item — never overwrite or
   // supersede prior rows, so the full negotiation trail is preserved.
+  // Each new Reverse Bids row gets a `new-*` name so ERPNext accepts the
+  // insert even when child autoname is still "prompt".
   const newHistoryRows: ReverseBid[] = clean.map((line) => {
     const prev = prevRateByItem.get(line.item_code);
     const previous = prev?.rate ?? 0;
@@ -1479,7 +1722,8 @@ export async function submitItemBids(
     const reductionPct = previous > 0 ? (reduction / previous) * 100 : 0;
     return {
       doctype: RB_BID_DOCTYPE,
-      supplier: input.supplier,
+      name: newChildRowName(RB_BID_DOCTYPE),
+      supplier,
       item_code: line.item_code,
       item_name: prev?.name ?? line.item_code,
       bid_amount: line.rate,
@@ -1496,16 +1740,59 @@ export async function submitItemBids(
   const bidTotals = bidValues(ranked);
   const lowest = bidTotals.length ? Math.min(...bidTotals) : doc.lowest_bid;
 
-  return patchReverseBidding(
-    input.auctionName,
-    {
-      bid_items: items,
-      invited_suppliers: ranked,
-      bid_history: history,
-      lowest_bid: Number.isFinite(lowest as number) ? lowest : doc.lowest_bid,
-    },
-    doc.modified
-  );
+  // eslint-disable-next-line no-console
+  console.log("[ReverseBidding] submitItemBids writing", {
+    auctionId: doc.name,
+    rfqId: doc.rfq,
+    supplierId: supplier,
+    requestedDocumentName: auctionName,
+    endpoint,
+    newHistoryNames: newHistoryRows.map((r) => r.name),
+    itemsSubmitted: clean.map((c) => c.item_code),
+  });
+
+  try {
+    const saved = await patchReverseBidding(
+      auctionName,
+      {
+        bid_items: items,
+        invited_suppliers: ranked,
+        bid_history: history,
+        lowest_bid: Number.isFinite(lowest as number) ? lowest : doc.lowest_bid,
+      },
+      doc.modified,
+      { silent: true },
+    );
+    // eslint-disable-next-line no-console
+    console.log("[ReverseBidding] submitItemBids ERPNext response", {
+      auctionId: saved.name,
+      rfqId: saved.rfq,
+      lowest_bid: saved.lowest_bid,
+      historyRows: (saved.bid_history ?? []).length,
+      bidItems: (saved.bid_items ?? []).length,
+    });
+    return saved;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[ReverseBidding] submitItemBids ERPNext error", {
+      auctionId: auctionName,
+      rfqId: doc.rfq,
+      supplierId: supplier,
+      endpoint,
+      error: err instanceof Error ? err.message : err,
+      response:
+        err && typeof err === "object" && "response" in err
+          ? (err as { response?: { status?: number; data?: unknown } }).response
+          : undefined,
+    });
+    const raw = err instanceof Error ? err.message : String(err);
+    if (/Please set the document name|does not exist/i.test(raw)) {
+      throw new Error(
+        "Could not save your bid history row. Ask an administrator to run the Reverse Bidding naming setup (hash autoname on Reverse Bids), then try again.",
+      );
+    }
+    throw err instanceof Error ? err : new Error(raw);
+  }
 }
 
 /* ────────────────────────────────────────────────────────────────────────
@@ -1663,10 +1950,18 @@ export async function ensureBidItems(
     rfq.items ?? [],
     quotations,
     supplierIds
-  );
+  ).map((row) => ({
+    ...row,
+    name: row.name?.trim() || newChildRowName(RB_ITEM_DOCTYPE),
+  }));
   if (items.length === 0) return doc;
 
-  return patchReverseBidding(doc.name, { bid_items: items }, doc.modified);
+  return patchReverseBidding(
+    doc.name,
+    { bid_items: items },
+    doc.modified,
+    { silent: true },
+  );
 }
 
 export interface ItemTargetInput {

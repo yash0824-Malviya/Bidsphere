@@ -193,7 +193,7 @@ export default function WarehouseVerificationCard({ grn, compact }: Props) {
           />
           <Link
             to={`/p2p/grn/${encodeURIComponent(grn.name)}`}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-neutral-700 hover:bg-sky-50 hover:text-sky-800"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-neutral-700 hover:bg-primary-50 hover:text-primary-800"
           >
             Open GRN
           </Link>
@@ -260,8 +260,8 @@ function ActionBtn({
       onClick={onClick}
       className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold shadow-sm disabled:opacity-50 ${
         primary
-          ? "bg-sky-600 text-white hover:bg-sky-700"
-          : "border border-neutral-200 bg-white text-neutral-700 hover:bg-sky-50 hover:text-sky-800"
+          ? "bg-primary-600 text-white hover:bg-primary-700"
+          : "border border-neutral-200 bg-white text-neutral-700 hover:bg-primary-50 hover:text-primary-800"
       }`}
     >
       {disabled ? (

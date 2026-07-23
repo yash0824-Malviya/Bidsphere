@@ -12,6 +12,7 @@ import type {
 import ConnectionError from "../../components/ConnectionError";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
+import PaginationBar from "../../components/PaginationBar";
 import { TableSkeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
 import {
@@ -20,6 +21,7 @@ import {
   SearchInput,
 } from "../../components/ui";
 import { useDebounce } from "../../hooks/useDebounce";
+import { useClientPagination } from "../../hooks/usePagination";
 import { formatDate } from "../../utils/format";
 
 const STATUS_OPTIONS: Array<"" | MaterialRequestStatus> = [
@@ -73,6 +75,19 @@ export default function RequisitionsPage() {
         order_by: "modified desc",
         limit_page_length: 100,
       }),
+  });
+
+  const {
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+    totalRecords,
+    totalPages,
+    pageRows,
+  } = useClientPagination(rows, {
+    defaultPageSize: 10,
+    resetKey: JSON.stringify(filters),
   });
 
   return (
@@ -169,7 +184,7 @@ export default function RequisitionsPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((mr: MaterialRequest) => (
+                {pageRows.map((mr: MaterialRequest) => (
                   <tr
                     key={mr.name}
                     onClick={() => navigate(`/p2p/requisitions/${mr.name}`)}
@@ -197,6 +212,15 @@ export default function RequisitionsPage() {
                 ))}
               </tbody>
             </table>
+            <PaginationBar
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalRecords={totalRecords}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+              recordLabel="material requests"
+            />
           </div>
         )}
       </div>

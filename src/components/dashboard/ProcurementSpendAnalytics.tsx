@@ -158,9 +158,9 @@ function ProcurementSpendAnalytics({
                 <Line
                   type="monotone"
                   dataKey="spend"
-                  stroke="#0ea5e9"
+                  stroke="#0098EA"
                   strokeWidth={2}
-                  dot={{ r: 2, fill: "#0ea5e9" }}
+                  dot={{ r: 2, fill: "#0098EA" }}
                   activeDot={{ r: 4 }}
                 />
               </LineChart>

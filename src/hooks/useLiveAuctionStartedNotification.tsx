@@ -46,7 +46,7 @@ function showAuctionStartedToast(
       <div
         className={`${
           t.visible ? "animate-enter" : "animate-leave"
-        } pointer-events-auto w-full max-w-sm cursor-pointer rounded-xl border border-sky-200 bg-white p-4 shadow-lg ring-1 ring-sky-100`}
+        } pointer-events-auto w-full max-w-sm cursor-pointer rounded-xl border border-primary-200 bg-white p-4 shadow-lg ring-1 ring-primary-100`}
         role="status"
         onClick={() => {
           toast.dismiss(t.id);
@@ -70,7 +70,7 @@ function showAuctionStartedToast(
               toast.dismiss(t.id);
               onOpen();
             }}
-            className="inline-flex items-center justify-center rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-sky-700"
+            className="inline-flex items-center justify-center rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-primary-700"
           >
             Open Auction
           </button>

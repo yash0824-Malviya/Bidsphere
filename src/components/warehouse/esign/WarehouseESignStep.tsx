@@ -209,7 +209,7 @@ export default function WarehouseESignStep({
         className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
       >
         <div className="mb-4 flex items-start gap-3">
-          <span className="grid h-10 w-10 place-items-center rounded-xl bg-sky-50 text-sky-700">
+          <span className="grid h-10 w-10 place-items-center rounded-xl bg-primary-50 text-primary-700">
             <ShieldCheck className="h-5 w-5" />
           </span>
           <div>
@@ -228,7 +228,7 @@ export default function WarehouseESignStep({
               key={key}
               className={`flex cursor-pointer items-start gap-2.5 rounded-xl border px-3.5 py-3 transition ${
                 value.checklist[key]
-                  ? "border-sky-300 bg-sky-50/70"
+                  ? "border-primary-300 bg-primary-50/70"
                   : "border-slate-200 bg-white hover:border-slate-300"
               } ${disabled || value.locked ? "pointer-events-none opacity-70" : ""}`}
             >
@@ -241,7 +241,7 @@ export default function WarehouseESignStep({
                     checklist: { ...value.checklist, [key]: e.target.checked },
                   })
                 }
-                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500"
               />
               <span className="text-sm text-slate-800">
                 {WAREHOUSE_CHECKLIST_LABELS[key]}
@@ -260,7 +260,7 @@ export default function WarehouseESignStep({
             onChange={(e) => patch({ remarks: e.target.value })}
             rows={3}
             placeholder="Inspection notes, exceptions, or carrier comments…"
-            className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm outline-none ring-sky-500/20 focus:border-sky-400 focus:ring-2 disabled:bg-slate-50"
+            className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm outline-none ring-primary-500/20 focus:border-primary-400 focus:ring-2 disabled:bg-slate-50"
           />
         </label>
       </motion.section>
@@ -337,7 +337,7 @@ export default function WarehouseESignStep({
               onClick={() => setTab(id)}
               className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold transition ${
                 tab === id
-                  ? "bg-sky-600 text-white shadow-sm"
+                  ? "bg-primary-600 text-white shadow-sm"
                   : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
               }`}
             >
@@ -366,7 +366,7 @@ export default function WarehouseESignStep({
                     signatureHash: null,
                   })
                 }
-                className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm outline-none focus:border-sky-400 focus:ring-2 focus:ring-sky-500/20"
+                className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-500/20"
                 placeholder="Type your full name"
               />
             </label>
@@ -393,7 +393,7 @@ export default function WarehouseESignStep({
                       }
                       className={`flex items-center justify-between rounded-xl border px-3.5 py-2.5 text-left transition ${
                         selected
-                          ? "border-sky-400 bg-sky-50 ring-2 ring-sky-200"
+                          ? "border-primary-400 bg-primary-50 ring-2 ring-primary-200"
                           : "border-slate-200 hover:bg-slate-50"
                       }`}
                     >
@@ -412,8 +412,8 @@ export default function WarehouseESignStep({
               </div>
             </div>
 
-            <div className="rounded-xl border border-dashed border-sky-200 bg-gradient-to-b from-sky-50/80 to-white px-4 py-6 text-center">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-600/80">
+            <div className="rounded-xl border border-dashed border-primary-200 bg-gradient-to-b from-primary-50/80 to-white px-4 py-6 text-center">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-primary-600/80">
                 Live Preview
               </p>
               <p
@@ -464,8 +464,8 @@ export default function WarehouseESignStep({
 
         {tab === "uploaded" && (
           <div className="space-y-3">
-            <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-sky-300 bg-sky-50/40 px-4 py-8 text-sm text-slate-600 hover:bg-sky-50">
-              <ImagePlus className="mb-2 h-5 w-5 text-sky-600" />
+            <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-primary-300 bg-primary-50/40 px-4 py-8 text-sm text-slate-600 hover:bg-primary-50">
+              <ImagePlus className="mb-2 h-5 w-5 text-primary-600" />
               Upload PNG / JPG / JPEG (transparent PNG preferred)
               <input
                 type="file"
@@ -528,7 +528,7 @@ export default function WarehouseESignStep({
                 type="button"
                 disabled={disabled || value.locked || !artifactReady || busy}
                 onClick={() => setPlacing(true)}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-sky-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-40"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-primary-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-primary-700 disabled:opacity-40"
               >
                 {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PenLine className="h-3.5 w-3.5" />}
                 Place Signature
@@ -583,7 +583,7 @@ export default function WarehouseESignStep({
             if (wasDragging) void rehashAfterMove();
           }}
           className={`relative mx-auto min-h-[420px] max-w-2xl rounded-xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-6 shadow-inner ${
-            placing ? "cursor-crosshair ring-2 ring-sky-300" : ""
+            placing ? "cursor-crosshair ring-2 ring-primary-300" : ""
           }`}
         >
           <p className="text-center text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">
@@ -610,7 +610,7 @@ export default function WarehouseESignStep({
             <div
               className={`relative flex h-28 items-center justify-center rounded-lg border-2 border-dashed transition ${
                 placing
-                  ? "border-sky-400 bg-sky-100/70 text-sky-700"
+                  ? "border-primary-400 bg-primary-100/70 text-primary-700"
                   : "border-slate-300 bg-white text-slate-400"
               }`}
             >
@@ -624,7 +624,7 @@ export default function WarehouseESignStep({
 
           {value.placed && (
             <div
-              className="absolute z-10 rounded-md border border-sky-400 bg-white/95 p-2 shadow-md"
+              className="absolute z-10 rounded-md border border-primary-400 bg-white/95 p-2 shadow-md"
               style={{
                 left: `${value.placement.x * 100}%`,
                 top: `${value.placement.y * 100}%`,
@@ -654,7 +654,7 @@ export default function WarehouseESignStep({
               <button
                 type="button"
                 aria-label="Resize signature"
-                className="absolute -bottom-1.5 -right-1.5 h-3.5 w-3.5 cursor-se-resize rounded-sm border border-sky-500 bg-sky-500"
+                className="absolute -bottom-1.5 -right-1.5 h-3.5 w-3.5 cursor-se-resize rounded-sm border border-primary-500 bg-primary-500"
                 onPointerDown={(e) => onSigPointerDown(e, "resize")}
               />
             </div>
@@ -676,7 +676,7 @@ export default function WarehouseESignStep({
       <label
         className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-4 py-4 transition ${
           value.certified
-            ? "border-sky-300 bg-sky-50"
+            ? "border-primary-300 bg-primary-50"
             : "border-slate-200 bg-white"
         } ${!checklistDone || !value.placed ? "opacity-80" : ""}`}
       >
@@ -708,7 +708,7 @@ export default function WarehouseESignStep({
               }
             })();
           }}
-          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500"
         />
         <span className="text-sm leading-snug text-slate-800">
           I certify that the above goods have been physically received and inspected.

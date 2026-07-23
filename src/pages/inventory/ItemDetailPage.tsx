@@ -126,8 +126,8 @@ export default function ItemDetailPage() {
 
   const item = itemQuery.data;
   const totalStock = (binsQuery.data ?? []).reduce(
-    (s, b) => s + (b.actual_qty ?? 0),
-    0
+    (s, b) => s + Math.max(0, Number(b.actual_qty) || 0),
+    0,
   );
   const reorder = item.safety_stock ?? 0;
   const isBelow = reorder > 0 && totalStock < reorder;
@@ -227,14 +227,15 @@ export default function ItemDetailPage() {
                       {b.projected_qty !== undefined && (
                         <p className="text-xs text-neutral-500">
                           Projected:{" "}
-                          {formatNumber(b.projected_qty)} {item.stock_uom}
+                          {formatNumber(Math.max(0, Number(b.projected_qty) || 0))}{" "}
+                          {item.stock_uom}
                         </p>
                       )}
                     </div>
                   </div>
                   <div className="text-right">
                     <p className="text-sm font-semibold tabular-nums text-neutral-900">
-                      {formatNumber(b.actual_qty)}
+                      {formatNumber(Math.max(0, Number(b.actual_qty) || 0))}
                     </p>
                     <p className="text-xs text-neutral-500">
                       {item.stock_uom ?? ""}

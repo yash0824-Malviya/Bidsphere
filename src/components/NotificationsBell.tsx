@@ -44,7 +44,7 @@ const MODULE_TONE: Partial<Record<NotificationModule, string>> = {
   Payment: "bg-success-50 text-success-600",
   "Legal Review": "bg-amber-50 text-amber-700",
   RFQ: "bg-blue-50 text-blue-700",
-  "Live Auction": "bg-sky-50 text-sky-700",
+  "Live Auction": "bg-primary-50 text-primary-700",
 };
 
 function toneForModule(module: NotificationModule): string {
@@ -281,7 +281,7 @@ export default function NotificationsBell() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="relative flex h-9 w-9 items-center justify-center rounded-full text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition-colors"
+        className="relative flex h-10 w-10 items-center justify-center rounded-full text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 transition-colors"
         aria-label={t("notifications.title")}
         aria-expanded={open}
       >

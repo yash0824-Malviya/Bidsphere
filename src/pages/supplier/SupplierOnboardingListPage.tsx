@@ -3,6 +3,8 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Inbox, Plus, Search } from "lucide-react";
 import PageHeader from "../../components/PageHeader";
+import PaginationBar from "../../components/PaginationBar";
+import { useClientPagination } from "../../hooks/usePagination";
 import NewOnboardingModal from "../../components/supplier-onboarding/NewOnboardingModal";
 import {
   getOnboardingStats,
@@ -25,7 +27,7 @@ function statusClass(status?: string): string {
       return "bg-rose-50 text-rose-700 border-rose-200";
     case "Under Review":
     case "Submitted":
-      return "bg-sky-50 text-sky-800 border-sky-200";
+      return "bg-primary-50 text-primary-800 border-primary-200";
     case "Changes Requested":
       return "bg-amber-50 text-amber-800 border-amber-200";
     case "Link Generated":
@@ -75,7 +77,7 @@ export default function SupplierOnboardingListPage() {
       { label: "Total Requests", value: s?.total ?? "—", accent: ONB.primary },
       { label: "Draft", value: s?.draft ?? "—", accent: "#64748B" },
       { label: "Generated", value: s?.generated ?? "—", accent: "#6366F1" },
-      { label: "Submitted", value: s?.submitted ?? "—", accent: "#0EA5E9" },
+      { label: "Submitted", value: s?.submitted ?? "—", accent: "#0098EA" },
       { label: "Pending Review", value: s?.pending_review ?? "—", accent: ONB.warning },
       { label: "Approved", value: s?.approved ?? "—", accent: ONB.success },
       { label: "Rejected", value: s?.rejected ?? "—", accent: ONB.error },
@@ -83,7 +85,22 @@ export default function SupplierOnboardingListPage() {
     ];
   }, [statsQuery.data]);
 
-  const exportRows = listQuery.data ?? [];
+  const listRows = listQuery.data ?? [];
+  const filterKey = `${status}|${supplierType}|${category}|${search}`;
+  const {
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+    totalRecords,
+    totalPages,
+    pageRows,
+  } = useClientPagination(listRows, {
+    defaultPageSize: 10,
+    resetKey: filterKey,
+  });
+
+  const exportRows = listRows;
   const exportColumns = useMemo<ExportColumn<OnboardingListRow>[]>(
     () => [
       { id: "name", label: "Onboarding ID", accessor: (r) => r.name },
@@ -251,14 +268,14 @@ export default function SupplierOnboardingListPage() {
                   </td>
                 </tr>
               )}
-              {!listQuery.isLoading && (listQuery.data?.length ?? 0) === 0 && (
+              {!listQuery.isLoading && listRows.length === 0 && (
                 <tr>
                   <td colSpan={11} className="px-3 py-10 text-center text-slate-500">
                     No onboarding requests yet.
                   </td>
                 </tr>
               )}
-              {(listQuery.data ?? []).map((row) => (
+              {pageRows.map((row) => (
                 <tr
                   key={row.name}
                   className="border-t border-slate-100 transition hover:bg-slate-50/80"
@@ -302,6 +319,15 @@ export default function SupplierOnboardingListPage() {
               ))}
             </tbody>
           </table>
+          <PaginationBar
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={totalRecords}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            recordLabel="onboarding requests"
+          />
         </div>
       </div>
 

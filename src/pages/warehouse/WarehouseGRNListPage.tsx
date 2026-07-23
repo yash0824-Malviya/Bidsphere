@@ -1,20 +1,20 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Eye, Search } from "lucide-react";
+import { Eye, Search } from "lucide-react";
 
 import { getGrnList } from "../../api/purchasing";
 import ErrorState from "../../components/ErrorState";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
+import PaginationBar from "../../components/PaginationBar";
 import { TableSkeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
 import { FilterBar, FilterField, SearchInput } from "../../components/ui";
 import { useDebounce } from "../../hooks/useDebounce";
+import { useClientPagination } from "../../hooks/usePagination";
 import { formatDate } from "../../utils/format";
 import type { PurchaseReceiptStatus } from "../../types/erpnext";
-
-const PAGE_SIZE = 20;
 
 const STATUS_OPTIONS: Array<"" | PurchaseReceiptStatus> = [
   "",
@@ -80,7 +80,6 @@ export default function WarehouseGRNListPage() {
   const [statusFilter, setStatusFilter] = useState<"" | PurchaseReceiptStatus>("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [page, setPage] = useState(0);
 
   const supplierOptions = useMemo(() => {
     const set = new Set<string>();
@@ -126,13 +125,19 @@ export default function WarehouseGRNListPage() {
     dateTo,
   ]);
 
-  // Reset to the first page whenever the filtered set changes size.
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
-  const safePage = Math.min(page, totalPages - 1);
-  const pageRows = filteredRows.slice(
-    safePage * PAGE_SIZE,
-    safePage * PAGE_SIZE + PAGE_SIZE
-  );
+  const filterKey = `${debouncedSearch}|${supplierFilter}|${warehouseFilter}|${statusFilter}|${dateFrom}|${dateTo}`;
+  const {
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+    totalRecords,
+    totalPages,
+    pageRows,
+  } = useClientPagination(filteredRows, {
+    defaultPageSize: 10,
+    resetKey: filterKey,
+  });
 
   const filtersActive =
     !!search ||
@@ -149,7 +154,6 @@ export default function WarehouseGRNListPage() {
     setStatusFilter("");
     setDateFrom("");
     setDateTo("");
-    setPage(0);
   }
 
   return (
@@ -163,20 +167,14 @@ export default function WarehouseGRNListPage() {
         <FilterField label="Search" className="min-w-[220px] flex-1">
           <SearchInput
             value={search}
-            onChange={(v) => {
-              setSearch(v);
-              setPage(0);
-            }}
+            onChange={setSearch}
             placeholder="GRN number, PO, or supplier…"
           />
         </FilterField>
         <FilterField label="Supplier" className="min-w-[160px]">
           <select
             value={supplierFilter}
-            onChange={(e) => {
-              setSupplierFilter(e.target.value);
-              setPage(0);
-            }}
+            onChange={(e) => setSupplierFilter(e.target.value)}
             className="select-field"
           >
             <option value="">All suppliers</option>
@@ -190,10 +188,7 @@ export default function WarehouseGRNListPage() {
         <FilterField label="Warehouse" className="min-w-[160px]">
           <select
             value={warehouseFilter}
-            onChange={(e) => {
-              setWarehouseFilter(e.target.value);
-              setPage(0);
-            }}
+            onChange={(e) => setWarehouseFilter(e.target.value)}
             className="select-field"
           >
             <option value="">All warehouses</option>
@@ -207,10 +202,9 @@ export default function WarehouseGRNListPage() {
         <FilterField label="Status" className="min-w-[150px]">
           <select
             value={statusFilter}
-            onChange={(e) => {
-              setStatusFilter(e.target.value as PurchaseReceiptStatus | "");
-              setPage(0);
-            }}
+            onChange={(e) =>
+              setStatusFilter(e.target.value as PurchaseReceiptStatus | "")
+            }
             className="select-field"
           >
             {STATUS_OPTIONS.map((opt) => (
@@ -224,10 +218,7 @@ export default function WarehouseGRNListPage() {
           <input
             type="date"
             value={dateFrom}
-            onChange={(e) => {
-              setDateFrom(e.target.value);
-              setPage(0);
-            }}
+            onChange={(e) => setDateFrom(e.target.value)}
             className="select-field"
           />
         </FilterField>
@@ -235,10 +226,7 @@ export default function WarehouseGRNListPage() {
           <input
             type="date"
             value={dateTo}
-            onChange={(e) => {
-              setDateTo(e.target.value);
-              setPage(0);
-            }}
+            onChange={(e) => setDateTo(e.target.value)}
             className="select-field"
           />
         </FilterField>
@@ -359,44 +347,15 @@ export default function WarehouseGRNListPage() {
               </table>
             </div>
 
-            {/* Pagination */}
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 px-4 py-3 text-xs text-neutral-500">
-              <span>
-                Showing{" "}
-                <span className="font-semibold text-neutral-700">
-                  {safePage * PAGE_SIZE + 1}–
-                  {Math.min((safePage + 1) * PAGE_SIZE, filteredRows.length)}
-                </span>{" "}
-                of{" "}
-                <span className="font-semibold text-neutral-700">
-                  {filteredRows.length}
-                </span>{" "}
-                goods receipts
-              </span>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => setPage((p) => Math.max(0, p - 1))}
-                  disabled={safePage === 0}
-                  className="inline-flex items-center gap-1 rounded-md border border-neutral-200 bg-white px-2.5 py-1.5 font-semibold text-neutral-600 disabled:opacity-40"
-                >
-                  <ChevronLeft className="h-3.5 w-3.5" />
-                  Prev
-                </button>
-                <span className="px-2 font-semibold text-neutral-700">
-                  Page {safePage + 1} of {totalPages}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-                  disabled={safePage >= totalPages - 1}
-                  className="inline-flex items-center gap-1 rounded-md border border-neutral-200 bg-white px-2.5 py-1.5 font-semibold text-neutral-600 disabled:opacity-40"
-                >
-                  Next
-                  <ChevronRight className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            </div>
+            <PaginationBar
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalRecords={totalRecords}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+              recordLabel="goods receipts"
+            />
           </>
         )}
       </div>

@@ -26,13 +26,13 @@ import AuctionCountdownAlert, {
   countdownPhaseClass,
 } from "../../components/reverse-bidding/AuctionCountdownAlert";
 import { TableSkeleton } from "../../components/Skeleton";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 import SupplierAccessDenied from "../../components/supplier-portal/SupplierAccessDenied";
 import { useCountdown } from "../../hooks/useCountdown";
 import { useServerTimeOffset } from "../../hooks/useServerTimeOffset";
 import { useAuctionCountdownAlerts } from "../../hooks/useAuctionCountdownAlerts";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
 import { formatCurrencyIn, formatDateTime } from "../../utils/format";
+import { toEnterpriseUserMessage } from "../../utils/enterpriseUserMessage";
 
 export default function SupplierAuctionPage() {
   const { t } = useTranslation();
@@ -129,50 +129,68 @@ export default function SupplierAuctionPage() {
       invalidateAuction();
     },
     onError: (e: unknown) =>
-      toast.error(e instanceof Error ? e.message : t("reverseBidding.bidRejected")),
+      toast.error(
+        toEnterpriseUserMessage(e, t("reverseBidding.bidRejected")),
+        { id: "reverse-auction-bid-error" },
+      ),
   });
 
   const itemBid = useMutation({
-    mutationFn: (items: ItemBidInput[]) =>
-      submitItemBids({ auctionName: name, supplier: supplierName, items }),
+    mutationFn: (items: ItemBidInput[]) => {
+      // eslint-disable-next-line no-console
+      console.log("[SupplierAuctionPage] Submit Item Bids clicked", {
+        auctionId: name,
+        supplierId: supplierName,
+        rfqId: auction?.rfq,
+        items,
+      });
+      return submitItemBids({
+        auctionName: name,
+        supplier: supplierName,
+        items,
+      });
+    },
     onSuccess: () => {
       toast.success(t("reverseBidding.itemBidsSubmitted"));
       setItemBids({});
       invalidateAuction();
     },
     onError: (e: unknown) =>
-      toast.error(e instanceof Error ? e.message : t("reverseBidding.bidRejected")),
+      toast.error(
+        toEnterpriseUserMessage(e, t("reverseBidding.bidRejected")),
+        { id: "reverse-auction-bid-error" },
+      ),
   });
 
   if (isReady && !isAuthenticated) {
     return (
-      <SupplierPortalLayout>
+      
         <SupplierAccessDenied
           title={t("reverseBidding.signInRequired")}
           description={t("reverseBidding.signInToParticipate")}
         />
-      </SupplierPortalLayout>
+      
     );
   }
 
   if (query.isLoading || !auction) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <div className="table-shell">
           <TableSkeleton rows={4} columns={2} />
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
   if (!supplierIsInvited(auction, supplierName)) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <SupplierAccessDenied
           title={t("reverseBidding.notInvited")}
           description={t("reverseBidding.notInvitedDesc")}
         />
-      </SupplierPortalLayout>
+      
     );
   }
 
@@ -217,7 +235,7 @@ export default function SupplierAuctionPage() {
     !(auction.winner_price ?? auction.lowest_bid);
 
   return (
-    <SupplierPortalLayout supplierName={supplierName}>
+    
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <AuctionCountdownAlert
           phase={alerts.phase}
@@ -615,6 +633,6 @@ export default function SupplierAuctionPage() {
           </div>
         )}
       </div>
-    </SupplierPortalLayout>
+    
   );
 }

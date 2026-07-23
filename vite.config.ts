@@ -391,6 +391,137 @@ function supplierVoucherDevMiddleware(): Plugin {
   };
 }
 
+/**
+ * Dev-server parity for `api/stock-check.ts` / `api/stockCheckCore.ts`.
+ * Intercepts POST /api/stock-check BEFORE Vite's /api proxy.
+ */
+function stockCheckDevMiddleware(): Plugin {
+  return {
+    name: "stock-check-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+        const url = req.url ?? "";
+        const pathOnly = url.split("?")[0] || "";
+        if (pathOnly !== "/api/stock-check") {
+          next();
+          return;
+        }
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "application/json");
+          res.end(
+            JSON.stringify({
+              success: false,
+              message: "Method Not Allowed. Use POST /api/stock-check.",
+            }),
+          );
+          return;
+        }
+
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(chunk as Buffer);
+          const raw = Buffer.concat(chunks).toString("utf8");
+          const body = raw ? JSON.parse(raw) : {};
+
+          const rbac = (await server.ssrLoadModule("/api/rbacAuth.ts")) as {
+            requireInternalAuth: (
+              headers: Record<string, unknown>,
+            ) => { email?: string; role: string };
+            requireRoles: (
+              principal: { role: string },
+              roles: string[],
+            ) => void;
+            RbacError: new (message: string, status?: number) => Error & {
+              status: number;
+            };
+          };
+          const core = (await server.ssrLoadModule(
+            "/api/stockCheckCore.ts",
+          )) as {
+            runStockCheck: (input: Record<string, unknown>) => Promise<unknown>;
+            StockCheckError: new (
+              message: string,
+              status?: number,
+              code?: string,
+            ) => Error & { status: number; code?: string };
+          };
+
+          const headers: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(req.headers)) {
+            headers[k] = v;
+          }
+          const principal = rbac.requireInternalAuth(headers);
+          rbac.requireRoles(principal, ["warehouse", "admin", "procurement"]);
+
+          const itemsRaw = Array.isArray(body.items) ? body.items : [];
+          const items = itemsRaw.map((row: Record<string, unknown>) => ({
+            item_code: String(row?.item_code ?? "").trim(),
+            requested_qty: Number(row?.requested_qty) || 0,
+            mr_warehouse: String(row?.mr_warehouse ?? "").trim() || undefined,
+          }));
+          const warehouses = (
+            Array.isArray(body.warehouses) ? body.warehouses : []
+          )
+            .map((w: unknown) => String(w ?? "").trim())
+            .filter(Boolean);
+
+          const result = await core.runStockCheck({
+            mr_number: String(body.mr_number ?? "").trim(),
+            company: String(body.company ?? "").trim(),
+            mr_company: String(body.mr_company ?? "").trim() || undefined,
+            warehouse: String(body.warehouse ?? "").trim(),
+            warehouses: warehouses.length ? warehouses : undefined,
+            items,
+            user:
+              String(body.user ?? "").trim() ||
+              principal.email ||
+              "Warehouse",
+          });
+
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify(result));
+        } catch (err) {
+          const status =
+            err &&
+            typeof err === "object" &&
+            "status" in err &&
+            Number.isInteger((err as { status?: number }).status)
+              ? (err as { status: number }).status
+              : 500;
+          const message =
+            err instanceof Error
+              ? err.message
+              : "Unable to fetch stock availability.";
+          const code =
+            err && typeof err === "object" && "code" in err
+              ? (err as { code?: string }).code
+              : undefined;
+          console.error("[stock-check-dev] FAILED:", message);
+          if (err instanceof Error && err.stack) {
+            console.error(err.stack);
+          }
+          res.statusCode = status >= 400 && status < 600 ? status : 500;
+          res.setHeader("Content-Type", "application/json");
+          res.end(
+            JSON.stringify({
+              success: false,
+              message,
+              ...(code ? { code } : {}),
+            }),
+          );
+        }
+      });
+    },
+  };
+}
+
 function poShipmentDevMiddleware(): Plugin {
   return {
     name: "po-shipment-dev-middleware",
@@ -1284,6 +1415,7 @@ export default defineConfig(({ mode }) => {
       legalReviewDevMiddleware(),
       bomDevMiddleware(),
       poShipmentDevMiddleware(),
+      stockCheckDevMiddleware(),
       supplierVoucherDevMiddleware(),
       supplierOnboardingDevMiddleware(),
       fileProxyDevMiddleware(proxyTarget, erpApiKey, erpApiSecret),
@@ -1346,7 +1478,7 @@ export default defineConfig(({ mode }) => {
           timeout: 30_000,
           proxyTimeout: 30_000,
           configure: (proxy) => {
-            proxy.on("proxyReq", (proxyReq) => {
+            proxy.on("proxyReq", (proxyReq, req) => {
               // Token auth only. Never forward the browser's Cookie jar —
               // it may contain Desk's sid from the same host (port-agnostic).
               if (erpApiKey && erpApiSecret) {
@@ -1357,12 +1489,49 @@ export default defineConfig(({ mode }) => {
               }
               proxyReq.removeHeader("cookie");
               proxyReq.removeHeader("Cookie");
+
+              // Log ERP resource list queries (DocType / fields / filters).
+              try {
+                const url = new URL(req.url || "", "http://local");
+                const match = /^\/api\/resource\/([^/?]+)/.exec(url.pathname);
+                if (match && (req.method || "GET").toUpperCase() === "GET") {
+                  const doctype = decodeURIComponent(match[1]);
+                  let fields: unknown = url.searchParams.get("fields");
+                  let filters: unknown = url.searchParams.get("filters");
+                  try {
+                    if (typeof fields === "string") fields = JSON.parse(fields);
+                  } catch {
+                    /* keep raw */
+                  }
+                  try {
+                    if (typeof filters === "string")
+                      filters = JSON.parse(filters);
+                  } catch {
+                    /* keep raw */
+                  }
+                  console.log("[vite-erp-proxy] ERP list query", {
+                    doctype,
+                    fields,
+                    filters,
+                    order_by: url.searchParams.get("order_by"),
+                  });
+                }
+              } catch {
+                /* ignore parse errors */
+              }
             });
-            proxy.on("proxyRes", (proxyRes) => {
+            proxy.on("proxyRes", (proxyRes, req) => {
               // Permanent isolation: ERPNext session cookies must never
               // reach the SPA browser (shared host ⇒ shared sid with Desk).
               if (proxyRes.headers["set-cookie"]) {
                 delete proxyRes.headers["set-cookie"];
+              }
+              const status = proxyRes.statusCode ?? 0;
+              if (status >= 400 && /\/api\/resource\//.test(req.url || "")) {
+                console.error("[vite-erp-proxy] ERP resource error", {
+                  status,
+                  url: req.url,
+                });
               }
             });
             proxy.on("error", (err) => {

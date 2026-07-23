@@ -3,8 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Calendar,
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
   Clock,
   FileText,
   Filter,
@@ -18,6 +16,7 @@ import {
 import { getAuditTrail, getAuditUsers } from "../../api/auditTrail";
 import type { AuditEntry, AuditFilters } from "../../api/auditTrail";
 import ExportButton from "../../components/export/ExportButton";
+import PaginationBar from "../../components/PaginationBar";
 import { Skeleton } from "../../components/Skeleton";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
 import { formatDateTime } from "../../utils/format";
@@ -53,6 +52,13 @@ export default function AuditTrailPage() {
   const entries = data?.entries ?? [];
   const hasMore = entries.length >= PAGE_SIZE;
   const users = usersQuery.data ?? [];
+
+  const currentPage = (filters.page ?? 0) + 1;
+  const pageSize = filters.pageSize ?? PAGE_SIZE;
+  const totalRecords = hasMore
+    ? currentPage * pageSize + 1
+    : (currentPage - 1) * pageSize + entries.length;
+  const totalPages = hasMore ? currentPage + 1 : currentPage;
 
   const activeFilterCount = useMemo(() => {
     let n = 0;
@@ -262,30 +268,19 @@ export default function AuditTrailPage() {
             </table>
           </div>
 
-          {/* Pagination */}
-          <div className="flex items-center justify-between border-t border-neutral-200 px-3 py-2">
-            <p className="text-[11px] text-neutral-500">
-              Page {(filters.page ?? 0) + 1} &middot; {entries.length} entries
-            </p>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                disabled={(filters.page ?? 0) === 0}
-                onClick={() => setFilters((f) => ({ ...f, page: (f.page ?? 1) - 1 }))}
-                className="inline-flex items-center gap-0.5 rounded px-2 py-1 text-[11px] font-medium text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 cursor-pointer bg-transparent border-none"
-              >
-                <ChevronLeft className="h-3 w-3" /> Prev
-              </button>
-              <button
-                type="button"
-                disabled={!hasMore}
-                onClick={() => setFilters((f) => ({ ...f, page: (f.page ?? 0) + 1 }))}
-                className="inline-flex items-center gap-0.5 rounded px-2 py-1 text-[11px] font-medium text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 cursor-pointer bg-transparent border-none"
-              >
-                Next <ChevronRight className="h-3 w-3" />
-              </button>
-            </div>
-          </div>
+          <PaginationBar
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={totalRecords}
+            pageSize={pageSize}
+            onPageChange={(page) =>
+              setFilters((f) => ({ ...f, page: page - 1 }))
+            }
+            onPageSizeChange={(size) =>
+              setFilters((f) => ({ ...f, pageSize: size, page: 0 }))
+            }
+            recordLabel="audit entries"
+          />
         </div>
       )}
     </div>
@@ -296,6 +291,7 @@ export default function AuditTrailPage() {
 
 const ROLE_COLORS: Record<string, string> = {
   "Procurement Manager": "bg-blue-50 text-blue-700",
+  "Procurement Team": "bg-sky-50 text-sky-700",
   "Finance Manager": "bg-emerald-50 text-emerald-700",
   "Legal Reviewer": "bg-violet-50 text-violet-700",
   "Warehouse Manager": "bg-amber-50 text-amber-700",

@@ -19,12 +19,13 @@ import {
 } from "../../api/poShipment";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
+import PaginationBar from "../../components/PaginationBar";
 import { TableSkeleton } from "../../components/Skeleton";
 import CalendarDatePicker from "../../components/ui/CalendarDatePicker";
+import { useClientPagination } from "../../hooks/usePagination";
 import { formatUkDisplayDate } from "../../utils/erpNextDate";
 import { formatDate } from "../../utils/format";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 
 type DeliveryFilterStatus =
   | "Accepted"
@@ -151,6 +152,19 @@ export default function SupplierDeliverySchedulePage() {
     return c;
   }, [rows]);
 
+  const {
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+    totalRecords,
+    totalPages,
+    pageRows,
+  } = useClientPagination(rows, {
+    defaultPageSize: 10,
+    resetKey: refreshKey,
+  });
+
   async function handleMarkShipped(poName: string) {
     try {
       await markInTransit(poName, erpSupplierName || supplierName);
@@ -191,23 +205,23 @@ export default function SupplierDeliverySchedulePage() {
 
   if (!isReady) {
     return (
-      <SupplierPortalLayout>
+      
         <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
           Loading…
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
   return (
-    <SupplierPortalLayout supplierName={supplierName}>
+    
       <PageHeader
         title="Delivery Schedule"
         description="Track and manage delivery schedules for accepted purchase orders."
       />
 
       {/* KPI Cards */}
-      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-5 lg:grid-cols-4">
         <KpiCard
           label="Total Scheduled"
           value={counts.scheduled}
@@ -255,6 +269,7 @@ export default function SupplierDeliverySchedulePage() {
             description="Accepted purchase orders and their delivery schedules will appear here."
           />
         ) : (
+          <>
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-neutral-200 text-sm">
               <thead className="bg-neutral-50 text-left text-xs font-medium uppercase tracking-wider text-neutral-500">
@@ -268,7 +283,7 @@ export default function SupplierDeliverySchedulePage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-200">
-                {rows.map((row) => {
+                {pageRows.map((row) => {
                   const isEditing = editingPO === row.poName;
                   const status =
                     row.delivery.status as DeliveryFilterStatus;
@@ -403,6 +418,16 @@ export default function SupplierDeliverySchedulePage() {
               </tbody>
             </table>
           </div>
+          <PaginationBar
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={totalRecords}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            recordLabel="records"
+          />
+          </>
         )}
       </section>
 
@@ -432,7 +457,7 @@ export default function SupplierDeliverySchedulePage() {
           </div>
         </section>
       )}
-    </SupplierPortalLayout>
+    
   );
 }
 

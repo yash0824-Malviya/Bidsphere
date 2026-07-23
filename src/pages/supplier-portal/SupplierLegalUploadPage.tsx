@@ -9,7 +9,6 @@ import SupplierLegalDocuments from "../../components/supplier/SupplierLegalDocum
 import { Skeleton } from "../../components/Skeleton";
 import EmptyState from "../../components/EmptyState";
 import { isSelectedAsWinner } from "../../utils/supplierLegalDocs";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 
 export default function SupplierLegalUploadPage() {
   const { sqName = "" } = useParams<{ sqName: string }>();
@@ -41,18 +40,18 @@ export default function SupplierLegalUploadPage() {
 
   if (sqQuery.isLoading) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <div className="space-y-4">
           <Skeleton className="h-6 w-48" />
           <Skeleton className="h-64 w-full" />
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
   if (sqQuery.isError || !sq) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <Link
           to="/supplier/quotations"
           className="mb-4 inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-accent-700"
@@ -64,14 +63,14 @@ export default function SupplierLegalUploadPage() {
           title="Quotation not found"
           description={`Supplier Quotation "${sqName}" could not be loaded.`}
         />
-      </SupplierPortalLayout>
+      
     );
   }
 
   const winnerLocked = isSelectedAsWinner(review);
 
   return (
-    <SupplierPortalLayout supplierName={supplierName}>
+    
       <div className="mb-4">
         <Link
           to="/supplier/quotations"
@@ -117,6 +116,6 @@ export default function SupplierLegalUploadPage() {
           </button>
         </div>
       </div>
-    </SupplierPortalLayout>
+    
   );
 }

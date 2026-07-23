@@ -1113,7 +1113,7 @@ export default function WarehouseCreateGRNPage() {
     const listFailed = poQuery.isError || warehousesQuery.isError;
 
     return (
-      <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8 space-y-6">
+      <div className="flex w-full flex-col gap-6">
         <div className="flex items-center gap-3">
           <button
             type="button"

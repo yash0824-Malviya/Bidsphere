@@ -60,7 +60,7 @@ export default function WarehouseItemMasterPage() {
 
   if (itemsQuery.isError) {
     return (
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <div className="w-full">
         <div className="rounded-2xl border border-slate-100 bg-white p-8 shadow-sm">
           <ErrorState
             title="Unable to load Warehouse data."
@@ -73,7 +73,7 @@ export default function WarehouseItemMasterPage() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-6 animate-in fade-in duration-300">
+    <div className="flex w-full flex-col gap-6 animate-in fade-in duration-300">
       {/* Filter and Search Bar */}
       <div className="flex flex-col gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:flex-row md:items-center">
         {/* Search */}

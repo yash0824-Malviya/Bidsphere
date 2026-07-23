@@ -3,7 +3,12 @@ import { DASHBOARD_QUERY_OPTIONS } from "./queryPresets";
 import {
   fetchDashboardCounts,
   fetchProcurementDashboardKpis,
+  fetchProcurementTeamDashboardKpis,
 } from "./dashboard";
+import {
+  fetchProcurementAnalyticsPrimary,
+  fetchProcurementAnalyticsTurnaround,
+} from "./procurementAnalytics";
 import type { AppRole } from "../config/roles";
 
 /**
@@ -30,8 +35,27 @@ export function prefetchDashboardForRole(
 
   switch (role) {
     case "procurement":
-      // Single combined KPI snapshot — matches ProcurementDashboard.
+      // KPI snapshot + analytics phases (same keys as ProcurementDashboard).
       warm(["procurement-dashboard-kpis"], fetchProcurementDashboardKpis);
+      void queryClient
+        .prefetchQuery({
+          queryKey: ["procurement-analytics", "primary"],
+          queryFn: fetchProcurementAnalyticsPrimary,
+          staleTime: DASHBOARD_QUERY_OPTIONS.staleTime,
+        })
+        .then(() =>
+          queryClient.prefetchQuery({
+            queryKey: ["procurement-analytics", "turnaround"],
+            queryFn: fetchProcurementAnalyticsTurnaround,
+            staleTime: DASHBOARD_QUERY_OPTIONS.staleTime,
+          }),
+        );
+      break;
+    case "procurement_team":
+      warm(
+        ["procurement-team-dashboard-kpis"],
+        fetchProcurementTeamDashboardKpis,
+      );
       break;
     case "admin":
       // AdminDashboard shares the counts query.

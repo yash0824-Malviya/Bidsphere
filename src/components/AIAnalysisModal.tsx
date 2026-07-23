@@ -927,7 +927,7 @@ function RecommendationResultsScreen({
           <div className="flex shrink-0 flex-col items-center justify-center rounded-2xl border border-white/80 bg-white/90 px-8 py-6 shadow-md ring-1 ring-neutral-200/60">
             <div className="relative flex h-24 w-24 items-center justify-center">
               <svg className="absolute inset-0 h-24 w-24 -rotate-90" viewBox="0 0 100 100">
-                <circle cx="50" cy="50" r="42" fill="none" stroke="#e5e7eb" strokeWidth="8" />
+                <circle cx="50" cy="50" r="42" fill="none" stroke="#E2E8F0" strokeWidth="8" />
                 <circle
                   cx="50"
                   cy="50"
@@ -1700,8 +1700,8 @@ export default function AIAnalysisModal({
 
             {error && !loading && !result && (
               <div className="py-10 text-center">
-                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-sky-50">
-                  <Sparkles className="h-7 w-7 text-sky-600" />
+                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary-50">
+                  <Sparkles className="h-7 w-7 text-primary-600" />
                 </div>
                 <p className="mx-auto max-w-md text-sm text-neutral-700">{error}</p>
                 <button

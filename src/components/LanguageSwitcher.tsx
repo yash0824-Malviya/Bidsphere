@@ -50,7 +50,7 @@ export default function LanguageSwitcher() {
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={t("language.label", "Language")}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 py-2 text-sm font-medium text-neutral-700 transition hover:bg-neutral-50"
+        className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-[#E8EDF5] bg-white px-3 text-[13px] font-medium text-neutral-700 transition hover:bg-neutral-50"
       >
         <Globe className="h-4 w-4 text-neutral-500" />
         <span className="hidden sm:inline">{active.flag}</span>

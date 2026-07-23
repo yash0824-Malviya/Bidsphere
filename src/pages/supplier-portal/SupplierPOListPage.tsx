@@ -10,11 +10,12 @@ import {
 } from "../../api/poDeliveryWorkflow";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
+import PaginationBar from "../../components/PaginationBar";
 import StatusBadge from "../../components/StatusBadge";
 import { TableSkeleton } from "../../components/Skeleton";
+import { useClientPagination } from "../../hooks/usePagination";
 import { formatCurrency, formatDate } from "../../utils/format";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 
 const DELIVERY_BADGE_STYLES: Record<PODeliveryStatus, string> = {
   "Pending Acceptance": "bg-warning-100 text-warning-700",
@@ -86,19 +87,32 @@ export default function SupplierPOListPage() {
     );
   }, [enrichedRows, activeTab]);
 
+  const {
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+    totalRecords,
+    totalPages,
+    pageRows,
+  } = useClientPagination(filteredRows, {
+    defaultPageSize: 10,
+    resetKey: activeTab,
+  });
+
   if (!isReady) {
     return (
-      <SupplierPortalLayout>
+      
         <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
           Loading…
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
   if (!erpSupplierName) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <PageHeader
           title="Purchase Orders"
           description="Purchase orders issued to your company by Netlink procurement."
@@ -108,12 +122,12 @@ export default function SupplierPOListPage() {
           title="Supplier account not linked"
           description="Your portal login is not linked to an ERPNext Supplier record yet, so purchase orders cannot be loaded. Contact procurement after onboarding is approved."
         />
-      </SupplierPortalLayout>
+      
     );
   }
 
   return (
-    <SupplierPortalLayout supplierName={supplierName}>
+    
       <PageHeader
         title="Purchase Orders"
         description="Purchase orders issued to your company by Netlink procurement."
@@ -158,6 +172,7 @@ export default function SupplierPOListPage() {
             description="Purchase orders issued to you by Netlink procurement will appear here once submitted."
           />
         ) : (
+          <>
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-neutral-200 text-sm">
               <thead className="bg-neutral-50 text-left text-xs font-medium uppercase tracking-wider text-neutral-500">
@@ -172,7 +187,7 @@ export default function SupplierPOListPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-200">
-                {filteredRows.map((po) => {
+                {pageRows.map((po) => {
                   const isPending =
                     po.deliveryState.status === "Pending Acceptance";
                   return (
@@ -223,8 +238,18 @@ export default function SupplierPOListPage() {
               </tbody>
             </table>
           </div>
+          <PaginationBar
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={totalRecords}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            recordLabel="records"
+          />
+          </>
         )}
       </section>
-    </SupplierPortalLayout>
+    
   );
 }

@@ -76,6 +76,8 @@ export type MaterialRequestWorkflowStatus =
   | "Under Warehouse Review"
   | "Stock Available"
   | "Material Issued"
+  | "Pending Department Acceptance"
+  | "Partially Issued"
   | "Procurement Required"
   | "Forwarded to Procurement"
   | "RFQ Created"
@@ -92,6 +94,8 @@ export const MR_DASHBOARD_STATUSES: MaterialRequestWorkflowStatus[] = [
   "Under Warehouse Review",
   "Stock Available",
   "Material Issued",
+  "Pending Department Acceptance",
+  "Partially Issued",
   "Procurement Required",
   "Forwarded to Procurement",
   "RFQ Created",
@@ -119,6 +123,9 @@ const LEGACY_STATUS_ALIASES: Record<string, MaterialRequestWorkflowStatus> = {
   "Procurement Pending": "Forwarded to Procurement",
   "RFQ Pending": "Forwarded to Procurement",
   "RFQ Requested": "Forwarded to Procurement",
+  "Waiting for Department Acceptance": "Pending Department Acceptance",
+  "Waiting for Acceptance": "Pending Department Acceptance",
+  "Partially Issued": "Partially Issued",
   Rejected: "Cancelled",
   Stopped: "Cancelled",
 };
@@ -186,6 +193,10 @@ const UI_TO_ERP_STATUS: Record<MaterialRequestWorkflowStatus, string> = {
   // state so the write never fails. Read-back shows "Under Warehouse Review".
   "Stock Available": "Under Warehouse Review",
   "Material Issued": "Material Issued",
+  // ERP Select has no dedicated option — store closest valid value.
+  "Pending Department Acceptance": "Material Issued",
+  // Partial stock issue + procurement remainder — keep ERP procurement marker.
+  "Partially Issued": "Forwarded to Procurement",
   "Procurement Required": "Procurement Required",
   "Forwarded to Procurement": "Forwarded to Procurement",
   "RFQ Created": "RFQ Created",

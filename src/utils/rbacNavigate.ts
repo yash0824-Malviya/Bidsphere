@@ -24,7 +24,11 @@ export function safeInternalDestination(
   role: AppRole,
   requested: string | null | undefined,
 ): string {
-  const path = (requested || "").split("?")[0];
-  if (path && canAccessPath(role, path)) return path;
+  const raw = requested || "";
+  const path = raw.split("?")[0];
+  const search = raw.includes("?") ? raw.slice(raw.indexOf("?")) : "";
+  if (path && canAccessPath(role, path, search)) {
+    return search ? `${path}${search}` : path;
+  }
   return getRoleHome(role);
 }

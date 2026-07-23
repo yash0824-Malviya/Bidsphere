@@ -159,8 +159,8 @@ let actionInflight: Promise<ProcurementActionCenterCounts> | null = null;
 
 /**
  * Action Center counts — live ERP, aligned with executive truth where shared.
- * `materialRequestsWaitingForRfq` is passed in from the queue query (same source
- * as the Forwarded MR table) so the card never diverges from the table.
+ * `materialRequestsWaitingForRfq` is passed in from forwarded dashboard
+ * counters (Pending RFQ Creation) so Action Center stays aligned.
  */
 export async function fetchProcurementActionCenterCounts(opts?: {
   materialRequestsWaitingForRfq?: number;

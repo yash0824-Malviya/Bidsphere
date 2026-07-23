@@ -25,7 +25,7 @@ import {
 function FileGlyph({ name, type }: { name: string; type?: string }) {
   const lower = `${name} ${type ?? ""}`.toLowerCase();
   if (/\.(png|jpe?g)$/.test(lower) || lower.includes("image/")) {
-    return <FileImage className="h-4 w-4 text-sky-600" />;
+    return <FileImage className="h-4 w-4 text-primary-600" />;
   }
   if (/\.zip$/.test(lower) || lower.includes("zip")) {
     return <FileArchive className="h-4 w-4 text-amber-600" />;
@@ -69,7 +69,7 @@ export default function EngineeringAttachmentsView({
 
   return (
     <div className={`min-w-[12rem] ${className}`.trim()}>
-      <span className="mb-1.5 inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-700 ring-1 ring-inset ring-sky-100">
+      <span className="mb-1.5 inline-flex items-center gap-1 rounded-full bg-primary-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary-700 ring-1 ring-inset ring-primary-100">
         <Paperclip className="h-3 w-3" />
         {list.length} Attachment{list.length === 1 ? "" : "s"}
       </span>

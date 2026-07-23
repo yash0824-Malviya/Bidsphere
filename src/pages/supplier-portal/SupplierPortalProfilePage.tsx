@@ -40,7 +40,6 @@ import {
   readSupplierSession,
   clearSupplierSession,
 } from "../../hooks/useSupplierSession";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 import OnboardingDiscussionPanel from "../../components/supplier-onboarding/OnboardingDiscussionPanel";
 import JourneyHeader from "../../components/supplier-onboarding/enterprise/JourneyHeader";
 import StepNavSidebar from "../../components/supplier-onboarding/enterprise/StepNavSidebar";
@@ -526,30 +525,26 @@ export default function SupplierPortalProfilePage() {
   // TEMPORARY LEGACY MODE — hide account-only restriction when flag is on for PIN users
   if (!sessionToken && !legacyPinMode) {
     return (
-      <SupplierPortalLayout supplierName={supplierName} statusBadge={displayStatus}>
+      
         <div className="p-8 text-sm text-slate-600">
           Profile onboarding is available for account-based portal users. Your company PIN
           session does not include an onboarding draft.
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
   return (
-    <SupplierPortalLayout
-      supplierName={supplierName}
-      statusBadge={displayStatus}
-      unlocked={unlocked}
-    >
+    
       <div
-        className="min-h-[calc(100vh-4rem)] px-4 py-4 sm:px-5 lg:px-6"
+        className="min-h-[calc(100vh-4rem)]"
         style={{ backgroundColor: ONB.bg }}
       >
         {loading ? (
           <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-slate-500">
             <Loader2 className="h-8 w-8 animate-spin" style={{ color: ONB.primary }} />
             <p className="text-sm font-medium">Loading your onboarding workspace…</p>
-            <div className="mt-4 grid w-full max-w-6xl gap-3 sm:grid-cols-3">
+            <div className="mt-4 grid w-full gap-3 sm:grid-cols-3">
               {[1, 2, 3].map((i) => (
                 <div
                   key={i}
@@ -559,7 +554,7 @@ export default function SupplierPortalProfilePage() {
             </div>
           </div>
         ) : (
-          <div className="mx-auto w-full max-w-[1600px] space-y-3">
+          <div className="flex w-full flex-col gap-6">
             <JourneyHeader items={journey} />
 
             <div className="grid items-start gap-3 lg:grid-cols-[220px_minmax(0,1fr)_300px] xl:grid-cols-[240px_minmax(0,1fr)_320px]">
@@ -732,7 +727,7 @@ export default function SupplierPortalProfilePage() {
 
                     {/* Sticky bottom action bar */}
                     <div className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 shadow-[0_-6px_24px_rgba(15,23,42,0.08)] backdrop-blur-md lg:left-[260px]">
-                      <div className="mx-auto flex w-full max-w-[1600px] flex-wrap items-center gap-2 px-4 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:px-5 lg:px-6">
+                      <div className="page-container flex flex-wrap items-center gap-2 !py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
                         <button
                           type="button"
                           disabled={stepIndex === 0}
@@ -821,7 +816,7 @@ export default function SupplierPortalProfilePage() {
           </div>
         )}
       </div>
-    </SupplierPortalLayout>
+    
   );
 }
 
@@ -843,7 +838,7 @@ function WelcomeCard({
       >
         <div className="pointer-events-none absolute inset-0 opacity-20">
           <div className="absolute -right-10 -top-10 h-56 w-56 rounded-full bg-white/30 blur-2xl" />
-          <div className="absolute bottom-0 left-1/3 h-40 w-40 rounded-full bg-sky-200/40 blur-2xl" />
+          <div className="absolute bottom-0 left-1/3 h-40 w-40 rounded-full bg-primary-200/40 blur-2xl" />
         </div>
         <div className="relative max-w-xl text-white">
           <p className="text-sm font-medium text-blue-100">Welcome</p>
@@ -1250,11 +1245,7 @@ function FieldInput({
 export function SupplierModuleLockedPage({ title }: { title: string }) {
   const { supplierName, displayStatus, unlocked } = useSupplierSession();
   return (
-    <SupplierPortalLayout
-      supplierName={supplierName}
-      statusBadge={displayStatus}
-      unlocked={unlocked}
-    >
+    
       <div
         className="mx-auto flex max-w-lg flex-col items-center px-4 py-20 text-center"
         style={{ backgroundColor: ONB.bg }}
@@ -1267,6 +1258,6 @@ export function SupplierModuleLockedPage({ title }: { title: string }) {
           This module unlocks after Procurement approves your onboarding profile.
         </p>
       </div>
-    </SupplierPortalLayout>
+    
   );
 }

@@ -42,6 +42,7 @@ const BIDSPHERE_ROLES = [
   "System Manager",
   "Procurement Manager",
   "Purchase Manager",
+  "Procurement Team",
   "Purchase User",
   "Finance Manager",
   "Accounts Manager",

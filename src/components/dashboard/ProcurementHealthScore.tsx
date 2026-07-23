@@ -19,7 +19,7 @@ function ProcurementHealthScore({ data, loading }: Props) {
     return <Skeleton className="h-[188px] w-full rounded-lg" />;
   }
 
-  const radialData = [{ name: "Score", value: data.score, fill: "#0ea5e9" }];
+  const radialData = [{ name: "Score", value: data.score, fill: "#0098EA" }];
 
   return (
     <div className="flex h-[188px] rounded-lg border border-neutral-200/80 bg-white shadow-sm">

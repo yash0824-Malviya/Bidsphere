@@ -44,7 +44,7 @@ function statusTone(status: BomParsedRow["status"]): string {
     case "new":
       return "bg-amber-50 text-amber-800 border-amber-200";
     case "missing_uom":
-      return "bg-sky-50 text-sky-800 border-sky-200";
+      return "bg-primary-50 text-primary-800 border-primary-200";
     case "duplicate":
       return "bg-orange-50 text-orange-800 border-orange-200";
     case "invalid":

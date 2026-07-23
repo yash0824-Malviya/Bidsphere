@@ -47,7 +47,7 @@ export interface ItemAttachmentsFieldProps {
 function FileGlyph({ name, type }: { name: string; type?: string }) {
   const lower = `${name} ${type ?? ""}`.toLowerCase();
   if (/\.(png|jpe?g)$/.test(lower) || lower.includes("image/")) {
-    return <FileImage className="h-4 w-4 text-sky-600" />;
+    return <FileImage className="h-4 w-4 text-primary-600" />;
   }
   if (/\.zip$/.test(lower) || lower.includes("zip")) {
     return <FileArchive className="h-4 w-4 text-amber-600" />;

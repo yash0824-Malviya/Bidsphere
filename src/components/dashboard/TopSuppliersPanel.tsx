@@ -1,6 +1,5 @@
 import { memo } from "react";
 import { Link } from "react-router-dom";
-import { ArrowDownRight, ArrowUpRight, Minus, Users } from "lucide-react";
 
 import { Skeleton } from "../Skeleton";
 import type { TopSupplierTrendRow } from "../../utils/dashboardUtils";
@@ -11,90 +10,91 @@ interface Props {
   loading?: boolean;
 }
 
-const RISK_STYLES: Record<
-  TopSupplierTrendRow["riskLevel"],
-  string
-> = {
-  low: "bg-emerald-50 text-emerald-700",
-  medium: "bg-amber-50 text-amber-800",
-  high: "bg-red-50 text-red-700",
-};
-
-function TrendIcon({ trend }: { trend: TopSupplierTrendRow["trend"] }) {
-  if (trend === "up")
-    return <ArrowUpRight className="h-3.5 w-3.5 text-emerald-600" />;
-  if (trend === "down")
-    return <ArrowDownRight className="h-3.5 w-3.5 text-red-500" />;
-  return <Minus className="h-3.5 w-3.5 text-neutral-400" />;
+function statusLabel(risk: TopSupplierTrendRow["riskLevel"]): {
+  label: string;
+  className: string;
+} {
+  if (risk === "high") {
+    return { label: "At Risk", className: "bg-rose-50 text-rose-700" };
+  }
+  if (risk === "medium") {
+    return { label: "Watch", className: "bg-amber-50 text-amber-700" };
+  }
+  return { label: "Active", className: "bg-emerald-50 text-emerald-700" };
 }
+
+const PANEL_SHELL =
+  "rounded-2xl border border-[#E8EDF5] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]";
 
 function TopSuppliersPanel({ rows, loading }: Props) {
   if (loading) {
-    return <Skeleton className="min-h-[160px] w-full rounded-xl" />;
+    return <Skeleton className={`min-h-[280px] w-full ${PANEL_SHELL}`} />;
   }
 
   return (
-    <div className="dashboard-panel">
-      <div className="dashboard-panel-header justify-between">
-        <div className="flex items-center gap-2">
-          <Users className="h-4 w-4 text-primary-600" />
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
-            Top Suppliers
-          </h3>
-        </div>
+    <div className={`flex h-full flex-col overflow-hidden ${PANEL_SHELL}`}>
+      <div className="flex items-center justify-between px-4 pb-2.5 pt-4">
+        <h3 className="text-[14px] font-semibold leading-tight text-[#111827]">
+          Top Suppliers
+        </h3>
         <Link
           to="/suppliers"
-          className="text-xs font-medium text-primary-600 hover:underline"
+          className="text-[12px] font-medium text-primary-600 no-underline hover:text-primary-700"
         >
           View all
         </Link>
       </div>
 
-      <ul className="dashboard-panel-body divide-y divide-neutral-100">
-        {rows.length === 0 ? (
-          <li className="py-8 text-center text-sm text-neutral-500">
-            No supplier spend recorded yet.
-          </li>
-        ) : (
-          rows.map((row) => (
-          <li key={row.supplier}>
-            <Link
-              to={`/suppliers/${encodeURIComponent(row.supplier)}`}
-              className="flex items-center gap-3 py-3 hover:bg-neutral-50/80"
-            >
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-neutral-900">
-                  {row.supplier}
-                </p>
-                <p className="text-xs tabular-nums text-neutral-500">
-                  {formatCurrencyCompact(row.spend)} · {row.spendSharePct}%
-                </p>
-              </div>
-              <span className="rounded-md bg-primary-50 px-2 py-0.5 text-xs font-semibold tabular-nums text-primary-700">
-                {row.performanceScore}
-              </span>
-              <span
-                className={`inline-flex items-center gap-0.5 text-xs font-medium tabular-nums ${
-                  row.trend === "up"
-                    ? "text-emerald-600"
-                    : row.trend === "down"
-                      ? "text-red-500"
-                      : "text-neutral-400"
-                }`}
-              >
-                <TrendIcon trend={row.trend} />
-                {Math.abs(row.trendPct)}%
-              </span>
-              <span
-                className={`rounded px-2 py-0.5 text-[10px] font-semibold uppercase ${RISK_STYLES[row.riskLevel]}`}
-              >
-                {row.riskLevel}
-              </span>
-            </Link>
-          </li>
-          ))
-        )}
-      </ul>
+      {rows.length === 0 ? (
+        <p className="px-4 py-10 text-center text-[13px] text-[#64748B]">
+          No supplier spend recorded yet.
+        </p>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-x-auto px-1 pb-2">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th className="!px-3 !py-2">Supplier</th>
+                <th className="!px-3 !py-2">Spend</th>
+                <th className="!px-3 !py-2">RFQs</th>
+                <th className="!px-3 !py-2">Performance Score</th>
+                <th className="!px-3 !py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => {
+                const status = statusLabel(row.riskLevel);
+                return (
+                  <tr key={row.supplier} className="!h-10">
+                    <td className="!px-3 !py-1.5">
+                      <Link
+                        to={`/suppliers/${encodeURIComponent(row.supplier)}`}
+                        className="table-link text-[13px]"
+                      >
+                        {row.supplier}
+                      </Link>
+                    </td>
+                    <td className="!px-3 !py-1.5 tabular-nums text-[13px]">
+                      {formatCurrencyCompact(row.spend)}
+                    </td>
+                    <td className="!px-3 !py-1.5 tabular-nums text-[13px] text-neutral-600">
+                      {row.orders}
+                    </td>
+                    <td className="!px-3 !py-1.5 tabular-nums text-[13px] font-semibold text-neutral-800">
+                      {row.performanceScore}
+                    </td>
+                    <td className="!px-3 !py-1.5">
+                      <span className={`status-badge ${status.className}`}>
+                        {status.label}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

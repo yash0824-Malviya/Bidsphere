@@ -1,10 +1,9 @@
 import { Fragment, useState, useMemo, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, ChevronDown, ChevronRight, Package, Truck } from "lucide-react";
+import { Activity, ChevronDown, ChevronRight, Package } from "lucide-react";
 
 import {
-  getLinkedRfqName,
   getMaterialRequestMode,
   getMaterialRequestProcurementType,
   getMaterialRequestWorkflowStatus,
@@ -12,7 +11,6 @@ import {
   parseForwardedItemsFromMr,
   type MaterialRequestWorkflowRecord,
 } from "../../api/materialRequestWorkflow";
-import { canCreateRfqFromMaterialRequest } from "../../api/createRFQFromMaterialRequest";
 import type {
   MaterialRequestMode,
   MaterialRequestProcurementType,
@@ -29,6 +27,7 @@ import ForwardedFilterBar, {
   EMPTY_FORWARDED_FILTERS,
   type ForwardedFilters,
 } from "../../components/material-requests/ForwardedFilterBar";
+import MrRfqActionControl from "../../components/material-requests/MrRfqActionControl";
 import {
   Drawing2dCell,
   PartNameCell,
@@ -153,41 +152,6 @@ function buildGroupedMrRows(
   });
 }
 
-/* ─── action cell ────────────────────────────────────────────────────────── */
-
-function ActionCell({ mr }: { mr: MaterialRequestWorkflowRecord }) {
-  // Once an RFQ exists (custom field, remarks tag, or stamped after RFQ Item
-  // lookup), never offer Create RFQ again.
-  const linkedRfq = getLinkedRfqName(mr);
-  if (linkedRfq || !canCreateRfqFromMaterialRequest(mr)) {
-    if (linkedRfq) {
-      return (
-        <Link
-          to={`/sourcing/rfq/${encodeURIComponent(linkedRfq)}`}
-          className="inline-flex items-center gap-1 rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs font-semibold text-primary-600 no-underline hover:bg-neutral-50"
-        >
-          View RFQ
-        </Link>
-      );
-    }
-    return (
-      <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200">
-        RFQ Created
-      </span>
-    );
-  }
-
-  return (
-    <Link
-      to={`/sourcing/rfq/new?mr=${encodeURIComponent(mr.name)}`}
-      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-1.5 text-xs font-semibold text-white no-underline shadow-sm hover:bg-emerald-700"
-    >
-      <Truck className="h-4 w-4" />
-      Create RFQ
-    </Link>
-  );
-}
-
 /* ─── page ───────────────────────────────────────────────────────────────── */
 
 export default function MaterialRequestProcurementPage() {
@@ -203,12 +167,9 @@ export default function MaterialRequestProcurementPage() {
     refetchOnWindowFocus: true,
   });
 
-  // API is the source of truth (Forwarded to Procurement only). Keep a light
-  // RFQ-link guard so Create RFQ never double-fires.
-  const allRows = useMemo(
-    () => buildGroupedMrRows(mrs).filter((r) => !getLinkedRfqName(r.mr)),
-    [mrs],
-  );
+  // API is the source of truth — fetchProcurementQueue already excludes
+  // MRs with an active RFQ (Cancelled/Rejected do not block).
+  const allRows = useMemo(() => buildGroupedMrRows(mrs), [mrs]);
 
   const departments = useMemo(
     () => [...new Set(allRows.map((r) => r.department))].filter((d) => d !== "—").sort(),
@@ -432,7 +393,10 @@ export default function MaterialRequestProcurementPage() {
                           {row.requestedBy}
                         </td>
                         <td className="whitespace-nowrap px-4 py-3">
-                          <StatusBadge status="Forwarded to Procurement" tone="info" />
+                          <StatusBadge
+                            status="Awaiting RFQ Creation"
+                            tone="info"
+                          />
                         </td>
                         <td className="whitespace-nowrap px-4 py-3">
                           <div className="flex items-center justify-end gap-2">
@@ -444,7 +408,7 @@ export default function MaterialRequestProcurementPage() {
                               <Activity className="h-3.5 w-3.5" />
                               View
                             </button>
-                            <ActionCell mr={row.mr} />
+                            <MrRfqActionControl mr={row.mr} compact />
                           </div>
                         </td>
                       </tr>

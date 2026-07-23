@@ -24,9 +24,11 @@ import ProcurementTypeBadge from "../../components/ProcurementTypeBadge";
 import RequestModeBadge from "../../components/RequestModeBadge";
 import ExportButton from "../../components/export/ExportButton";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
+import PaginationBar from "../../components/PaginationBar";
 import { Skeleton } from "../../components/Skeleton";
 import type { ExportColumn } from "../../utils/export";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
+import { useClientPagination } from "../../hooks/usePagination";
 import { formatDate } from "../../utils/format";
 
 type Decision = "approve" | "reject";
@@ -86,6 +88,21 @@ export default function PendingApprovalsPage() {
       return true;
     });
   }, [data, search, department, status, fromDate, toDate]);
+
+  const filterKey = `${search}|${department}|${status}|${fromDate}|${toDate}`;
+  const {
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+    totalRecords,
+    totalPages,
+    pageRows,
+  } = useClientPagination(rows, {
+    defaultPageSize: 10,
+    resetKey: filterKey,
+    pageParam: "approvalPage",
+  });
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["admin-pending-approvals"] });
@@ -288,7 +305,7 @@ export default function PendingApprovalsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-200">
-                {rows.map((row) => (
+                {pageRows.map((row) => (
                   <tr key={row.name} className="hover:bg-neutral-50">
                     <td className="px-4 py-3">
                       <Link
@@ -353,6 +370,15 @@ export default function PendingApprovalsPage() {
                 ))}
               </tbody>
             </table>
+            <PaginationBar
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalRecords={totalRecords}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+              recordLabel="requests"
+            />
           </div>
         )}
       </div>

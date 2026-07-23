@@ -1,15 +1,22 @@
 import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { CheckCircle, Eye, Search } from "lucide-react";
+import { CheckCircle, Download, Eye, Printer, Search } from "lucide-react";
 import {
   getIssuedMaterials,
+  getMaterialIssueDetail,
   type MaterialIssueStatus,
 } from "../../services/warehouseService";
 import EmptyState from "../../components/EmptyState";
 import ErrorState from "../../components/ErrorState";
+import PageHeader from "../../components/PageHeader";
 import { TableSkeleton } from "../../components/Skeleton";
 import { formatDate } from "../../utils/format";
+import {
+  downloadMaterialIssuePdf,
+  printMaterialIssuePdf,
+} from "../../utils/pdf/materialIssuePdf";
+import toast from "react-hot-toast";
 
 const PAGE_SIZE = 10;
 
@@ -21,6 +28,7 @@ const STATUS_OPTIONS: Array<"" | MaterialIssueStatus> = [
 ];
 
 function StatusPill({ status }: { status: MaterialIssueStatus }) {
+  const label = status === "Fully Issued" ? "Completed" : status;
   const cls =
     status === "Fully Issued"
       ? "bg-emerald-50 text-emerald-700 border-emerald-200"
@@ -31,7 +39,7 @@ function StatusPill({ status }: { status: MaterialIssueStatus }) {
     <span
       className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold ${cls}`}
     >
-      {status}
+      {label}
     </span>
   );
 }
@@ -158,7 +166,7 @@ export default function WarehouseMaterialIssuedPage() {
 
   if (issuedQuery.isError) {
     return (
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <div className="w-full">
         <div className="rounded-2xl border border-slate-100 bg-white p-8 shadow-sm">
           <ErrorState
             title="Unable to load Warehouse data."
@@ -170,8 +178,42 @@ export default function WarehouseMaterialIssuedPage() {
     );
   }
 
+  const runPdf = async (name: string, mode: "print" | "download") => {
+    try {
+      const detail = await getMaterialIssueDetail(name);
+      const payload = {
+        issue_number: detail.name,
+        mr_name: detail.mr_name,
+        department: detail.department,
+        warehouse: detail.warehouse,
+        issued_by: detail.issued_by,
+        receiver: detail.received_by || "—",
+        issue_date: detail.issue_date,
+        issue_type: detail.issue_type || "Full Issue",
+        remarks: detail.remarks,
+        items: detail.items.map((it) => ({
+          item_code: it.item_code,
+          item_name: it.item_name,
+          required_qty: it.requested_qty ?? 0,
+          issued_qty: it.issued_qty,
+          remaining_qty: it.remaining_qty ?? 0,
+          uom: it.uom,
+        })),
+      };
+      if (mode === "print") await printMaterialIssuePdf(payload);
+      else await downloadMaterialIssuePdf(payload);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Unable to generate PDF.");
+    }
+  };
+
   return (
-    <div className="mx-auto max-w-7xl space-y-6 px-4 py-8 duration-300 animate-in fade-in sm:px-6 lg:px-8">
+    <div className="flex w-full flex-col gap-6 duration-300 animate-in fade-in">
+      <PageHeader
+        title="Issued History"
+        description="Completed Material Issue records with print and PDF actions."
+      />
+
       {/* Filters */}
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="relative mb-3">
@@ -287,19 +329,24 @@ export default function WarehouseMaterialIssuedPage() {
               <table className="w-full border-collapse text-left">
                 <thead>
                   <tr className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    <th className="px-6 py-4">Issue Number</th>
-                    <th className="px-6 py-4">Material Request</th>
-                    <th className="px-6 py-4">Department</th>
-                    <th className="px-6 py-4">Issued By</th>
-                    <th className="px-6 py-4">Issue Date</th>
-                    <th className="px-6 py-4 text-center">Status</th>
-                    <th className="w-20 px-6 py-4 text-center">Actions</th>
+                    <th className="px-4 py-3.5">Issue Number</th>
+                    <th className="px-4 py-3.5">Material Request</th>
+                    <th className="px-4 py-3.5">Department</th>
+                    <th className="px-4 py-3.5">Warehouse</th>
+                    <th className="px-4 py-3.5">Issued By</th>
+                    <th className="px-4 py-3.5">Received By</th>
+                    <th className="px-4 py-3.5 text-right">Items</th>
+                    <th className="px-4 py-3.5 text-right">Qty</th>
+                    <th className="px-4 py-3.5">Issue Date</th>
+                    <th className="px-4 py-3.5">Issue Type</th>
+                    <th className="px-4 py-3.5 text-center">Status</th>
+                    <th className="px-4 py-3.5 text-center">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-sm">
                   {paginatedData.map((row) => (
                     <tr key={row.name} className="transition-colors hover:bg-slate-50/75">
-                      <td className="px-6 py-4">
+                      <td className="px-4 py-3.5">
                         <button
                           type="button"
                           onClick={() =>
@@ -312,38 +359,59 @@ export default function WarehouseMaterialIssuedPage() {
                           {row.name}
                         </button>
                       </td>
-                      <td className="px-6 py-4">
+                      <td className="px-4 py-3.5">
                         {row.mr_name ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              navigate(
-                                `/material-requests/${encodeURIComponent(row.mr_name)}`,
-                              )
-                            }
-                            className="font-medium text-primary-700 hover:underline"
-                          >
+                          <span className="font-medium text-slate-800">
                             {row.mr_name}
-                          </button>
+                          </span>
                         ) : (
                           <span className="text-slate-400">—</span>
                         )}
                       </td>
-                      <td className="px-6 py-4 text-slate-600">
+                      <td className="px-4 py-3.5 text-slate-600">
                         {row.department || <span className="text-slate-400">—</span>}
                       </td>
-                      <td className="px-6 py-4 text-slate-600">{row.issued_by}</td>
-                      <td className="px-6 py-4 tabular-nums text-slate-600">
+                      <td className="px-4 py-3.5 text-slate-600">
+                        {row.warehouse || "—"}
+                      </td>
+                      <td className="px-4 py-3.5 text-slate-600">{row.issued_by}</td>
+                      <td className="px-4 py-3.5 text-slate-600">
+                        {row.received_by || "—"}
+                      </td>
+                      <td className="px-4 py-3.5 text-right tabular-nums">
+                        {row.total_items ?? "—"}
+                      </td>
+                      <td className="px-4 py-3.5 text-right tabular-nums">
+                        {row.total_quantity ?? "—"}
+                      </td>
+                      <td className="px-4 py-3.5 tabular-nums text-slate-600">
                         {row.issue_date ? formatDate(row.issue_date, "dd MMM yyyy") : "—"}
                       </td>
-                      <td className="px-6 py-4 text-center">
-                        <StatusPill status={row.status} />
+                      <td className="px-4 py-3.5">
+                        <span
+                          className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                            row.issue_type === "Partial Issue"
+                              ? "border-amber-200 bg-amber-50 text-amber-700"
+                              : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          }`}
+                        >
+                          {row.issue_type === "Partial Issue" ? "Partial" : "Full"}
+                        </span>
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center justify-center">
+                      <td className="px-4 py-3.5 text-center">
+                        <StatusPill
+                          status={
+                            row.status === "Fully Issued"
+                              ? "Fully Issued"
+                              : row.status
+                          }
+                        />
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <div className="flex items-center justify-center gap-1">
                           <button
                             type="button"
-                            title="View issue details"
+                            title="View"
                             onClick={() =>
                               navigate(
                                 `/warehouse/material-requests/issued/${encodeURIComponent(row.name)}`,
@@ -352,6 +420,22 @@ export default function WarehouseMaterialIssuedPage() {
                             className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:border-primary-200 hover:bg-primary-50 hover:text-primary-700"
                           >
                             <Eye className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            title="Download PDF"
+                            onClick={() => void runPdf(row.name, "download")}
+                            className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:border-primary-200 hover:bg-primary-50 hover:text-primary-700"
+                          >
+                            <Download className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            title="Print"
+                            onClick={() => void runPdf(row.name, "print")}
+                            className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white p-1.5 text-slate-500 hover:border-primary-200 hover:bg-primary-50 hover:text-primary-700"
+                          >
+                            <Printer className="h-4 w-4" />
                           </button>
                         </div>
                       </td>

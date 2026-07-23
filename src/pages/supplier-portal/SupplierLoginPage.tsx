@@ -269,7 +269,7 @@ export default function SupplierLoginPage() {
         <div className="relative mx-auto w-full max-w-[400px]">
           <div className="rounded-2xl border border-neutral-200 bg-white p-7 shadow-sm sm:p-8">
             <div className="mb-7">
-              <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[#0ea5e9] text-white shadow-md shadow-[#0ea5e9]/25">
+              <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[#0098EA] text-white shadow-md shadow-[#0098EA]/25">
                 <Building2 className="h-5 w-5" />
               </div>
               <h2 className="text-2xl font-semibold tracking-tight text-neutral-900">

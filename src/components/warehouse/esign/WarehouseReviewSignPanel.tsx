@@ -74,9 +74,9 @@ export default function WarehouseReviewSignPanel({
   }
 
   return (
-    <section className="rounded-2xl border border-sky-200 bg-sky-50/40 p-5 space-y-4">
+    <section className="rounded-2xl border border-primary-200 bg-primary-50/40 p-5 space-y-4">
       <div className="flex items-start gap-3">
-        <span className="grid h-10 w-10 place-items-center rounded-xl bg-sky-100 text-sky-700">
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-primary-100 text-primary-700">
           <ShieldCheck className="h-5 w-5" />
         </span>
         <div>
@@ -132,7 +132,7 @@ export default function WarehouseReviewSignPanel({
           onClick={() => setMode("drawn")}
           className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold ${
             mode === "drawn"
-              ? "bg-sky-600 text-white"
+              ? "bg-primary-600 text-white"
               : "border border-slate-200 bg-white text-slate-700"
           }`}
         >
@@ -145,7 +145,7 @@ export default function WarehouseReviewSignPanel({
           onClick={() => setMode("typed")}
           className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold ${
             mode === "typed"
-              ? "bg-sky-600 text-white"
+              ? "bg-primary-600 text-white"
               : "border border-slate-200 bg-white text-slate-700"
           }`}
         >

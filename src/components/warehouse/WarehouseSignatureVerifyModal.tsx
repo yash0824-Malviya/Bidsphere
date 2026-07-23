@@ -44,7 +44,7 @@ export default function WarehouseSignatureVerifyModal({
       >
         <header className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
           <div className="flex items-center gap-2.5">
-            <span className="grid h-9 w-9 place-items-center rounded-lg bg-sky-50 text-sky-700">
+            <span className="grid h-9 w-9 place-items-center rounded-lg bg-primary-50 text-primary-700">
               <ShieldCheck className="h-4 w-4" />
             </span>
             <div>
@@ -72,7 +72,7 @@ export default function WarehouseSignatureVerifyModal({
         <div className="space-y-4 px-5 py-5">
           {busy || !result ? (
             <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-500">
-              <Loader2 className="h-5 w-5 animate-spin text-sky-600" />
+              <Loader2 className="h-5 w-5 animate-spin text-primary-600" />
               Verifying signature…
             </div>
           ) : (

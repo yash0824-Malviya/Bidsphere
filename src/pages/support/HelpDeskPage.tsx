@@ -200,7 +200,7 @@ const FAQ_ITEMS = [
 
 export default function HelpDeskPage() {
   return (
-    <div className="mx-auto max-w-5xl space-y-8">
+    <div className="flex w-full flex-col gap-6">
       <PageHeader
         title="Help"
         description={`Documentation, workflow guides, and support resources for ${APP_NAME}.`}

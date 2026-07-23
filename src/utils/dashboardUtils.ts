@@ -102,11 +102,11 @@ export interface FinancialSummaryItem {
   tone?: "default" | "warning" | "danger" | "success";
 }
 
-// Tonal shades of the single Netlink brand blue (#0EA5E9) so category charts
+// Tonal shades of the single Netlink brand blue (#0098EA) so category charts
 // stay on-brand instead of mixing several different blues.
 const CATEGORY_COLORS = [
-  "#0ea5e9",
-  "#0284c7",
+  "#0098EA",
+  "#007FC4",
   "#38bdf8",
   "#0369a1",
   "#7dd3fc",
@@ -897,6 +897,8 @@ export interface ProcurementHealthScoreData {
 export interface TopSupplierTrendRow {
   supplier: string;
   spend: number;
+  /** Invoice / order count used for the Top Suppliers table. */
+  orders: number;
   performanceScore: number;
   trend: "up" | "down" | "flat";
   trendPct: number;
@@ -1101,6 +1103,7 @@ export function buildTopSuppliersWithTrend(
       return {
         supplier,
         spend: data.spend,
+        orders: data.count,
         performanceScore: Math.round(performanceScore),
         trend,
         trendPct: Math.round(trendPct * 10) / 10,
@@ -1116,6 +1119,7 @@ export function buildTopSuppliersWithTrend(
   return ensureTopSuppliersBySpend(invoices, pos, limit).map((row) => ({
     supplier: row.supplier,
     spend: row.spend,
+    orders: row.invoiceCount,
     performanceScore: 0, // no historical data to compute from
     trend: "flat" as const,
     trendPct: 0,

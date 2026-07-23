@@ -1,6 +1,6 @@
 import { type ReactNode, useMemo } from "react";
 
-const ACCENT = "#0284c7";
+const ACCENT = "#007FC4";
 const ACCENT_LIGHT = "#f0f9ff";
 const ACCENT_BORDER = "#bae6fd";
 
@@ -98,7 +98,7 @@ function parseMarkdownTable(tableLines: string[]): ReactNode | null {
                       : cell.includes("Paid")
                       ? "#16a34a"
                       : cell.includes("Submitted")
-                      ? "#0284c7"
+                      ? "#007FC4"
                       : "#374151",
                     fontWeight: cell.includes("Overdue") ? 600 : 400,
                   }}
@@ -323,7 +323,7 @@ function renderMarkdownContent(text: string): ReactNode[] {
           key={key++}
           style={{
             border: "none",
-            borderTop: "1px solid #e5e7eb",
+            borderTop: "1px solid #E2E8F0",
             margin: "10px 0",
           }}
         />

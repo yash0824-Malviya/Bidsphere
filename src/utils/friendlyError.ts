@@ -2,11 +2,16 @@
  * Frappe/ERPNext error sanitizer.
  *
  * ERPNext surfaces failures as raw Python exceptions — e.g.
- * `frappe.exceptions.ValidationError: BidSphere Status cannot be "…"` — often
- * with a full traceback. Those must NEVER reach the user. This helper logs the
- * complete exception (so it's captured in the browser/server console) and
- * returns a clean, human-readable `Error` for the toast.
+ * `frappe.exceptions.ValidationError: Warehouse Stores - B does not belong to company Netlink`.
+ * We strip the exception class / traceback noise and keep the real validation
+ * text for toasts. Never replace ERPNext validation with a generic message.
  */
+
+import {
+  extractRawErrorMessage,
+  isErpValidationUserMessage,
+  stripFrappeExceptionNoise,
+} from "./enterpriseUserMessage";
 
 /** True when the error looks like a raw Frappe/Python backend exception. */
 export function isFrappeBackendError(err: unknown): boolean {
@@ -19,8 +24,9 @@ export function isFrappeBackendError(err: unknown): boolean {
 /**
  * Log the full exception and return a user-safe Error.
  *
- * - Raw Frappe/Python exceptions → replaced with `userMessage`.
- * - Anything else (network errors, already-clean messages) → passed through.
+ * - ERPNext validation → cleaned validation text (never generic)
+ * - Raw traceback with no extractable message → `userMessage`
+ * - Already-clean errors → passed through
  */
 export function sanitizeFrappeError(
   err: unknown,
@@ -29,7 +35,22 @@ export function sanitizeFrappeError(
 ): Error {
   console.error(`[Frappe error]${context ? ` ${context}` : ""}`, err);
 
+  const raw = extractRawErrorMessage(err);
+  if (raw && isErpValidationUserMessage(raw)) {
+    const cleaned = stripFrappeExceptionNoise(raw);
+    if (cleaned) return new Error(cleaned);
+  }
+
   if (isFrappeBackendError(err)) {
+    const cleaned = stripFrappeExceptionNoise(raw);
+    if (
+      cleaned &&
+      cleaned.length <= 320 &&
+      !/^Traceback/i.test(cleaned) &&
+      !/pymysql|stack\s*trace/i.test(cleaned)
+    ) {
+      return new Error(cleaned);
+    }
     return new Error(userMessage);
   }
   if (err instanceof Error) return err;

@@ -59,6 +59,7 @@ export default function ProtectedRoute({ children }: Props) {
 
   const role = user.role ?? "procurement";
   const path = location.pathname;
+  const search = location.search;
 
   // Hard block: internal users never render supplier portal under this guard
   if (path === "/supplier" || path.startsWith("/supplier/")) {
@@ -70,11 +71,11 @@ export default function ProtectedRoute({ children }: Props) {
     return <Navigate to={getRoleHome(role)} replace />;
   }
 
-  if (!canAccessPath(role, path)) {
-    const key = `role:${role}:${path}`;
+  if (!canAccessPath(role, path, search)) {
+    const key = `role:${role}:${path}${search}`;
     if (deniedRef.current !== key) {
       deniedRef.current = key;
-      notifyAccessDenied(path);
+      notifyAccessDenied(`${path}${search}`);
     }
     authLog("redirect decision", `ProtectedRoute → ${getRoleHome(role)} (RBAC deny)`);
     return <Navigate to={getRoleHome(role)} replace />;

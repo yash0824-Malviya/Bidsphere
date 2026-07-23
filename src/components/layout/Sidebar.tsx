@@ -1,15 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import {
-  ChevronDown,
-  ChevronRight,
-  LogOut,
-} from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import type { NavItem } from "../../utils/routes";
 import { useAuthStore } from "../../store/authStore";
 import { APP_SIDEBAR_TITLE, APP_SIDEBAR_TAGLINE } from "../../config/branding";
-import { getNavGroupsForRole, ROLE_LABELS } from "../../config/roles";
+import { getNavGroupsForRole } from "../../config/roles";
 import { translateNavLabel } from "../../i18n/navLabels";
 import BrandLogo from "../BrandLogo";
 
@@ -35,44 +31,18 @@ export default function Sidebar({
 }: Props) {
   const { t } = useTranslation();
   const { pathname, search } = useLocation();
-  const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
-  const logout = useAuthStore((s) => s.logout);
   const navGroups = getNavGroupsForRole(user?.role ?? "procurement");
   const collapsed = variant === "collapsed";
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
 
-  const handleLogout = useCallback(() => {
-    setMenuOpen(false);
-    void logout().then(() => navigate("/login", { replace: true }));
-  }, [logout, navigate]);
+  const widthClass = collapsed ? "w-[64px]" : "w-[240px]";
 
-  // Close dropdown on outside click
-  useEffect(() => {
-    if (!menuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [menuOpen]);
-
-  const initials = user?.full_name
-    ? user.full_name
-        .split(" ")
-        .filter(Boolean)
-        .slice(0, 2)
-        .map((p) => p[0]?.toUpperCase() ?? "")
-        .join("") || "?"
-    : "?";
-
-  const widthClass =
-    variant === "collapsed"
-      ? "w-[72px]"
-      : "w-[240px]";
+  const mainGroups = navGroups.filter(
+    (g) => g.label !== "Support" && g.label !== "Help",
+  );
+  const supportGroups = navGroups.filter(
+    (g) => g.label === "Support" || g.label === "Help",
+  );
 
   return (
     <aside
@@ -80,33 +50,35 @@ export default function Sidebar({
         fixed ? "fixed left-0 top-0 z-40 h-[100dvh] min-h-screen" : "h-full min-h-0"
       } ${className}`}
     >
+      {/* Brand */}
       <div
-        className={`flex flex-shrink-0 items-center border-b border-white/5 py-4 ${
-          collapsed ? "justify-center px-2" : "gap-3 px-4"
+        className={`flex h-14 flex-shrink-0 items-center border-b border-white/5 ${
+          collapsed ? "justify-center px-2" : "gap-2.5 px-3"
         }`}
       >
         <BrandLogo size="sm" markOnly />
         {!collapsed && (
           <div className="min-w-0 leading-tight">
-            <div className="truncate text-sm font-bold text-white">
+            <div className="truncate text-[13px] font-semibold text-white">
               {APP_SIDEBAR_TITLE}
             </div>
-            <div className="truncate text-[10px] font-medium uppercase tracking-[0.12em] text-primary-400">
+            <div className="truncate text-[10px] font-medium uppercase tracking-[0.1em] text-primary-400">
               {APP_SIDEBAR_TAGLINE}
             </div>
           </div>
         )}
       </div>
 
-      <nav className="scrollbar-hidden min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain scroll-smooth px-2 py-3 md:px-3">
-        {navGroups.map((group) => (
-          <div key={group.label}>
+      {/* Main nav */}
+      <nav className="scrollbar-hidden min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-2 py-2">
+        {mainGroups.map((group) => (
+          <div key={group.label || "main"}>
             {group.label && !collapsed ? (
-              <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.1em] text-neutral-500">
+              <p className="mb-1 px-2.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-neutral-500">
                 {translateNavLabel(t, group.label)}
               </p>
             ) : null}
-            <div className="space-y-0.5">
+            <div className="space-y-px">
               {group.items.map((item) => (
                 <SidebarItem
                   key={item.to}
@@ -122,59 +94,32 @@ export default function Sidebar({
         ))}
       </nav>
 
-      <div ref={menuRef} className="relative flex-shrink-0 border-t border-white/5 px-2 py-4 md:px-3">
-        {/* Dropdown menu — positioned above the card */}
-        {menuOpen && !collapsed && (
-          <div className="absolute bottom-full left-2 right-2 mb-1.5 rounded-lg border border-white/10 bg-[#1e293b] py-1 shadow-xl md:left-3 md:right-3">
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="flex w-full items-center gap-2.5 px-3.5 py-2 text-[13px] font-medium text-red-400 transition hover:bg-white/5 hover:text-red-300 cursor-pointer bg-transparent border-none text-left"
-            >
-              <LogOut className="h-4 w-4" />
-              {t("sidebar.logout")}
-            </button>
-          </div>
-        )}
-
-        {/* User card — clickable to toggle dropdown */}
-        <button
-          type="button"
-          onClick={() => {
-            if (collapsed) {
-              handleLogout();
-            } else {
-              setMenuOpen((v) => !v);
-            }
-          }}
-          title={collapsed ? t("sidebar.logout") : t("sidebar.accountMenu")}
-          className={`flex w-full items-center rounded-lg bg-white/[0.03] py-2.5 transition hover:bg-white/[0.07] cursor-pointer border-none text-left ${
-            collapsed ? "justify-center px-1" : "gap-3 px-2.5"
-          }`}
-        >
-          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-white">
-            {initials}
-          </div>
-          {!collapsed && (
-            <>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[13px] font-medium text-white">
-                  {user?.full_name ?? t("sidebar.signedOut")}
-                </div>
-                <div className="truncate text-[11px] text-sidebar-text">
-                  {user?.email ?? ""}
-                </div>
-                {user?.role ? (
-                  <div className="truncate text-[10px] text-primary-400">
-                    {ROLE_LABELS[user.role]}
-                  </div>
-                ) : null}
+      {/* Support / Help only at bottom */}
+      {supportGroups.length > 0 ? (
+        <div className="flex-shrink-0 border-t border-white/5 px-2 py-2">
+          {supportGroups.map((group) => (
+            <div key={group.label || "support"}>
+              {group.label && !collapsed ? (
+                <p className="mb-1 px-2.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-neutral-500">
+                  {translateNavLabel(t, group.label)}
+                </p>
+              ) : null}
+              <div className="space-y-px">
+                {group.items.map((item) => (
+                  <SidebarItem
+                    key={item.to}
+                    item={item}
+                    pathname={pathname}
+                    search={search}
+                    collapsed={collapsed}
+                    onNavigate={onNavigate}
+                  />
+                ))}
               </div>
-              <ChevronDown className={`h-3.5 w-3.5 flex-shrink-0 text-sidebar-text transition-transform ${menuOpen ? "rotate-180" : ""}`} />
-            </>
-          )}
-        </button>
-      </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </aside>
   );
 }
@@ -182,7 +127,7 @@ export default function Sidebar({
 function isChildNavActive(
   pathname: string,
   search: string,
-  to: string
+  to: string,
 ): boolean {
   const [toPath, toQuery = ""] = to.split("?");
   if (pathname !== toPath) return false;
@@ -234,7 +179,10 @@ function SidebarItem({
       const next = !prev;
       if (next) {
         requestAnimationFrame(() => {
-          itemRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+          itemRef.current?.scrollIntoView({
+            block: "nearest",
+            behavior: "smooth",
+          });
         });
       }
       return next;
@@ -244,12 +192,17 @@ function SidebarItem({
   const Icon = item.icon;
 
   const linkClass = (isActive: boolean) =>
-    `group relative flex items-center rounded-lg text-[13px] font-medium transition-all duration-200 ${
-      collapsed ? "justify-center px-2 py-2.5" : "gap-2.5 px-3 py-2"
+    `group relative flex h-10 items-center rounded-xl text-[13px] font-medium transition-colors duration-150 ${
+      collapsed ? "justify-center px-2" : "gap-2.5 px-3"
     } ${
       isActive
-        ? "bg-primary/15 text-white shadow-[inset_3px_0_0_0_#0ea5e9]"
-        : "text-sidebar-text hover:bg-white/5 hover:text-white"
+        ? "bg-white/[0.10] text-white"
+        : "text-sidebar-text hover:bg-white/[0.06] hover:text-white"
+    }`;
+
+  const iconClass = (isActive: boolean) =>
+    `h-3.5 w-3.5 flex-shrink-0 transition-colors ${
+      isActive ? "text-white" : "text-sidebar-text group-hover:text-white"
     }`;
 
   if (!hasChildren) {
@@ -260,11 +213,7 @@ function SidebarItem({
         title={collapsed ? label : undefined}
         className={linkClass(active)}
       >
-        <Icon
-          className={`h-4 w-4 flex-shrink-0 transition-colors ${
-            active ? "text-primary-400" : "text-sidebar-text group-hover:text-white"
-          }`}
-        />
+        <Icon className={iconClass(active)} />
         {!collapsed && <span className="truncate">{label}</span>}
       </Link>
     );
@@ -278,11 +227,7 @@ function SidebarItem({
         title={label}
         className={linkClass(active)}
       >
-        <Icon
-          className={`h-4 w-4 flex-shrink-0 transition-colors ${
-            active ? "text-primary-400" : "text-sidebar-text group-hover:text-white"
-          }`}
-        />
+        <Icon className={iconClass(active)} />
       </Link>
     );
   }
@@ -292,48 +237,58 @@ function SidebarItem({
       <button
         type="button"
         onClick={handleToggle}
-        className={`${linkClass(active)} w-full text-left`}
+        className={`${linkClass(active)} w-full border-none bg-transparent text-left`}
       >
-        <Icon
-          className={`h-4 w-4 flex-shrink-0 transition-colors ${
-            active ? "text-primary-400" : "text-sidebar-text group-hover:text-white"
-          }`}
-        />
+        <Icon className={iconClass(active)} />
         <span className="flex-1 truncate">{label}</span>
         {open ? (
-          <ChevronDown className="h-3.5 w-3.5 opacity-60" />
+          <ChevronDown className="h-3 w-3 opacity-70" />
         ) : (
-          <ChevronRight className="h-3.5 w-3.5 opacity-60" />
+          <ChevronRight className="h-3 w-3 opacity-70" />
         )}
       </button>
 
-      {open && item.children && (
-        <div className="ml-4 mt-0.5 space-y-0.5 border-l border-white/10 pl-3">
-          {item.children.map((child) => {
-            const childActive = isChildNavActive(pathname, search, child.to);
-            return (
-              <div key={child.to}>
-                {child.group && (
-                  <p className="mb-0.5 mt-2 px-3 text-[9px] font-semibold uppercase tracking-[0.12em] text-neutral-500 first:mt-0.5">
-                    {translateNavLabel(t, child.group)}
-                  </p>
-                )}
-                <Link
-                  to={child.to}
-                  onClick={onNavigate}
-                  className={`block rounded-md px-3 py-1.5 text-[13px] font-medium transition-all duration-200 ${
-                    childActive
-                      ? "bg-primary/15 text-white shadow-[inset_2px_0_0_0_#0ea5e9]"
-                      : "text-sidebar-text hover:bg-white/5 hover:text-white"
-                  }`}
-                >
-                  {translateNavLabel(t, child.label)}
-                </Link>
+      <div
+        className={`grid transition-[grid-template-rows] duration-200 ease-out ${
+          open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+        }`}
+      >
+        <div className="overflow-hidden">
+          {item.children ? (
+            <div className="mt-1.5 mr-2 ml-5 border-l border-white/15 pl-3">
+              <div className="space-y-1">
+                {item.children.map((child) => {
+                  const childActive = isChildNavActive(
+                    pathname,
+                    search,
+                    child.to,
+                  );
+                  return (
+                    <div key={child.to}>
+                      {child.group && (
+                        <p className="mb-1 mt-1.5 px-2 text-[9px] font-semibold uppercase tracking-[0.1em] text-neutral-500 first:mt-0">
+                          {translateNavLabel(t, child.group)}
+                        </p>
+                      )}
+                      <Link
+                        to={child.to}
+                        onClick={onNavigate}
+                        className={`mx-2 flex h-8 items-center px-2.5 text-[12px] font-medium transition-[background-color] duration-150 ease-in-out ${
+                          childActive
+                            ? "rounded-[10px] bg-white/[0.10] text-white"
+                            : "rounded-lg text-sidebar-text hover:bg-white/[0.06] hover:text-white"
+                        }`}
+                      >
+                        {translateNavLabel(t, child.label)}
+                      </Link>
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
+            </div>
+          ) : null}
         </div>
-      )}
+      </div>
     </div>
   );
 }

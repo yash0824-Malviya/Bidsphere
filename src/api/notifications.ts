@@ -180,7 +180,9 @@ function voucherModuleForRole(
 function voucherRoute(role: NotificationTargetRole, voucherId: string): string {
   const enc = encodeURIComponent(voucherId);
   if (role === "supplier") return `/supplier/vouchers/${enc}`;
-  if (role === "procurement") return `/p2p/vouchers/${enc}`;
+  if (role === "procurement" || role === "procurement_team") {
+    return `/p2p/vouchers/${enc}`;
+  }
   return `/p2p/vouchers/${enc}`;
 }
 

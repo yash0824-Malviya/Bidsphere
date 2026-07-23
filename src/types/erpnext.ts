@@ -230,6 +230,12 @@ export interface RequestForQuotation extends ErpDoc {
   company?: string;
   message_for_supplier?: string;
   terms?: string;
+  /**
+   * Custom Check field. When enabled, invited suppliers must complete a
+   * Cost Breakdown on their quotation. Provisioned by
+   * scripts/setup-cost-breakdown-doctype.mjs.
+   */
+  custom_require_cost_breakdown?: 0 | 1 | boolean;
   suppliers: RFQSupplierRow[];
   items: RFQItem[];
 }

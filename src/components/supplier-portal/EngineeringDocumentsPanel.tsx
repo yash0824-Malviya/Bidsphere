@@ -41,7 +41,7 @@ export default function EngineeringDocumentsPanel({
           Engineering Documents
         </p>
         {hasFiles && (
-          <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-bold text-sky-700 ring-1 ring-inset ring-sky-100">
+          <span className="rounded-full bg-primary-50 px-2 py-0.5 text-[10px] font-bold text-primary-700 ring-1 ring-inset ring-primary-100">
             {list.length} Attachment{list.length === 1 ? "" : "s"}
           </span>
         )}

@@ -27,6 +27,13 @@ import {
 } from "../../services/warehouseService";
 import { getIncomingPurchaseOrders, getPurchaseReceipts } from "../../api/purchasing";
 import { fetchProcurementQueue } from "../../api/materialRequestWorkflow";
+import {
+  countPendingDepartmentAcceptance,
+  countPendingDepartmentAcceptanceAsync,
+  countTodaysMaterialIssues,
+  listPendingDepartmentReceipts,
+  listPendingWarehouseReceipts,
+} from "../../api/materialIssueReceipt";
 import { syncMaterialRequestSlaBatch } from "../../api/slaIntegration";
 import { useSlaVisible } from "../../hooks/useSlaVisible";
 import SlaCountdownWidget from "../../components/sla/SlaCountdownWidget";
@@ -110,6 +117,25 @@ export default function WarehouseDashboardPage() {
     retry: false,
     refetchOnWindowFocus: true,
   });
+  const receiptKpiQuery = useQuery({
+    queryKey: ["material-issue-receipts", "warehouse", "kpi"],
+    queryFn: async () => {
+      const pendingDepartmentAcceptance =
+        await countPendingDepartmentAcceptanceAsync();
+      return {
+        pendingDepartmentAcceptance,
+        todaysIssues: countTodaysMaterialIssues(),
+        pendingSignatures:
+          listPendingWarehouseReceipts().length +
+          listPendingDepartmentReceipts().length,
+      };
+    },
+    enabled: canLoad,
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+  });
+  const receiptKpiTick = receiptKpiQuery.dataUpdatedAt;
 
   // Ensure SLA timers track the procurement-facing queue the warehouse manages.
   useEffect(() => {
@@ -184,23 +210,60 @@ export default function WarehouseDashboardPage() {
   const forwardedQueue = procurementQueueQuery.data ?? [];
 
   const kpis = useMemo(() => {
-    const partiallyIssued = pending.filter((mr) => {
+    const partiallyIssuedPending = pending.filter((mr) => {
       const items = mr.items ?? [];
       if (items.length === 0) return false;
       const anyAvailable = items.some((i) => i.available_qty > 0);
       const anyShort = items.some((i) => i.available_qty < i.required_qty);
       return anyAvailable && anyShort;
     }).length;
+    const issuedTodayRows = issued.filter((s) => s.issue_date === todayIso);
+    const completedToday = issuedTodayRows.filter(
+      (s) => s.status === "Fully Issued",
+    ).length;
+    const partialIssues = issued.filter(
+      (s) => s.status === "Partially Issued",
+    ).length;
+    const pendingIssues = readyToIssueMRs.length;
+    const successRate =
+      issuedTodayRows.length === 0
+        ? null
+        : Math.round((completedToday / issuedTodayRows.length) * 100);
+    const pendingSignatures =
+      receiptKpiQuery.data?.pendingSignatures ??
+      listPendingWarehouseReceipts().length +
+        listPendingDepartmentReceipts().length;
+
     return {
       pending: pending.length,
       // KPIs are the length of the EXACT arrays rendered by the widgets below.
       readyToIssue: readyToIssueMRs.length,
-      issuedToday: issued.filter((s) => s.issue_date === todayIso).length,
+      issuedToday: issuedTodayRows.length,
       procurementRequired: procurementRequiredMRs.length,
-      partiallyIssued,
+      partiallyIssued: partiallyIssuedPending,
       lowStock: inventory.filter((i) => i.status !== "In Stock").length,
+      todaysIssues: issuedTodayRows.length,
+      pendingIssues,
+      partialIssues,
+      completedToday,
+      issueSuccessRate: successRate,
+      pendingSignatures,
+      receiptsAwaitingConfirmation:
+        receiptKpiQuery.data?.pendingDepartmentAcceptance ??
+        countPendingDepartmentAcceptance(),
+      todaysReceiptIssues:
+        receiptKpiQuery.data?.todaysIssues ?? countTodaysMaterialIssues(),
     };
-  }, [pending, issued, readyToIssueMRs, procurementRequiredMRs, inventory, todayIso]);
+  }, [
+    pending,
+    issued,
+    readyToIssueMRs,
+    procurementRequiredMRs,
+    inventory,
+    todayIso,
+    receiptKpiTick,
+    receiptKpiQuery.data,
+  ]);
 
   const lowStockItems = useMemo(
     () => inventory.filter((i) => i.status !== "In Stock"),
@@ -361,6 +424,75 @@ export default function WarehouseDashboardPage() {
           desc="Low or out of stock"
           loading={inventoryQuery.isLoading}
           to="/warehouse/inventory/stock"
+        />
+      </div>
+
+      {/* 2a · Material Issue KPIs */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
+        <KpiCard
+          icon={PackageCheck}
+          accent="bg-sky-50 text-sky-600"
+          label="Today's Material Issues"
+          value={kpis.todaysReceiptIssues || kpis.todaysIssues}
+          desc="Issues + receipts today"
+          loading={issuedQuery.isLoading}
+          to="/warehouse/material-requests/issued"
+        />
+        <KpiCard
+          icon={ClipboardList}
+          accent="bg-amber-50 text-amber-700"
+          label="Pending Signatures"
+          value={kpis.pendingSignatures}
+          desc="Warehouse or department"
+          loading={false}
+          to="/warehouse/material-requests/issued"
+        />
+        <KpiCard
+          icon={FileSearch}
+          accent="bg-rose-50 text-rose-600"
+          label="Pending Department Acceptance"
+          value={kpis.receiptsAwaitingConfirmation}
+          desc="Awaiting department digital acceptance"
+          loading={false}
+          to="/warehouse/issue-items/pending-acceptance"
+        />
+        <KpiCard
+          icon={PackagePlus}
+          accent="bg-violet-50 text-violet-600"
+          label="Pending Issues"
+          value={kpis.pendingIssues}
+          desc="Ready to issue now"
+          loading={pendingQuery.isLoading}
+          to="/warehouse/issue-items"
+        />
+        <KpiCard
+          icon={Split}
+          accent="bg-orange-50 text-orange-600"
+          label="Partial Issues"
+          value={kpis.partialIssues}
+          desc="History · partial"
+          loading={issuedQuery.isLoading}
+          to="/warehouse/material-requests/issued"
+        />
+        <KpiCard
+          icon={CheckCircle}
+          accent="bg-emerald-50 text-emerald-600"
+          label="Completed Today"
+          value={kpis.completedToday}
+          desc="Full issues today"
+          loading={issuedQuery.isLoading}
+          to="/warehouse/material-requests/issued"
+        />
+        <KpiCard
+          icon={Activity}
+          accent="bg-teal-50 text-teal-600"
+          label="Issue Success Rate"
+          value={
+            kpis.issueSuccessRate == null ? "—" : `${kpis.issueSuccessRate}%`
+          }
+          desc="Full / today's issues"
+          loading={issuedQuery.isLoading}
+          to="/warehouse/material-requests/issued"
         />
       </div>
 
@@ -593,7 +725,7 @@ export default function WarehouseDashboardPage() {
                         critical ? "text-rose-600" : "text-amber-600"
                       }`}
                     >
-                      {item.available_qty} {item.uom}
+                      {Math.max(0, Number(item.available_qty) || 0)} {item.uom}
                     </td>
                     <td className="py-2 px-2 tabular-nums text-slate-500">
                       {item.reorder_level}
@@ -713,7 +845,7 @@ function KpiCard({
   icon: LucideIcon;
   accent: string;
   label: string;
-  value: number;
+  value: number | string;
   desc: string;
   loading?: boolean;
   to: string;

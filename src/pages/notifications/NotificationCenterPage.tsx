@@ -16,11 +16,13 @@ import {
   clearNotificationsForViewer,
   EMAIL_TEMPLATES,
 } from "../../api/notifications";
+import PaginationBar from "../../components/PaginationBar";
 import type { NotificationModule } from "../../types/notification";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
 import { formatDateTime } from "../../utils/format";
 import hotToast from "react-hot-toast";
 import { useRoleNotifications } from "../../hooks/useRoleNotifications";
+import { useClientPagination } from "../../hooks/usePagination";
 import { ROLE_ALLOWED_MODULES, SUPPLIER_ALLOWED_MODULES } from "../../types/notification";
 
 const MODULE_COLORS: Partial<Record<NotificationModule, string>> = {
@@ -40,7 +42,7 @@ const MODULE_COLORS: Partial<Record<NotificationModule, string>> = {
   "PO Ready for GRN": "bg-amber-50 text-amber-700",
   GRN: "bg-teal-50 text-teal-700",
   Compliance: "bg-amber-50 text-amber-700",
-  "Live Auction": "bg-sky-50 text-sky-700",
+  "Live Auction": "bg-primary-50 text-primary-700",
 };
 
 type Tab = "notifications" | "templates";
@@ -72,7 +74,7 @@ export default function NotificationCenterPage() {
     if (viewer.role === "supplier") {
       return [...SUPPLIER_ALLOWED_MODULES];
     }
-    return [...ROLE_ALLOWED_MODULES[viewer.role]];
+    return [...(ROLE_ALLOWED_MODULES[viewer.role] ?? [])];
   }, [viewer]);
 
   const filtered = useMemo(() => {
@@ -91,6 +93,21 @@ export default function NotificationCenterPage() {
     }
     return list;
   }, [notifications, moduleFilter, readFilter, search]);
+
+  const filterKey = `${moduleFilter}|${readFilter}|${search}`;
+  const {
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+    totalRecords,
+    totalPages,
+    pageRows,
+  } = useClientPagination(filtered, {
+    defaultPageSize: 10,
+    resetKey: filterKey,
+    pageParam: "notifPage",
+  });
 
   function handleMarkAllRead() {
     markAllRead();
@@ -204,7 +221,7 @@ export default function NotificationCenterPage() {
             </div>
           ) : (
             <div className="space-y-1">
-              {filtered.map((n) => (
+              {pageRows.map((n) => (
                 <button
                   key={n.id}
                   type="button"
@@ -280,6 +297,16 @@ export default function NotificationCenterPage() {
                   </div>
                 </button>
               ))}
+              <PaginationBar
+                currentPage={currentPage}
+                totalPages={totalPages}
+                totalRecords={totalRecords}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                onPageSizeChange={setPageSize}
+                recordLabel="notifications"
+                className="rounded-lg border border-neutral-200"
+              />
             </div>
           )}
         </>

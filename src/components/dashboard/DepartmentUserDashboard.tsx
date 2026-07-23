@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ClipboardList,
   FileText,
+  PackageCheck,
   Plus,
   TrendingUp,
 } from "lucide-react";
@@ -16,6 +17,7 @@ import {
   getMaterialRequestWorkflowStatus,
   listMaterialRequestsWorkflow,
 } from "../../api/materialRequestWorkflow";
+import { countDepartmentPendingAcceptance } from "../../api/departmentIssuedItems";
 import { getDashboardConfig } from "../../config/dashboardRoles";
 import { formatDate } from "../../utils/format";
 import StatusBadge from "../StatusBadge";
@@ -89,12 +91,8 @@ function isDraftRequest(status: string, workflow: string, docstatus: number) {
 }
 
 function isCompletedRequest(status: string, workflow: string) {
-  return (
-    workflow === "Completed" ||
-    workflow === "Material Issued" ||
-    status === "Issued" ||
-    status === "Completed"
-  );
+  // Material Issued alone is NOT complete — department must accept the receipt.
+  return workflow === "Completed" || status === "Completed";
 }
 
 function isSubmittedRequest(
@@ -118,6 +116,8 @@ function isSubmittedRequest(
     workflow === "Submitted" ||
     workflow === "Under Warehouse Review" ||
     workflow === "Stock Available" ||
+    workflow === "Material Issued" ||
+    workflow === "Pending Department Acceptance" ||
     workflow === "Procurement Required" ||
     workflow === "Forwarded to Procurement" ||
     workflow === "RFQ Created"
@@ -165,6 +165,15 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
 
   const rows = rowsQuery.data ?? EMPTY_ROWS;
 
+  const pendingAcceptanceQuery = useQuery({
+    queryKey: ["department-issued-items", "kpi", "pending"],
+    queryFn: () => countDepartmentPendingAcceptance(),
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+  });
+  const pendingAcceptance = pendingAcceptanceQuery.data ?? 0;
+
   const counts = useMemo(() => {
     const mapped = rows.reduce(
       (acc, mr) => {
@@ -196,11 +205,12 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
       console.log("[Department Dashboard] dashboard state after mapping", {
         rowCount: rows.length,
         mapped,
+        pendingAcceptance,
       });
     }
 
     return mapped;
-  }, [rows]);
+  }, [rows, pendingAcceptance]);
 
   return (
     <div className="dashboard-stack">
@@ -226,8 +236,8 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
       <SlaCountdownWidget role="department" title="My Request SLAs" />
 
       {rowsQuery.isLoading ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {[1, 2, 3, 4].map((i) => (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          {[1, 2, 3, 4, 5].map((i) => (
             <Skeleton key={i} className="h-28 rounded-xl" />
           ))}
         </div>
@@ -236,7 +246,7 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
           Failed to load Material Requests from ERPNext.
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <KpiCard
             label="Total Requests"
             value={counts.totalRequests}
@@ -256,6 +266,13 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
             to="/material-requests/list?status=Submitted"
             accent="text-amber-700"
             icon={<ClipboardList className="h-5 w-5" />}
+          />
+          <KpiCard
+            label="Pending Material Acceptance"
+            value={pendingAcceptance}
+            to="/department/issued-items/pending-acceptance"
+            accent="text-amber-700"
+            icon={<PackageCheck className="h-5 w-5" />}
           />
           <KpiCard
             label="Completed"

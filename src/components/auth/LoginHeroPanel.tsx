@@ -17,13 +17,13 @@ export default function LoginHeroPanel() {
         <div className="relative z-10 flex flex-1 flex-col justify-center py-10 lg:py-0 lg:pr-[44%]">
           <div className="relative w-full max-w-[500px]">
             <h1 className="login-hero-brand text-[2.75rem] font-bold tracking-tight sm:text-5xl lg:text-[3.2rem] lg:leading-[1.05]">
-              <span className="bg-gradient-to-r from-[#0284c7] via-[#0ea5e9] to-[#38bdf8] bg-clip-text text-transparent">
+              <span className="bg-gradient-to-r from-[#007FC4] via-[#0098EA] to-[#38bdf8] bg-clip-text text-transparent">
                 {APP_NAME}
               </span>
             </h1>
 
             <div className="login-hero-badge mt-6 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-medium">
-              <Sparkles className="h-3 w-3 text-[#0ea5e9]" />
+              <Sparkles className="h-3 w-3 text-[#0098EA]" />
               AI-Powered Procurement Platform
             </div>
 

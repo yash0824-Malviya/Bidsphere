@@ -5,7 +5,6 @@ import { useTranslation } from "react-i18next";
 import toast from "react-hot-toast";
 import {
   ArrowLeft,
-  ArrowRight,
   Check,
   CheckCircle2,
   Loader2,
@@ -13,7 +12,6 @@ import {
   Pencil,
   Send,
   Trash2,
-  Truck,
   XCircle,
 } from "lucide-react";
 
@@ -39,7 +37,6 @@ import {
   type MaterialRequestWorkflowRecord,
 } from "../../api/materialRequestWorkflow";
 import type { MaterialRequestWorkflowStatus } from "../../types/materialRequestWorkflow";
-import { canCreateRfqFromMaterialRequest } from "../../api/createRFQFromMaterialRequest";
 import { listTimersForReference } from "../../api/sla";
 import { syncMaterialRequestSla } from "../../api/slaIntegration";
 import { isSlaVisibleForRole } from "../../config/slaAccess";
@@ -53,6 +50,7 @@ import {
   Drawing2dCell,
   PartNameCell,
 } from "../../components/warehouse/EngineeringDocCells";
+import MrRfqActionControl from "../../components/material-requests/MrRfqActionControl";
 import { useAuthStore } from "../../store/authStore";
 import {
   canCreateMaterialRequest,
@@ -100,6 +98,14 @@ const MR_BADGE: Record<
     label: "Material Issued",
     cls: "bg-blue-100 text-blue-700",
   },
+  "Pending Department Acceptance": {
+    label: "Waiting for Acceptance",
+    cls: "bg-amber-100 text-amber-800",
+  },
+  "Partially Issued": {
+    label: "Partially Issued",
+    cls: "bg-orange-100 text-orange-800",
+  },
   "Procurement Required": {
     label: "Procurement Required",
     cls: "bg-orange-100 text-orange-700",
@@ -138,8 +144,13 @@ function resolveStageBadge(
   fullyIssued: boolean,
 ): { label: string; cls: string } {
   const fallback = MR_BADGE[effectiveStatus] ?? MR_BADGE.Draft;
+  // Dual-sign acceptance gate — never show Completed while waiting.
+  if (effectiveStatus === "Pending Department Acceptance") {
+    return MR_BADGE["Pending Department Acceptance"];
+  }
   if (!procurementInvolved || !progress) return fallback;
-  if (fullyIssued) return MR_BADGE.Completed;
+  if (fullyIssued && effectiveStatus === "Completed") return MR_BADGE.Completed;
+  if (fullyIssued) return MR_BADGE["Pending Department Acceptance"];
   if (progress.stockEntries.length > 0) return MR_BADGE["Material Issued"];
   if (progress.goodsReceipts.length > 0) return STAGE_BADGE_EXTRA["Goods Received"];
   if (progress.purchaseOrders.length > 0)
@@ -163,9 +174,12 @@ function StageBadge({ label, cls }: { label: string; cls: string }) {
  * hidden entirely; only when Procurement was actually involved do they appear.
  * ────────────────────────────────────────────────────────────────────────── */
 const STOCK_PATH_STEPS = [
-  "Request Submitted",
+  "Material Request Created",
   "Warehouse Review",
   "Material Issued",
+  "Warehouse Signed",
+  "Waiting Department Acceptance",
+  "Department Signed",
   "Completed",
 ];
 
@@ -231,6 +245,7 @@ function resolveTimeline(
         case "RFQ Created":
           return 3;
         case "Material Issued":
+        case "Pending Department Acceptance":
           return 6;
         case "Completed":
           return 7;
@@ -243,7 +258,8 @@ function resolveTimeline(
       if (progress.goodsReceipts.length > 0) index = Math.max(index, 5);
       if (progress.stockEntries.length > 0) index = Math.max(index, 6);
     }
-    if (fullyIssued) index = 7;
+    // Only department acceptance (status Completed) finishes the path.
+    if (fullyIssued && status === "Completed") index = 7;
     return { steps: INDIRECT_PATH_STEPS, currentIndex: index };
   }
 
@@ -264,6 +280,7 @@ function resolveTimeline(
         case "RFQ Created":
           return 3;
         case "Material Issued":
+        case "Pending Department Acceptance":
           return 6;
         case "Completed":
           return 7;
@@ -282,7 +299,7 @@ function resolveTimeline(
       if (progress.goodsReceipts.length > 0) index = Math.max(index, 5);
       if (progress.stockEntries.length > 0) index = Math.max(index, 6);
     }
-    if (fullyIssued) index = 7;
+    if (fullyIssued && status === "Completed") index = 7;
 
     return { steps: PROCUREMENT_PATH_STEPS, currentIndex: index };
   }
@@ -295,9 +312,13 @@ function resolveTimeline(
       case "Stock Available":
         return 1;
       case "Material Issued":
+        // Issued but warehouse signature may still be pending on the receipt.
         return 2;
+      case "Pending Department Acceptance":
+        // Warehouse signed → waiting department (skip "Warehouse Signed" as done).
+        return 4;
       case "Completed":
-        return 3;
+        return 6;
       default:
         return 0;
     }
@@ -763,11 +784,9 @@ export default function MaterialRequestDetailPage() {
   const procurementInvolved = isProcurementInvolved(mr, fulfillment);
   const progress = progressQuery.data ?? null;
 
-  // Auto-complete for display: once every requested unit is issued from stock
-  // (Remaining = 0 and Issued = Requested) the request is effectively Completed,
-  // so the badge and the final workflow step reflect that — not "Material
-  // Issued". Only derived off the stock path; a procurement-pending MR is never
-  // auto-completed.
+  // Fully issued from stock does NOT complete the MR until the department
+  // digitally accepts the Material Issue Receipt. While waiting, keep
+  // Pending Department Acceptance (never jump to Completed).
   const requestedTotal = fulfillment.totals.requested;
   const liveIssuedQty = progress?.issuedQty ?? 0;
   const isFullyIssued =
@@ -775,14 +794,15 @@ export default function MaterialRequestDetailPage() {
     ((fulfillment.totals.remaining === 0 &&
       fulfillment.totals.issued === requestedTotal) ||
       liveIssuedQty >= requestedTotal);
-  const hasStockEntry = (progress?.stockEntries.length ?? 0) > 0;
-  const effectiveStatus: MaterialRequestWorkflowStatus =
-    isFullyIssued &&
-    (workflowStatus === "Material Issued" ||
-      workflowStatus === "Completed" ||
-      hasStockEntry)
+  const awaitingAcceptance =
+    workflowStatus === "Pending Department Acceptance";
+  const effectiveStatus: MaterialRequestWorkflowStatus = awaitingAcceptance
+    ? "Pending Department Acceptance"
+    : workflowStatus === "Completed"
       ? "Completed"
-      : workflowStatus;
+      : isFullyIssued && workflowStatus === "Material Issued"
+        ? "Pending Department Acceptance"
+        : workflowStatus;
 
   // Badge that reflects the true live stage (PO / GRN / Issue), not the stalled
   // stored status.
@@ -849,8 +869,7 @@ export default function MaterialRequestDetailPage() {
     effectiveStatus === "Material Issued" &&
     isSubmitted &&
     (canReviewMaterialRequest(role) || isOwner);
-  const canRfq =
-    mr && canCreateRfqFromMR(role) && canCreateRfqFromMaterialRequest(mr);
+  const allowCreateRfq = Boolean(mr && canCreateRfqFromMR(role));
   // Edit is available on a Draft to the roles that can author MRs (Department
   // User, Admin).
   // Edit/Delete only while the ERP document is still an unsubmitted draft.
@@ -973,24 +992,11 @@ export default function MaterialRequestDetailPage() {
                 Mark as Completed
               </button>
             ) : null}
-            {canRfq ? (
-              <Link
-                to={`/sourcing/rfq/new?mr=${encodeURIComponent(mr.name)}`}
-                className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white no-underline"
-              >
-                <Truck className="h-4 w-4" />
-                Create RFQ from MR
-              </Link>
-            ) : null}
-            {mr.custom_linked_rfq ? (
-              <Link
-                to={`/sourcing/rfq/${encodeURIComponent(mr.custom_linked_rfq)}`}
-                className="inline-flex items-center gap-1 text-sm font-semibold text-primary-600 no-underline"
-              >
-                View RFQ {mr.custom_linked_rfq}{" "}
-                <ArrowRight className="h-4 w-4" />
-              </Link>
-            ) : null}
+            <MrRfqActionControl
+              mr={mr}
+              allowCreate={allowCreateRfq}
+              createLabel="Create RFQ from MR"
+            />
           </div>
         }
       />
@@ -1014,7 +1020,7 @@ export default function MaterialRequestDetailPage() {
         status={effectiveStatus}
         procurementInvolved={procurementInvolved}
         progress={progress}
-        fullyIssued={isFullyIssued}
+        fullyIssued={isFullyIssued && !awaitingAcceptance && workflowStatus === "Completed"}
         isIndirect={procurementType === "Indirect"}
       />
 
@@ -1269,7 +1275,7 @@ export default function MaterialRequestDetailPage() {
                         {line.required_qty}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums">
-                        {line.available_qty}
+                        {Math.max(0, Number(line.available_qty) || 0)}
                       </td>
                       <td className="px-3 py-2">
                         <span

@@ -37,6 +37,8 @@ import { deriveRfqProcurementWorkflow } from "../../api/rfqProcurementWorkflow";
 import { invalidateApprovalWorkflow } from "../../api/approvalWorkflow";
 import POStatusTimeline from "../../components/p2p/POStatusTimeline";
 import { Skeleton } from "../../components/Skeleton";
+import { canManagePurchaseOrders } from "../../config/roles";
+import { useAuthStore } from "../../store/authStore";
 import { buildProcurementWorkflowSteps } from "../../utils/procurementStatusWorkflow";
 import { formatCurrency, formatDate } from "../../utils/format";
 import type {
@@ -60,6 +62,7 @@ export default function RFQtoPOConversionPage() {
   const { rfqId } = useParams<{ rfqId: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const role = useAuthStore((s) => s.user?.role);
   const decodedId = rfqId ? decodeURIComponent(rfqId) : "";
 
   /* ── Data fetching ── */
@@ -120,8 +123,11 @@ export default function RFQtoPOConversionPage() {
     poExists: !!linkedPO,
     poName: linkedPO?.name ?? null,
   });
-  const approved = procurementWorkflow.canCreatePO || procurementWorkflow.purchaseOrderStatus === "Created";
-  const canCreatePO = procurementWorkflow.canCreatePO;
+  const approved =
+    procurementWorkflow.canCreatePO ||
+    procurementWorkflow.purchaseOrderStatus === "Created";
+  const canCreatePO =
+    procurementWorkflow.canCreatePO && canManagePurchaseOrders(role);
 
   /* ── Adapter fields used by the audit / status UI below ── */
   const legalStatusLabel = legalDoc?.review_status ?? "Pending";

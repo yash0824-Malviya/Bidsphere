@@ -10,7 +10,10 @@ import {
 import { isMfaRequired, logMfaEnvDiagnostics } from "../config/mfaConfig";
 
 declare const __DEMO_MFA_ENABLED__: boolean;
-import { resolveRoleFromUser } from "../config/roles";
+import {
+  displayNameForAuthenticatedUser,
+  resolveRoleFromUser,
+} from "../config/roles";
 import {
   AUTH_STORAGE_KEY,
   MFA_PENDING_KEY,
@@ -361,12 +364,23 @@ export const useAuthStore = create<AuthState>()(
 
           if (result === "valid") {
             authLog("redirect decision", "valid-session → dashboard");
+            // Re-resolve on restore so a persisted Manager role cannot stick
+            // to procurement.team@ after the Team mapping was added.
+            const role = resolveRoleFromUser({
+              name: user.name,
+              email: user.email,
+            });
+            const full_name = displayNameForAuthenticatedUser({
+              ...user,
+              role,
+            });
             set({
               isAuthenticated: true,
               sessionProof: rememberMe ? proof : null,
               user: {
                 ...user,
-                role: user.role ?? resolveRoleFromUser(user),
+                role,
+                full_name,
               },
             });
             return;

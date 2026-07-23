@@ -388,7 +388,7 @@ function currentActor(): { name: string; role: VoucherActorRole } {
   const user = useAuthStore.getState().user;
   const role = user?.role;
   const actorRole: VoucherActorRole =
-    role === "procurement"
+    role === "procurement" || role === "procurement_team"
       ? "procurement"
       : role === "admin"
         ? "admin"

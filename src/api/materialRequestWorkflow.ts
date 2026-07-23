@@ -29,6 +29,13 @@ import {
   type MaterialRequestPayload,
 } from "./purchasing";
 import { lookupDefaultWarehouse } from "./sourcing";
+import { overlayMrStatusFromReceipts } from "./mrPendingAcceptanceOverlay";
+import { parseForwardedItemsJsonFromRemarks } from "../utils/warehouseIssueFulfillmentSync";
+import {
+  applyCostCentersToStockEntryDoc,
+  fetchMrItemCostCenters,
+} from "./stockEntryCostCenter";
+import { assertMaterialRequestIsWarehouseCompany } from "./warehouseCompany";
 import type { MaterialRequest, MaterialRequestItem } from "../types/erpnext";
 import {
   ADMIN_REVIEW_STATUSES,
@@ -48,6 +55,11 @@ import {
   type MaterialRequestWorkflowStatus,
 } from "../types/materialRequestWorkflow";
 import { nowERPDateTime, toERPDateTime, todayERPNextDate } from "../utils/erpDate";
+import {
+  nonNegativeQty,
+  resolveInventoryStockStatus,
+} from "../utils/inventoryStock";
+import { getAvailableQty, getItemStockAcrossWarehouses } from "./warehouseInventoryService";
 import { sanitizeFrappeError } from "../utils/friendlyError";
 
 const MR_DOCTYPE = "Material Request";
@@ -59,6 +71,7 @@ export const MR_WORKFLOW_STATUSES: MaterialRequestWorkflowStatus[] = [
   "Under Warehouse Review",
   "Stock Available",
   "Material Issued",
+  "Pending Department Acceptance",
   "Procurement Required",
   "Forwarded to Procurement",
   "RFQ Created",
@@ -79,6 +92,7 @@ export const WAREHOUSE_DASHBOARD_STATUSES: MaterialRequestWorkflowStatus[] = [
   "Under Warehouse Review",
   "Stock Available",
   "Material Issued",
+  "Pending Department Acceptance",
   "Procurement Required",
 ];
 
@@ -525,7 +539,16 @@ function matchesWorkflowStatusFilter(
 export function getMaterialRequestWorkflowStatus(
   doc: MaterialRequestWorkflowRecord,
 ): MaterialRequestWorkflowStatus {
-  return workflowStatus(doc);
+  const base = workflowStatus(doc);
+  // ERP stores "Material Issued" (or still "Forwarded to Procurement") while
+  // Warehouse↔Department acceptance is open — restore UI status from MIR tags
+  // on remarks + local receipts.
+  const overlaid = overlayMrStatusFromReceipts(
+    doc.name,
+    base,
+    doc.custom_warehouse_remarks ?? doc.remarks,
+  );
+  return (overlaid || base) as MaterialRequestWorkflowStatus;
 }
 
 /**
@@ -1271,23 +1294,15 @@ export async function updateMaterialRequestWorkflowStatus(
   return fetchMaterialRequestWorkflow(name);
 }
 
+/**
+ * Available qty for an item in one warehouse.
+ * Delegates to shared warehouseInventoryService (ERPNext Bin).
+ */
 export async function getBinQuantity(
   itemCode: string,
   warehouse: string,
 ): Promise<number> {
-  const rows = await apiGet<Array<{ actual_qty?: number }>>(
-    buildResourceUrl("Bin"),
-    buildListConfig({
-      fields: ["actual_qty"],
-      filters: [
-        ["item_code", "=", itemCode],
-        ["warehouse", "=", warehouse],
-      ],
-      limit_page_length: 1,
-    }),
-  );
-  const qty = rows?.[0]?.actual_qty;
-  return typeof qty === "number" && Number.isFinite(qty) ? qty : 0;
+  return getAvailableQty(itemCode, warehouse);
 }
 
 export type ItemStockStatusLabel = "In Stock" | "Low Stock" | "Out of Stock";
@@ -1297,25 +1312,11 @@ export async function getItemStockSummary(itemCode: string): Promise<{
   current_stock: number;
   available_qty: number;
 }> {
-  const rows = await apiGet<
-    Array<{ actual_qty?: number; reserved_qty?: number }>
-  >(
-    buildResourceUrl("Bin"),
-    buildListConfig({
-      fields: ["actual_qty", "reserved_qty"],
-      filters: [["item_code", "=", itemCode]],
-      limit_page_length: 500,
-    }),
-  );
-  let current_stock = 0;
-  let available_qty = 0;
-  for (const row of rows ?? []) {
-    const actual = Number(row.actual_qty) || 0;
-    const reserved = Number(row.reserved_qty) || 0;
-    current_stock += actual;
-    available_qty += Math.max(0, actual - reserved);
-  }
-  return { current_stock, available_qty };
+  const across = await getItemStockAcrossWarehouses(itemCode);
+  return {
+    current_stock: across.total_actual,
+    available_qty: across.total_available,
+  };
 }
 
 /** @deprecated Use getItemStockSummary */
@@ -1329,9 +1330,16 @@ export async function getItemTotalAvailableStock(
 export function resolveStockStatusLabel(
   availableQty: number,
   requestedQty?: number,
+  reorderLevel?: number,
 ): ItemStockStatusLabel {
-  if (availableQty <= 0) return "Out of Stock";
-  if (requestedQty != null && requestedQty > 0 && availableQty < requestedQty) {
+  const available = nonNegativeQty(availableQty);
+  // Inventory-style status when a reorder level is provided.
+  if (reorderLevel != null && reorderLevel > 0) {
+    return resolveInventoryStockStatus(available, reorderLevel);
+  }
+  if (available <= 0) return "Out of Stock";
+  // MR context: partial cover of requested qty is shown as Low Stock.
+  if (requestedQty != null && requestedQty > 0 && available < requestedQty) {
     return "Low Stock";
   }
   return "In Stock";
@@ -1341,19 +1349,44 @@ export async function checkMaterialRequestStock(
   name: string,
 ): Promise<MaterialRequestStockCheck> {
   const mr = await fetchMaterialRequestWorkflow(name);
-  const company = mr.company || COMPANY;
+  // Warehouse module: Netlink only (never Company Bidsphere warehouses).
+  const company = COMPANY;
+  if ((mr.company || "").trim() && (mr.company || "").trim() !== COMPANY) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[WarehouseInventory] MR company differs from Warehouse module company — using Netlink for stock",
+      { mr: name, mrCompany: mr.company, warehouseCompany: COMPANY },
+    );
+  }
   const defaultWarehouse = await lookupDefaultWarehouse(company);
   const lines: MaterialRequestStockLine[] = [];
 
   for (const row of mr.items ?? []) {
-    const warehouse = row.warehouse || defaultWarehouse;
     const required = Number(row.qty) || 0;
-    const available = warehouse
-      ? await getBinQuantity(row.item_code, warehouse)
-      : 0;
+    const across = await getItemStockAcrossWarehouses(row.item_code, {
+      company,
+      forIssue: true,
+    });
+    const available = across.total_available;
+    const bestWh =
+      across.by_warehouse.sort((a, b) => b.available_qty - a.available_qty)[0]
+        ?.warehouse ||
+      row.warehouse ||
+      defaultWarehouse ||
+      "—";
+    // eslint-disable-next-line no-console
+    console.log("[WarehouseInventory] checkMaterialRequestStock line", {
+      mr: name,
+      company,
+      item_code: row.item_code,
+      required,
+      available,
+      warehouse: bestWh,
+      by_warehouse: across.by_warehouse.slice(0, 5),
+    });
     lines.push({
       item_code: row.item_code,
-      warehouse: warehouse || "—",
+      warehouse: bestWh,
       required_qty: required,
       available_qty: available,
       sufficient: available >= required,
@@ -1384,6 +1417,74 @@ async function extractMappedDoc(
   return obj;
 }
 
+const MAKE_STOCK_ENTRY_METHOD =
+  "/api/method/erpnext.stock.doctype.material_request.material_request.make_stock_entry";
+
+/**
+ * Call ERPNext `make_stock_entry(source_name, …)`.
+ * Must pass `source_name` (Material Request name) — not `material_request_id`.
+ */
+export async function makeStockEntryDraftFromMaterialRequest(
+  sourceName: string,
+  context?: {
+    company?: string;
+    warehouse?: string;
+    receiver?: string;
+    items?: Array<{
+      item_code?: string;
+      issue_qty?: number;
+      qty?: number;
+    }>;
+  },
+): Promise<Record<string, unknown> & { doctype?: string; items?: Array<Record<string, unknown>> }> {
+  const source_name = String(sourceName || "").trim();
+  if (!source_name) {
+    throw new Error(
+      "Material Request reference is missing. Stock Entry cannot be created.",
+    );
+  }
+
+  // eslint-disable-next-line no-console
+  console.log("[make_stock_entry] request", {
+    material_request: source_name,
+    source_name,
+    company: context?.company || "",
+    warehouse: context?.warehouse || "",
+    receiver: context?.receiver || "",
+    items: (context?.items || []).map((i) => ({
+      item_code: i.item_code,
+      issue_qty: i.issue_qty ?? i.qty,
+    })),
+  });
+
+  try {
+    const mapped = await apiPost<unknown>(MAKE_STOCK_ENTRY_METHOD, {
+      source_name,
+    });
+    const draft = (await extractMappedDoc(mapped)) as Record<string, unknown> & {
+      doctype?: string;
+      name?: string;
+      items?: Array<Record<string, unknown>>;
+    };
+    draft.doctype = "Stock Entry";
+    // eslint-disable-next-line no-console
+    console.log("[make_stock_entry] response", {
+      material_request: source_name,
+      stock_entry_draft: draft.name || "(new)",
+      item_count: Array.isArray(draft.items) ? draft.items.length : 0,
+    });
+    return draft;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[make_stock_entry] ERPNext Error", {
+      material_request: source_name,
+      source_name,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}
+
 /**
  * Issue material via ERPNext standard Stock Entry (Material Issue).
  * Requires submitted MR and sufficient bin quantities.
@@ -1397,15 +1498,15 @@ export async function issueMaterialRequest(
     throw new Error("Insufficient stock. Forward this request to Procurement.");
   }
 
-  const mapped = await apiPost<unknown>(
-    "/api/method/erpnext.stock.doctype.material_request.material_request.make_stock_entry",
-    { material_request_id: name },
-  );
-  const draft = (await extractMappedDoc(mapped)) as Record<string, unknown> & {
+  const draft = (await makeStockEntryDraftFromMaterialRequest(name, {
+    items: stockCheck.lines.map((l) => ({
+      item_code: l.item_code,
+      issue_qty: l.available_qty,
+    })),
+  })) as Record<string, unknown> & {
     doctype?: string;
     items?: Array<Record<string, unknown>>;
   };
-  draft.doctype = "Stock Entry";
 
   // For partial issues, filter/adjust the items table in the draft stock entry
   if (options?.partial && draft && Array.isArray(draft.items)) {
@@ -1429,6 +1530,31 @@ export async function issueMaterialRequest(
     draft.items = adjustedItems;
   }
 
+  // Remap Cost Center to Material Request company (reject Main - B / Bidsphere).
+  const mrCostCenters = await fetchMrItemCostCenters(name);
+  const seCompany = assertMaterialRequestIsWarehouseCompany(
+    String(
+      (draft as { company?: string }).company ||
+        (await fetchMaterialRequestWorkflow(name).catch(() => null))?.company ||
+        COMPANY,
+    ),
+  );
+  (draft as { company?: string }).company = seCompany;
+  const costCenter = await applyCostCentersToStockEntryDoc(draft, {
+    mrItemCostCenters: mrCostCenters,
+  });
+  // eslint-disable-next-line no-console
+  console.log("[issueMaterialRequest] before Stock Entry save", {
+    company: seCompany,
+    costCenter,
+    warehouse:
+      String(
+        (draft as { from_warehouse?: string }).from_warehouse ||
+          draft.items?.[0]?.s_warehouse ||
+          "",
+      ) || null,
+  });
+
   const saved = await apiPost<{ name?: string } & Record<string, unknown>>(
     "/api/method/frappe.client.save",
     { doc: draft },
@@ -1444,11 +1570,65 @@ export async function issueMaterialRequest(
 
   const mr = await updateMaterialRequestWorkflowStatus(
     name,
-    "Material Issued",
+    "Pending Department Acceptance",
     {
       custom_warehouse_remarks: options?.warehouse_remarks,
     },
   );
+
+  // Department Issue Receipts hydrate from Material Issue Receipt + MIR sidecar.
+  try {
+    const { createMaterialIssueReceipt } = await import(
+      "./materialIssueReceipt"
+    );
+    const lines = Array.isArray(saved.items)
+      ? (saved.items as Array<Record<string, unknown>>)
+          .map((item) => {
+            const issued = Math.max(0, Number(item.qty) || 0);
+            if (issued <= 0 || !item.item_code) return null;
+            return {
+              item_code: String(item.item_code),
+              item_name: String(item.item_name || item.item_code),
+              uom: String(item.uom || "Nos"),
+              required_qty: issued,
+              issued_qty: issued,
+            };
+          })
+          .filter((l): l is NonNullable<typeof l> => Boolean(l))
+      : [];
+    if (lines.length > 0) {
+      const firstLine = Array.isArray(saved.items)
+        ? (saved.items as Array<Record<string, unknown>>)[0]
+        : undefined;
+      const warehouse = String(
+        (saved as { from_warehouse?: string }).from_warehouse ||
+          firstLine?.s_warehouse ||
+          "",
+      );
+      await createMaterialIssueReceipt({
+        stock_entry: stockEntryName,
+        mr_name: name,
+        department:
+          mr.custom_department ||
+          (mr as { department?: string }).department ||
+          "General",
+        warehouse,
+        issued_by: String((saved as { owner?: string }).owner || "Warehouse"),
+        receiver: "Department User",
+        issue_type: options?.partial ? "Partial Issue" : "Full Issue",
+        lines,
+      });
+    }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[issueMaterialRequest] Department receipt sync failed:",
+      err,
+    );
+    throw err instanceof Error
+      ? err
+      : new Error("Material issued but Department Issue Receipt was not created.");
+  }
 
   return { stock_entry: stockEntryName, mr };
 }
@@ -1919,12 +2099,14 @@ export async function forwardMaterialRequestToProcurement(
     options?.forwardedBy?.trim() || current.owner || "Warehouse";
   const forwardedOn = nowERPDateTime();
 
-   
-  console.log("[Warehouse] Forwarded MR:", {
+  // eslint-disable-next-line no-console
+  console.log("[Process Selected] Forward to Procurement request", {
     mr: name,
     forwardedBy,
     forwardedOn,
     warehouseRemarks,
+    skipStockCheck: Boolean(options?.skipStockCheck),
+    currentStatus,
   });
 
   // Embed a machine-readable forward audit tag so who/when survives even when
@@ -1951,8 +2133,8 @@ export async function forwardMaterialRequestToProcurement(
     { custom_warehouse_remarks: remarksBlock || undefined },
   );
 
-   
-  console.log("[Warehouse] Status saved:", {
+  // eslint-disable-next-line no-console
+  console.log("[Process Selected] Forward to Procurement response", {
     mr: name,
     storedStatus: saved[MR_WORKFLOW_FIELD] ?? null,
     resolvedStatus: getMaterialRequestWorkflowStatus(saved),
@@ -2130,8 +2312,8 @@ export function buildWarehouseDecisions(
 ): WarehouseItemDecision[] {
   return stockCheck.lines.map((line) => {
     const meta = mrItems.find((i) => i.item_code === line.item_code);
-    const requested_qty = line.required_qty;
-    const available_qty = line.available_qty;
+    const requested_qty = nonNegativeQty(line.required_qty);
+    const available_qty = nonNegativeQty(line.available_qty);
     const issue_qty = Math.min(available_qty, requested_qty);
     const forward_qty = Math.max(0, requested_qty - available_qty);
     const shortage_qty = Math.max(0, requested_qty - available_qty);
@@ -2195,19 +2377,16 @@ export async function processWarehouseDecisions(
 
   // Case 2: Partial stock (some items have stock, some don't)
   if (hasAnyStock && hasAnyShortage) {
-    const mapped = await apiPost<unknown>(
-      "/api/method/erpnext.stock.doctype.material_request.material_request.make_stock_entry",
-      { material_request_id: mrName },
-    );
-    const draft = (await extractMappedDoc(mapped)) as Record<
-      string,
-      unknown
-    > & {
+    const draft = (await makeStockEntryDraftFromMaterialRequest(mrName, {
+      items: decisions.map((d) => ({
+        item_code: d.item_code,
+        issue_qty: d.issue_qty,
+      })),
+    })) as Record<string, unknown> & {
       doctype?: string;
       name?: string;
       items?: Array<Record<string, unknown>>;
     };
-    draft.doctype = "Stock Entry";
 
     if (Array.isArray(draft.items)) {
       draft.items = draft.items
@@ -2222,6 +2401,26 @@ export async function processWarehouseDecisions(
         })
         .filter((item): item is Record<string, unknown> => item !== null);
     }
+
+    const mrCostCenters = await fetchMrItemCostCenters(mrName);
+    const seCompany = assertMaterialRequestIsWarehouseCompany(
+      String(mr.company || COMPANY),
+    );
+    (draft as { company?: string }).company = seCompany;
+    const costCenter = await applyCostCentersToStockEntryDoc(draft, {
+      mrItemCostCenters: mrCostCenters,
+    });
+    // eslint-disable-next-line no-console
+    console.log("[processWarehouseDecisions] before Stock Entry save", {
+      company: seCompany,
+      costCenter,
+      warehouse:
+        String(
+          (draft as { from_warehouse?: string }).from_warehouse ||
+            draft.items?.[0]?.s_warehouse ||
+            "",
+        ) || null,
+    });
 
     const saved = await apiPost<{ name?: string } & Record<string, unknown>>(
       "/api/method/frappe.client.save",
@@ -2310,13 +2509,7 @@ export function parseForwardedItemsFromMr(
 ): WarehouseItemDecision[] {
   // Look for [BidSphere:ForwardedItems:...] in custom_warehouse_remarks or remarks
   const raw = mr.custom_warehouse_remarks ?? mr.remarks ?? "";
-  const match = raw.match(/\[BidSphere:ForwardedItems:(\[.*?\])\]/s);
-  if (!match) return [];
-  try {
-    return JSON.parse(match[1]) as WarehouseItemDecision[];
-  } catch {
-    return [];
-  }
+  return parseForwardedItemsJsonFromRemarks(raw) as WarehouseItemDecision[];
 }
 
 /**
@@ -2381,13 +2574,16 @@ function isProcurementQueueEligible(
   doc: MaterialRequestWorkflowRecord,
 ): boolean {
   if ((doc.docstatus ?? 0) === 2) return false;
-  if (linkedRfqFromDoc(doc)) return false;
 
   const raw = String(doc[MR_WORKFLOW_FIELD] ?? "").trim();
   const status = getMaterialRequestWorkflowStatus(doc);
 
   // Explicit forward only — written by Confirm & Process / forward API.
-  if (status === "Forwarded to Procurement") return true;
+  // "RFQ Created" stays eligible when the linked RFQ was Cancelled/Rejected
+  // (active-RFQ gate is applied separately in fetchProcurementQueue).
+  if (status === "Forwarded to Procurement" || status === "RFQ Created") {
+    return true;
+  }
   if (
     raw === "Procurement Review" ||
     raw === "Procurement Pending" ||
@@ -2400,7 +2596,6 @@ function isProcurementQueueEligible(
   if (
     Number(doc.custom_forwarded_to_procurement) === 1 &&
     status !== "Procurement Required" &&
-    status !== "RFQ Created" &&
     status !== "Completed" &&
     status !== "Cancelled"
   ) {
@@ -2492,11 +2687,14 @@ export async function fetchProcurementQueue(opts?: {
     return isProcurementQueueEligible(doc) || status === "RFQ Created";
   });
 
-  // Active queue candidates: no field-level RFQ link yet (may still have RFQ
-  // Items — resolved after hydrate via batch RFQ Item lookup).
-  const activeEligible = forwardedDocs.filter(
-    (d) => !linkedRfqFromDoc(d) && getMaterialRequestWorkflowStatus(d) !== "RFQ Created",
-  );
+  // Candidates: forwarded MRs including ones with a field RFQ link / "RFQ Created".
+  // Active vs Cancelled RFQ is resolved after hydrate via batch lookup.
+  const activeEligible = forwardedDocs.filter((d) => {
+    const status = getMaterialRequestWorkflowStatus(d);
+    if (status === "Procurement Required") return false;
+    if (status === "Completed" || status === "Cancelled") return false;
+    return true;
+  });
 
   console.log("Applied Filters", appliedFilters);
   console.log("Returned Records", activeEligible.length);
@@ -2538,25 +2736,35 @@ export async function fetchProcurementQueue(opts?: {
     ...remainder,
   ];
 
-  // Discover RFQs created without custom_linked_rfq (partial mark / legacy).
-  const rfqByMr = await batchFindRfqNamesForMaterialRequests(
+  // Discover *active* RFQs only (Cancelled / Rejected do not remove MR from queue).
+  const { batchFindActiveRfqNamesForMaterialRequests } = await import(
+    "./mrRfqAction"
+  );
+  const fieldLinks = new Map<string, string>();
+  for (const d of detailedDocs) {
+    const link = linkedRfqFromDoc(d);
+    if (link) fieldLinks.set(d.name, link);
+  }
+  const activeRfqByMr = await batchFindActiveRfqNamesForMaterialRequests(
     detailedDocs.map((d) => d.name),
+    fieldLinks,
   );
 
   const rejected: Array<{ name: string; reason: string }> = [];
   const queue = detailedDocs.filter((mr) => {
-    const linked =
-      linkedRfqFromDoc(mr) || rfqByMr.get(mr.name) || undefined;
-    if (linked) {
+    const activeRfq = activeRfqByMr.get(mr.name);
+    if (activeRfq) {
       // Stamp for UI ActionCell / canCreate guards without a second round-trip.
-      if (!mr.custom_linked_rfq) {
-        mr.custom_linked_rfq = linked;
-      }
+      mr.custom_linked_rfq = activeRfq;
       rejected.push({
         name: mr.name,
-        reason: `rfq_exists=${linked}`,
+        reason: `rfq_exists=${activeRfq}`,
       });
       return false;
+    }
+    // Stale link / remarks pointing at a Cancelled RFQ must not hide Create.
+    if (!activeRfqByMr.has(mr.name) && linkedRfqFromDoc(mr)) {
+      mr.custom_linked_rfq = "";
     }
     if (!isProcurementQueueEligible(mr)) {
       rejected.push({
@@ -2600,10 +2808,8 @@ export async function fetchProcurementQueue(opts?: {
 /* ─── Procurement → Ready to Issue reconciliation ────────────────────────── */
 
 /**
- * Sum live on-hand stock (`Bin.actual_qty`) per item across the company's
- * warehouses in a single batched query. Cross-company bins are excluded so a
- * receipt into another company never counts. Never throws — an empty map means
- * "no stock found" so reconciliation simply won't advance any MR.
+ * Sum live on-hand stock per item via shared warehouseInventoryService
+ * (ERPNext Bin). Never throws — an empty map means "no stock found".
  */
 async function fetchCompanyStockByItem(
   itemCodes: string[],
@@ -2612,58 +2818,20 @@ async function fetchCompanyStockByItem(
   const codes = [...new Set(itemCodes.filter(Boolean))];
   if (codes.length === 0) return stock;
 
-  let warehouseNames: string[] = [];
   try {
-    const list = await apiGet<Array<{ name?: string }>>(
-      buildResourceUrl("Warehouse"),
-      withSilent(
-        buildListConfig({
-          fields: ["name"],
-          filters: [
-            ["company", "=", COMPANY],
-            ["is_group", "=", 0],
-            ["disabled", "=", 0],
-          ],
-          limit_page_length: 500,
-        }),
-      ),
-    );
-    warehouseNames = (list ?? [])
-      .map((w) => w.name)
-      .filter((n): n is string => Boolean(n));
-  } catch {
-    // Fall through with no warehouse filter — better to over-count than to
-    // wrongly leave an MR stuck in Procurement Required.
-  }
-
-  const filters: Filter[] = [["item_code", "in", codes]];
-  if (warehouseNames.length > 0) filters.push(["warehouse", "in", warehouseNames]);
-
-  let bins: Array<{ item_code?: string; actual_qty?: number }>;
-  try {
-    bins = await apiGet<Array<{ item_code?: string; actual_qty?: number }>>(
-      buildResourceUrl("Bin"),
-      withSilent(
-        buildListConfig({
-          fields: ["item_code", "actual_qty"],
-          filters,
-          limit_page_length: 2000,
-        }),
-      ),
+    await Promise.all(
+      codes.map(async (code) => {
+        const across = await getItemStockAcrossWarehouses(code, {
+          company: COMPANY,
+          forIssue: true,
+        });
+        stock.set(code, across.total_available);
+      }),
     );
   } catch (err) {
     if (import.meta.env.DEV) {
-      console.warn("[MR reconcile] Bin stock fetch failed:", err);
+      console.warn("[MR reconcile] shared inventory fetch failed:", err);
     }
-    return stock;
-  }
-
-  for (const bin of bins ?? []) {
-    if (!bin.item_code) continue;
-    stock.set(
-      bin.item_code,
-      (stock.get(bin.item_code) ?? 0) + (Number(bin.actual_qty) || 0),
-    );
   }
   return stock;
 }

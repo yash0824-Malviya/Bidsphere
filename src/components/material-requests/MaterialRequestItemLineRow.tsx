@@ -137,7 +137,9 @@ function StockStatusBadge({ status }: { status: ItemStockStatusLabel | "-" }) {
 }
 
 function formatQty(value: number): string {
-  return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  return Math.max(0, Number(value) || 0).toLocaleString(undefined, {
+    maximumFractionDigits: 2,
+  });
 }
 
 export default function MaterialRequestItemLineRow({

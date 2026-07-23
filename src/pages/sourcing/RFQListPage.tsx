@@ -1,7 +1,18 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Calendar, FileSearch, Plus, RotateCcw, X } from "lucide-react";
+import {
+  Calendar,
+  Copy,
+  ExternalLink,
+  Eye,
+  FileSearch,
+  MoreHorizontal,
+  Plus,
+  RotateCcw,
+  X,
+} from "lucide-react";
+import toast from "react-hot-toast";
 
 import { getRFQNamesWithPO } from "../../api/purchasing";
 import {
@@ -14,8 +25,10 @@ import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
 import PaginationBar from "../../components/PaginationBar";
 import { TableSkeleton } from "../../components/Skeleton";
-import StatusBadge from "../../components/StatusBadge";
 import ExportButton from "../../components/export/ExportButton";
+import RfqListStatusBadge, {
+  resolveRfqEnterpriseListStatus,
+} from "../../components/sourcing/RfqListStatusBadge";
 import { ownerTitleFromEmail } from "../../config/roles";
 import {
   FilterBar,
@@ -46,7 +59,8 @@ import {
 
 interface RFQRow extends RFQListRow {
   quote_count: number;
-  /** UI status — "Completed" when a linked PO exists. */
+  has_po: boolean;
+  /** UI status label for badges / export. */
   display_status: string;
 }
 
@@ -143,20 +157,43 @@ export default function RFQListPage() {
     const poSet = linkedPOsQuery.data;
     return (rfqsQuery.data?.data ?? []).map<RFQRow>((rfq) => {
       const quote_count = quoteCounts?.get(rfq.name) ?? 0;
-      const hasPO = poSet?.has(rfq.name) ?? false;
-      const erpStatus = rfq.status ?? "Draft";
-      const display_status = hasPO
-        ? "Completed"
-        : erpStatus === "Ordered" || erpStatus === "Closed"
-          ? "Completed"
-          : erpStatus;
+      const has_po = poSet?.has(rfq.name) ?? false;
+      const display_status = resolveRfqEnterpriseListStatus({
+        erpStatus: rfq.status,
+        quoteCount: quote_count,
+        hasPO: has_po,
+      });
       return {
         ...rfq,
         quote_count,
+        has_po,
         display_status,
       };
     });
   }, [rfqsQuery.data, quotesQuery.data, linkedPOsQuery.data]);
+
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [actionMenu, setActionMenu] = useState<string | null>(null);
+  const actionMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setSelected(new Set());
+    setActionMenu(null);
+  }, [filterKey, page, pageSize]);
+
+  useEffect(() => {
+    if (!actionMenu) return;
+    const onDoc = (e: MouseEvent) => {
+      if (
+        actionMenuRef.current &&
+        !actionMenuRef.current.contains(e.target as Node)
+      ) {
+        setActionMenu(null);
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [actionMenu]);
 
   const sortedRows = useMemo(() => {
     const normalized = sortNewestFirst(rows, {
@@ -165,6 +202,39 @@ export default function RFQListPage() {
     });
     return sortRows(normalized, sort, RFQ_COMPARATORS);
   }, [rows, sort]);
+
+  const pageNames = useMemo(
+    () => sortedRows.map((r) => r.name),
+    [sortedRows],
+  );
+
+  const allPageSelected =
+    pageNames.length > 0 && pageNames.every((n) => selected.has(n));
+  const somePageSelected =
+    pageNames.some((n) => selected.has(n)) && !allPageSelected;
+
+  const toggleSelectAll = useCallback(() => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (pageNames.every((n) => next.has(n))) {
+        for (const n of pageNames) next.delete(n);
+      } else {
+        for (const n of pageNames) next.add(n);
+      }
+      return next;
+    });
+  }, [pageNames]);
+
+  const toggleSelectOne = useCallback((name: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }, []);
+
+  const serialBase = (Math.max(1, page) - 1) * pageSize;
 
   const ownerOptions = useMemo(() => {
     const set = new Set<string>();
@@ -357,7 +427,7 @@ export default function RFQListPage() {
       {(chips.length > 0 || preset === "open") && (
         <div className="mb-3 flex flex-wrap items-center gap-2">
           {preset === "open" && !filtersState.status && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-800 ring-1 ring-inset ring-sky-100">
+            <span className="inline-flex items-center gap-1 rounded-full bg-primary-50 px-2.5 py-1 text-xs font-medium text-primary-800 ring-1 ring-inset ring-primary-100">
               Preset: Open RFQs
             </span>
           )}
@@ -409,7 +479,7 @@ export default function RFQListPage() {
             onRetry={() => rfqsQuery.refetch()}
           />
         ) : rfqsQuery.isLoading ? (
-          <TableSkeleton rows={6} columns={5} />
+          <TableSkeleton rows={8} columns={8} />
         ) : sortedRows.length === 0 ? (
           <EmptyState
             icon={FileSearch}
@@ -435,137 +505,256 @@ export default function RFQListPage() {
           />
         ) : (
           <>
-            <div className="data-card-list">
-              {sortedRows.map((rfq) => (
-                <div
-                  key={rfq.name}
-                  role="button"
-                  tabIndex={0}
-                  className="data-card-row"
-                  onClick={() =>
-                    navigate(`/sourcing/rfq/${encodeURIComponent(rfq.name)}`)
-                  }
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      navigate(
-                        `/sourcing/rfq/${encodeURIComponent(rfq.name)}`,
-                      );
-                    }
-                  }}
-                >
-                  <div className="data-card-field">
-                    <span className="data-card-label">RFQ Number</span>
-                    <span className="data-card-value">{rfq.name}</span>
+            {/* Mobile cards */}
+            <div className="space-y-2 md:hidden">
+              {sortedRows.map((rfq, idx) => {
+                const isSelected = selected.has(rfq.name);
+                return (
+                  <div
+                    key={rfq.name}
+                    className={`rounded-lg border px-3 py-3 ${
+                      isSelected
+                        ? "border-l-4 border-l-[#2563EB] border-y-[#E2E8F0] border-r-[#E2E8F0] bg-blue-50/70"
+                        : "border-[#E2E8F0] bg-white"
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelectOne(rfq.name)}
+                        className="mt-1 h-4 w-4 rounded border-neutral-300 text-[#2563EB] focus:ring-[#2563EB]"
+                        aria-label={`Select ${rfq.name}`}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[12px] tabular-nums text-neutral-400">
+                            #{serialBase + idx + 1}
+                          </span>
+                          <Link
+                            to={`/sourcing/rfq/${encodeURIComponent(rfq.name)}`}
+                            className="font-mono text-[14px] font-medium text-[#2563EB] hover:underline"
+                          >
+                            {rfq.name}
+                          </Link>
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <RfqListStatusBadge status={rfq.display_status} />
+                          <span className="text-[13px] text-neutral-500">
+                            {rfq.quote_count} quotes ·{" "}
+                            {ownerTitleFromEmail(rfq.owner)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div className="data-card-field">
-                    <span className="data-card-label">Last Modified</span>
-                    <span className="data-card-value">
-                      {rfq.modified ? formatDate(rfq.modified) : "—"}
-                    </span>
-                  </div>
-                  <div className="data-card-field">
-                    <span className="data-card-label">Owner</span>
-                    <span className="data-card-value">
-                      {ownerTitleFromEmail(rfq.owner)}
-                    </span>
-                  </div>
-                  <div className="data-card-field">
-                    <span className="data-card-label">Quotes</span>
-                    <span className="data-card-value">{rfq.quote_count}</span>
-                  </div>
-                  <div className="data-card-field">
-                    <span className="data-card-label">Status</span>
-                    <span className="data-card-value">
-                      <StatusBadge status={rfq.display_status} />
-                    </span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
-            <div className="hidden overflow-x-auto md:block">
-              <table className="data-table">
-                <thead>
-                  <tr>
+            {/* Desktop data grid */}
+            <div className="hidden max-h-[min(70vh,720px)] overflow-auto md:block">
+              <table className="w-full min-w-[960px] border-separate border-spacing-0 text-[13px]">
+                <thead className="sticky top-0 z-20">
+                  <tr className="bg-neutral-50 text-left text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+                    <th className="sticky top-0 z-20 w-10 border-b border-[#E2E8F0] bg-neutral-50 px-3 py-2.5">
+                      <input
+                        type="checkbox"
+                        checked={allPageSelected}
+                        ref={(el) => {
+                          if (el) el.indeterminate = somePageSelected;
+                        }}
+                        onChange={toggleSelectAll}
+                        className="h-4 w-4 rounded border-neutral-300 text-[#2563EB] focus:ring-[#2563EB]"
+                        aria-label="Select all rows on this page"
+                      />
+                    </th>
+                    <th className="sticky top-0 z-20 w-12 border-b border-[#E2E8F0] bg-neutral-50 px-2 py-2.5 text-center">
+                      #
+                    </th>
                     <SortableTableHeader
                       label="RFQ Number"
                       sortKey="name"
                       sort={sort}
                       onSort={setSort}
+                      className="sticky top-0 z-20 border-b border-[#E2E8F0] bg-neutral-50 px-3 py-2.5"
                     />
                     <SortableTableHeader
                       label="Last Modified"
                       sortKey="modified"
                       sort={sort}
                       onSort={setSort}
+                      className="sticky top-0 z-20 border-b border-[#E2E8F0] bg-neutral-50 px-3 py-2.5"
                     />
                     <SortableTableHeader
                       label="Owner"
                       sortKey="owner"
                       sort={sort}
                       onSort={setSort}
+                      className="sticky top-0 z-20 border-b border-[#E2E8F0] bg-neutral-50 px-3 py-2.5"
                     />
                     <SortableTableHeader
                       label="Quotes"
                       sortKey="quotes"
                       sort={sort}
                       onSort={setSort}
-                      className="text-right"
+                      className="sticky top-0 z-20 border-b border-[#E2E8F0] bg-neutral-50 px-3 py-2.5 text-right"
                     />
                     <SortableTableHeader
                       label="Status"
                       sortKey="status"
                       sort={sort}
                       onSort={setSort}
+                      className="sticky top-0 z-20 border-b border-[#E2E8F0] bg-neutral-50 px-3 py-2.5"
                     />
+                    <th className="sticky top-0 z-20 w-14 border-b border-[#E2E8F0] bg-neutral-50 px-2 py-2.5 text-center">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedRows.map((rfq) => (
-                    <tr
-                      key={rfq.name}
-                      onClick={() =>
-                        navigate(
-                          `/sourcing/rfq/${encodeURIComponent(rfq.name)}`,
-                        )
-                      }
-                      className="cursor-pointer"
-                    >
-                      <td>
-                        <Link
-                          to={`/sourcing/rfq/${encodeURIComponent(rfq.name)}`}
-                          className="table-link"
+                  {sortedRows.map((rfq, idx) => {
+                    const isSelected = selected.has(rfq.name);
+                    const detailPath = `/sourcing/rfq/${encodeURIComponent(rfq.name)}`;
+                    return (
+                      <tr
+                        key={rfq.name}
+                        onClick={() => navigate(detailPath)}
+                        className={`group h-14 cursor-pointer border-b border-[#E2E8F0] transition-colors ${
+                          isSelected
+                            ? "bg-blue-50/80"
+                            : "bg-white hover:bg-neutral-50"
+                        }`}
+                      >
+                        <td
+                          className={`px-3 py-0 align-middle ${
+                            isSelected
+                              ? "border-l-4 border-l-[#2563EB]"
+                              : "border-l-4 border-l-transparent"
+                          }`}
                           onClick={(e) => e.stopPropagation()}
                         >
-                          {rfq.name}
-                        </Link>
-                      </td>
-                      <td className="whitespace-nowrap text-neutral-600">
-                        {rfq.modified ? formatDate(rfq.modified) : "—"}
-                      </td>
-                      <td className="text-neutral-600">
-                        {ownerTitleFromEmail(rfq.owner)}
-                      </td>
-                      <td className="text-right tabular-nums">
-                        <span
-                          className={
-                            rfq.quote_count > 0
-                              ? "font-medium text-primary"
-                              : "text-neutral-500"
-                          }
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelectOne(rfq.name)}
+                            className="h-4 w-4 rounded border-neutral-300 text-[#2563EB] focus:ring-[#2563EB]"
+                            aria-label={`Select ${rfq.name}`}
+                          />
+                        </td>
+                        <td className="px-2 py-0 text-center align-middle tabular-nums text-neutral-400">
+                          {serialBase + idx + 1}
+                        </td>
+                        <td className="px-3 py-0 align-middle">
+                          <Link
+                            to={detailPath}
+                            className="font-mono text-[13px] font-medium text-[#2563EB] hover:underline"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {rfq.name}
+                          </Link>
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-0 align-middle text-neutral-600">
+                          {rfq.modified ? formatDate(rfq.modified) : "—"}
+                        </td>
+                        <td className="px-3 py-0 align-middle text-neutral-600">
+                          {ownerTitleFromEmail(rfq.owner)}
+                        </td>
+                        <td className="px-3 py-0 text-right align-middle tabular-nums">
+                          <span
+                            className={
+                              rfq.quote_count > 0
+                                ? "font-medium text-[#111827]"
+                                : "text-neutral-400"
+                            }
+                          >
+                            {rfq.quote_count}
+                          </span>
+                        </td>
+                        <td className="px-3 py-0 align-middle">
+                          <RfqListStatusBadge status={rfq.display_status} />
+                        </td>
+                        <td
+                          className="relative px-2 py-0 text-center align-middle"
+                          onClick={(e) => e.stopPropagation()}
                         >
-                          {rfq.quote_count}
-                        </span>
-                      </td>
-                      <td>
-                        <StatusBadge status={rfq.display_status} />
-                      </td>
-                    </tr>
-                  ))}
+                          <div
+                            className="relative inline-block"
+                            ref={
+                              actionMenu === rfq.name ? actionMenuRef : undefined
+                            }
+                          >
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setActionMenu((cur) =>
+                                  cur === rfq.name ? null : rfq.name,
+                                )
+                              }
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100 hover:text-neutral-800"
+                              aria-label={`Actions for ${rfq.name}`}
+                              aria-expanded={actionMenu === rfq.name}
+                            >
+                              <MoreHorizontal className="h-4 w-4" />
+                            </button>
+                            {actionMenu === rfq.name && (
+                              <div className="absolute right-0 top-full z-30 mt-1 w-44 rounded-md border border-[#E2E8F0] bg-white py-1 shadow-sm">
+                                <button
+                                  type="button"
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-[#111827] hover:bg-neutral-50"
+                                  onClick={() => {
+                                    setActionMenu(null);
+                                    navigate(detailPath);
+                                  }}
+                                >
+                                  <Eye className="h-3.5 w-3.5 text-neutral-500" />
+                                  View RFQ
+                                </button>
+                                <button
+                                  type="button"
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-[#111827] hover:bg-neutral-50"
+                                  onClick={() => {
+                                    setActionMenu(null);
+                                    window.open(detailPath, "_blank", "noopener");
+                                  }}
+                                >
+                                  <ExternalLink className="h-3.5 w-3.5 text-neutral-500" />
+                                  Open in new tab
+                                </button>
+                                <button
+                                  type="button"
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] text-[#111827] hover:bg-neutral-50"
+                                  onClick={() => {
+                                    void navigator.clipboard
+                                      .writeText(rfq.name)
+                                      .then(() =>
+                                        toast.success("RFQ number copied"),
+                                      )
+                                      .catch(() =>
+                                        toast.error("Could not copy"),
+                                      );
+                                    setActionMenu(null);
+                                  }}
+                                >
+                                  <Copy className="h-3.5 w-3.5 text-neutral-500" />
+                                  Copy RFQ number
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
+
+            {selected.size > 0 && (
+              <div className="border-t border-[#E2E8F0] bg-blue-50/50 px-3 py-2 text-[13px] text-[#1D4ED8]">
+                {selected.size} selected
+              </div>
+            )}
 
             <PaginationBar
               currentPage={rfqsQuery.data?.current_page ?? page}

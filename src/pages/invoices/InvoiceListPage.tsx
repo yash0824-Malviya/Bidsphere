@@ -39,7 +39,7 @@ const STATUS_TABS: { id: StatusFilter; label: string }[] = [
 export default function InvoiceListPage() {
   const navigate = useNavigate();
   const role = useAuthStore((s) => s.user?.role);
-  const readOnly = role === "procurement";
+  const readOnly = role === "procurement_team";
 
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");

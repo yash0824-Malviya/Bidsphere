@@ -4,6 +4,7 @@ import {
   ClipboardCheck,
   CreditCard,
   FileSearch,
+  Package,
   PackagePlus,
   Receipt,
   Truck,
@@ -125,28 +126,49 @@ const PROCUREMENT_QUICK_ACTIONS: DashboardQuickAction[] = [
     icon: FileSearch,
   },
   {
-    id: "create-po",
-    label: "Create Purchase Order",
-    to: "/p2p/purchase-orders/new",
-    icon: PackagePlus,
-  },
-  {
     id: "add-supplier",
     label: "Add Supplier",
     to: "/suppliers/new",
     icon: UserPlus,
   },
   {
-    id: "approve-po",
-    label: "Approve PO",
-    to: "/p2p/purchase-orders?status=To%20Receive%20and%20Bill",
+    id: "forwarded-mrs",
+    label: "Forwarded Requests",
+    to: "/material-requests/procurement",
     icon: ClipboardCheck,
   },
   {
-    id: "track-shipment",
-    label: "Track Shipment",
-    to: "/p2p/purchase-orders",
+    id: "reverse-bidding",
+    label: "Reverse Bidding",
+    to: "/sourcing/reverse-bidding",
     icon: Truck,
+  },
+];
+
+const PROCUREMENT_TEAM_QUICK_ACTIONS: DashboardQuickAction[] = [
+  {
+    id: "create-po",
+    label: "Create Purchase Order",
+    to: "/p2p/purchase-orders/create",
+    icon: PackagePlus,
+  },
+  {
+    id: "purchase-orders",
+    label: "Purchase Orders",
+    to: "/p2p/purchase-orders",
+    icon: ClipboardCheck,
+  },
+  {
+    id: "grn-monitoring",
+    label: "GRN Monitoring",
+    to: "/p2p/grn",
+    icon: Package,
+  },
+  {
+    id: "supplier-directory",
+    label: "Supplier Directory",
+    to: "/suppliers",
+    icon: UserPlus,
   },
 ];
 
@@ -187,9 +209,16 @@ export const DASHBOARD_BY_ROLE: Record<AppRole, RoleDashboardConfig> = {
   },
   procurement: {
     title: "Procurement Manager Dashboard",
-    subtitle: "Manage sourcing, suppliers and purchasing operations",
+    subtitle: "Manage sourcing, suppliers and RFQ-to-PO approval",
     roleLabel: ROLE_LABELS.procurement,
     statusLabel: "Procurement",
+  },
+  procurement_team: {
+    title: "Purchase Order Operations Dashboard",
+    subtitle:
+      "Create and manage Purchase Orders, monitor GRNs, and view supplier directory performance.",
+    roleLabel: ROLE_LABELS.procurement_team,
+    statusLabel: "Operational",
   },
   finance: {
     title: "Finance Manager Dashboard",
@@ -263,6 +292,18 @@ const EXECUTIVE_LAYOUT_BY_ROLE: Record<
     showSavings: true,
     showAlerts: true,
   },
+  procurement_team: {
+    // Operational PO KPIs are rendered by ProcurementTeamDashboard (not this layout).
+    kpiKeys: ["openPos", "pendingInvoices"],
+    quickActions: PROCUREMENT_TEAM_QUICK_ACTIONS,
+    showSpendCharts: false,
+    showActivity: false,
+    activityTitle: "Recent Purchase Order Activity",
+    activityTypes: ["po"],
+    showTopSuppliers: false,
+    showSavings: false,
+    showAlerts: false,
+  },
   finance: {
     kpiKeys: FINANCE_KPI_KEYS,
     quickActions: FINANCE_QUICK_ACTIONS,
@@ -295,14 +336,14 @@ export function getDashboardConfig(role: AppRole): RoleDashboardConfig {
 }
 
 export function getExecutiveDashboardLayout(
-  role: Exclude<AppRole, "warehouse" | "legal" | "department" | "manufacturing">
+  role: Exclude<AppRole, "warehouse" | "legal" | "department" | "manufacturing">,
 ): ExecutiveDashboardLayout {
   return EXECUTIVE_LAYOUT_BY_ROLE[role] ?? EXECUTIVE_LAYOUT_BY_ROLE.admin;
 }
 
 export function filterActivityByRole(
   items: ActivityFeedItem[],
-  role: Exclude<AppRole, "warehouse" | "legal" | "department" | "manufacturing">
+  role: Exclude<AppRole, "warehouse" | "legal" | "department" | "manufacturing">,
 ): ActivityFeedItem[] {
   const { activityTypes } = getExecutiveDashboardLayout(role);
   if (activityTypes === "all") return items;

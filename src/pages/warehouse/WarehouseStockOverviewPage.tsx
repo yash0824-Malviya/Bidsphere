@@ -58,7 +58,10 @@ export default function WarehouseStockOverviewPage() {
       return { totalQty: 0, lowStock: 0, outOfStock: 0, grnsLast30Days: 0 };
     }
     const fromFiltered = {
-      totalQty: filteredData.reduce((acc, row) => acc + row.available_qty, 0),
+      totalQty: filteredData.reduce(
+        (acc, row) => acc + Math.max(0, Number(row.available_qty) || 0),
+        0,
+      ),
       lowStock: filteredData.filter((row) => row.status === "Low Stock").length,
       outOfStock: filteredData.filter((row) => row.status === "Out of Stock").length,
     };
@@ -84,7 +87,7 @@ export default function WarehouseStockOverviewPage() {
 
   if (stockQuery.isError) {
     return (
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <div className="w-full">
         <div className="rounded-2xl border border-slate-100 bg-white p-8 shadow-sm">
           <ErrorState
             title="Unable to load stock data."
@@ -97,7 +100,7 @@ export default function WarehouseStockOverviewPage() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-6 animate-in fade-in duration-300">
+    <div className="flex w-full flex-col gap-6 animate-in fade-in duration-300">
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
@@ -228,7 +231,7 @@ export default function WarehouseStockOverviewPage() {
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden flex flex-col min-h-[400px]">
         {stockQuery.isLoading ? (
           <div className="p-6">
-            <TableSkeleton rows={6} columns={6} />
+            <TableSkeleton rows={6} columns={7} />
           </div>
         ) : filteredData.length === 0 ? (
           <div className="flex-1 flex items-center justify-center p-12">
@@ -250,6 +253,7 @@ export default function WarehouseStockOverviewPage() {
                   <tr className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-500 uppercase tracking-wider">
                     <th className="py-4 px-6">Item</th>
                     <th className="py-4 px-6">Warehouse</th>
+                    <th className="py-4 px-6 text-right">Current Stock</th>
                     <th className="py-4 px-6 text-right">Available Qty</th>
                     <th className="py-4 px-6 text-right">Reserved Qty</th>
                     <th className="py-4 px-6 text-right">Reorder Level</th>
@@ -269,11 +273,14 @@ export default function WarehouseStockOverviewPage() {
                         </div>
                       </td>
                       <td className="py-4 px-6 text-slate-600">{row.warehouse}</td>
+                      <td className="py-4 px-6 text-right text-slate-600 tabular-nums">
+                        {Math.max(0, row.current_stock).toLocaleString()} {row.uom}
+                      </td>
                       <td className="py-4 px-6 text-right font-medium text-slate-900 tabular-nums">
-                        {row.available_qty.toLocaleString()} {row.uom}
+                        {Math.max(0, row.available_qty).toLocaleString()} {row.uom}
                       </td>
                       <td className="py-4 px-6 text-right text-slate-500 tabular-nums">
-                        {row.reserved_qty.toLocaleString()} {row.uom}
+                        {Math.max(0, row.reserved_qty).toLocaleString()} {row.uom}
                       </td>
                       <td className="py-4 px-6 text-right text-slate-500 tabular-nums">
                         {row.reorder_level.toLocaleString()} {row.uom}

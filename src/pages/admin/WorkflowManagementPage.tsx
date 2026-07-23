@@ -26,7 +26,7 @@ const STAGE_COLORS: Record<string, { bg: string; text: string; border: string }>
     text: "text-cyan-800",
     border: "border-cyan-300",
   },
-  in_transit: { bg: "bg-sky-50", text: "text-sky-700", border: "border-sky-200" },
+  in_transit: { bg: "bg-primary-50", text: "text-primary-700", border: "border-primary-200" },
   grn_received: { bg: "bg-emerald-50", text: "text-emerald-700", border: "border-emerald-200" },
   invoice_generated: { bg: "bg-amber-50", text: "text-amber-700", border: "border-amber-200" },
   supplier_payment_confirmation: {

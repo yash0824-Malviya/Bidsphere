@@ -4,7 +4,6 @@ import PageHeader from "../../components/PageHeader";
 import { APP_NAME, APP_SUPPLIER_PORTAL } from "../../config/branding";
 import { SUPPORT_EMAIL } from "../../utils/supplierPortalUtils";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 
 const MAILTO_SUBJECT = encodeURIComponent(`${APP_SUPPLIER_PORTAL} Support Request`);
 const MAILTO_BODY =
@@ -15,16 +14,16 @@ export default function SupplierContactSupportPage() {
 
   if (!isReady) {
     return (
-      <SupplierPortalLayout>
+      
         <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
           Loading…
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
   return (
-    <SupplierPortalLayout supplierName={supplierName}>
+    
       <PageHeader
         title="Contact Support"
         description={`Reach the ${APP_NAME} team for portal issues, access problems, or workflow questions.`}
@@ -98,6 +97,6 @@ export default function SupplierContactSupportPage() {
           </div>
         </div>
       </div>
-    </SupplierPortalLayout>
+    
   );
 }

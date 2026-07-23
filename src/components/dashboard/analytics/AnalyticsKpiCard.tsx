@@ -16,7 +16,18 @@ interface Props {
   description: string;
   kpi: AnalyticsKpi | null;
   loading?: boolean;
+  compact?: boolean;
+  variant?: "default" | "enterprise";
+  accent?: "blue" | "green" | "orange" | "red" | "gray";
 }
+
+const ACCENT = {
+  blue: { bg: "bg-[#E8F4FF]", fg: "text-[#1993FF]", bar: "bg-[#1993FF]", spark: "#1993FF" },
+  green: { bg: "bg-[#DCFCE7]", fg: "text-[#22C55E]", bar: "bg-[#22C55E]", spark: "#22C55E" },
+  orange: { bg: "bg-[#FEF3C7]", fg: "text-[#F59E0B]", bar: "bg-[#F59E0B]", spark: "#F59E0B" },
+  red: { bg: "bg-[#FEE2E2]", fg: "text-[#EF4444]", bar: "bg-[#EF4444]", spark: "#EF4444" },
+  gray: { bg: "bg-[#F3F4F6]", fg: "text-[#6B7280]", bar: "bg-[#6B7280]", spark: "#6B7280" },
+} as const;
 
 const STATUS: Record<
   KpiStatus,
@@ -25,30 +36,126 @@ const STATUS: Record<
   good: {
     iconBg: "bg-emerald-50",
     icon: "text-emerald-600",
-    bar: "bg-emerald-500",
-    spark: "#10b981",
+    bar: "bg-[#22C55E]",
+    spark: "#22C55E",
   },
   warning: {
     iconBg: "bg-amber-50",
     icon: "text-amber-600",
-    bar: "bg-amber-500",
-    spark: "#f59e0b",
+    bar: "bg-[#F59E0B]",
+    spark: "#F59E0B",
   },
   bad: {
     iconBg: "bg-rose-50",
     icon: "text-rose-600",
-    bar: "bg-rose-500",
-    spark: "#ef4444",
+    bar: "bg-[#EF4444]",
+    spark: "#EF4444",
   },
   neutral: {
     iconBg: "bg-neutral-100",
     icon: "text-neutral-500",
-    bar: "bg-neutral-400",
-    spark: "#94a3b8",
+    bar: "bg-[#6B7280]",
+    spark: "#6B7280",
   },
 };
 
-function TrendBadge({ kpi }: { kpi: AnalyticsKpi }) {
+const CARD_SHELL =
+  "rounded-2xl border border-[#E8EDF5] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)] transition-[transform,box-shadow] duration-150 hover:-translate-y-0.5 hover:shadow-[0_4px_12px_rgba(15,23,42,0.07)]";
+
+function ProgressTrack({
+  pct,
+  barClass,
+}: {
+  pct: number;
+  barClass: string;
+}) {
+  return (
+    <div className="h-1 w-full overflow-hidden rounded-full bg-[#EEF2F7]">
+      <div
+        className={`h-full rounded-full transition-all duration-200 ${barClass}`}
+        style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
+      />
+    </div>
+  );
+}
+
+function enterpriseSupport(
+  title: string,
+  kpi: AnalyticsKpi,
+): { text: string; tone: string } | null {
+  if (/savings/i.test(title)) {
+    const savings = kpi.meta?.find((m) => /savings/i.test(m.label));
+    if (savings?.value) {
+      const raw = savings.value.replace(/%/g, "").trim();
+      const n = Number(raw);
+      if (Number.isFinite(n) && n !== 0) {
+        return {
+          text: `${n > 0 ? "+" : ""}${n.toFixed(1)}%`,
+          tone: n >= 0 ? "text-[#22C55E]" : "text-[#EF4444]",
+        };
+      }
+    }
+    if (kpi.trend && kpi.trend.pct !== 0) {
+      const sign = kpi.trend.direction === "down" ? "-" : "+";
+      return {
+        text: `${sign}${kpi.trend.pct}%`,
+        tone:
+          kpi.trend.direction === "up"
+            ? "text-[#22C55E]"
+            : kpi.trend.direction === "down"
+              ? "text-[#EF4444]"
+              : "text-[#64748B]",
+      };
+    }
+  }
+
+  if (/budget/i.test(title)) {
+    const remaining = kpi.meta?.find((m) => /remaining/i.test(m.label));
+    if (remaining) return { text: `${remaining.label} ${remaining.value}`, tone: "text-[#64748B]" };
+  }
+
+  if (/response/i.test(title)) {
+    const responded = kpi.meta?.find((m) => /responded/i.test(m.label));
+    const invited = kpi.meta?.find((m) => /invited/i.test(m.label));
+    if (responded && invited) {
+      return {
+        text: `${responded.value} of ${invited.value} responded`,
+        tone: "text-[#64748B]",
+      };
+    }
+  }
+
+  if (/delivery/i.test(title)) {
+    const onTime = kpi.meta?.find((m) => /on time/i.test(m.label));
+    const received = kpi.meta?.find((m) => /received/i.test(m.label));
+    if (onTime && received) {
+      return {
+        text: `${onTime.value} of ${received.value} on time`,
+        tone: "text-[#64748B]",
+      };
+    }
+  }
+
+  if (/turnaround/i.test(title)) {
+    const completed = kpi.meta?.find((m) => /completed/i.test(m.label));
+    if (completed) {
+      return { text: `${completed.value} completed`, tone: "text-[#64748B]" };
+    }
+    return { text: "Average turnaround", tone: "text-[#64748B]" };
+  }
+
+  if (/cycle/i.test(title)) {
+    const completed = kpi.meta?.find((m) => /completed/i.test(m.label));
+    if (completed) {
+      return { text: `${completed.value} completed`, tone: "text-[#64748B]" };
+    }
+    return { text: "Average cycle", tone: "text-[#64748B]" };
+  }
+
+  return null;
+}
+
+function TrendLine({ kpi }: { kpi: AnalyticsKpi }) {
   const t = kpi.trend;
   if (!t) return null;
   const isPositive = t.inverted ? t.direction === "down" : t.direction === "up";
@@ -59,42 +166,15 @@ function TrendBadge({ kpi }: { kpi: AnalyticsKpi }) {
       ? ArrowUpRight
       : ArrowDownRight;
   const tone = isFlat
-    ? "bg-neutral-100 text-neutral-500"
+    ? "text-[#6B7280]"
     : isPositive
-      ? "bg-emerald-50 text-emerald-700"
-      : "bg-rose-50 text-rose-700";
+      ? "text-[#22C55E]"
+      : "text-[#EF4444]";
   return (
-    <span
-      className={`inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-semibold ${tone}`}
-      title={t.label}
-    >
+    <span className={`inline-flex items-center gap-0.5 text-[12px] font-medium ${tone}`}>
       <Icon className="h-3 w-3" />
-      {t.pct}%
+      {`${t.direction === "up" ? "+" : t.direction === "down" ? "-" : ""}${t.pct}%`}
     </span>
-  );
-}
-
-function MetaGrid({ meta }: { meta: NonNullable<AnalyticsKpi["meta"]> }) {
-  const dense = meta.length >= 4;
-  return (
-    <div
-      className={
-        dense
-          ? "grid grid-cols-2 gap-x-3 gap-y-1.5"
-          : "flex flex-col gap-1"
-      }
-    >
-      {meta.map((m) => (
-        <div key={m.label} className="min-w-0">
-          <p className="truncate text-[10px] font-medium uppercase tracking-wide text-neutral-400">
-            {m.label}
-          </p>
-          <p className="truncate text-xs font-semibold tabular-nums text-neutral-800">
-            {m.value}
-          </p>
-        </div>
-      ))}
-    </div>
   );
 }
 
@@ -104,107 +184,166 @@ function AnalyticsKpiCard({
   description,
   kpi,
   loading,
+  compact = false,
+  variant = "default",
+  accent = "blue",
 }: Props) {
+  const enterprise = variant === "enterprise";
+  const showProgressBar = /budget|response|delivery/i.test(title);
+
   if (loading || !kpi) {
     return (
-      <div className="card flex min-h-[132px] flex-col gap-3 p-4">
-        <div className="flex items-center justify-between">
-          <Skeleton className="h-9 w-9 rounded-lg" />
-          <Skeleton className="h-4 w-10 rounded-full" />
-        </div>
-        <Skeleton className="h-7 w-24" />
-        <Skeleton className="h-3 w-32" />
+      <div
+        className={`flex flex-col gap-2 ${CARD_SHELL} p-4 ${
+          enterprise ? "h-[148px]" : "min-h-[120px]"
+        }`}
+      >
+        <Skeleton className="h-9 w-9 rounded-full" />
+        <Skeleton className="h-4 w-28" />
+        <Skeleton className="h-7 w-16" />
       </div>
     );
   }
 
   const s = STATUS[kpi.status] ?? STATUS.neutral;
+  const a = ACCENT[accent];
   const sparkline = kpi.sparkline ?? [];
   const waiting = !kpi.available;
-  const subtitle =
-    kpi.subtitle ||
-    (waiting ? kpi.emptyMessage : null) ||
-    (!kpi.meta?.length ? description : null);
+  const hasProgress = typeof kpi.progress === "number";
+  const hasSpark = sparkline.some((n) => Number.isFinite(n) && n > 0);
+
+  if (enterprise) {
+    const support = waiting
+      ? { text: "No data", tone: "text-[#94A3B8]" }
+      : enterpriseSupport(title, kpi);
+
+    return (
+      <div className={`flex h-[148px] flex-col ${CARD_SHELL} p-4`}>
+        <div className="flex items-center gap-2.5">
+          <span
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
+              waiting ? ACCENT.gray.bg : a.bg
+            }`}
+          >
+            {waiting ? (
+              <Info className={`h-4 w-4 ${ACCENT.gray.fg}`} aria-hidden />
+            ) : (
+              <Icon className={`h-4 w-4 ${a.fg}`} />
+            )}
+          </span>
+          <p className="text-[13px] font-semibold leading-snug text-[#111827]">
+            {title}
+          </p>
+        </div>
+
+        <div className="mt-auto">
+          <p
+            className={`text-[24px] font-bold leading-none tracking-tight tabular-nums ${
+              waiting ? "text-[#CBD5E1]" : "text-[#0F172A]"
+            }`}
+          >
+            {waiting ? "—" : kpi.display}
+          </p>
+          {support ? (
+            <p className={`mt-1.5 text-[12px] font-medium ${support.tone}`}>
+              {support.text}
+            </p>
+          ) : (
+            <div className="mt-1.5 h-4" />
+          )}
+          {showProgressBar ? (
+            <div className="mt-2.5">
+              <ProgressTrack
+                pct={
+                  waiting
+                    ? 0
+                    : (kpi.progress ??
+                      (kpi.value != null ? Number(kpi.value) : 0))
+                }
+                barClass={waiting ? "bg-neutral-200" : a.bar}
+              />
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  if (compact) {
+    return (
+      <div
+        className={`flex h-[100px] flex-col justify-between ${CARD_SHELL} p-4 ${
+          waiting ? "bg-[#F8FAFC]" : ""
+        }`}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-[13px] font-semibold text-[#111827]">{title}</p>
+          <span
+            className={`flex h-8 w-8 items-center justify-center rounded-full ${
+              waiting ? "bg-[#E8F4FF] text-[#1993FF]" : `${s.iconBg} ${s.icon}`
+            }`}
+          >
+            {waiting ? (
+              <Info className="h-4 w-4" aria-hidden />
+            ) : (
+              <Icon className="h-4 w-4" />
+            )}
+          </span>
+        </div>
+        <div>
+          <p
+            className={`text-[22px] font-bold tracking-tight tabular-nums ${
+              waiting ? "text-neutral-300" : "text-[#0F172A]"
+            }`}
+          >
+            {waiting ? "—" : kpi.display}
+          </p>
+          <p className="mt-1 text-[12px] text-[#64748B]">
+            {waiting ? "No data" : description}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div
-      className={`card flex min-h-[132px] flex-col gap-2.5 p-4 transition-all duration-300 ease-out ${
-        waiting ? "bg-slate-50/60" : "bg-white"
-      }`}
-    >
+    <div className={`flex min-h-[120px] flex-col gap-2 ${CARD_SHELL} p-4`}>
       <div className="flex items-start justify-between gap-2">
         <div
-          className={`grid h-9 w-9 place-items-center rounded-lg transition-colors ${
-            waiting ? "bg-sky-50" : s.iconBg
+          className={`grid h-9 w-9 place-items-center rounded-full ${
+            waiting ? "bg-[#E8F4FF]" : s.iconBg
           }`}
         >
           {waiting ? (
-            <Info className="h-5 w-5 text-sky-600" aria-hidden />
+            <Info className="h-4 w-4 text-[#1993FF]" aria-hidden />
           ) : (
-            <Icon className={`h-5 w-5 ${s.icon}`} />
+            <Icon className={`h-4 w-4 ${s.icon}`} />
           )}
         </div>
-        {kpi.available ? <TrendBadge kpi={kpi} /> : null}
+        {kpi.available ? <TrendLine kpi={kpi} /> : null}
       </div>
-
       <div>
-        <p className="text-xs font-medium text-neutral-500">{title}</p>
-        {waiting ? (
-          <p
-            className="mt-1 text-2xl font-semibold tracking-tight text-neutral-300"
-            aria-label="Value unavailable"
-          >
-            --
-          </p>
-        ) : (
-          <p className="mt-0.5 text-2xl font-semibold tracking-tight text-neutral-900 transition-opacity duration-300">
-            {kpi.display}
-          </p>
-        )}
-        {subtitle ? (
-          <p
-            className={`mt-1 text-[11px] leading-snug ${
-              waiting ? "font-medium text-sky-800/80" : "text-neutral-400"
-            }`}
-          >
-            {subtitle}
-          </p>
-        ) : null}
+        <p className="text-[13px] font-semibold text-[#111827]">{title}</p>
+        <p
+          className={`mt-1 text-[24px] font-bold tracking-tight tabular-nums ${
+            waiting ? "text-neutral-300" : "text-[#0F172A]"
+          }`}
+        >
+          {waiting ? "—" : kpi.display}
+        </p>
       </div>
-
-      {kpi.meta && kpi.meta.length > 0 ? (
-        <MetaGrid meta={kpi.meta} />
-      ) : (
-        <p className="text-[11px] text-neutral-400">{description}</p>
-      )}
-
-      {waiting && kpi.footer ? (
-        <div className="mt-auto flex items-start gap-1.5 rounded-lg border border-sky-100 bg-sky-50/80 px-2.5 py-2">
-          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-600" aria-hidden />
-          <p className="text-[11px] leading-snug text-sky-900/80">{kpi.footer}</p>
+      {kpi.available && hasProgress ? (
+        <div className="mt-auto">
+          <ProgressTrack pct={kpi.progress ?? 0} barClass={s.bar} />
         </div>
-      ) : kpi.available ? (
-        typeof kpi.progress === "number" ? (
-          <div className="mt-auto h-1.5 w-full overflow-hidden rounded-full bg-neutral-100">
-            <div
-              className={`h-full rounded-full transition-all ${s.bar}`}
-              style={{ width: `${kpi.progress}%` }}
-            />
-          </div>
-        ) : sparkline.some((n) => Number.isFinite(n) && n > 0) ? (
-          <div className="mt-auto">
-            <Sparkline
-              data={sparkline.filter((n) => Number.isFinite(n) && n > 0)}
-              color={s.spark}
-            />
-          </div>
-        ) : kpi.footer ? (
-          <p className="mt-auto text-[10px] leading-snug text-neutral-400">
-            {kpi.footer}
-          </p>
-        ) : (
-          <div className="mt-auto h-2" />
-        )
+      ) : kpi.available && hasSpark ? (
+        <div className="mt-auto">
+          <Sparkline
+            data={sparkline.filter((n) => Number.isFinite(n) && n > 0)}
+            color={s.spark}
+            height={20}
+          />
+        </div>
       ) : (
         <div className="mt-auto h-2" />
       )}

@@ -17,12 +17,18 @@ import {
 const INTERNAL_READ_ROLES: AppRole[] = [
   "admin",
   "procurement",
+  "procurement_team",
   "warehouse",
   "finance",
   "finance_executive",
 ];
 
-const INTERNAL_WRITE_ROLES: AppRole[] = ["admin", "procurement", "warehouse"];
+const INTERNAL_WRITE_ROLES: AppRole[] = [
+  "admin",
+  "procurement",
+  "procurement_team",
+  "warehouse",
+];
 
 function assertCanRead(principal: AccessPrincipal): void {
   if (principal.typ === "supplier") return;

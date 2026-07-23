@@ -9,12 +9,12 @@ import { apiGet, apiPost, buildListConfig, buildResourceUrl, COMPANY } from "./e
 import {
   extractSourceDepartmentMrName,
   fetchMaterialRequestWorkflow,
-  findRfqNameForMaterialRequest,
   getLinkedRfqName,
   getMaterialRequestWorkflowStatus,
   markMaterialRequestRfqCreated,
   parseForwardedItemsFromMr,
 } from "./materialRequestWorkflow";
+import { findActiveRfqForMaterialRequest } from "./mrRfqAction";
 import type { EngineeringAttachment } from "../utils/materialRequestItemFiles";
 import { disableServerScriptsFor, lookupDefaultWarehouse } from "./sourcing";
 import { assertSuppliersActive } from "./supplier";
@@ -31,6 +31,18 @@ import type { MaterialRequestItem } from "../types/erpnext";
 const RFQ_DOCTYPE = "Request for Quotation";
 const RFQ_ITEM_DOCTYPE = "Request for Quotation Item";
 const RFQ_SUPPLIER_DOCTYPE = "Request for Quotation Supplier";
+
+/** Thrown when create is blocked by an existing active RFQ for the MR. */
+export class ActiveRfqExistsError extends Error {
+  readonly rfqName: string;
+  constructor(rfqName: string) {
+    super(
+      `An RFQ already exists for this Material Request (${rfqName}). Open that RFQ instead of creating a duplicate.`,
+    );
+    this.name = "ActiveRfqExistsError";
+    this.rfqName = rfqName;
+  }
+}
 
 export interface CreateRFQFromMaterialRequestInput {
   material_request: string;
@@ -324,21 +336,16 @@ export async function createRFQFromMaterialRequest(
   const mr = await fetchMaterialRequestWorkflow(input.material_request);
   const status = getMaterialRequestWorkflowStatus(mr);
 
-  // Hard stop: one MR → one RFQ (field link, remarks tag, or RFQ Item rows).
-  const existingRfq =
-    getLinkedRfqName(mr) ||
-    (await findRfqNameForMaterialRequest(mr.name));
-  if (existingRfq) {
-    throw new Error(
-      `An RFQ already exists for this Material Request (${existingRfq}).`,
-    );
+  // Hard stop: one MR → one *active* RFQ. Cancelled / Rejected RFQs do not block.
+  const existingActiveRfq = await findActiveRfqForMaterialRequest(mr.name, mr);
+  if (existingActiveRfq) {
+    throw new ActiveRfqExistsError(existingActiveRfq);
   }
-  if (status === "RFQ Created") {
-    throw new Error(
-      "An RFQ already exists for this Material Request.",
-    );
-  }
-  if (status !== "Forwarded to Procurement") {
+  // "RFQ Created" with only inactive RFQs may recreate; otherwise require Forwarded.
+  if (
+    status !== "Forwarded to Procurement" &&
+    status !== "RFQ Created"
+  ) {
     throw new Error(
       `Material Request ${mr.name} must be in "Forwarded to Procurement" status before creating an RFQ.`,
     );
@@ -402,13 +409,25 @@ export async function createRFQFromMaterialRequest(
   return created;
 }
 
-/** Validate MR is eligible for RFQ creation (UI gate — API re-checks). */
+/**
+ * Sync UI gate (may be stale if linked RFQ was cancelled).
+ * Prefer {@link canCreateRfqFromMaterialRequestAsync} when possible.
+ */
 export function canCreateRfqFromMaterialRequest(
   mr: MaterialRequestWorkflowRecord
 ): boolean {
   if (getLinkedRfqName(mr)) return false;
   const status = getMaterialRequestWorkflowStatus(mr);
-  // "RFQ Created" means an RFQ already exists — never show Create RFQ again.
   if (status === "RFQ Created") return false;
   return status === "Forwarded to Procurement";
+}
+
+/** Authoritative create-eligibility check (active RFQ only blocks). */
+export async function canCreateRfqFromMaterialRequestAsync(
+  mr: MaterialRequestWorkflowRecord,
+): Promise<boolean> {
+  const active = await findActiveRfqForMaterialRequest(mr.name, mr);
+  if (active) return false;
+  const status = getMaterialRequestWorkflowStatus(mr);
+  return status === "Forwarded to Procurement" || status === "RFQ Created";
 }

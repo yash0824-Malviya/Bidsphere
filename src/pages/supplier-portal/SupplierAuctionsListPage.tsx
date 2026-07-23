@@ -10,8 +10,9 @@ import {
 } from "../../api/reverseBidding";
 import AuctionStatusBadge from "../../components/reverse-bidding/AuctionStatusBadge";
 import EmptyState from "../../components/EmptyState";
+import PaginationBar from "../../components/PaginationBar";
 import { TableSkeleton } from "../../components/Skeleton";
-import SupplierPortalLayout from "./SupplierPortalLayout";
+import { useClientPagination } from "../../hooks/usePagination";
 import SupplierAccessDenied from "../../components/supplier-portal/SupplierAccessDenied";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
 import { formatCurrencyIn, formatDateTime } from "../../utils/format";
@@ -31,22 +32,35 @@ export default function SupplierAuctionsListPage() {
     refetchOnWindowFocus: true,
   });
 
+  const auctions = query.data ?? [];
+
+  const {
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+    totalRecords,
+    totalPages,
+    pageRows,
+  } = useClientPagination(auctions, {
+    defaultPageSize: 10,
+    resetKey: supplierName,
+  });
+
   if (isReady && !isAuthenticated) {
     return (
-      <SupplierPortalLayout>
+      
         <SupplierAccessDenied
           title={t("reverseBidding.signInRequired")}
           description={t("reverseBidding.signInToViewInvitations")}
         />
-      </SupplierPortalLayout>
+      
     );
   }
 
-  const auctions = query.data ?? [];
-
   return (
-    <SupplierPortalLayout supplierName={supplierName}>
-      <div className="mb-4">
+    
+      <div>
         <h1 className="text-lg font-bold text-neutral-900">{t("reverseBidding.liveAuctionsTitle")}</h1>
         <p className="text-sm text-neutral-500">
           {t("reverseBidding.listSubtitle")}
@@ -64,8 +78,9 @@ export default function SupplierAuctionsListPage() {
           description={t("reverseBidding.noInvitationsDesc")}
         />
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
-          {auctions.map((a) => {
+        <>
+        <div className="grid gap-6 sm:grid-cols-2">
+          {pageRows.map((a) => {
             const status = deriveAuctionStatus(a);
             const mine = (a.invited_suppliers ?? []).find((s) =>
               sameSupplier(s.supplier, supplierName)
@@ -142,7 +157,17 @@ export default function SupplierAuctionsListPage() {
             );
           })}
         </div>
+        <PaginationBar
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalRecords={totalRecords}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+          recordLabel="records"
+        />
+        </>
       )}
-    </SupplierPortalLayout>
+    
   );
 }

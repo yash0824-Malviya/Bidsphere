@@ -90,10 +90,16 @@ export interface ForwardedHistoryRow {
 }
 
 export interface ForwardedCounters {
+  /** MRs at "Sent to Procurement" (awaiting RFQ). */
   forwardedRequests: number;
   rfqsPending: number;
   rfqsCreatedToday: number;
+  /** All forwarded MRs (history). */
   historyCount: number;
+  /** Forwarded MRs with High / Urgent priority. */
+  highPriorityRequests: number;
+  /** MRs forwarded to procurement today. */
+  requestsCreatedToday: number;
 }
 
 /* ─── forwarded detection ────────────────────────────────────────────────── */
@@ -228,11 +234,14 @@ function deriveStage(
 export async function fetchForwardedActiveQueue(): Promise<
   MaterialRequestWorkflowRecord[]
 > {
+  // fetchProcurementQueue already excludes MRs with an *active* RFQ and
+  // clears stale Cancelled/Rejected links in memory.
   const queue = await fetchProcurementQueue();
   return queue.filter((mr) => {
-    if (mr.custom_linked_rfq) return false;
     const status = getMaterialRequestWorkflowStatus(mr);
-    return status === "Forwarded to Procurement";
+    return (
+      status === "Forwarded to Procurement" || status === "RFQ Created"
+    );
   });
 }
 
@@ -366,6 +375,13 @@ export function buildForwardedCounters(
 ): ForwardedCounters {
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
+  const highPriority = new Set(["Urgent", "High"]);
+
+  const isToday = (raw: string | null | undefined): boolean => {
+    if (!raw) return false;
+    const d = new Date(raw);
+    return !Number.isNaN(d.getTime()) && d >= startOfToday;
+  };
 
   const forwardedRequests = history.filter(
     (r) => r.currentStage === "Sent to Procurement",
@@ -376,16 +392,24 @@ export function buildForwardedCounters(
   ).length;
 
   // RFQs whose linked RFQ document was created today (live RFQ creation date).
-  const rfqsCreatedToday = history.filter((r) => {
-    if (!r.rfqCreatedOn) return false;
-    const d = new Date(r.rfqCreatedOn);
-    return !Number.isNaN(d.getTime()) && d >= startOfToday;
-  }).length;
+  const rfqsCreatedToday = history.filter((r) =>
+    isToday(r.rfqCreatedOn),
+  ).length;
+
+  const highPriorityRequests = history.filter((r) =>
+    highPriority.has(String(r.priority || "").trim()),
+  ).length;
+
+  const requestsCreatedToday = history.filter((r) =>
+    isToday(r.forwardedOn),
+  ).length;
 
   return {
     forwardedRequests,
     rfqsPending,
     rfqsCreatedToday,
     historyCount: history.length,
+    highPriorityRequests,
+    requestsCreatedToday,
   };
 }

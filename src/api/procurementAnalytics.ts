@@ -513,15 +513,28 @@ function computeSavings(
 
 /* ── Orchestration ────────────────────────────────────────────────────── */
 
-export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics> {
-  const t0 = typeof performance !== "undefined" ? performance.now() : 0;
-  const monthKeys = last12MonthKeys();
+type AnalyticsPrimaryContext = {
+  truth: ProcurementTruthCounts;
+  monthKeys: string[];
+  poRows: PoLike[];
+  recentRfqs: Array<{ name: string; modified?: string }>;
+  recentPos: Array<PoLike & { creation?: string }>;
+  mrDateMap: Map<string, string>;
+  rfqDetails: Array<RfqLike | null>;
+  quotesPerRfq: Array<{
+    rfq: { name: string; modified?: string };
+    quotes: SqLike[];
+  }>;
+  analytics: ProcurementAnalytics;
+};
 
-  // Truth counts first (shared cache with executive KPIs), then parallel samples.
-  const truth: ProcurementTruthCounts = await timedDashApi(
-    "Truth counts (analytics)",
-    () => fetchProcurementTruthCounts(),
-  ).catch(() => ({
+/** In-memory handoff so turnaround enrichment reuses the primary hydrate. */
+let primaryContextCache: AnalyticsPrimaryContext | null = null;
+let primaryContextAt = 0;
+const PRIMARY_CONTEXT_TTL_MS = 90_000;
+
+function emptyTruth(): ProcurementTruthCounts {
+  return {
     openRfqs: 0,
     pendingQuotations: 0,
     pendingPurchaseOrders: 0,
@@ -529,59 +542,148 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
     submittedMaterialRequests: 0,
     submittedPurchaseOrders: 0,
     fetchedAt: new Date().toISOString(),
-    source: "frappe.client.get_count" as const,
-  }));
+    source: "frappe.client.get_count",
+  };
+}
 
-  const [budgetRes, poRes, rfqListRes, mrRes, declineCountRes] =
-    await Promise.allSettled([
-      timedDashApi("Supplier Analytics · Budget", () =>
-        computeBudget({
-          openRfqs: truth.openRfqs,
-          pendingPurchaseOrders: truth.pendingPurchaseOrders,
-        }),
-      ),
-      timedDashApi("Supplier Analytics · PO list", () =>
-        getPurchaseOrders({
-          limit_page_length: 100,
-          fields: [
-            "name",
-            "status",
-            "transaction_date",
-            "schedule_date",
-            "grand_total",
-            "per_received",
-            "modified",
-            "creation",
-          ],
-          order_by: "transaction_date desc",
-        }),
-      ),
-      timedDashApi("Supplier Analytics · RFQ list", () => getRFQs()),
-      timedDashApi("Supplier Analytics · MR list", () =>
-        getMaterialRequests({
-          limit_page_length: 100,
-          fields: [
-            "name",
-            "status",
-            "transaction_date",
-            "creation",
-            "modified",
-            "owner",
-          ],
-        }),
-      ),
-      timedDashApi("Supplier Analytics · No-quote count", () =>
-        getCount(RESPONSE_DOCTYPE, []),
-      ),
-    ]);
+function waitingTurnaroundKpi(): AnalyticsKpi {
+  return {
+    ...unavailable(),
+    display: "--",
+    subtitle: "Loading turnaround…",
+    emptyMessage: "Loading turnaround…",
+  };
+}
+
+function waitingCycleKpi(): AnalyticsKpi {
+  return {
+    ...unavailable(),
+    display: "--",
+    subtitle: "Loading cycle time…",
+    emptyMessage: "Loading cycle time…",
+  };
+}
+
+/**
+ * Fast path for dashboard KPI cards + most charts.
+ * Skips PO-item hydrate and cycle/turnaround joins (those run in phase 2).
+ */
+export async function fetchProcurementAnalyticsPrimary(): Promise<ProcurementAnalytics> {
+  const ctx = await loadAnalyticsPrimaryContext();
+  return ctx.analytics;
+}
+
+/**
+ * Deferred path: RFQ turnaround + procurement cycle time (PO↔MR/RFQ joins).
+ * Reuses the primary hydrate when still warm.
+ */
+export async function fetchProcurementAnalyticsTurnaround(): Promise<{
+  rfqTurnaround: AnalyticsKpi;
+  cycleTime: AnalyticsKpi;
+  rfqTurnaroundChart: TurnaroundPoint[];
+}> {
+  const fresh =
+    primaryContextCache &&
+    Date.now() - primaryContextAt < PRIMARY_CONTEXT_TTL_MS
+      ? primaryContextCache
+      : await loadAnalyticsPrimaryContext();
+  return computeTurnaroundAndCycle(fresh);
+}
+
+/** Full analytics (primary + turnaround) — drawer / legacy callers. */
+export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics> {
+  const t0 = typeof performance !== "undefined" ? performance.now() : 0;
+  const primary = await loadAnalyticsPrimaryContext();
+  const turnaround = await computeTurnaroundAndCycle(primary);
+  const merged: ProcurementAnalytics = {
+    ...primary.analytics,
+    rfqTurnaround: turnaround.rfqTurnaround,
+    cycleTime: turnaround.cycleTime,
+    charts: {
+      ...primary.analytics.charts,
+      rfqTurnaround: turnaround.rfqTurnaroundChart,
+    },
+  };
+  if (import.meta.env.DEV && t0) {
+    console.log(
+      `[Dashboard Perf] procurement analytics (full) ${Math.round(performance.now() - t0)}ms`,
+    );
+  }
+  return merged;
+}
+
+async function loadAnalyticsPrimaryContext(): Promise<AnalyticsPrimaryContext> {
+  const t0 = typeof performance !== "undefined" ? performance.now() : 0;
+  const monthKeys = last12MonthKeys();
+
+  // Start truth + list fetches together. Kick off budget as soon as truth
+  // resolves so it overlaps remaining list work (no truth→lists waterfall).
+  const truthPromise = timedDashApi("Truth counts (analytics)", () =>
+    fetchProcurementTruthCounts(),
+  ).catch(() => emptyTruth());
+
+  const listsPromise = Promise.allSettled([
+    timedDashApi("Supplier Analytics · PO list", () =>
+      getPurchaseOrders({
+        limit_page_length: 100,
+        fields: [
+          "name",
+          "status",
+          "transaction_date",
+          "schedule_date",
+          "grand_total",
+          "per_received",
+          "modified",
+          "creation",
+        ],
+        order_by: "transaction_date desc",
+      }),
+    ),
+    // Only need SAMPLE_LIMIT rows for hydrate — avoid pulling a full 50-row list.
+    timedDashApi("Supplier Analytics · RFQ list", () =>
+      getRFQs({ limit: Math.max(SAMPLE_LIMIT * 3, 15) }),
+    ),
+    timedDashApi("Supplier Analytics · MR list", () =>
+      getMaterialRequests({
+        limit_page_length: 100,
+        fields: [
+          "name",
+          "status",
+          "transaction_date",
+          "creation",
+          "modified",
+          "owner",
+        ],
+      }),
+    ),
+    timedDashApi("Supplier Analytics · No-quote count", () =>
+      getCount(RESPONSE_DOCTYPE, []),
+    ),
+  ]);
+
+  const budgetPromise = truthPromise.then((truth) =>
+    timedDashApi("Supplier Analytics · Budget", () =>
+      computeBudget({
+        openRfqs: truth.openRfqs,
+        pendingPurchaseOrders: truth.pendingPurchaseOrders,
+      }),
+    ).catch(() => ({
+      kpi: unavailable(),
+      chart: [] as BudgetActualPoint[],
+      currency: "USD",
+    })),
+  );
+
+  const [truth, listResults, budget] = await Promise.all([
+    truthPromise,
+    listsPromise,
+    budgetPromise,
+  ]);
+
+  const [poRes, rfqListRes, mrRes, declineCountRes] = listResults;
 
   const noQuoteTotal =
     declineCountRes.status === "fulfilled" ? Number(declineCountRes.value) : 0;
-
-  const budget =
-    budgetRes.status === "fulfilled"
-      ? budgetRes.value
-      : { kpi: unavailable(), chart: [] as BudgetActualPoint[], currency: "USD" };
 
   const poRows: PoLike[] =
     poRes.status === "fulfilled" ? (poRes.value as PoLike[]) : [];
@@ -599,15 +701,13 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
   const recentRfqs = rfqRows.slice(0, SAMPLE_LIMIT);
   // Cycle time only considers completed procurement — never Draft/Cancelled POs.
   const eligiblePos = poRows.filter(
-    (p) => p.status !== "Draft" && p.status !== "Cancelled"
+    (p) => p.status !== "Draft" && p.status !== "Cancelled",
   );
   const recentPos = eligiblePos.slice(0, SAMPLE_LIMIT);
 
-  // Hydrate join samples in parallel.
-  // SQ path uses list summaries (no N× get_doc). PO links prefer a single
-  // Purchase Order Item query before falling back to get_doc.
-  const [rfqDetails, quotesPerRfq, poDetails] = await timedDashApi(
-    "Supplier Analytics · hydrate samples",
+  // Primary hydrate: RFQ docs + SQ summaries only (no PO-item fan-out yet).
+  const [rfqDetails, quotesPerRfq] = await timedDashApi(
+    "Supplier Analytics · hydrate RFQ/SQ samples",
     () =>
       Promise.all([
         Promise.all(
@@ -624,7 +724,6 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
               .catch(() => ({ rfq: r, quotes: [] as SqLike[] })),
           ),
         ),
-        hydratePoDetailsForAnalytics(recentPos),
       ]),
   );
 
@@ -728,6 +827,131 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
     };
   }
 
+  /* ── On-time delivery (received POs vs required/schedule date) ── */
+  let received = 0;
+  let onTime = 0;
+  for (const po of poRows) {
+    if ((po.per_received ?? 0) < 100) continue;
+    const sched = safeDate(po.schedule_date);
+    const delivered = safeDate(po.modified);
+    if (!sched || !delivered) continue;
+    received += 1;
+    // Allow the whole scheduled day.
+    if (diffDays(delivered, sched) <= 1) onTime += 1;
+  }
+  let onTimeDelivery: AnalyticsKpi;
+  if (received === 0) {
+    onTimeDelivery = {
+      ...unavailable(),
+      display: "--",
+      emptyMessage: "No data available",
+      subtitle: "No fully received purchase orders yet",
+    };
+  } else {
+    const rate = (onTime / received) * 100;
+    onTimeDelivery = {
+      available: true,
+      value: Math.round(rate),
+      display: `${Math.round(rate)}%`,
+      status: rate >= 90 ? "good" : rate >= 75 ? "warning" : "bad",
+      trend: null,
+      sparkline: [],
+      progress: Math.min(100, Math.round(rate)),
+      meta: [
+        { label: "On time", value: String(onTime) },
+        { label: "Received", value: String(received) },
+      ],
+    };
+  }
+
+  logDashboardWidget("7. Budget Utilisation", {
+    available: budget.kpi.available,
+    display: budget.kpi.display,
+    value: budget.kpi.value,
+    meta: budget.kpi.meta,
+    currency: budget.currency,
+  });
+  logDashboardWidget("8. Cost Savings", {
+    available: savings.kpi.available,
+    display: savings.kpi.display,
+    value: savings.kpi.value,
+    meta: savings.kpi.meta,
+    source: "Highest SQ − Lowest SQ per RFQ",
+  });
+  logDashboardWidget("9. Supplier Response Rate", {
+    available: supplierResponse.available,
+    display: supplierResponse.display,
+    value: supplierResponse.value,
+    meta: supplierResponse.meta,
+    progress: supplierResponse.progress,
+  });
+  logDashboardWidget("10. On-Time Delivery", {
+    available: onTimeDelivery.available,
+    display: onTimeDelivery.display,
+    value: onTimeDelivery.value,
+    received,
+    onTime,
+  });
+
+  const analytics: ProcurementAnalytics = {
+    currency: budget.currency,
+    costSavings: savings.kpi,
+    budgetUtilisation: budget.kpi,
+    rfqTurnaround: waitingTurnaroundKpi(),
+    supplierResponse,
+    cycleTime: waitingCycleKpi(),
+    onTimeDelivery,
+    charts: {
+      monthlySpend,
+      budgetVsActual: budget.chart,
+      supplierResponse: supplierResponseChart,
+      rfqTurnaround: [],
+      costSavings: savings.chart,
+    },
+  };
+
+  const ctx: AnalyticsPrimaryContext = {
+    truth,
+    monthKeys,
+    poRows,
+    recentRfqs,
+    recentPos,
+    mrDateMap,
+    rfqDetails,
+    quotesPerRfq,
+    analytics,
+  };
+  primaryContextCache = ctx;
+  primaryContextAt = Date.now();
+
+  if (import.meta.env.DEV && t0) {
+    console.log(
+      `[Dashboard Perf] procurement analytics (primary) ${Math.round(performance.now() - t0)}ms`,
+    );
+  }
+
+  return ctx;
+}
+
+/**
+ * Phase 2 — PO item hydrate + cycle/turnaround joins.
+ * Heavy path; runs after primary KPI cards are already paint-ready.
+ */
+async function computeTurnaroundAndCycle(
+  ctx: AnalyticsPrimaryContext,
+): Promise<{
+  rfqTurnaround: AnalyticsKpi;
+  cycleTime: AnalyticsKpi;
+  rfqTurnaroundChart: TurnaroundPoint[];
+}> {
+  const { truth, monthKeys, recentRfqs, recentPos, mrDateMap, rfqDetails, quotesPerRfq } =
+    ctx;
+
+  const poDetails = await timedDashApi(
+    "Supplier Analytics · hydrate PO samples",
+    () => hydratePoDetailsForAnalytics(recentPos),
+  );
+
   /* ── Procurement cycle time ──────────────────────────────────────────────
    * Average(PO creation − Material Request creation) over completed POs. When a
    * PO has no linked Material Request, fall back to Average(PO − RFQ creation).
@@ -735,7 +959,6 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
    * out of `recentPos`). Durations are collected in HOURS so the card can show
    * hours for same-day cycles and days otherwise. */
 
-  // RFQ creation dates from the hydrated RFQ sample, plus an on-demand cache.
   const rfqDateByName = new Map<string, string>();
   recentRfqs.forEach((r, idx) => {
     const d = rfqDetails[idx];
@@ -743,8 +966,6 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
     if (r?.name && created) rfqDateByName.set(r.name, created);
   });
 
-  // Supplier Quotation → RFQ, so a PO that only links its winning SQ can still
-  // resolve back to the originating RFQ for the fallback.
   const sqToRfq = new Map<string, string>();
   for (const { rfq, quotes } of quotesPerRfq) {
     for (const q of quotes) {
@@ -800,21 +1021,14 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
       const sq = it.supplier_quotation;
       if (sq && sqToRfq.has(sq)) return sqToRfq.get(sq) ?? null;
     }
-    // `createPOFromRFQ` stores the originating RFQ name in the PO's remarks.
     const remarks = doc.remarks?.trim();
     if (remarks && /rfq/i.test(remarks)) return remarks;
     return null;
   }
 
-  // `sqToRfq` only knows about Supplier Quotations belonging to the small
-  // `recentRfqs` sample, so a PO's winning SQ is frequently absent from it
-  // even though the SQ itself always carries its originating RFQ on each
-  // line item. Hydrate that SQ on demand (cached) as a last-resort lookup so
-  // RFQ completion isn't silently missed just because the RFQ fell outside
-  // the bounded sample.
   const sqRfqCache = new Map<string, string | null>();
   async function resolveRfqForSupplierQuotation(
-    sqName: string
+    sqName: string,
   ): Promise<string | null> {
     if (sqRfqCache.has(sqName)) return sqRfqCache.get(sqName) ?? null;
     try {
@@ -832,9 +1046,6 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
     }
   }
 
-  // Resolve linkages in parallel. Cycle time uses ONLY
-  // Purchase Order Date − Material Request Date (completed cycles).
-  // RFQ turnaround uses completed_date (PO) − creation_date (RFQ).
   const cycleResolved = await Promise.all(
     poDetails.map(async (doc) => {
       if (!doc) return null;
@@ -882,7 +1093,6 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
     }),
   );
 
-  // RFQ name → earliest Purchase Order date (completed_date signal).
   const rfqCompletedAt = new Map<string, Date>();
   const cycleHours: number[] = [];
   for (const row of cycleResolved) {
@@ -896,9 +1106,6 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
     }
   }
 
-  /* ── RFQ turnaround = Average(completed_date − creation_date) over
-   * completed RFQs only. An RFQ is complete once a Purchase Order has been
-   * raised against it; that PO date is completed_date. */
   const turnaroundHours: number[] = [];
   const turnByMonth = new Map<string, number[]>();
   const turnEntries = await Promise.all(
@@ -921,7 +1128,6 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
     }
   }
 
-  // Only months with real averages — never pad charts with 0 days.
   const rfqTurnaroundChart: TurnaroundPoint[] = monthKeys
     .map((k) => {
       const values = turnByMonth.get(k) ?? [];
@@ -932,8 +1138,6 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
     })
     .filter((p): p is TurnaroundPoint => p != null);
 
-  // Completed RFQs = RFQs with a linked PO (closed) in the analytics sample.
-  // Open RFQs = exact ERP count (same filter as top KPI card).
   const completedRfqCount = turnaroundHours.length;
   const openRfqCount = truth.openRfqs;
 
@@ -1031,43 +1235,6 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
     };
   }
 
-  /* ── On-time delivery (received POs vs required/schedule date) ── */
-  let received = 0;
-  let onTime = 0;
-  for (const po of poRows) {
-    if ((po.per_received ?? 0) < 100) continue;
-    const sched = safeDate(po.schedule_date);
-    const delivered = safeDate(po.modified);
-    if (!sched || !delivered) continue;
-    received += 1;
-    // Allow the whole scheduled day.
-    if (diffDays(delivered, sched) <= 1) onTime += 1;
-  }
-  let onTimeDelivery: AnalyticsKpi;
-  if (received === 0) {
-    onTimeDelivery = {
-      ...unavailable(),
-      display: "--",
-      emptyMessage: "No data available",
-      subtitle: "No fully received purchase orders yet",
-    };
-  } else {
-    const rate = (onTime / received) * 100;
-    onTimeDelivery = {
-      available: true,
-      value: Math.round(rate),
-      display: `${Math.round(rate)}%`,
-      status: rate >= 90 ? "good" : rate >= 75 ? "warning" : "bad",
-      trend: null,
-      sparkline: [],
-      progress: Math.min(100, Math.round(rate)),
-      meta: [
-        { label: "On time", value: String(onTime) },
-        { label: "Received", value: String(received) },
-      ],
-    };
-  }
-
   logDashboardWidget("5. RFQ Turnaround", {
     available: rfqTurnaround.available,
     display: rfqTurnaround.display,
@@ -1087,55 +1254,6 @@ export async function fetchProcurementAnalytics(): Promise<ProcurementAnalytics>
     completedCycles: completedCyclesCount,
     formula: "PO submitted − Material Request submitted",
   });
-  logDashboardWidget("7. Budget Utilisation", {
-    available: budget.kpi.available,
-    display: budget.kpi.display,
-    value: budget.kpi.value,
-    meta: budget.kpi.meta,
-    currency: budget.currency,
-  });
-  logDashboardWidget("8. Cost Savings", {
-    available: savings.kpi.available,
-    display: savings.kpi.display,
-    value: savings.kpi.value,
-    meta: savings.kpi.meta,
-    source: "Highest SQ − Lowest SQ per RFQ",
-  });
-  logDashboardWidget("9. Supplier Response Rate", {
-    available: supplierResponse.available,
-    display: supplierResponse.display,
-    value: supplierResponse.value,
-    meta: supplierResponse.meta,
-    progress: supplierResponse.progress,
-  });
-  logDashboardWidget("10. On-Time Delivery", {
-    available: onTimeDelivery.available,
-    display: onTimeDelivery.display,
-    value: onTimeDelivery.value,
-    received,
-    onTime,
-  });
 
-  if (import.meta.env.DEV && t0) {
-    console.log(
-      `[Dashboard Perf] procurement analytics ${Math.round(performance.now() - t0)}ms`,
-    );
-  }
-
-  return {
-    currency: budget.currency,
-    costSavings: savings.kpi,
-    budgetUtilisation: budget.kpi,
-    rfqTurnaround,
-    supplierResponse,
-    cycleTime,
-    onTimeDelivery,
-    charts: {
-      monthlySpend,
-      budgetVsActual: budget.chart,
-      supplierResponse: supplierResponseChart,
-      rfqTurnaround: rfqTurnaroundChart,
-      costSavings: savings.chart,
-    },
-  };
+  return { rfqTurnaround, cycleTime, rfqTurnaroundChart };
 }

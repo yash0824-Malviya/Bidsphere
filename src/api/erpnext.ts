@@ -347,9 +347,8 @@ erpnext.interceptors.response.use(
     }
 
     // ─── Full structured log ───────────────────────────────────────────
-    // Single console.error grouping every piece of context Frappe spreads
-    // across multiple response keys, so you don't need to click through
-    // a collapsed object view to see what actually went wrong.
+    // Always log the complete Frappe payload (HTTP 417 ValidationError etc.).
+    const parsedValidation = extractErpNextError(data);
     // eslint-disable-next-line no-console
     console.error("[ERPNext Full Error]", {
       status,
@@ -357,13 +356,34 @@ erpnext.interceptors.response.use(
       method: error.config?.method,
       requestData,
       responseData: data,
+      completeResponse: data,
       exc: data?.exc,
       exc_type: data?.exc_type,
+      exception: data?.exception,
       server_messages: data?._server_messages,
       message: data?.message,
+      parsedValidation,
     });
+    if (
+      typeof error.config?.url === "string" &&
+      /frappe\.client\.(save|submit|insert)/i.test(error.config.url)
+    ) {
+      // eslint-disable-next-line no-console
+      console.error("[frappe.client.save] non-200 response — complete body", {
+        status,
+        url: error.config.url,
+        _server_messages: data?._server_messages,
+        exc: data?.exc,
+        exception: data?.exception,
+        message: data?.message,
+        exc_type: data?.exc_type,
+        parsedValidation,
+        completeResponse: data,
+      });
+    }
 
     // ─── Message cascade (most informative → least) ────────────────────
+    // Prefer real ERPNext validation text — never collapse to a generic toast.
     let message = "Request failed";
     // CSRFTokenError on token-auth POSTs surfaces as a generic "Invalid
     // Request" via `_server_messages`; promote it to a clearer label so
@@ -373,28 +393,39 @@ erpnext.interceptors.response.use(
         "CSRFTokenError: missing or invalid X-Frappe-CSRF-Token header.";
     } else if (data?.exc_type === "DoesNotExistError" || status === 404) {
       const docName = extractDocNameFromUrl(error.config?.url);
-      message = docName
-        ? `${docName.doctype} "${docName.name}" does not exist in ERPNext.`
-        : "The requested document does not exist.";
+      // Prefer the ERPNext exception text — child-table naming failures often
+      // surface as DoesNotExistError while the parent URL still exists.
+      const serverMsg = parsedValidation;
+      message =
+        (serverMsg && /does not exist|not found|Please set the document name/i.test(serverMsg)
+          ? serverMsg
+          : null) ||
+        (docName
+          ? `${docName.doctype} "${docName.name}" does not exist in ERPNext.`
+          : "The requested document does not exist.");
       // eslint-disable-next-line no-console
       console.warn("[DoesNotExistError]", {
         url: error.config?.url,
         doctype: docName?.doctype,
         document: docName?.name,
+        serverMessage: serverMsg || null,
+        resolvedMessage: message,
       });
-      error.message = String(message);
+      error.message = cleanErpValidationMessage(String(message));
       (error as AxiosError & { _isDocNotFound: boolean })._isDocNotFound = true;
       return Promise.reject(error);
     } else if (data?.exc_type === "LinkValidationError") {
       message =
         friendlyLinkValidationMessage(data) ??
+        parsedValidation ??
         "A linked record is missing. Please check your selections.";
     } else if (data?.exc_type === "MandatoryError") {
       message =
         friendlyMandatoryErrorMessage(data) ??
+        parsedValidation ??
         "Please fill in all required fields.";
     } else if (data?.exc_type === "UpdateAfterSubmitError") {
-      const serverMsg = extractErpNextError(data) || data.message || error.message;
+      const serverMsg = parsedValidation || data.message || error.message;
       const match = String(serverMsg).match(
         /(?:UpdateAfterSubmitError|Not allowed to change|Cannot change)\s+(?:['"`]?([^'"`\n]+)['"`]?|([^\n]+?))\s+after submission/i
       );
@@ -402,25 +433,34 @@ erpnext.interceptors.response.use(
       message = fieldName
         ? `UpdateAfterSubmitError: Not allowed to change ${fieldName} after submission`
         : String(serverMsg);
-    } else {
-      // Combine ALL server messages + the exc exception line so the real
-      // ValidationError isn't hidden behind an informational alert.
-      const combined = extractErpNextError(data);
-      if (combined) {
-        message = combined;
-      } else if (data?.exception) {
-        message = String(data.exception);
-      } else if (typeof data?.message === "string" && data.message) {
-        message = data.message;
-      } else if (error.message) {
-        message = error.message;
-      }
+    } else if (parsedValidation) {
+      // ValidationError (often HTTP 417) and any other Frappe business error.
+      message = parsedValidation;
+    } else if (data?.exception) {
+      message = String(data.exception);
+    } else if (typeof data?.message === "string" && data.message) {
+      message = data.message;
+    } else if (error.message) {
+      message = error.message;
     }
+
+    message = cleanErpValidationMessage(String(message));
 
     // Keep the friendly mapping for connection-level errors (timeout /
     // 502 / 503 / 504 / network) so users see actionable hints instead
     // of "Request failed" when ERPNext is simply offline.
-    const friendly = friendlyErrorMessage(error) || message;
+    const connectionFriendly = friendlyErrorMessage(error);
+    const isConnectionIssue =
+      error.code === "ECONNABORTED" ||
+      error.code === "ERR_NETWORK" ||
+      error.message === "Network Error" ||
+      status === 502 ||
+      status === 503 ||
+      status === 504;
+    const toastMessage =
+      isConnectionIssue && connectionFriendly
+        ? connectionFriendly
+        : message;
 
     const isSchemaNoise =
       data?.exc_type === "QueryDeadlockError" ||
@@ -434,7 +474,8 @@ erpnext.interceptors.response.use(
       isSchemaNoise;
 
     if (!silent && status !== 403 && typeof window !== "undefined") {
-      surfaceErrorToast(friendly);
+      // Surface the real validation message (HTTP 417 included).
+      surfaceErrorToast(toastMessage);
     }
 
     // Mutate the AxiosError's message in place rather than wrapping it
@@ -795,9 +836,9 @@ export async function fetchPagedList<T = unknown>(
 }
 
 interface ErpNextErrorPayload {
-  message?: string;
+  message?: string | { message?: string };
   /** ERPNext attaches the full Python traceback as a JSON-encoded list. */
-  exc?: string;
+  exc?: string | string[];
   exception?: string;
   exc_type?: string;
   /**
@@ -805,7 +846,7 @@ interface ErpNextErrorPayload {
    * (each containing `{title, message, indicator, raise_exception}`).
    * Frappe's two layers of stringification are why parsing is fiddly.
    */
-  _server_messages?: string;
+  _server_messages?: string | unknown[];
   _error_message?: string;
 }
 
@@ -824,6 +865,9 @@ function friendlyLinkValidationMessage(
   if (data.exception) parts.push(stripHtml(String(data.exception)));
   if (typeof data.message === "string" && data.message) {
     parts.push(stripHtml(data.message));
+  } else if (data.message && typeof data.message === "object") {
+    const nested = (data.message as { message?: unknown }).message;
+    if (typeof nested === "string" && nested) parts.push(stripHtml(nested));
   }
 
   const raw = parts.join(" | ");
@@ -862,7 +906,15 @@ function friendlyMandatoryErrorMessage(
 
   const combined = extractErpNextError(data);
   const exception = data.exception ? stripHtml(String(data.exception)) : "";
-  const raw = [combined, exception, data.message]
+  const msg =
+    typeof data.message === "string"
+      ? data.message
+      : data.message && typeof data.message === "object"
+        ? String(
+            (data.message as { message?: unknown }).message || "",
+          )
+        : "";
+  const raw = [combined, exception, msg]
     .filter((part) => typeof part === "string" && part.length > 0)
     .join(" | ");
 
@@ -980,56 +1032,110 @@ function friendlyErrorMessage(
  * first one is what previously hid the real error behind a benign
  * "Item Price added…" alert.
  */
-function parseAllServerMessages(raw: string): string[] {
+function parseAllServerMessages(raw: unknown): string[] {
   const out: string[] = [];
-  try {
-    const outer = JSON.parse(raw);
-    if (!Array.isArray(outer)) return out;
-    for (const entry of outer) {
-      if (typeof entry === "string") {
-        try {
-          const inner = JSON.parse(entry) as {
-            message?: string;
-            title?: string;
-          };
-          const m = inner?.message || inner?.title;
-          if (m) out.push(stripHtml(m));
-        } catch {
-          out.push(stripHtml(entry));
-        }
-      } else if (entry && typeof entry === "object") {
-        const obj = entry as { message?: string; title?: string };
-        const m = obj.message || obj.title;
-        if (m) out.push(stripHtml(m));
-      }
+  if (raw == null) return out;
+
+  let outer: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      outer = JSON.parse(raw);
+    } catch {
+      out.push(stripHtml(raw));
+      return out;
     }
-  } catch {
-    /* fall through */
+  }
+
+  if (!Array.isArray(outer)) {
+    if (typeof outer === "string") out.push(stripHtml(outer));
+    return out;
+  }
+
+  for (const entry of outer) {
+    if (typeof entry === "string") {
+      try {
+        const inner = JSON.parse(entry) as {
+          message?: string;
+          title?: string;
+        };
+        const m = inner?.message || inner?.title;
+        if (m) out.push(stripHtml(String(m)));
+      } catch {
+        out.push(stripHtml(entry));
+      }
+    } else if (entry && typeof entry === "object") {
+      const obj = entry as { message?: string; title?: string };
+      const m = obj.message || obj.title;
+      if (m) out.push(stripHtml(String(m)));
+    }
   }
   return out;
 }
 
+/** Strip Frappe exception class prefixes so toasts show the real validation text. */
+export function cleanErpValidationMessage(raw: string): string {
+  return stripHtml(raw)
+    .replace(/^frappe\.exceptions\.\w+:\s*/gi, "")
+    .replace(
+      /^(ValidationError|MandatoryError|LinkValidationError|PermissionError|DoesNotExistError|UniqueValidationError|InvalidWarehouseCompanyError):\s*/gi,
+      "",
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
  * Combine everything Frappe tells us about a failure into one message:
- * all `_server_messages` *plus* the real exception line from `exc`,
- * de-duplicated and joined. This guarantees the actual `ValidationError`
- * is shown even when an informational alert is also present.
+ * `_server_messages` + `exc` + `exception` + `message`, de-duplicated.
+ * Prefer the clean validation text (never hide it behind a generic toast).
  */
-function extractErpNextError(data: ErpNextErrorPayload | undefined): string | null {
+function extractErpNextError(
+  data: ErpNextErrorPayload | undefined,
+): string | null {
   if (!data) return null;
   const parts: string[] = [];
 
+  const push = (value: string | null | undefined) => {
+    if (!value) return;
+    const cleaned = cleanErpValidationMessage(String(value));
+    if (!cleaned) return;
+    // Drop pure traceback noise; keep the validation line.
+    if (/^Traceback \(most recent call last\)/i.test(cleaned)) return;
+    if (!parts.includes(cleaned)) parts.push(cleaned);
+  };
+
   if (data._server_messages) {
     for (const m of parseAllServerMessages(data._server_messages)) {
-      if (m && !parts.includes(m)) parts.push(m);
+      push(m);
     }
   }
   if (data.exc) {
-    const excMsg = parseExc(data.exc);
-    if (excMsg && !parts.includes(excMsg)) parts.push(excMsg);
+    push(parseExc(data.exc));
+  }
+  if (data.exception) {
+    push(String(data.exception));
+  }
+  if (typeof data.message === "string" && data.message) {
+    push(data.message);
+  } else if (data.message && typeof data.message === "object") {
+    // Some endpoints nest `{ message: { message: "..." } }`.
+    const nested = data.message as { message?: unknown };
+    if (typeof nested.message === "string") push(nested.message);
+  }
+  if (data._error_message) {
+    push(String(data._error_message));
   }
 
   return parts.length ? parts.join(" | ") : null;
+}
+
+/**
+ * Public helper — parse any Frappe/ERPNext error payload (incl. HTTP 417)
+ * into a user-facing validation message.
+ */
+export function extractErpNextErrorMessage(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  return extractErpNextError(data as ErpNextErrorPayload);
 }
 
 /**
@@ -1037,13 +1143,37 @@ function extractErpNextError(data: ErpNextErrorPayload | undefined): string | nu
  * We pull out the last non-empty traceback line which is almost always
  * the exception class plus its message.
  */
-function parseExc(raw: string): string | null {
+function parseExc(raw: unknown): string | null {
   try {
-    const arr = JSON.parse(raw);
-    const trace = Array.isArray(arr) ? arr[0] : raw;
+    let trace: unknown = raw;
+    if (typeof raw === "string") {
+      try {
+        const arr = JSON.parse(raw);
+        trace = Array.isArray(arr) ? arr[0] : raw;
+      } catch {
+        trace = raw;
+      }
+    } else if (Array.isArray(raw)) {
+      trace = raw[0];
+    }
     if (typeof trace !== "string") return null;
-    const lines = trace.split("\n").map((s) => s.trim()).filter(Boolean);
-    return lines.length > 0 ? stripHtml(lines[lines.length - 1]) : null;
+    const lines = trace
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (lines.length === 0) return null;
+    // Prefer the last ValidationError / MandatoryError line when present.
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      if (
+        /ValidationError|MandatoryError|LinkValidationError|DoesNotExistError|PermissionError|does not belong|Mandatory field/i.test(
+          line,
+        )
+      ) {
+        return stripHtml(line);
+      }
+    }
+    return stripHtml(lines[lines.length - 1]);
   } catch {
     return null;
   }

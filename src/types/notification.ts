@@ -23,11 +23,16 @@ export type NotificationModule =
   | "GRN"
   | "Inventory"
   | "RFQ Invitation"
+  | "RFI"
+  | "RFI Invitation"
+  | "RFP"
+  | "RFP Invitation"
   | "Quotation Status"
   | "Invoice Status"
   | "Payment Status"
   | "Live Auction"
-  | "SLA";
+  | "SLA"
+  | "Material Issue Receipt";
 
 export type NotificationTargetRole = AppRole | "supplier";
 
@@ -76,6 +81,8 @@ export const ROLE_ALLOWED_MODULES: Record<
   admin: new Set(["System", "Audit", "Users", "Workflow", "SLA"]),
   procurement: new Set([
     "RFQ",
+    "RFI",
+    "RFP",
     "Supplier Quotation",
     "AI Analysis",
     "Legal Review",
@@ -83,6 +90,11 @@ export const ROLE_ALLOWED_MODULES: Record<
     "Purchase Order",
     "Budget",
   ]),
+  /**
+   * Procurement Team — PO operations + GRN monitoring only.
+   * No Invoice / Voucher / RFQ / Budget / Legal / AI modules.
+   */
+  procurement_team: new Set(["Purchase Order", "PO Ready for GRN", "GRN"]),
   legal: new Set(["Legal Review", "Supplier Documents", "Compliance"]),
   finance: new Set([
     "Voucher",
@@ -92,13 +104,20 @@ export const ROLE_ALLOWED_MODULES: Record<
     "Outstanding Payables",
   ]),
   finance_executive: new Set(["Budget"]),
-  warehouse: new Set(["PO Ready for GRN", "GRN", "Inventory"]),
-  department: new Set(["Purchase Order"]),
+  warehouse: new Set([
+    "PO Ready for GRN",
+    "GRN",
+    "Inventory",
+    "Material Issue Receipt",
+  ]),
+  department: new Set(["Purchase Order", "Material Issue Receipt"]),
   manufacturing: new Set(["Inventory"]),
 };
 
 export const SUPPLIER_ALLOWED_MODULES = new Set<NotificationModule>([
   "RFQ Invitation",
+  "RFI Invitation",
+  "RFP Invitation",
   "Quotation Status",
   "Purchase Order",
   "Invoice Status",
@@ -118,10 +137,13 @@ export const WAREHOUSE_MODULES = new Set<NotificationModule>([
   "PO Ready for GRN",
   "GRN",
   "Inventory",
+  "Material Issue Receipt",
 ]);
 
 export const PROCUREMENT_MODULES = new Set<NotificationModule>([
   "RFQ",
+  "RFI",
+  "RFP",
   "Supplier Quotation",
   "AI Analysis",
   "Legal Review",

@@ -73,7 +73,6 @@ import {
 } from "../../utils/format";
 import { SUPPORT_EMAIL } from "../../utils/supplierPortalUtils";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 import type { PurchaseOrder } from "../../types/erpnext";
 import type { PaymentSummary } from "../../api/supplierPortal";
 import type { TimelineStep } from "../../components/supplier-portal/ProcurementTimeline";
@@ -448,22 +447,22 @@ export default function SupplierPOPage() {
   /* ── Loading skeleton ─────────────────────────────────────────────────── */
   if (!sessionReady || !supplierName || isLoading) {
     return (
-      <SupplierPortalLayout>
+      
         <AppLoading variant="document" />
-      </SupplierPortalLayout>
+      
     );
   }
 
   /* ── Error / not found ────────────────────────────────────────────────── */
   if (isError || !po) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <EnterpriseError
           error={error ?? new Error("not found")}
           onRetry={() => void refetch()}
           onBack={() => window.history.back()}
         />
-      </SupplierPortalLayout>
+      
     );
   }
 
@@ -479,14 +478,14 @@ export default function SupplierPOPage() {
 
   if (!isOwner) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <BackLink />
         <EmptyState
           icon={ShoppingCart}
           title="Access denied"
           description="This purchase order does not belong to your supplier account."
         />
-      </SupplierPortalLayout>
+      
     );
   }
 
@@ -542,7 +541,7 @@ export default function SupplierPOPage() {
 
   /* ── Render ───────────────────────────────────────────────────────────── */
   return (
-    <SupplierPortalLayout supplierName={supplierName}>
+    
       <BackLink />
 
       {/* PO header */}
@@ -1387,7 +1386,7 @@ export default function SupplierPOPage() {
           </div>
         </div>
       )}
-    </SupplierPortalLayout>
+    
   );
 }
 
@@ -1629,7 +1628,7 @@ function ItemStatusBadge({
   const styles = {
     success: "bg-emerald-100 text-emerald-800 ring-emerald-200",
     warning: "bg-amber-100 text-amber-800 ring-amber-200",
-    info: "bg-sky-100 text-sky-800 ring-sky-200",
+    info: "bg-primary-100 text-primary-800 ring-primary-200",
     neutral: "bg-neutral-100 text-neutral-600 ring-neutral-200",
   };
   return (

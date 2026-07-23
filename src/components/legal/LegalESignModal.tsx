@@ -110,7 +110,7 @@ function LegalESignModalBody({
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
               autoFocus
-              className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none ring-sky-500/30 transition focus:border-sky-400 focus:ring-2"
+              className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 outline-none ring-primary-500/30 transition focus:border-primary-400 focus:ring-2"
               placeholder="Enter your full legal name"
             />
           </label>
@@ -129,7 +129,7 @@ function LegalESignModalBody({
                     onClick={() => setFontId(f.id)}
                     className={`flex items-center justify-between rounded-xl border px-3.5 py-2.5 text-left transition ${
                       selected
-                        ? "border-sky-400 bg-sky-50 ring-2 ring-sky-200"
+                        ? "border-primary-400 bg-primary-50 ring-2 ring-primary-200"
                         : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
                     }`}
                   >
@@ -148,8 +148,8 @@ function LegalESignModalBody({
             </div>
           </div>
 
-          <div className="rounded-xl border border-dashed border-sky-200 bg-gradient-to-b from-sky-50/80 to-white px-4 py-6 text-center shadow-sm">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-600/80">
+          <div className="rounded-xl border border-dashed border-primary-200 bg-gradient-to-b from-primary-50/80 to-white px-4 py-6 text-center shadow-sm">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-primary-600/80">
               Live Preview
             </p>
             <p
@@ -165,7 +165,7 @@ function LegalESignModalBody({
               type="checkbox"
               checked={confirmed}
               onChange={(e) => setConfirmed(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500"
             />
             <span className="text-sm leading-snug text-slate-700">
               I confirm this is my electronic signature and I intend to sign

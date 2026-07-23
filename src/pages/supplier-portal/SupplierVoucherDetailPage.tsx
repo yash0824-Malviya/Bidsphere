@@ -33,7 +33,6 @@ import type { Voucher } from "../../types/voucher";
 import { formatCurrency, formatDate } from "../../utils/format";
 import { toERPDate, toERPDateTime } from "../../utils/erpDate";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 
 function invoiceCreateErrorMessage(err: unknown): string {
   const ax = err as AxiosError<{ message?: string; error?: string }> & {
@@ -201,18 +200,18 @@ export default function SupplierVoucherDetailPage() {
 
   if (!isReady || loading) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
           Loading…
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
   if (!voucher || loadError) {
     const forbidden = loadError?.status === 403;
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <BackLink />
         <EmptyState
           icon={FileText}
@@ -224,7 +223,7 @@ export default function SupplierVoucherDetailPage() {
               : "This voucher may not exist or is not addressed to your company.")
           }
         />
-      </SupplierPortalLayout>
+      
     );
   }
 
@@ -333,7 +332,7 @@ export default function SupplierVoucherDetailPage() {
   }
 
   return (
-    <SupplierPortalLayout supplierName={supplierName}>
+    
       <BackLink />
       <PageHeader
         title="Voucher"
@@ -729,7 +728,7 @@ export default function SupplierVoucherDetailPage() {
           </div>
         </div>
       </div>
-    </SupplierPortalLayout>
+    
   );
 }
 

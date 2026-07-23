@@ -653,7 +653,7 @@ export default function LegalPdfViewer({
 
                     {showGhost && ghost ? (
                       <div
-                        className="pointer-events-none absolute z-10 rounded-md border-2 border-dashed border-sky-400 bg-sky-200/35 shadow-sm"
+                        className="pointer-events-none absolute z-10 rounded-md border-2 border-dashed border-primary-400 bg-primary-200/35 shadow-sm"
                         style={{
                           left: `${ghost.xPct}%`,
                           top: `${ghost.yPct}%`,
@@ -663,11 +663,11 @@ export default function LegalPdfViewer({
                         }}
                       >
                         <div className="flex h-full flex-col items-center justify-center px-2 text-center">
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-700">
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-primary-700">
                             Signature Area
                           </p>
                           <p
-                            className="truncate text-lg text-sky-900/80"
+                            className="truncate text-lg text-primary-900/80"
                             style={{ fontFamily: fontCss }}
                           >
                             {pendingTyped}
@@ -742,7 +742,7 @@ export default function LegalPdfViewer({
       </div>
 
       {pendingTyped ? (
-        <div className="border-t border-sky-100 bg-sky-50 px-4 py-2 text-center text-xs font-medium text-sky-900">
+        <div className="border-t border-primary-100 bg-primary-50 px-4 py-2 text-center text-xs font-medium text-primary-900">
           Move the blue signature area, then click to place
           {" · "}
           <button

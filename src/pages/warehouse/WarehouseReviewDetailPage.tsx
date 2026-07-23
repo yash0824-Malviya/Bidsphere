@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { Fragment, useState, useEffect } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
@@ -6,16 +6,21 @@ import {
   ArrowLeft,
   Loader2,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Truck,
   XCircle,
   AlertTriangle,
   RefreshCw,
 } from "lucide-react";
 
+import StockDecisionAttachmentChip from "../../components/warehouse/StockDecisionAttachmentChip";
 import {
-  Drawing2dCell,
-  PartNameCell,
-} from "../../components/warehouse/EngineeringDocCells";
+  formatStockDecisionsTag,
+  persistStockDecisionAudit,
+  type StockDecisionAction,
+  type StockDecisionAuditRow,
+} from "../../api/stockDecisionAudit";
 import {
   getMaterialRequestDetail,
   rejectMaterialRequest,
@@ -25,17 +30,42 @@ import {
   createWarehouseReview,
   forwardMaterialRequestToProcurement,
 } from "../../api/materialRequestWorkflow";
-import { apiGet, apiPost, buildListConfig, COMPANY } from "../../api/erpnext";
+import { apiPost } from "../../api/erpnext";
 import {
   forwardToProcurement,
   invalidateForwardCaches,
 } from "../../services/warehouseService";
 import { AppLoading, EnterpriseError } from "../../components/enterprise";
-import { validateWarehouseBelongsToCompany } from "../../utils/warehouseValidation";
 import { sanitizeFrappeError } from "../../utils/friendlyError";
 import { useAuthStore } from "../../store/authStore";
 import { logMrWorkflowStage } from "../../utils/mrWorkflowDebug";
 import { engineeringCustomFieldsForErp } from "../../utils/materialRequestItemFiles";
+import { nonNegativeQty } from "../../utils/inventoryStock";
+import {
+  assertMaterialRequestIsWarehouseCompany,
+  assertNetlinkWarehouse,
+  logWarehouseCompanyDiagnostics,
+  resolveNetlinkIssueSourceWarehouse,
+  resolveNetlinkStoresWarehouse,
+  resolveNetlinkWarehouses,
+  resolvePurchaseWarehouseForCompany,
+  resolveWarehouseStockCompany,
+  WAREHOUSE_MODULE_COMPANY,
+} from "../../api/warehouseCompany";
+import {
+  applyCostCentersToStockEntryDoc,
+  fetchMrItemCostCenters,
+} from "../../api/stockEntryCostCenter";
+import { createMaterialIssueReceipt } from "../../api/materialIssueReceipt";
+import {
+  fetchStockCheck,
+  StockCheckApiError,
+} from "../../api/stockCheck";
+import {
+  isWarehouseCompanyMismatchError,
+  SELECTED_WAREHOUSE_OTHER_COMPANY_MESSAGE,
+  WAREHOUSE_COMPANY_MISMATCH_REASON,
+} from "../../utils/warehouseValidation";
 
 function extractSavedDocName(saved: unknown): string | undefined {
   if (!saved || typeof saved !== "object") return undefined;
@@ -49,10 +79,19 @@ function extractSavedDocName(saved: unknown): string | undefined {
   return undefined;
 }
 
+/** Per-line outcome after Process Selected (session-scoped). */
+interface ProcessedLineResult {
+  item_code: string;
+  status: "issued" | "forwarded" | "forward_failed";
+  reason?: string;
+  reasonCode?: "warehouse_company_mismatch" | "other";
+}
+
 /** Read-only summary of a completed warehouse decision (session-scoped). */
 interface ProcessedSummary {
   issuedItems: number;
   forwardedItems: number;
+  failedItems: number;
   issuedQty: number;
   forwardedQty: number;
   processedBy: string;
@@ -60,6 +99,7 @@ interface ProcessedSummary {
   remarks: string;
   outcome: "issued" | "forwarded" | "partial";
   purchaseMR?: string;
+  lineResults: ProcessedLineResult[];
 }
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -67,12 +107,16 @@ interface ProcessedSummary {
 interface BinRow {
   warehouse: string;
   actual_qty: number;
+  reserved_qty: number;
+  /** max(0, actual - reserved) — used for Available Qty / decisions. */
+  available_qty: number;
 }
 
 type ItemDecisionType =
   "issue_local" | "issue_transfer" | "forward_procurement";
 
 interface ItemStockResult {
+  /** Total available across warehouses (never negative). */
   totalQty: number;
   localQty: number;
   bestWarehouse: string;
@@ -98,76 +142,6 @@ interface MRResponse {
 
 // ─── API helpers ───────────────────────────────────────────────────────────────
 
-async function checkItemAcrossAllWarehouses(
-  itemCode: string,
-  requestedQty: number,
-  netlinkWhNames: string[],
-): Promise<ItemStockResult> {
-  if (netlinkWhNames.length === 0) {
-    return {
-      totalQty: 0,
-      localQty: 0,
-      bestWarehouse: "",
-      bestWarehouseQty: 0,
-      allBins: [],
-      canIssueLocally: false,
-      canIssueWithTransfer: false,
-      cannotFulfill: true,
-      shortage: requestedQty,
-      decision: "forward_procurement",
-    };
-  }
-
-  const bins = await apiGet<BinRow[]>(
-    "/api/resource/Bin",
-    buildListConfig({
-      filters: [
-        ["item_code", "=", itemCode],
-        ["warehouse", "in", netlinkWhNames],
-      ],
-      fields: ["warehouse", "actual_qty"],
-      limit_page_length: 50,
-    }),
-  );
-
-  const rows: BinRow[] = Array.isArray(bins) ? bins : [];
-
-  const totalQty = rows.reduce((sum, b) => sum + (b.actual_qty || 0), 0);
-  const sorted = [...rows].sort(
-    (a, b) => (b.actual_qty || 0) - (a.actual_qty || 0),
-  );
-  const bestBin = sorted[0];
-  const localBin = rows.find((b) =>
-    b.warehouse.toLowerCase().includes("stores"),
-  );
-  const localQty = localBin?.actual_qty ?? 0;
-
-  // canIssueWithTransfer only when a single non-local warehouse has enough
-  // (the transfer step moves from one warehouse — multi-source is not supported).
-  const bestBinQty = bestBin?.actual_qty ?? 0;
-  const canIssueLocally = localQty >= requestedQty;
-  const canIssueWithTransfer = !canIssueLocally && bestBinQty >= requestedQty;
-  const cannotFulfill = !canIssueLocally && !canIssueWithTransfer;
-
-  let decision: ItemDecisionType;
-  if (canIssueLocally) decision = "issue_local";
-  else if (canIssueWithTransfer) decision = "issue_transfer";
-  else decision = "forward_procurement";
-
-  return {
-    totalQty,
-    localQty,
-    bestWarehouse: bestBin?.warehouse ?? "",
-    bestWarehouseQty: bestBin?.actual_qty ?? 0,
-    allBins: sorted,
-    canIssueLocally,
-    canIssueWithTransfer,
-    cannotFulfill,
-    shortage: Math.max(0, requestedQty - totalQty),
-    decision,
-  };
-}
-
 /** Best-effort audit comment on a Material Request. Never throws. */
 async function addMRComment(mrName: string, message: string): Promise<void> {
   try {
@@ -192,11 +166,58 @@ async function addMRComment(mrName: string, message: string): Promise<void> {
  */
 async function createAndSubmitStockEntry(
   doc: Record<string, unknown>,
+  opts?: { mrName?: string },
 ): Promise<string> {
-  // frappe.client.save lets ERPNext compute basic_rate, valuation_rate, etc.
-  const saved = await apiPost<SEResponse>("/api/method/frappe.client.save", {
-    doc,
+  // Cost Center must match Stock Entry company (never Main - B on Netlink).
+  const mrCostCenters = opts?.mrName
+    ? await fetchMrItemCostCenters(opts.mrName)
+    : undefined;
+  const costCenter = await applyCostCentersToStockEntryDoc(
+    doc as {
+      company?: string;
+      cost_center?: string;
+      from_warehouse?: string;
+      items?: Array<Record<string, unknown>>;
+    },
+    { mrItemCostCenters: mrCostCenters },
+  );
+  const company = String(doc.company || "");
+  const warehouse = String(
+    doc.from_warehouse ||
+      (Array.isArray(doc.items) &&
+        (doc.items[0] as { s_warehouse?: string } | undefined)?.s_warehouse) ||
+      "",
+  );
+  // eslint-disable-next-line no-console
+  console.log("[Process Selected] Stock Entry before save", {
+    company,
+    costCenter,
+    warehouse,
   });
+  // eslint-disable-next-line no-console
+  console.log("[Process Selected] Stock Entry ERP request", doc);
+  // frappe.client.save lets ERPNext compute basic_rate, valuation_rate, etc.
+  let saved: SEResponse;
+  try {
+    saved = await apiPost<SEResponse>("/api/method/frappe.client.save", {
+      doc,
+    });
+  } catch (err) {
+    const ax = err as {
+      response?: { status?: number; data?: unknown };
+      message?: string;
+    };
+    // eslint-disable-next-line no-console
+    console.error("[frappe.client.save] Material Issue failed — complete response", {
+      status: ax.response?.status,
+      completeResponse: ax.response?.data,
+      message: ax.message,
+      requestDoc: doc,
+    });
+    throw err;
+  }
+  // eslint-disable-next-line no-console
+  console.log("[Process Selected] Stock Entry ERP save response", saved);
   const seName = saved?.name;
   if (!seName) {
     throw new Error(
@@ -204,9 +225,29 @@ async function createAndSubmitStockEntry(
     );
   }
 
-  await apiPost("/api/method/frappe.client.submit", {
-    doc: saved,
-  });
+  try {
+    const submitted = await apiPost("/api/method/frappe.client.submit", {
+      doc: saved,
+    });
+    // eslint-disable-next-line no-console
+    console.log("[Process Selected] Stock Entry ERP submit response", {
+      stock_entry: seName,
+      submitted,
+    });
+  } catch (err) {
+    const ax = err as {
+      response?: { status?: number; data?: unknown };
+      message?: string;
+    };
+    // eslint-disable-next-line no-console
+    console.error("[frappe.client.submit] Material Issue failed — complete response", {
+      status: ax.response?.status,
+      completeResponse: ax.response?.data,
+      message: ax.message,
+      stock_entry: seName,
+    });
+    throw err;
+  }
 
   return seName;
 }
@@ -260,25 +301,221 @@ async function rollbackWarehouseProcess(opts: {
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
 
-function DecisionBadge({ decision }: { decision: ItemDecisionType }) {
-  if (decision === "issue_local") {
-    return (
-      <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700">
-        ✓ Issue Locally
-      </span>
-    );
-  }
-  if (decision === "issue_transfer") {
-    return (
-      <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700">
-        🔄 Transfer + Issue
-      </span>
-    );
-  }
+function RecommendationBadge({
+  availableQty,
+  requestedQty,
+  uom = "Nos",
+  recommendation,
+  bestWarehouse,
+  localAvailableQty,
+}: {
+  availableQty: number;
+  requestedQty: number;
+  uom?: string;
+  recommendation?:
+    | "Issue Material"
+    | "Stock available in another warehouse"
+    | "Forward to Procurement";
+  bestWarehouse?: string;
+  localAvailableQty?: number;
+}) {
+  // availableQty is aggregated company stock (Inventory-aligned).
+  const available = Math.max(0, Number(availableQty) || 0);
+  const requested = Math.max(0, Number(requestedQty) || 0);
+  const local = Math.max(0, Number(localAvailableQty) || 0);
+  const shortage = Math.max(0, requested - available);
+  const stockElsewhere =
+    recommendation === "Stock available in another warehouse" ||
+    (shortage === 0 && local < requested && available >= requested);
+
   return (
-    <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-[11px] font-semibold text-rose-700">
-      → Procurement
+    <span className="inline-flex flex-col items-start gap-0.5">
+      {shortage === 0 && !stockElsewhere ? (
+        <span className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[12px] font-semibold text-emerald-700">
+          ✅ Recommended: Ready to Issue
+        </span>
+      ) : stockElsewhere ? (
+        <span className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-[12px] font-semibold text-sky-800">
+          📦 Stock available in another warehouse
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-1 rounded-md border border-orange-200 bg-orange-50 px-2 py-0.5 text-[12px] font-semibold text-orange-800">
+          ⚠ Procurement Required
+        </span>
+      )}
+      <span className="space-y-0.5 text-[11px] tabular-nums leading-snug text-slate-500">
+        <span className="block">
+          Requested: {requested} {uom}
+        </span>
+        <span className="block">
+          Available (all warehouses): {available} {uom}
+        </span>
+        {stockElsewhere && bestWarehouse ? (
+          <span className="block font-medium text-sky-700">
+            Best source: {bestWarehouse}
+          </span>
+        ) : null}
+        {shortage > 0 ? (
+          <span className="block font-medium text-orange-700">
+            Shortage: {shortage} {uom}
+          </span>
+        ) : null}
+      </span>
     </span>
+  );
+}
+
+type RowWorkflowStatus =
+  | "ready_to_issue"
+  | "sent_to_procurement"
+  | "processing"
+  | "issued"
+  | "forwarded"
+  | "forward_failed"
+  | "completed";
+
+function WorkflowStatusBadge({
+  status,
+  reason,
+}: {
+  status: RowWorkflowStatus;
+  reason?: string;
+}) {
+  const map: Record<
+    RowWorkflowStatus,
+    { label: string; className: string }
+  > = {
+    ready_to_issue: {
+      label: "Ready to Issue",
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    },
+    sent_to_procurement: {
+      // Pre-process: selected Forward action (not yet submitted).
+      label: "Forward to Procurement",
+      className: "border-orange-200 bg-orange-50 text-orange-800",
+    },
+    processing: {
+      label: "Processing…",
+      className: "border-slate-200 bg-slate-50 text-slate-600",
+    },
+    issued: {
+      label: "Issued",
+      className: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    },
+    forwarded: {
+      label: "Forwarded",
+      className: "border-slate-200 bg-slate-100 text-slate-700",
+    },
+    forward_failed: {
+      label: "Forward Failed",
+      className: "border-rose-200 bg-rose-50 text-rose-800",
+    },
+    completed: {
+      label: "Completed",
+      className: "border-slate-200 bg-slate-100 text-slate-700",
+    },
+  };
+  const cfg = map[status];
+  return (
+    <span className="inline-flex flex-col items-start gap-0.5">
+      <span
+        className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[12px] font-medium ${cfg.className}`}
+      >
+        {cfg.label}
+      </span>
+      {status === "forward_failed" && reason ? (
+        <span className="text-[11px] font-medium text-rose-700">
+          Reason: {reason}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** Action control bound to the line's selected action (not recommendation). */
+function LineActionPicker({
+  selected,
+  disabled,
+  menuOpen,
+  fullWidth,
+  onToggleMenu,
+  onSelectIssue,
+  onSelectForward,
+}: {
+  selected: StockDecisionAction;
+  disabled?: boolean;
+  menuOpen: boolean;
+  fullWidth?: boolean;
+  onToggleMenu: () => void;
+  onSelectIssue: () => void;
+  onSelectForward: () => void;
+}) {
+  const isIssue = selected === "issue";
+  const primaryClass = isIssue
+    ? "bg-primary-600 hover:bg-primary-700 border-primary-500"
+    : "bg-orange-500 hover:bg-orange-600 border-orange-400";
+  return (
+    <div className={`relative inline-flex ${fullWidth ? "w-full" : ""}`}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={isIssue ? onSelectIssue : onSelectForward}
+        className={`inline-flex h-9 items-center justify-center rounded-l-lg px-3 text-[13px] font-semibold text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${primaryClass} ${fullWidth ? "flex-1" : ""}`}
+      >
+        {isIssue ? "Issue Material" : "Forward to Procurement"}
+      </button>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onToggleMenu}
+        className={`inline-flex h-9 items-center justify-center rounded-r-lg border-l px-2 text-white shadow-sm transition disabled:opacity-60 ${primaryClass}`}
+        aria-label="More actions"
+        aria-expanded={menuOpen}
+      >
+        <ChevronDown className="h-3.5 w-3.5" />
+      </button>
+      {menuOpen ? (
+        <div className="absolute left-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+          <button
+            type="button"
+            className={`flex w-full px-3 py-2 text-left text-[13px] font-medium hover:bg-slate-50 ${
+              isIssue ? "bg-emerald-50 text-emerald-800" : "text-slate-700"
+            }`}
+            onClick={onSelectIssue}
+          >
+            Issue Material
+          </button>
+          <button
+            type="button"
+            className={`flex w-full px-3 py-2 text-left text-[13px] font-medium hover:bg-orange-50 ${
+              !isIssue ? "bg-orange-50 text-orange-800" : "text-orange-700"
+            }`}
+            onClick={onSelectForward}
+          >
+            Forward to Procurement
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+interface ItemActionSelection {
+  action: StockDecisionAction;
+  recommended: StockDecisionAction;
+  reason?: string;
+  selectedAt: string;
+  selectedBy: string;
+}
+
+function DetailField({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+        {label}
+      </p>
+      <p className="mt-1 text-[13px] font-medium text-slate-700">{value}</p>
+    </div>
   );
 }
 
@@ -287,6 +524,8 @@ function MrStatusBadge({ status }: { status: string }) {
     "Under Warehouse Review": "border-amber-200 bg-amber-50 text-amber-800",
     "Stock Available": "border-teal-200 bg-teal-50 text-teal-800",
     "Material Issued": "border-emerald-200 bg-emerald-50 text-emerald-800",
+    "Pending Department Acceptance":
+      "border-amber-200 bg-amber-50 text-amber-800",
     "Procurement Required":
       "border-orange-200 bg-orange-50 text-orange-800",
     "Forwarded to Procurement":
@@ -312,20 +551,30 @@ export default function WarehouseReviewDetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  const [warehouseRemarks, setWarehouseRemarks] = useState("");
-  const [showRejectPanel, setShowRejectPanel] = useState(false);
-  const [rejectRemarks, setRejectRemarks] = useState("");
+  /** Optional warehouse remark per item (saved with that line only). */
+  const [itemRemarks, setItemRemarks] = useState<Record<string, string>>({});
+  const [showReturnDialog, setShowReturnDialog] = useState(false);
+  const [returnRemarks, setReturnRemarks] = useState("");
 
   // Per-item multi-warehouse stock check results
   const [itemDecisions, setItemDecisions] = useState<
     Record<string, ItemStockResult>
   >({});
-  // Per-item action overrides — warehouse can change auto-detected decision
-  const [itemActions, setItemActions] = useState<
-    Record<string, ItemDecisionType>
-  >({});
   const [checkingStock, setCheckingStock] = useState(false);
+  /** Set when stock API fails — stops spinner and shows Retry. */
+  const [stockCheckError, setStockCheckError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
+  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
+  /** Per-item recommendation + manual override selection. */
+  const [itemSelections, setItemSelections] = useState<
+    Record<string, ItemActionSelection>
+  >({});
+  const [actionMenuOpen, setActionMenuOpen] = useState<string | null>(null);
+  const [forwardDialog, setForwardDialog] = useState<{
+    itemCode: string;
+    hasAvailableStock: boolean;
+  } | null>(null);
+  const [forwardReason, setForwardReason] = useState("");
   // Set the instant processing succeeds. Makes the page read-only for the rest
   // of the session (independent of the async status refetch) and blocks a
   // second submission of the same Material Request.
@@ -339,7 +588,9 @@ export default function WarehouseReviewDetailPage() {
 
   const detailQuery = useQuery({
     queryKey: ["warehouse", "mr-detail", mrNumber],
-    queryFn: () => getMaterialRequestDetail(mrNumber ?? ""),
+    // Review page runs its own Stock Decision check — skip nested stock pass.
+    queryFn: () =>
+      getMaterialRequestDetail(mrNumber ?? "", { includeStockCheck: false }),
     enabled: !!mrNumber,
   });
 
@@ -349,6 +600,19 @@ export default function WarehouseReviewDetailPage() {
   // ── Load stock across ALL warehouses for each item ───────────────────────────
   // ── Per-item multi-warehouse stock check ───────────────────────────────────────
 
+  const emptyDecision = (requestedQty: number): ItemStockResult => ({
+    totalQty: 0,
+    localQty: 0,
+    bestWarehouse: "",
+    bestWarehouseQty: 0,
+    allBins: [],
+    canIssueLocally: false,
+    canIssueWithTransfer: false,
+    cannotFulfill: true,
+    shortage: requestedQty,
+    decision: "forward_procurement",
+  });
+
   // Shared logic for both the auto-effect and the manual Refresh button.
   // All setState calls are inside the async callback — never synchronously
   // at the top level of the effect — to satisfy the React Compiler rule.
@@ -357,56 +621,173 @@ export default function WarehouseReviewDetailPage() {
 
     void (async () => {
       setCheckingStock(true);
+      setStockCheckError(null);
       setItemDecisions({});
-      setItemActions({});
+
+      const actor =
+        currentUser?.full_name ||
+        currentUser?.email ||
+        currentUser?.name ||
+        "Warehouse";
 
       try {
-        // Fetch valid Netlink warehouses first
-        let netlinkWhNames: string[] = [];
-        try {
-          const list = await apiGet<any[]>("/api/resource/Warehouse", {
-            params: {
-              filters: JSON.stringify([
-                ["company", "=", COMPANY],
-                ["is_group", "=", 0],
-                ["disabled", "=", 0],
-              ]),
-              fields: JSON.stringify(["name"]),
-              limit_page_length: 500,
-            },
-          });
-          netlinkWhNames = Array.isArray(list) ? list.map((w) => w.name) : [];
-        } catch (err) {
-          console.error("Failed to fetch Netlink warehouses for stock check:", err);
+        // Stock company = Netlink when MR.company is Bidsphere (common ERP default).
+        // Do not hard-block Review — that was the regression.
+        const companyCtx = resolveWarehouseStockCompany(mr?.company);
+        const stockCompany = companyCtx.stockCompany;
+        const companyWarehouses = await resolveNetlinkWarehouses(stockCompany);
+        const preferredWarehouse =
+          (await resolveNetlinkStoresWarehouse(stockCompany)) ||
+          companyWarehouses.find((w) => /stores\s*-\s*nsgai/i.test(w)) ||
+          companyWarehouses[0] ||
+          "";
+
+        if (!preferredWarehouse) {
+          throw new StockCheckApiError(
+            "Warehouse Stores - NSGAI not found.",
+            404,
+            "warehouse_not_found",
+          );
+        }
+
+        await logWarehouseCompanyDiagnostics({
+          mrNumber: mr?.name || mrNumber,
+          mrCompany: companyCtx.mrCompany,
+          warehouse: preferredWarehouse,
+          user: actor,
+        });
+
+        const payload = {
+          mr_number: mr?.name || mrNumber || "",
+          company: stockCompany,
+          mr_company: companyCtx.mrCompany,
+          warehouse: preferredWarehouse,
+          warehouses: companyWarehouses,
+          items: mrItems.map((i) => ({
+            item_code: i.item_code,
+            requested_qty: Number(i.required_qty) || 0,
+            mr_warehouse: i.warehouse || undefined,
+          })),
+          user: actor,
+        };
+
+        // eslint-disable-next-line no-console
+        console.log("[StockDecision] Calling /api/stock-check", {
+          ...payload,
+          selectedWarehouse: preferredWarehouse,
+          inventoryScope: "all company warehouses (aggregated)",
+        });
+        if (companyCtx.notice) {
+          // eslint-disable-next-line no-console
+          console.info("[StockDecision] Company notice:", companyCtx.notice);
+        }
+
+        const result = await fetchStockCheck(payload);
+        if (result.notice) {
+          // eslint-disable-next-line no-console
+          console.info("[StockDecision] Backend company notice:", result.notice);
         }
 
         const results: Record<string, ItemStockResult> = {};
+        const selections: Record<string, ItemActionSelection> = {};
+        const selectedAt = new Date().toISOString();
+
+        for (const line of result.lines) {
+          const available = nonNegativeQty(line.available_qty);
+          const localQty = nonNegativeQty(
+            line.local_available_qty ??
+              line.by_warehouse?.find((b) => b.warehouse === line.warehouse)
+                ?.available_qty,
+          );
+          const shortage = nonNegativeQty(line.shortage_qty);
+          const requested = nonNegativeQty(line.requested_qty);
+          const bestWarehouse = line.best_warehouse || line.warehouse;
+          const bestWarehouseQty = nonNegativeQty(
+            line.best_warehouse_qty ?? available,
+          );
+          const canIssueLocally = localQty + 1e-9 >= requested;
+          const canIssueWithTransfer =
+            !canIssueLocally && available + 1e-9 >= requested;
+          const cannotFulfill = !canIssueLocally && !canIssueWithTransfer;
+
+          // eslint-disable-next-line no-console
+          console.log("[StockDecision] Line mapped", {
+            item_code: line.item_code,
+            selectedWarehouse: line.warehouse,
+            warehouseFromMR: line.mr_warehouse,
+            warehouseFromItem: line.item_default_warehouse,
+            erpAvailableQty: available,
+            localAvailableQty: localQty,
+            erpWarehouseName: bestWarehouse,
+            by_warehouse: line.by_warehouse,
+            recommendation: line.recommendation,
+          });
+
+          results[line.item_code] = {
+            totalQty: available,
+            localQty,
+            bestWarehouse,
+            bestWarehouseQty,
+            allBins: (line.by_warehouse || []).map((b) => ({
+              warehouse: b.warehouse,
+              actual_qty: b.available_qty,
+              reserved_qty: b.reserved_qty,
+              available_qty: b.available_qty,
+            })),
+            canIssueLocally,
+            canIssueWithTransfer,
+            cannotFulfill,
+            shortage,
+            decision: canIssueLocally
+              ? "issue_local"
+              : canIssueWithTransfer
+                ? "issue_transfer"
+                : "forward_procurement",
+          };
+          // Never auto-select Forward when stock exists in another warehouse.
+          const recommended: StockDecisionAction =
+            line.recommendation === "Forward to Procurement"
+              ? "forward"
+              : "issue";
+          selections[line.item_code] = {
+            action: recommended,
+            recommended,
+            selectedAt,
+            selectedBy: actor,
+          };
+        }
+
+        // Ensure every MR line has a decision row even if API omitted it.
         for (const item of mrItems) {
-          try {
-            results[item.item_code] = await checkItemAcrossAllWarehouses(
-              item.item_code,
-              item.required_qty,
-              netlinkWhNames,
-            );
-          } catch {
-            results[item.item_code] = {
-              totalQty: 0,
-              localQty: 0,
-              bestWarehouse: "",
-              bestWarehouseQty: 0,
-              allBins: [],
-              canIssueLocally: false,
-              canIssueWithTransfer: false,
-              cannotFulfill: true,
-              shortage: item.required_qty,
-              decision: "forward_procurement",
+          if (!results[item.item_code]) {
+            results[item.item_code] = emptyDecision(item.required_qty);
+            selections[item.item_code] = {
+              action: "forward",
+              recommended: "forward",
+              selectedAt,
+              selectedBy: actor,
             };
           }
         }
+
+        setStockCheckError(null);
         setItemDecisions(results);
+        setItemSelections(selections);
+      } catch (err) {
+        const msg =
+          err instanceof StockCheckApiError || err instanceof Error
+            ? err.message
+            : "Unable to fetch stock availability.";
+        // eslint-disable-next-line no-console
+        console.error("[StockDecision] Stock check failed", err);
+        setStockCheckError(msg);
+        const fallback: Record<string, ItemStockResult> = {};
+        for (const item of mrItems) {
+          fallback[item.item_code] = emptyDecision(item.required_qty);
+        }
+        setItemDecisions(fallback);
+        toast.error(msg);
       } finally {
-        // Always reset loading state, even on an unexpected error above —
-        // never leave the "Checking stock…" spinner stuck.
         setCheckingStock(false);
       }
     })();
@@ -420,35 +801,190 @@ export default function WarehouseReviewDetailPage() {
 
   // ── Derived state ────────────────────────────────────────────────────────────
 
-  const getFinalDecision = (itemCode: string): ItemDecisionType =>
-    (itemActions[itemCode] as ItemDecisionType | undefined) ??
-    itemDecisions[itemCode]?.decision ??
-    "forward_procurement";
+  const getRecommendedAction = (
+    itemCode: string,
+    requestedQty: number,
+  ): StockDecisionAction => {
+    const d = itemDecisions[itemCode];
+    if (!d) return "forward";
+    const available = Math.max(0, d.totalQty);
+    const shortage = Math.max(0, requestedQty - available);
+    return shortage === 0 ? "issue" : "forward";
+  };
+
+  const getSelectedAction = (
+    itemCode: string,
+    requestedQty: number,
+  ): StockDecisionAction =>
+    itemSelections[itemCode]?.action ??
+    getRecommendedAction(itemCode, requestedQty);
+
+  /**
+   * Maps the user's selected action to an ERP processing path.
+   * Selected "issue" NEVER remaps to forward — even if stock flags are stale.
+   */
+  const getFinalDecision = (itemCode: string): ItemDecisionType => {
+    const item = mrItems.find((i) => i.item_code === itemCode);
+    const requestedQty = item?.required_qty ?? 0;
+    const selected = getSelectedAction(itemCode, requestedQty);
+    if (selected === "forward") return "forward_procurement";
+    const d = itemDecisions[itemCode];
+    if (d?.canIssueLocally) return "issue_local";
+    // Issue from another warehouse (transfer) or best available source.
+    return "issue_transfer";
+  };
+
+  const getLineProcessResult = (
+    itemCode: string,
+  ): ProcessedLineResult | undefined =>
+    processedResult?.lineResults?.find((r) => r.item_code === itemCode);
+
+  const getRowWorkflowStatus = (
+    itemCode: string,
+    requestedQty: number,
+  ): RowWorkflowStatus => {
+    if (processing) return "processing";
+    const line = getLineProcessResult(itemCode);
+    if (line) {
+      if (line.status === "issued") return "issued";
+      if (line.status === "forwarded") return "forwarded";
+      if (line.status === "forward_failed") return "forward_failed";
+    }
+    const selected = getSelectedAction(itemCode, requestedQty);
+    if (processedResult) {
+      // Fallback if lineResults missing — never mark failed forward as Issued.
+      if (selected === "issue") return "issued";
+      return "forward_failed";
+    }
+    if (mr?.status === "Material Issued" || mr?.status === "Completed") {
+      return "completed";
+    }
+    // Per-line workflow follows the current selected action (not MR-level status),
+    // so mixed Issue + Forward selections display correctly before Process.
+    return selected === "issue" ? "ready_to_issue" : "sent_to_procurement";
+  };
+
+  const buildAuditRows = (
+    selections: Record<string, ItemActionSelection> = itemSelections,
+  ): StockDecisionAuditRow[] =>
+    mrItems.map((item) => {
+      const sel = selections[item.item_code];
+      const recommended = getRecommendedAction(
+        item.item_code,
+        item.required_qty,
+      );
+      return {
+        item_code: item.item_code,
+        recommended_action: sel?.recommended ?? recommended,
+        selected_action: sel?.action ?? recommended,
+        selected_by:
+          sel?.selectedBy ||
+          currentUser?.full_name ||
+          currentUser?.email ||
+          currentUser?.name ||
+          "Warehouse",
+        selected_at: sel?.selectedAt || new Date().toISOString(),
+        reason: sel?.reason,
+      };
+    });
+
+  const applyItemSelection = (
+    itemCode: string,
+    action: StockDecisionAction,
+    reason?: string,
+  ) => {
+    const item = mrItems.find((i) => i.item_code === itemCode);
+    const requestedQty = item?.required_qty ?? 0;
+    const recommended = getRecommendedAction(itemCode, requestedQty);
+    const actor =
+      currentUser?.full_name ||
+      currentUser?.email ||
+      currentUser?.name ||
+      "Warehouse";
+    const selectedAt = new Date().toISOString();
+    const next = {
+      ...itemSelections,
+      [itemCode]: {
+        action,
+        recommended,
+        reason: reason?.trim() || undefined,
+        selectedAt,
+        selectedBy: actor,
+      },
+    };
+    setItemSelections(next);
+    setActionMenuOpen(null);
+    void persistStockDecisionAudit(mrNumber ?? "", buildAuditRows(next));
+  };
+
+  const requestForwardSelection = (itemCode: string, requestedQty: number) => {
+    const hasAvailableStock =
+      getRecommendedAction(itemCode, requestedQty) === "issue";
+    if (hasAvailableStock) {
+      setForwardReason(itemSelections[itemCode]?.reason ?? "");
+      setForwardDialog({ itemCode, hasAvailableStock: true });
+      setActionMenuOpen(null);
+      return;
+    }
+    applyItemSelection(itemCode, "forward");
+  };
+
+  const confirmForwardDialog = () => {
+    if (!forwardDialog) return;
+    applyItemSelection(
+      forwardDialog.itemCode,
+      "forward",
+      forwardReason.trim() || undefined,
+    );
+    setForwardDialog(null);
+    setForwardReason("");
+  };
+
+  const toggleRowExpanded = (itemCode: string) => {
+    setExpandedRows((prev) => ({ ...prev, [itemCode]: !prev[itemCode] }));
+  };
 
   const decisionsReady =
     !checkingStock &&
     mrItems.length > 0 &&
     Object.keys(itemDecisions).length >= mrItems.length;
 
-  const issueLocalItems = mrItems.filter(
-    (i) => getFinalDecision(i.item_code) === "issue_local",
-  );
-  const issueTransferItems = mrItems.filter(
-    (i) => getFinalDecision(i.item_code) === "issue_transfer",
+  // Footer + Process Selected group by the user's selected action only
+  // (never remap via stock flags — that caused Issue:0 / Forward:2 bugs).
+  const issueSelectedItems = mrItems.filter(
+    (i) => getSelectedAction(i.item_code, i.required_qty) === "issue",
   );
   const procurementItems = mrItems.filter(
-    (i) => getFinalDecision(i.item_code) === "forward_procurement",
+    (i) => getSelectedAction(i.item_code, i.required_qty) === "forward",
+  );
+  const issueLocalItems = issueSelectedItems.filter(
+    (i) => getFinalDecision(i.item_code) === "issue_local",
+  );
+  const issueTransferItems = issueSelectedItems.filter(
+    (i) => getFinalDecision(i.item_code) === "issue_transfer",
   );
 
   // ── Reject mutation ──────────────────────────────────────────────────────────
 
+  const composeItemRemarks = () =>
+    mrItems
+      .map((item) => {
+        const note = itemRemarks[item.item_code]?.trim();
+        if (!note) return null;
+        return `${item.item_code}: ${note}`;
+      })
+      .filter(Boolean)
+      .join("\n");
+
   const rejectMutation = useMutation({
-    mutationFn: () => rejectMaterialRequest(mrNumber ?? "", rejectRemarks),
+    mutationFn: () => rejectMaterialRequest(mrNumber ?? "", returnRemarks),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
       void queryClient.invalidateQueries({ queryKey: ["mr-dashboard-rows"] });
       void queryClient.invalidateQueries({ queryKey: ["mr-procurement-queue"] });
-      toast.success("Material request rejected.");
+      toast.success("Material request returned to requester.");
+      setShowReturnDialog(false);
+      setReturnRemarks("");
       navigate("/warehouse/material-requests/pending");
     },
     onError: (err: unknown) => {
@@ -487,12 +1023,17 @@ export default function WarehouseReviewDetailPage() {
       setProcessedResult({
         issuedItems: 0,
         forwardedItems: mrItems.length,
+        failedItems: 0,
         issuedQty: 0,
         forwardedQty: mrItems.reduce((s, i) => s + i.required_qty, 0),
         processedBy: forwardedBy,
         processedOn: new Date().toISOString(),
-        remarks: warehouseRemarks.trim(),
+        remarks: composeItemRemarks(),
         outcome: "forwarded",
+        lineResults: mrItems.map((i) => ({
+          item_code: i.item_code,
+          status: "forwarded" as const,
+        })),
       });
       toast.success(`${mrNumber} forwarded to the Procurement Queue.`);
     } catch (err: unknown) {
@@ -519,226 +1060,261 @@ export default function WarehouseReviewDetailPage() {
     const today = new Date().toISOString().split("T")[0];
     const createdStockEntries: string[] = [];
     let newProcurementMR: string | undefined;
+    const failedItems: Array<{ item_code: string; reason: string }> = [];
+    let issuedOk = false;
+    let forwardedOk = false;
+
+    // Snapshot groups from current selections (do not re-read mid-process).
+    const localIssue = [...issueLocalItems];
+    const transferIssue = [...issueTransferItems];
+    const forwardLines = [...procurementItems];
+
+    const processPayload = mrItems.map((item) => {
+      const d = itemDecisions[item.item_code];
+      const selected = getSelectedAction(item.item_code, item.required_qty);
+      const available = Math.max(0, d?.totalQty ?? 0);
+      const shortage = Math.max(0, (Number(item.required_qty) || 0) - available);
+      const recommendation = d?.canIssueLocally
+        ? "Issue Material"
+        : d?.canIssueWithTransfer
+          ? "Stock available in another warehouse"
+          : "Forward to Procurement";
+      return {
+        item_code: item.item_code,
+        selected_action:
+          selected === "issue" ? "Issue Material" : "Forward to Procurement",
+        available_qty: available,
+        shortage_qty: shortage,
+        recommendation,
+        process_path: getFinalDecision(item.item_code),
+      };
+    });
+
+    // Required pre-submit log shape (also includes process_path for debugging).
+    // eslint-disable-next-line no-console
+    console.log(
+      "[Process Selected] request payload",
+      processPayload.map(
+        ({
+          item_code,
+          selected_action,
+          available_qty,
+          shortage_qty,
+          recommendation,
+        }) => ({
+          item_code,
+          selected_action,
+          available_qty,
+          shortage_qty,
+          recommendation,
+        }),
+      ),
+    );
+    // eslint-disable-next-line no-console
+    console.log("[Process Selected] full request payload", processPayload);
+    // eslint-disable-next-line no-console
+    console.log("[Process Selected] groups", {
+      issueLocal: localIssue.map((i) => i.item_code),
+      issueTransfer: transferIssue.map((i) => i.item_code),
+      forward: forwardLines.map((i) => i.item_code),
+    });
 
     try {
-      // Fetch Netlink warehouses for fallback & validation
-      let netlinkWhNames: string[] = [];
-      try {
-        const list = await apiGet<any[]>("/api/resource/Warehouse", {
-          params: {
-            filters: JSON.stringify([
-              ["company", "=", COMPANY],
-              ["is_group", "=", 0],
-              ["disabled", "=", 0],
-            ]),
-            fields: JSON.stringify(["name"]),
-            limit_page_length: 500,
-          },
-        });
-        netlinkWhNames = Array.isArray(list) ? list.map((w) => w.name) : [];
-      } catch (err) {
-        console.error("Failed to fetch Netlink warehouses for verification:", err);
+      // Netlink only — never Company Bidsphere warehouses.
+      const mrCompany = assertMaterialRequestIsWarehouseCompany(mr.company);
+      const companyWarehouses = await resolveNetlinkWarehouses(mrCompany);
+      const preferredWarehouse =
+        (await resolveNetlinkStoresWarehouse(mrCompany)) ||
+        companyWarehouses[0] ||
+        "";
+
+      if (!preferredWarehouse) {
+        throw new Error(
+          `No warehouse found for Company ${mrCompany}. ` +
+            `Configure Finished Goods / Stores under Company ${mrCompany}.`,
+        );
       }
 
-      // ─── Validation Step BEFORE calling ERPNext ─────────────────────────────
-      if (issueLocalItems.length > 0) {
-        for (const item of issueLocalItems) {
-          const d = itemDecisions[item.item_code];
-          const sourceWh =
-            d?.allBins.find((b) =>
-              b.warehouse.toLowerCase().includes("stores"),
-            )?.warehouse ??
-            netlinkWhNames.find((w) => w.toLowerCase().includes("stores")) ??
-            netlinkWhNames[0] ??
-            "";
-
-          if (!sourceWh) {
-            throw new Error(`Validation failed: No Stores warehouse resolved for item "${item.item_code}".`);
-          }
-          const isValid = await validateWarehouseBelongsToCompany(sourceWh, COMPANY);
-          if (!isValid) {
-            throw new Error(
-              `Validation failed: Warehouse "${sourceWh}" does not belong to company "${COMPANY}".`
-            );
-          }
-        }
-      }
-
-      if (issueTransferItems.length > 0) {
-        const storesWarehouse =
-          issueTransferItems
-            .flatMap((i) => itemDecisions[i.item_code]?.allBins ?? [])
-            .find((b) => b.warehouse.toLowerCase().includes("stores"))
-            ?.warehouse ??
-          netlinkWhNames.find((w) => w.toLowerCase().includes("stores")) ??
-          netlinkWhNames[0] ??
-          "";
-
-        if (!storesWarehouse) {
-          throw new Error("Validation failed: Target Stores warehouse could not be resolved.");
-        }
-        const isTargetValid = await validateWarehouseBelongsToCompany(storesWarehouse, COMPANY);
-        if (!isTargetValid) {
-          throw new Error(
-            `Validation failed: Target warehouse "${storesWarehouse}" does not belong to company "${COMPANY}".`
+      // Pre-resolve Netlink source warehouses (Finished Goods preferred when stocked).
+      const sourceByItem = new Map<string, string>();
+      for (const item of [...localIssue, ...transferIssue]) {
+        try {
+          const sourceWh = await resolveNetlinkIssueSourceWarehouse(
+            item.item_code,
+            item.required_qty,
           );
+          sourceByItem.set(item.item_code, sourceWh);
+          await assertNetlinkWarehouse(sourceWh, "Source");
+        } catch (srcErr) {
+          const reason =
+            srcErr instanceof Error
+              ? srcErr.message
+              : "Failed to resolve source warehouse.";
+          failedItems.push({ item_code: item.item_code, reason });
         }
+      }
 
-        for (const item of issueTransferItems) {
-          const d = itemDecisions[item.item_code];
-          const sourceWh = d?.bestWarehouse ?? "";
-          if (!sourceWh) {
-            throw new Error(`Validation failed: No source warehouse resolved for item "${item.item_code}".`);
-          }
-          const isSourceValid = await validateWarehouseBelongsToCompany(sourceWh, COMPANY);
-          if (!isSourceValid) {
-            throw new Error(
-              `Validation failed: Source warehouse "${sourceWh}" does not belong to company "${COMPANY}".`
-            );
+      const localIssueReady = localIssue.filter(
+        (i) => !failedItems.some((f) => f.item_code === i.item_code),
+      );
+      const transferIssueReady = transferIssue.filter(
+        (i) => !failedItems.some((f) => f.item_code === i.item_code),
+      );
+
+      if (transferIssueReady.length > 0) {
+        await assertNetlinkWarehouse(preferredWarehouse, "Target");
+      }
+
+      // ─── Branch A: Issue from Netlink warehouse (dynamic, never Bidsphere) ───
+      if (localIssueReady.length > 0) {
+        try {
+          const doc = {
+            doctype: "Stock Entry",
+            stock_entry_type: "Material Issue",
+            purpose: "Material Issue",
+            company: mrCompany,
+            posting_date: today,
+            items: localIssueReady.map((item) => {
+              const sourceWh =
+                sourceByItem.get(item.item_code) || preferredWarehouse;
+              return {
+                doctype: "Stock Entry Detail",
+                item_code: item.item_code,
+                qty: item.required_qty,
+                s_warehouse: sourceWh,
+                uom: item.uom || "Nos",
+                stock_uom: item.uom || "Nos",
+                conversion_factor: 1,
+              };
+            }),
+          };
+
+          // eslint-disable-next-line no-console
+          console.log("[Process Selected] Issue Material ERP request", doc);
+          const seName = await createAndSubmitStockEntry(doc, {
+            mrName: mrNumber,
+          });
+          // eslint-disable-next-line no-console
+          console.log("[Process Selected] Issue Material ERP response", {
+            stock_entry: seName,
+          });
+          createdStockEntries.push(seName);
+          issuedOk = true;
+          await addMRComment(
+            mrNumber,
+            `Issued ${localIssueReady.length} item(s) directly from Stores. Stock Entry: ${seName}`,
+          );
+          toast.success(
+            `✅ ${localIssueReady.length} item(s) issued (${seName})`,
+          );
+        } catch (issueErr) {
+          const reason =
+            issueErr instanceof Error
+              ? issueErr.message
+              : "Material Issue failed.";
+          // eslint-disable-next-line no-console
+          console.error("[Process Selected] Issue Material failed", issueErr);
+          for (const item of localIssueReady) {
+            failedItems.push({ item_code: item.item_code, reason });
           }
         }
       }
 
-      // ─── Branch A: Issue directly from local Stores ─────────────────────────
-      if (issueLocalItems.length > 0) {
-        const doc = {
-          doctype: "Stock Entry",
-          stock_entry_type: "Material Issue",
-          purpose: "Material Issue",
-          company: COMPANY,
-          posting_date: today,
-          items: issueLocalItems.map((item) => {
-            const d = itemDecisions[item.item_code];
-            const sourceWh =
-              d?.allBins.find((b) =>
-                b.warehouse.toLowerCase().includes("stores"),
-              )?.warehouse ??
-              netlinkWhNames.find((w) => w.toLowerCase().includes("stores")) ??
-              netlinkWhNames[0] ??
-              "";
-            return {
-              doctype: "Stock Entry Detail",
-              item_code: item.item_code,
-              qty: item.required_qty,
-              s_warehouse: sourceWh,
-              uom: item.uom || "Nos",
-              stock_uom: item.uom || "Nos",
-              conversion_factor: 1,
-            };
-          }),
-        };
-
-        const seName = await createAndSubmitStockEntry(doc);
-        createdStockEntries.push(seName);
-        await addMRComment(
-          mrNumber,
-          `Issued ${issueLocalItems.length} item(s) directly from Stores. Stock Entry: ${seName}`,
-        );
-        toast.success(
-          `✅ ${issueLocalItems.length} item(s) issued from Stores (${seName})`,
-        );
-      }
-
-      // ─── Branch B: Transfer from remote warehouse → Stores, then issue ───────
-      if (issueTransferItems.length > 0) {
-        const sources = issueTransferItems
-          .map((i) => itemDecisions[i.item_code]?.bestWarehouse)
+      // ─── Branch B: Transfer Netlink WH → Netlink Stores (dynamic), then issue
+      if (transferIssueReady.length > 0) {
+        const sources = transferIssueReady
+          .map((i) => sourceByItem.get(i.item_code))
           .filter(Boolean)
           .join(", ");
 
-        const storesWarehouse =
-          issueTransferItems
-            .flatMap((i) => itemDecisions[i.item_code]?.allBins ?? [])
-            .find((b) => b.warehouse.toLowerCase().includes("stores"))
-            ?.warehouse ??
-          netlinkWhNames.find((w) => w.toLowerCase().includes("stores")) ??
-          netlinkWhNames[0] ??
-          "";
+        const storesWarehouse = preferredWarehouse;
 
-        const transferDoc = {
-          doctype: "Stock Entry",
-          stock_entry_type: "Material Transfer",
-          purpose: "Material Transfer",
-          company: COMPANY,
-          posting_date: today,
-          items: issueTransferItems.map((item) => {
-            const d = itemDecisions[item.item_code];
-            return {
+        try {
+          const transferDoc = {
+            doctype: "Stock Entry",
+            stock_entry_type: "Material Transfer",
+            purpose: "Material Transfer",
+            company: mrCompany,
+            posting_date: today,
+            items: transferIssueReady.map((item) => {
+              const sourceWh =
+                sourceByItem.get(item.item_code) || preferredWarehouse;
+              return {
+                doctype: "Stock Entry Detail",
+                item_code: item.item_code,
+                qty: item.required_qty,
+                s_warehouse: sourceWh,
+                t_warehouse: storesWarehouse,
+                uom: item.uom || "Nos",
+                stock_uom: item.uom || "Nos",
+                conversion_factor: 1,
+              };
+            }),
+          };
+
+          // eslint-disable-next-line no-console
+          console.log("[Process Selected] Transfer ERP request", transferDoc);
+          const transferSEName = await createAndSubmitStockEntry(transferDoc, {
+            mrName: mrNumber,
+          });
+          createdStockEntries.push(transferSEName);
+
+          toast(
+            `Step 1 ✔ Transfer SE ${transferSEName} submitted. Starting issue step…`,
+            { icon: "🔄" },
+          );
+
+          const issueDoc = {
+            doctype: "Stock Entry",
+            stock_entry_type: "Material Issue",
+            purpose: "Material Issue",
+            company: mrCompany,
+            posting_date: today,
+            items: transferIssueReady.map((item) => ({
               doctype: "Stock Entry Detail",
               item_code: item.item_code,
               qty: item.required_qty,
-              s_warehouse: d?.bestWarehouse ?? "",
-              t_warehouse: storesWarehouse,
+              s_warehouse: storesWarehouse,
               uom: item.uom || "Nos",
               stock_uom: item.uom || "Nos",
               conversion_factor: 1,
-            };
-          }),
-        };
+            })),
+          };
 
-        let transferSEName: string;
-        try {
-          transferSEName = await createAndSubmitStockEntry(transferDoc);
-          createdStockEntries.push(transferSEName);
+          // eslint-disable-next-line no-console
+          console.log(
+            "[Process Selected] Transfer→Issue ERP request",
+            issueDoc,
+          );
+          const issueSEName = await createAndSubmitStockEntry(issueDoc, {
+            mrName: mrNumber,
+          });
+          createdStockEntries.push(issueSEName);
+          issuedOk = true;
+
+          await addMRComment(
+            mrNumber,
+            `Transfer + Issue completed for ${transferIssueReady.length} item(s). ` +
+              `Source: [${sources}]. ` +
+              `Transfer SE: ${transferSEName}. Issue SE: ${issueSEName}.`,
+          );
+          toast.success(
+            `🔄 ${transferIssueReady.length} item(s) transferred and issued (Transfer: ${transferSEName} / Issue: ${issueSEName})`,
+          );
         } catch (transferErr) {
-          const tMsg =
+          const reason =
             transferErr instanceof Error
               ? transferErr.message
-              : String(transferErr);
-          throw new Error(
-            `Material Transfer from [${sources}] to Stores failed. No stock was moved. ${tMsg}`,
-            { cause: transferErr },
+              : "Transfer/Issue failed.";
+          // eslint-disable-next-line no-console
+          console.error(
+            "[Process Selected] Transfer/Issue failed (no rollback of other successes)",
+            transferErr,
           );
+          for (const item of transferIssueReady) {
+            failedItems.push({ item_code: item.item_code, reason });
+          }
         }
-
-        toast(
-          `Step 1 ✔ Transfer SE ${transferSEName} submitted. Starting issue step…`,
-          { icon: "🔄" },
-        );
-
-        const issueDoc = {
-          doctype: "Stock Entry",
-          stock_entry_type: "Material Issue",
-          purpose: "Material Issue",
-          company: COMPANY,
-          posting_date: today,
-          items: issueTransferItems.map((item) => ({
-            doctype: "Stock Entry Detail",
-            item_code: item.item_code,
-            qty: item.required_qty,
-            s_warehouse: storesWarehouse,
-            uom: item.uom || "Nos",
-            stock_uom: item.uom || "Nos",
-            conversion_factor: 1,
-          })),
-        };
-
-        let issueSEName: string;
-        try {
-          issueSEName = await createAndSubmitStockEntry(issueDoc);
-          createdStockEntries.push(issueSEName);
-        } catch (issueErr) {
-          const rollbackMsg = await rollbackWarehouseProcess({
-            stockEntries: [transferSEName],
-          });
-          createdStockEntries.length = 0;
-          const iMsg =
-            issueErr instanceof Error ? issueErr.message : String(issueErr);
-          throw new Error(
-            `Material Issue from Stores failed. ${rollbackMsg}. Issue error: ${iMsg}`,
-            { cause: issueErr },
-          );
-        }
-
-        await addMRComment(
-          mrNumber,
-          `Transfer + Issue completed for ${issueTransferItems.length} item(s). ` +
-            `Source: [${sources}]. ` +
-            `Transfer SE: ${transferSEName}. Issue SE: ${issueSEName}.`,
-        );
-        toast.success(
-          `🔄 ${issueTransferItems.length} item(s) transferred and issued (Transfer: ${transferSEName} / Issue: ${issueSEName})`,
-        );
       }
 
       // ─── Branch C: Purchase MR for shortfall + forward to Procurement ──────
@@ -747,57 +1323,96 @@ export default function WarehouseReviewDetailPage() {
         currentUser?.email ||
         currentUser?.name ||
         "Warehouse";
-      const forwardWarehouse =
-        procurementItems.find((i) => i.warehouse)?.warehouse ||
-        mrItems.find((i) => i.warehouse)?.warehouse ||
-        "";
+      // Purchase warehouse must belong to stock company (never "Stores - B").
+      let forwardWarehouse = preferredWarehouse;
 
-      if (procurementItems.length > 0) {
-        const purchaseMRDoc = {
-          doctype: "Material Request",
-          material_request_type: "Purchase",
-          custom_bidsphere_status: "Draft",
-          custom_procurement_type: mr.procurement_type,
-          custom_request_mode: mr.request_mode,
-          custom_department: mr.department,
-          custom_priority: mr.priority,
-          custom_requested_by: mr.requested_by,
-          transaction_date: today,
-          schedule_date: today,
-          company: COMPANY,
-          items: procurementItems.map((item, idx) => {
-            // Carry Department engineering attachment URL refs onto the Purchase
-            // MR (no File re-upload). RFQ / Supplier resolve these same URLs.
-            const eng = engineeringCustomFieldsForErp({
-              part_name: item.part_name,
-              drawing_2d_url: item.drawing_2d_url,
-              attachments: item.attachments,
-            });
-            return {
-              doctype: "Material Request Item",
-              idx: idx + 1,
-              item_code: item.item_code,
-              item_name: item.description || item.item_code,
-              description: `${item.description || item.item_code} [Shortfall from ${mrNumber}]`,
-              qty: item.required_qty,
-              uom: item.uom || "Nos",
-              stock_uom: item.uom || "Nos",
-              conversion_factor: 1,
-              schedule_date: today,
-              ...(item.warehouse || forwardWarehouse
-                ? { warehouse: item.warehouse || forwardWarehouse }
-                : {}),
-              ...eng,
-            };
-          }),
-        };
-
+      if (forwardLines.length > 0) {
         try {
+          // Resolve once for the Purchase MR — validate company before ERP save.
+          const purchaseWh = await resolvePurchaseWarehouseForCompany({
+            mrCompany: mr.company,
+            candidateWarehouse:
+              forwardLines.find((i) => i.warehouse)?.warehouse ||
+              preferredWarehouse,
+            itemCode: forwardLines[0]?.item_code,
+          });
+          forwardWarehouse = purchaseWh.warehouse;
+
+          // eslint-disable-next-line no-console
+          console.log("[Process Selected] Purchase warehouse resolved", {
+            materialRequestCompany: mr.company,
+            stockCompany: mrCompany,
+            selectedWarehouse: purchaseWh.warehouse,
+            warehouseCompany: purchaseWh.warehouseCompany,
+            purchaseWarehouse: purchaseWh.warehouse,
+            why: purchaseWh.reason,
+            rejectedCandidate: purchaseWh.rejectedCandidate || null,
+            rejectedCandidateCompany:
+              purchaseWh.rejectedCandidateCompany || null,
+          });
+
+          if (purchaseWh.warehouseCompany !== mrCompany) {
+            throw new Error(SELECTED_WAREHOUSE_OTHER_COMPANY_MESSAGE);
+          }
+
+          const purchaseMRDoc = {
+            doctype: "Material Request",
+            material_request_type: "Purchase",
+            custom_bidsphere_status: "Draft",
+            custom_procurement_type: mr.procurement_type,
+            custom_request_mode: mr.request_mode,
+            custom_department: mr.department,
+            custom_priority: mr.priority,
+            custom_requested_by: mr.requested_by,
+            transaction_date: today,
+            schedule_date: today,
+            company: mrCompany,
+            items: forwardLines.map((item, idx) => {
+              // Carry Department engineering attachment URL refs onto the Purchase
+              // MR (no File re-upload). RFQ / Supplier resolve these same URLs.
+              const eng = engineeringCustomFieldsForErp({
+                part_name: item.part_name,
+                drawing_2d_url: item.drawing_2d_url,
+                attachments: item.attachments,
+              });
+              return {
+                doctype: "Material Request Item",
+                idx: idx + 1,
+                item_code: item.item_code,
+                item_name: item.description || item.item_code,
+                description: `${item.description || item.item_code} [Shortfall from ${mrNumber}]`,
+                qty: item.required_qty,
+                uom: item.uom || "Nos",
+                stock_uom: item.uom || "Nos",
+                conversion_factor: 1,
+                schedule_date: today,
+                // Always use company-validated purchase warehouse — never MR
+                // item warehouse when it belongs to another company.
+                warehouse: forwardWarehouse,
+                ...eng,
+              };
+            }),
+          };
+
+          // eslint-disable-next-line no-console
+          console.log("[Process Selected] ERP Request Payload", {
+            materialRequestCompany: mr.company,
+            stockCompany: mrCompany,
+            selectedWarehouse: forwardWarehouse,
+            warehouseCompany: purchaseWh.warehouseCompany,
+            purchaseWarehouse: forwardWarehouse,
+            payload: purchaseMRDoc,
+          });
+
           const purchaseMR = await apiPost<MRResponse>(
             "/api/method/frappe.client.save",
             { doc: purchaseMRDoc },
           );
-          console.log("Material Request API Response", purchaseMR);
+          // eslint-disable-next-line no-console
+          console.log(
+            "[Process Selected] Forward Purchase MR ERP response",
+            purchaseMR,
+          );
           newProcurementMR = extractSavedDocName(purchaseMR);
           if (!newProcurementMR) {
             throw new Error("Purchase Material Request was not created.");
@@ -809,37 +1424,55 @@ export default function WarehouseReviewDetailPage() {
             docstatus: 0,
           });
         } catch (createErr) {
-          const rollbackMsg = await rollbackWarehouseProcess({
-            stockEntries: createdStockEntries,
-          });
-          createdStockEntries.length = 0;
-          const msg =
+          // Do NOT roll back successful Issue Material stock entries.
+          const raw =
             createErr instanceof Error ? createErr.message : String(createErr);
-          throw new Error(
-            `Purchase Material Request creation failed. ${rollbackMsg}. ${msg}`,
-            { cause: createErr },
+          const msg = isWarehouseCompanyMismatchError(raw)
+            ? SELECTED_WAREHOUSE_OTHER_COMPANY_MESSAGE
+            : raw;
+          // eslint-disable-next-line no-console
+          console.error(
+            "[Process Selected] Purchase MR create failed (keeping issued stock)",
+            {
+              error: createErr,
+              userMessage: msg,
+              materialRequestCompany: mr.company,
+              stockCompany: mrCompany,
+              selectedWarehouse: forwardWarehouse,
+            },
           );
+          for (const item of forwardLines) {
+            failedItems.push({
+              item_code: item.item_code,
+              reason: msg,
+            });
+          }
         }
 
-        await addMRComment(
-          mrNumber,
-          `${procurementItems.length} item(s) short — Purchase MR ${newProcurementMR} created and forwarded to Procurement.`,
-        );
-        await addMRComment(
-          newProcurementMR,
-          `Created from warehouse review of ${mrNumber}. Automatically forwarded to the Procurement Queue.`,
-        );
+        if (newProcurementMR) {
+          await addMRComment(
+            mrNumber,
+            `${forwardLines.length} item(s) short — Purchase MR ${newProcurementMR} created and forwarded to Procurement.`,
+          );
+          await addMRComment(
+            newProcurementMR,
+            `Created from warehouse review of ${mrNumber}. Automatically forwarded to the Procurement Queue.`,
+          );
+        }
       }
 
-      const hasIssued =
-        issueLocalItems.length > 0 || issueTransferItems.length > 0;
-      const hasForwarded = procurementItems.length > 0;
+      const forwardSucceeded =
+        forwardLines.length > 0 &&
+        Boolean(newProcurementMR) &&
+        forwardLines.every(
+          (i) => !failedItems.some((f) => f.item_code === i.item_code),
+        );
 
-      if (hasForwarded) {
+      if (forwardSucceeded && newProcurementMR) {
         // Single final step: forward to Procurement Queue + history + audit.
         // No intermediate "Procurement Required" / second Send click.
         const forwardingData = JSON.stringify(
-          procurementItems.map((item) => ({
+          forwardLines.map((item) => ({
             item_code: item.item_code,
             item_name: item.description || item.item_code,
             requested_qty: item.required_qty,
@@ -847,27 +1480,41 @@ export default function WarehouseReviewDetailPage() {
             forward_qty: item.required_qty,
             uom: item.uom || "Nos",
             warehouse: item.warehouse || forwardWarehouse || "",
+            warehouse_remark: itemRemarks[item.item_code]?.trim() || undefined,
           })),
         );
+        const auditRows = buildAuditRows();
         const remarksLines = [
-          warehouseRemarks.trim(),
+          composeItemRemarks(),
           newProcurementMR
             ? `Purchase MR for shortfall: ${newProcurementMR}`
             : "",
           `[BidSphere:ForwardedItems:${forwardingData}]`,
+          formatStockDecisionsTag(auditRows),
         ].filter(Boolean);
         const remarksText = remarksLines.join("\n");
 
         try {
-          if (hasIssued) {
+          await persistStockDecisionAudit(mrNumber, auditRows);
+          if (issuedOk) {
             await createWarehouseReview({
               material_request: mrNumber,
               warehouse_remarks: remarksText,
               decision: "Partially Issued",
               issued_qty:
-                issueLocalItems.reduce((sum, i) => sum + i.required_qty, 0) +
-                issueTransferItems.reduce((sum, i) => sum + i.required_qty, 0),
-              forwarded_qty: procurementItems.reduce(
+                localIssue
+                  .filter(
+                    (i) =>
+                      !failedItems.some((f) => f.item_code === i.item_code),
+                  )
+                  .reduce((sum, i) => sum + i.required_qty, 0) +
+                transferIssue
+                  .filter(
+                    (i) =>
+                      !failedItems.some((f) => f.item_code === i.item_code),
+                  )
+                  .reduce((sum, i) => sum + i.required_qty, 0),
+              forwarded_qty: forwardLines.reduce(
                 (sum, i) => sum + i.required_qty,
                 0,
               ),
@@ -879,64 +1526,168 @@ export default function WarehouseReviewDetailPage() {
             forwardedBy,
             skipStockCheck: true,
           });
+          forwardedOk = true;
           logMrWorkflowStage(
             "Warehouse Review → Forwarded to Procurement (single step)",
             { name: mrNumber, purchaseMR: newProcurementMR },
           );
-        } catch (forwardErr) {
-          const rollbackMsg = await rollbackWarehouseProcess({
-            stockEntries: createdStockEntries,
-            purchaseMr: newProcurementMR,
-          });
-          createdStockEntries.length = 0;
-          newProcurementMR = undefined;
-          console.error(
-            "[Warehouse] Forward to Procurement failed — rolled back:",
-            forwardErr,
+          toast.success(
+            newProcurementMR
+              ? `${forwardLines.length} item(s) forwarded to Procurement — Purchase MR ${newProcurementMR} created.`
+              : `${forwardLines.length} item(s) forwarded to the Procurement Queue.`,
           );
+        } catch (forwardErr) {
+          // Keep successful issues — do not cancel Stock Entries.
           const msg =
             forwardErr instanceof Error
               ? forwardErr.message
-              : sanitizeFrappeError(
-                  forwardErr,
-                  "Failed to forward Material Request to Procurement.",
-                  "WarehouseReview.forward",
-                ).message;
-          throw new Error(`${msg} ${rollbackMsg}`);
+              : "Failed to forward Material Request to Procurement.";
+          // eslint-disable-next-line no-console
+          console.error(
+            "[Process Selected] Forward failed (keeping issued items)",
+            forwardErr,
+          );
+          for (const item of forwardLines) {
+            if (!failedItems.some((f) => f.item_code === item.item_code)) {
+              failedItems.push({ item_code: item.item_code, reason: msg });
+            }
+          }
         }
-
-        toast.success(
-          newProcurementMR
-            ? `${procurementItems.length} item(s) forwarded to Procurement — Purchase MR ${newProcurementMR} created.`
-            : `${procurementItems.length} item(s) forwarded to the Procurement Queue.`,
+      } else if (issuedOk && !forwardSucceeded) {
+        // Finalize successful Issue lines even when Forward failed (partial).
+        const auditRows = buildAuditRows();
+        const failNotes = failedItems
+          .map((f) => `${f.item_code}: ${f.reason}`)
+          .join("; ");
+        const remarksText = [
+          composeItemRemarks(),
+          formatStockDecisionsTag(auditRows),
+          failNotes
+            ? `Forward failed (issued items kept): ${failNotes}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+        const issuedItems = [...localIssue, ...transferIssue].filter(
+          (i) => !failedItems.some((f) => f.item_code === i.item_code),
         );
-      } else if (hasIssued) {
-        const remarksText = warehouseRemarks.trim() || undefined;
+        const issuedQty = issuedItems.reduce(
+          (sum, i) => sum + i.required_qty,
+          0,
+        );
+        // Prefer the last Material Issue Stock Entry (not the transfer).
+        const issueStockEntry =
+          createdStockEntries[createdStockEntries.length - 1] || "";
         try {
-          await updateMaterialRequestWorkflowStatus(mrNumber, "Material Issued", {
-            custom_warehouse_remarks: remarksText,
-          });
+          await persistStockDecisionAudit(mrNumber, auditRows);
           await createWarehouseReview({
             material_request: mrNumber,
-            warehouse_remarks: remarksText,
-            decision: "Material Issued",
-            issued_qty:
-              issueLocalItems.reduce((sum, i) => sum + i.required_qty, 0) +
-              issueTransferItems.reduce((sum, i) => sum + i.required_qty, 0),
+            warehouse_remarks: remarksText || undefined,
+            decision:
+              forwardLines.length > 0 ? "Partially Issued" : "Material Issued",
+            issued_qty: issuedQty,
           });
-        } catch (statusErr) {
-          const rollbackMsg = await rollbackWarehouseProcess({
-            stockEntries: createdStockEntries,
-          });
-          createdStockEntries.length = 0;
-          throw new Error(
-            `${
-              statusErr instanceof Error
-                ? statusErr.message
-                : "Failed to mark Material Request as issued."
-            } ${rollbackMsg}`,
+
+          // Issue-only success → MIR + navigate. Partial (forward failed) stays
+          // on this page so Forward Failed workflow is visible for AP003 etc.
+          if (
+            issueStockEntry &&
+            issuedItems.length > 0 &&
+            forwardLines.length === 0
+          ) {
+            const preferredWh =
+              (await resolveNetlinkStoresWarehouse(mrCompany)) ||
+              (await resolveNetlinkWarehouses(mrCompany))[0] ||
+              "";
+            const receipt = await createMaterialIssueReceipt({
+              stock_entry: issueStockEntry,
+              mr_name: mrNumber,
+              department: mr.department || "General",
+              warehouse: preferredWh,
+              issued_by:
+                currentUser?.full_name ||
+                currentUser?.email ||
+                currentUser?.name ||
+                "Warehouse",
+              receiver: "Department User",
+              issue_type: "Full Issue",
+              remarks: remarksText,
+              lines: issuedItems.map((i) => ({
+                item_code: i.item_code,
+                item_name: i.description || i.item_code,
+                required_qty: i.required_qty,
+                issued_qty: i.required_qty,
+                uom: i.uom || "Nos",
+              })),
+            });
+            invalidateForwardCaches(queryClient);
+            void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+            void queryClient.invalidateQueries({
+              queryKey: ["material-issue-receipts"],
+            });
+            void queryClient.invalidateQueries({
+              queryKey: ["department-issued-items"],
+            });
+            void queryClient.invalidateQueries({
+              queryKey: ["mr-dashboard-rows"],
+            });
+            void queryClient.invalidateQueries({
+              queryKey: ["material-request"],
+            });
+            toast.success(
+              `Material Issue Receipt ${receipt.issue_number} created — sign to continue.`,
+            );
+            navigate(
+              `/warehouse/material-issue-receipts/${encodeURIComponent(receipt.issue_number)}`,
+            );
+            return;
+          }
+
+          await updateMaterialRequestWorkflowStatus(
+            mrNumber,
+            "Pending Department Acceptance",
+            { custom_warehouse_remarks: remarksText || undefined },
           );
+        } catch (statusErr) {
+          // Keep submitted Stock Entries — do not roll them back.
+          const msg =
+            statusErr instanceof Error
+              ? statusErr.message
+              : "Failed to create Material Issue Receipt.";
+          // eslint-disable-next-line no-console
+          console.error(
+            "[Process Selected] Post-issue status/receipt failed",
+            statusErr,
+          );
+          toast.error(msg);
         }
+      }
+
+      // eslint-disable-next-line no-console
+      console.log("[Process Selected] result summary", {
+        issuedOk,
+        forwardedOk,
+        failedItems,
+        stockEntries: createdStockEntries,
+        purchaseMR: newProcurementMR,
+      });
+
+      if (failedItems.length > 0) {
+        const detail = failedItems
+          .map((f) => `${f.item_code}: ${f.reason}`)
+          .join(" | ");
+        toast.error(
+          issuedOk || forwardedOk
+            ? `Partial success. Failed: ${detail}`
+            : `Process failed. ${detail}`,
+        );
+      }
+
+      if (!issuedOk && !forwardedOk) {
+        if (failedItems.length === 0) {
+          toast.error("Nothing was processed. Check item actions and retry.");
+        }
+        return;
       }
 
       // Invalidate every MR-related cache so Warehouse + Procurement refresh.
@@ -968,19 +1719,61 @@ export default function WarehouseReviewDetailPage() {
       void queryClient.refetchQueries({ queryKey: ["mr-procurement-queue"] });
       void queryClient.refetchQueries({ queryKey: ["warehouse"] });
 
-      // Flip the page to its read-only, post-processing state and render the
-      // decision summary. We intentionally do NOT auto-navigate away — the
-      // Warehouse Manager should see the confirmation on this page.
-      const issuedQty =
-        issueLocalItems.reduce((sum, i) => sum + i.required_qty, 0) +
-        issueTransferItems.reduce((sum, i) => sum + i.required_qty, 0);
-      const forwardedQty = procurementItems.reduce(
+      const successfulIssue = [...localIssue, ...transferIssue].filter(
+        (i) => !failedItems.some((f) => f.item_code === i.item_code),
+      );
+      const successfulForward = forwardLines.filter(
+        (i) => !failedItems.some((f) => f.item_code === i.item_code),
+      );
+      const failedForward = forwardLines.filter((i) =>
+        failedItems.some((f) => f.item_code === i.item_code),
+      );
+      const issuedQty = successfulIssue.reduce(
         (sum, i) => sum + i.required_qty,
         0,
       );
+      const forwardedQty = successfulForward.reduce(
+        (sum, i) => sum + i.required_qty,
+        0,
+      );
+      const lineResults: ProcessedLineResult[] = [
+        ...successfulIssue.map((i) => ({
+          item_code: i.item_code,
+          status: "issued" as const,
+        })),
+        ...successfulForward.map((i) => ({
+          item_code: i.item_code,
+          status: "forwarded" as const,
+        })),
+        ...failedForward.map((i) => {
+          const fail = failedItems.find((f) => f.item_code === i.item_code);
+          const mismatch = isWarehouseCompanyMismatchError(fail?.reason || "");
+          return {
+            item_code: i.item_code,
+            status: "forward_failed" as const,
+            reason: mismatch
+              ? WAREHOUSE_COMPANY_MISMATCH_REASON
+              : fail?.reason || "Forward failed",
+            reasonCode: mismatch
+              ? ("warehouse_company_mismatch" as const)
+              : ("other" as const),
+          };
+        }),
+      ];
+
+      // eslint-disable-next-line no-console
+      console.log("[Process Selected] success/failure summary", {
+        issued: successfulIssue.map((i) => i.item_code),
+        forwarded: successfulForward.map((i) => i.item_code),
+        failed: failedItems,
+        lineResults,
+        purchaseMR: newProcurementMR,
+      });
+
       setProcessedResult({
-        issuedItems: issueLocalItems.length + issueTransferItems.length,
-        forwardedItems: procurementItems.length,
+        issuedItems: successfulIssue.length,
+        forwardedItems: successfulForward.length,
+        failedItems: failedItems.length,
         issuedQty,
         forwardedQty,
         processedBy:
@@ -989,26 +1782,33 @@ export default function WarehouseReviewDetailPage() {
           currentUser?.name ||
           "Warehouse",
         processedOn: new Date().toISOString(),
-        remarks: warehouseRemarks.trim(),
+        remarks: composeItemRemarks(),
         outcome:
-          hasIssued && hasForwarded
+          successfulIssue.length > 0 &&
+          (successfulForward.length > 0 || failedForward.length > 0)
             ? "partial"
-            : hasForwarded
+            : successfulForward.length > 0
               ? "forwarded"
               : "issued",
         purchaseMR: newProcurementMR,
+        lineResults,
       });
     } catch (err: unknown) {
-      // Never surface a raw Frappe/Python exception; log it and toast a clean
-      // message. Non-Frappe errors (e.g. our own enriched rollback notes) pass
-      // through with their existing text.
-      toast.error(
-        sanitizeFrappeError(
-          err,
-          "Unable to update the Material Request. Please try again.",
-          "WarehouseReview.handleProcessAll",
-        ).message,
-      );
+      // eslint-disable-next-line no-console
+      console.error("[Process Selected] unexpected failure", err);
+      const raw =
+        err instanceof Error
+          ? err.message
+          : "Unable to process selected warehouse decisions.";
+      // Prefer the concrete message; only sanitize obvious Frappe tracebacks.
+      const safe = /Traceback|frappe\.exceptions|pymysql/i.test(raw)
+        ? sanitizeFrappeError(
+            err,
+            "Unable to process selected warehouse decisions. Please try again.",
+            "WarehouseReview.handleProcessAll",
+          ).message
+        : raw;
+      toast.error(safe);
     } finally {
       setProcessing(false);
     }
@@ -1040,7 +1840,7 @@ export default function WarehouseReviewDetailPage() {
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6 px-4 py-8 sm:px-6 lg:px-8 animate-in fade-in duration-300">
+    <div className="flex w-full flex-col gap-6 animate-in fade-in duration-300">
       {/* Back + status toolbar (no page title — content starts at the card below) */}
       <div className="flex items-center gap-3">
         <Link
@@ -1083,25 +1883,26 @@ export default function WarehouseReviewDetailPage() {
       </div>
 
       {/* Stock Decision Grid */}
-      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-6 py-4">
+      <div className="overflow-hidden rounded-[12px] border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-slate-50/80 px-5 py-4">
           <div>
             <h2 className="text-base font-bold text-slate-800">
               Stock Decision Grid
             </h2>
             <p className="mt-0.5 text-xs text-slate-500">
-              Checks all Netlink warehouses for available stock. Override any
-              row's decision using the dropdown.
+              System recommends an action from stock. Override when needed, then
+              confirm processing below.
             </p>
           </div>
-          {decisionsReady && (
+          {(decisionsReady || stockCheckError) && isPendingReview && (
             <button
               type="button"
               onClick={runStockCheck}
-              className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50"
+              disabled={processing || checkingStock}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:opacity-50"
             >
               <RefreshCw className="h-3.5 w-3.5" />
-              Refresh Stock
+              {stockCheckError ? "Retry" : "Refresh Stock"}
             </button>
           )}
         </div>
@@ -1113,362 +1914,902 @@ export default function WarehouseReviewDetailPage() {
               Checking all warehouses for {mrItems.length} item(s)…
             </span>
           </div>
+        ) : stockCheckError ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-16 px-6 text-center">
+            <AlertTriangle className="h-8 w-8 text-amber-500" />
+            <p className="text-sm font-semibold text-slate-800">
+              Unable to fetch stock availability
+            </p>
+            <p className="max-w-lg text-sm font-medium text-rose-700">
+              ❌ {stockCheckError}
+            </p>
+            <p className="max-w-md text-xs text-slate-500">
+              Fix the issue above, then retry. Server logs show STOCK CHECK /
+              ERP REQUEST / ERP RESPONSE details.
+            </p>
+            <button
+              type="button"
+              onClick={runStockCheck}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-primary-700"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Retry
+            </button>
+          </div>
         ) : mrItems.length === 0 ? (
           <div className="flex items-center justify-center py-16 text-sm text-slate-500">
             No items found in this material request.
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-slate-100 bg-slate-50/50 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                  <th className="whitespace-nowrap px-5 py-3.5">Item Code</th>
-                  <th className="whitespace-nowrap px-5 py-3.5">Item Name</th>
-                  <th className="whitespace-nowrap px-5 py-3.5 text-center">
-                    UOM
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3.5 text-right">
-                    Requested Qty
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3.5">Part Name</th>
-                  <th className="whitespace-nowrap px-5 py-3.5">Attachments</th>
-                  <th className="whitespace-nowrap px-5 py-3.5 text-right">
-                    Local Warehouse Stock
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3.5 text-right">
-                    Other Warehouse Stock
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3.5 text-right">
-                    Available Qty
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3.5">Best Source</th>
-                  <th className="whitespace-nowrap px-5 py-3.5 text-right">
-                    Shortage
-                  </th>
-                  <th className="whitespace-nowrap px-5 py-3.5">Decision</th>
-                  <th className="whitespace-nowrap px-5 py-3.5 text-center">
-                    Status
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {mrItems.map((item) => {
-                  const d = itemDecisions[item.item_code];
-                  const finalDecision = getFinalDecision(item.item_code);
-
-                  if (!d) {
-                    return (
-                      <tr
-                        key={item.item_code}
-                        className="transition-colors hover:bg-slate-50/25"
-                      >
-                        <td className="px-5 py-4 font-mono text-xs font-semibold text-slate-900">
-                          {item.item_code}
-                        </td>
-                        <td
-                          colSpan={13}
-                          className="px-5 py-4 text-xs text-slate-400"
-                        >
-                          <span className="flex items-center gap-2">
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            Checking all warehouses…
-                          </span>
-                        </td>
-                      </tr>
+          <>
+            {/* Desktop / tablet table */}
+            <div className="hidden overflow-x-auto md:block">
+              <table className="w-full min-w-[720px] border-collapse text-left">
+                <thead className="sticky top-0 z-[1]">
+                  <tr className="border-b border-slate-200 bg-slate-50 text-[13px] font-semibold text-slate-600">
+                    <th className="w-8 px-3 py-3" aria-label="Expand" />
+                    <th className="px-3 py-3">Item</th>
+                    <th className="whitespace-nowrap px-3 py-3 text-right">
+                      Requested Qty
+                    </th>
+                    <th className="whitespace-nowrap px-3 py-3 text-right">
+                      Available Qty
+                    </th>
+                    <th className="whitespace-nowrap px-3 py-3 text-right">
+                      Shortage Qty
+                    </th>
+                    <th className="whitespace-nowrap px-3 py-3">
+                      Recommendation
+                    </th>
+                    <th className="whitespace-nowrap px-3 py-3">Action</th>
+                    <th className="whitespace-nowrap px-3 py-3">
+                      Current Workflow
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {mrItems.map((item) => {
+                    const d = itemDecisions[item.item_code];
+                    const expanded = !!expandedRows[item.item_code];
+                    const availableQty = Math.max(0, d?.totalQty ?? 0);
+                    const shortageQty = Math.max(
+                      0,
+                      (Number(item.required_qty) || 0) - availableQty,
                     );
-                  }
+                    const stockEnough = d ? shortageQty === 0 : false;
+                    const selected = getSelectedAction(
+                      item.item_code,
+                      item.required_qty,
+                    );
+                    const workflow = getRowWorkflowStatus(
+                      item.item_code,
+                      item.required_qty,
+                    );
+                    const lineResult = getLineProcessResult(item.item_code);
+                    const finalDecision = getFinalDecision(item.item_code);
+                    const otherQty = d
+                      ? Math.max(0, availableQty - Math.max(0, d.localQty))
+                      : 0;
+                    const bestSource =
+                      finalDecision === "issue_local"
+                        ? "Stores (local)"
+                        : finalDecision === "issue_transfer"
+                          ? `${d?.bestWarehouse || "—"} (transfer needed)`
+                          : "None — forward to Procurement";
+                    const menuOpen = actionMenuOpen === item.item_code;
+                    const selection = itemSelections[item.item_code];
 
-                  return (
-                    <tr
-                      key={item.item_code}
-                      className="transition-colors hover:bg-slate-50/25"
-                    >
-                      <td className="px-5 py-4 font-mono text-xs font-semibold text-slate-900">
-                        {item.item_code}
-                      </td>
-                      <td
-                        className="max-w-[14rem] truncate px-5 py-4 text-slate-600"
-                        title={item.description}
+                    if (!d) {
+                      return (
+                        <tr key={item.item_code} className="min-h-[56px]">
+                          <td className="px-3 py-2" />
+                          <td className="px-3 py-2">
+                            <p className="font-mono text-[13px] font-semibold text-slate-900">
+                              {item.item_code}
+                            </p>
+                            <p className="truncate text-[14px] text-slate-600">
+                              {item.description || item.item_code}
+                            </p>
+                          </td>
+                          <td
+                            colSpan={5}
+                            className="px-3 py-2 text-[13px] text-slate-500"
+                          >
+                            {checkingStock ? (
+                              <span className="inline-flex items-center gap-2 text-slate-400">
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                Checking stock…
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-2 text-amber-700">
+                                Stock unavailable — use Retry above.
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    }
+
+                    return (
+                      <Fragment key={item.item_code}>
+                        <tr className="min-h-[56px] transition-colors hover:bg-slate-50/80">
+                          <td className="px-2 py-2">
+                            <button
+                              type="button"
+                              onClick={() => toggleRowExpanded(item.item_code)}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                              aria-expanded={expanded}
+                              aria-label={
+                                expanded ? "Collapse details" : "Expand details"
+                              }
+                            >
+                              {expanded ? (
+                                <ChevronDown className="h-4 w-4" />
+                              ) : (
+                                <ChevronRight className="h-4 w-4" />
+                              )}
+                            </button>
+                          </td>
+                          <td className="max-w-[220px] px-3 py-2">
+                            <p className="font-mono text-[13px] font-semibold text-slate-900">
+                              {item.item_code}
+                            </p>
+                            <p
+                              className="truncate text-[14px] text-slate-700"
+                              title={item.description}
+                            >
+                              {item.description || item.item_code}
+                            </p>
+                            {item.part_name?.trim() ? (
+                              <p
+                                className="mt-0.5 truncate text-[12px] text-slate-500"
+                                title={item.part_name}
+                              >
+                                Part: {item.part_name}
+                              </p>
+                            ) : null}
+                            <div className="mt-1.5">
+                              <StockDecisionAttachmentChip
+                                url={item.drawing_2d_url}
+                                attachments={item.attachments}
+                              />
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            <span className="text-[15px] font-semibold tabular-nums text-slate-800">
+                              {item.required_qty}
+                            </span>
+                            <span className="ml-1 text-[12px] text-slate-400">
+                              {item.uom || "Nos"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            <span
+                              className={`text-[15px] font-semibold tabular-nums ${
+                                stockEnough
+                                  ? "text-emerald-700"
+                                  : "text-orange-700"
+                              }`}
+                            >
+                              {d ? availableQty : "—"}
+                            </span>
+                            {d ? (
+                              <span className="ml-1 text-[12px] text-slate-400">
+                                {item.uom || "Nos"}
+                              </span>
+                            ) : null}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            {d && shortageQty > 0 ? (
+                              <>
+                                <span className="text-[15px] font-semibold tabular-nums text-orange-700">
+                                  {shortageQty}
+                                </span>
+                                <span className="ml-1 text-[12px] text-slate-400">
+                                  {item.uom || "Nos"}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-[13px] text-slate-300">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            {d ? (
+                              <RecommendationBadge
+                                availableQty={availableQty}
+                                requestedQty={item.required_qty}
+                                uom={item.uom || "Nos"}
+                                localAvailableQty={d.localQty}
+                                bestWarehouse={d.bestWarehouse}
+                                recommendation={
+                                  d.canIssueLocally
+                                    ? "Issue Material"
+                                    : d.canIssueWithTransfer
+                                      ? "Stock available in another warehouse"
+                                      : "Forward to Procurement"
+                                }
+                              />
+                            ) : (
+                              <span className="text-[12px] text-slate-400">
+                                Checking…
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            {isPendingReview ? (
+                              <LineActionPicker
+                                selected={selected}
+                                disabled={processing || !decisionsReady}
+                                menuOpen={menuOpen}
+                                onToggleMenu={() =>
+                                  setActionMenuOpen((prev) =>
+                                    prev === item.item_code
+                                      ? null
+                                      : item.item_code,
+                                  )
+                                }
+                                onSelectIssue={() =>
+                                  applyItemSelection(item.item_code, "issue")
+                                }
+                                onSelectForward={() =>
+                                  requestForwardSelection(
+                                    item.item_code,
+                                    item.required_qty,
+                                  )
+                                }
+                              />
+                            ) : (
+                              <span className="text-[12px] text-slate-400">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            <WorkflowStatusBadge
+                              status={workflow}
+                              reason={lineResult?.reason}
+                            />
+                          </td>
+                        </tr>
+                        {expanded && (
+                          <tr className="bg-slate-50/70">
+                            <td colSpan={7} className="px-5 py-4">
+                              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                                <DetailField
+                                  label="Local Warehouse Stock"
+                                  value={String(d.localQty)}
+                                />
+                                <DetailField
+                                  label="Other Warehouse Stock"
+                                  value={String(otherQty)}
+                                />
+                                <DetailField
+                                  label="Best Source"
+                                  value={bestSource}
+                                />
+                                <DetailField
+                                  label="Selected Action"
+                                  value={
+                                    selected === "issue"
+                                      ? "Issue Material"
+                                      : "Forward to Procurement"
+                                  }
+                                />
+                                <DetailField
+                                  label="Override Reason"
+                                  value={selection?.reason?.trim() || "—"}
+                                />
+                                <div className="sm:col-span-2 lg:col-span-1">
+                                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                                    Attachment Preview
+                                  </p>
+                                  <div className="mt-1.5">
+                                    <StockDecisionAttachmentChip
+                                      url={item.drawing_2d_url}
+                                      attachments={item.attachments}
+                                    />
+                                  </div>
+                                </div>
+                                <div className="sm:col-span-2 lg:col-span-3">
+                                  <label
+                                    htmlFor={`wh-remark-${item.item_code}`}
+                                    className="text-[11px] font-semibold uppercase tracking-wide text-slate-400"
+                                  >
+                                    Warehouse Remark{" "}
+                                    <span className="normal-case font-normal">
+                                      (optional)
+                                    </span>
+                                  </label>
+                                  <textarea
+                                    id={`wh-remark-${item.item_code}`}
+                                    value={itemRemarks[item.item_code] ?? ""}
+                                    onChange={(e) =>
+                                      setItemRemarks((prev) => ({
+                                        ...prev,
+                                        [item.item_code]: e.target.value,
+                                      }))
+                                    }
+                                    rows={2}
+                                    disabled={!isPendingReview || processing}
+                                    placeholder="Note for this item only…"
+                                    className="mt-1.5 w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-800 placeholder:text-slate-400 focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-100 disabled:bg-slate-50"
+                                  />
+                                </div>
+                                <div className="sm:col-span-2 lg:col-span-3">
+                                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                                    Audit History
+                                  </p>
+                                  <ul className="mt-1.5 space-y-1 text-[13px] text-slate-600">
+                                    <li>
+                                      Stock checked — Local{" "}
+                                      {Math.max(0, d.localQty)}, Other{" "}
+                                      {otherQty}, Available{" "}
+                                      {Math.max(0, d.totalQty)}
+                                      {d.shortage > 0
+                                        ? `, Shortage ${d.shortage}`
+                                        : ""}
+                                    </li>
+                                    <li>
+                                      Recommended:{" "}
+                                      {stockEnough
+                                        ? "Issue from Warehouse"
+                                        : "Procurement Required"}
+                                    </li>
+                                    <li>
+                                      Selected:{" "}
+                                      {selected === "issue"
+                                        ? "Issue Material"
+                                        : "Forward to Procurement"}
+                                      {selection?.selectedBy
+                                        ? ` by ${selection.selectedBy}`
+                                        : ""}
+                                    </li>
+                                    {processedResult && (
+                                      <li>
+                                        Processed by {processedResult.processedBy}{" "}
+                                        on{" "}
+                                        {new Date(
+                                          processedResult.processedOn,
+                                        ).toLocaleString()}
+                                      </li>
+                                    )}
+                                  </ul>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile cards */}
+            <div className="space-y-3 p-4 md:hidden">
+              {mrItems.map((item) => {
+                const d = itemDecisions[item.item_code];
+                const expanded = !!expandedRows[item.item_code];
+                const availableQty = Math.max(0, d?.totalQty ?? 0);
+                const shortageQty = Math.max(
+                  0,
+                  (Number(item.required_qty) || 0) - availableQty,
+                );
+                const stockEnough = d ? shortageQty === 0 : false;
+                const selected = getSelectedAction(
+                  item.item_code,
+                  item.required_qty,
+                );
+                const workflow = getRowWorkflowStatus(
+                  item.item_code,
+                  item.required_qty,
+                );
+                const lineResult = getLineProcessResult(item.item_code);
+                const finalDecision = getFinalDecision(item.item_code);
+                const otherQty = d
+                  ? Math.max(0, availableQty - Math.max(0, d.localQty))
+                  : 0;
+                const bestSource =
+                  finalDecision === "issue_local"
+                    ? "Stores (local)"
+                    : finalDecision === "issue_transfer"
+                      ? `${d?.bestWarehouse || "—"} (transfer needed)`
+                      : "None — forward to Procurement";
+                const menuOpen = actionMenuOpen === item.item_code;
+
+                return (
+                  <div
+                    key={item.item_code}
+                    className="rounded-[12px] border border-slate-200 bg-white p-4 shadow-sm"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="font-mono text-[13px] font-semibold text-slate-900">
+                          {item.item_code}
+                        </p>
+                        <p className="text-[14px] text-slate-700">
+                          {item.description || item.item_code}
+                        </p>
+                        {item.part_name?.trim() ? (
+                          <p className="mt-0.5 text-[12px] text-slate-500">
+                            Part: {item.part_name}
+                          </p>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => toggleRowExpanded(item.item_code)}
+                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"
+                        aria-expanded={expanded}
                       >
-                        {item.description || item.item_code}
-                      </td>
-                      <td className="px-5 py-4 text-center text-slate-500">
-                        {item.uom || "Nos"}
-                      </td>
-                      <td className="px-5 py-4 text-right font-medium tabular-nums text-slate-800">
-                        {item.required_qty}
-                      </td>
+                        {expanded ? (
+                          <ChevronDown className="h-4 w-4" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4" />
+                        )}
+                      </button>
+                    </div>
 
-                      {/* Engineering docs from Department MR — view only */}
-                      <td className="px-5 py-4">
-                        <PartNameCell value={item.part_name} />
-                      </td>
-                      <td className="px-5 py-4">
-                        <Drawing2dCell
-                          url={item.drawing_2d_url}
-                          attachments={item.attachments}
-                        />
-                      </td>
-
-                      {/* Local Stores qty */}
-                      <td
-                        className={`px-5 py-4 text-right tabular-nums ${
-                          d.localQty > 0 ? "text-emerald-700" : "text-slate-400"
-                        }`}
-                      >
-                        {d.localQty}
-                      </td>
-
-                      {/* Other warehouses (total − local) */}
-                      <td
-                        className={`px-5 py-4 text-right tabular-nums ${
-                          d.totalQty - d.localQty > 0
-                            ? "text-slate-700"
-                            : "text-slate-400"
-                        }`}
-                      >
-                        {Math.max(0, d.totalQty - d.localQty)}
-                      </td>
-
-                      {/* Available across ALL warehouses */}
-                      <td
-                        className={`px-5 py-4 text-right font-bold tabular-nums ${
-                          d.totalQty >= item.required_qty
-                            ? "text-emerald-700"
-                            : "text-rose-600"
-                        }`}
-                      >
-                        {d.totalQty}
-                      </td>
-
-                      {/* Best source description */}
-                      <td className="px-5 py-4 text-xs text-slate-600">
-                        {finalDecision === "issue_local"
-                          ? "Stores (local)"
-                          : finalDecision === "issue_transfer"
-                            ? `${d.bestWarehouse} (transfer needed)`
-                            : "None"}
-                      </td>
-
-                      {/* Shortage */}
-                      <td
-                        className={`px-5 py-4 text-right font-bold tabular-nums ${
-                          d.shortage > 0 ? "text-rose-600" : "text-slate-300"
-                        }`}
-                      >
-                        {d.shortage > 0 ? d.shortage : "—"}
-                      </td>
-
-                      {/* Per-item decision override */}
-                      <td className="px-5 py-4">
-                        <select
-                          value={itemActions[item.item_code] ?? d.decision}
-                          onChange={(e) =>
-                            setItemActions((prev) => ({
-                              ...prev,
-                              [item.item_code]: e.target
-                                .value as ItemDecisionType,
-                            }))
-                          }
-                          className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 shadow-sm focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200"
+                    <div className="mt-3 grid grid-cols-2 gap-3">
+                      <div>
+                        <p className="text-[11px] font-semibold text-slate-400">
+                          Requested
+                        </p>
+                        <p className="text-[15px] font-semibold tabular-nums text-slate-800">
+                          {item.required_qty}{" "}
+                          <span className="text-[12px] font-normal text-slate-400">
+                            {item.uom || "Nos"}
+                          </span>
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[11px] font-semibold text-slate-400">
+                          Available
+                        </p>
+                        <p
+                          className={`text-[15px] font-semibold tabular-nums ${
+                            stockEnough ? "text-emerald-700" : "text-orange-700"
+                          }`}
                         >
-                          {d.canIssueLocally && (
-                            <option value="issue_local">
-                              Issue from Stores
-                            </option>
-                          )}
-                          {d.canIssueWithTransfer && (
-                            <option value="issue_transfer">
-                              Transfer + Issue from {d.bestWarehouse}
-                            </option>
-                          )}
-                          <option value="forward_procurement">
-                            Forward to Procurement
-                          </option>
-                        </select>
-                      </td>
+                          {d ? availableQty : "—"}{" "}
+                          {d ? (
+                            <span className="text-[12px] font-normal text-slate-400">
+                              {item.uom || "Nos"}
+                            </span>
+                          ) : null}
+                        </p>
+                      </div>
+                      {d && shortageQty > 0 ? (
+                        <div className="col-span-2">
+                          <p className="text-[11px] font-semibold text-slate-400">
+                            Shortage
+                          </p>
+                          <p className="text-[15px] font-semibold tabular-nums text-orange-700">
+                            {shortageQty}{" "}
+                            <span className="text-[12px] font-normal text-slate-400">
+                              {item.uom || "Nos"}
+                            </span>
+                          </p>
+                        </div>
+                      ) : null}
+                    </div>
 
-                      <td className="px-5 py-4 text-center">
-                        <DecisionBadge decision={finalDecision} />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      {d ? (
+                        <RecommendationBadge
+                          availableQty={availableQty}
+                          requestedQty={item.required_qty}
+                          uom={item.uom || "Nos"}
+                          localAvailableQty={d.localQty}
+                          bestWarehouse={d.bestWarehouse}
+                          recommendation={
+                            d.canIssueLocally
+                              ? "Issue Material"
+                              : d.canIssueWithTransfer
+                                ? "Stock available in another warehouse"
+                                : "Forward to Procurement"
+                          }
+                        />
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[12px] text-slate-400">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          Checking…
+                        </span>
+                      )}
+                      <WorkflowStatusBadge
+                        status={workflow}
+                        reason={lineResult?.reason}
+                      />
+                    </div>
+
+                    <div className="mt-3">
+                      <StockDecisionAttachmentChip
+                        url={item.drawing_2d_url}
+                        attachments={item.attachments}
+                      />
+                    </div>
+
+                    {isPendingReview && d && (
+                      <div className="relative mt-3 space-y-2">
+                        <LineActionPicker
+                          selected={selected}
+                          disabled={processing || !decisionsReady}
+                          menuOpen={menuOpen}
+                          fullWidth
+                          onToggleMenu={() =>
+                            setActionMenuOpen((prev) =>
+                              prev === item.item_code ? null : item.item_code,
+                            )
+                          }
+                          onSelectIssue={() =>
+                            applyItemSelection(item.item_code, "issue")
+                          }
+                          onSelectForward={() =>
+                            requestForwardSelection(
+                              item.item_code,
+                              item.required_qty,
+                            )
+                          }
+                        />
+                        <p className="text-[11px] text-slate-500">
+                          Selected:{" "}
+                          {selected === "issue"
+                            ? "Issue Material"
+                            : "Forward to Procurement"}
+                        </p>
+                      </div>
+                    )}
+
+                    {expanded && d && (
+                      <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
+                        <DetailField
+                          label="Local Warehouse Stock"
+                          value={String(d.localQty)}
+                        />
+                        <DetailField
+                          label="Other Warehouse Stock"
+                          value={String(otherQty)}
+                        />
+                        <DetailField label="Best Source" value={bestSource} />
+                        <DetailField
+                          label="Selected Action"
+                          value={
+                            selected === "issue"
+                              ? "Issue Material"
+                              : "Forward to Procurement"
+                          }
+                        />
+                        <div>
+                          <label
+                            htmlFor={`wh-remark-m-${item.item_code}`}
+                            className="text-[11px] font-semibold uppercase tracking-wide text-slate-400"
+                          >
+                            Warehouse Remark{" "}
+                            <span className="normal-case font-normal">
+                              (optional)
+                            </span>
+                          </label>
+                          <textarea
+                            id={`wh-remark-m-${item.item_code}`}
+                            value={itemRemarks[item.item_code] ?? ""}
+                            onChange={(e) =>
+                              setItemRemarks((prev) => ({
+                                ...prev,
+                                [item.item_code]: e.target.value,
+                              }))
+                            }
+                            rows={2}
+                            disabled={!isPendingReview || processing}
+                            placeholder="Note for this item only…"
+                            className="mt-1.5 w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-800 placeholder:text-slate-400 focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-100 disabled:bg-slate-50"
+                          />
+                        </div>
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                            Audit History
+                          </p>
+                          <p className="mt-1 text-[13px] text-slate-600">
+                            Recommended:{" "}
+                            {stockEnough
+                              ? "Issue from Warehouse"
+                              : "Procurement Required"}
+                            . Selected:{" "}
+                            {selected === "issue"
+                              ? "Issue Material"
+                              : "Forward to Procurement"}
+                            .
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </>
         )}
       </div>
 
-      {/* Pending review: summary + action buttons */}
-      {isPendingReview && (
-        <>
-          {/* Decision Summary */}
-          {decisionsReady && (
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
-              <p className="mb-3 text-sm font-bold text-slate-800">
-                Decision Summary
+      {forwardDialog && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        >
+          <button
+            type="button"
+            aria-label="Close"
+            className="absolute inset-0 bg-slate-900/45 backdrop-blur-sm"
+            onClick={() => {
+              setForwardDialog(null);
+              setForwardReason("");
+            }}
+          />
+          <div className="relative z-10 w-full max-w-md overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+            <div className="border-b border-slate-100 px-5 py-4">
+              <h3 className="text-base font-bold text-slate-900">
+                Forward Material Request?
+              </h3>
+              <p className="mt-1.5 text-[13px] leading-relaxed text-slate-600">
+                This request has available stock but will be forwarded to
+                Procurement instead of issuing from Warehouse.
               </p>
-              <div className="space-y-2">
-                {issueLocalItems.length > 0 && (
-                  <p className="text-sm text-emerald-700">
-                    ✅ {issueLocalItems.length} item(s) will be issued directly
-                    from local Stores stock
-                  </p>
-                )}
-                {issueTransferItems.length > 0 && (
-                  <p className="text-sm text-blue-700">
-                    🔄 {issueTransferItems.length} item(s) will be transferred
-                    from another warehouse, then issued from Stores
-                  </p>
-                )}
-                {procurementItems.length > 0 && (
-                  <p className="text-sm text-rose-700">
-                    📋 {procurementItems.length} item(s) will be forwarded to
-                    Procurement (no stock anywhere — Purchase MR will be
-                    created)
-                  </p>
-                )}
-                {mrItems.length > 0 &&
-                  issueLocalItems.length === 0 &&
-                  issueTransferItems.length === 0 &&
-                  procurementItems.length === 0 && (
-                    <p className="text-sm text-slate-500">
-                      Stock check in progress…
-                    </p>
-                  )}
-              </div>
             </div>
-          )}
-
-          {/* Remarks + Confirm button */}
-          <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div>
+            <div className="px-5 py-4">
               <label
-                htmlFor="warehouse-remarks"
-                className="block text-sm font-semibold text-slate-700"
+                htmlFor="forward-override-reason"
+                className="block text-[13px] font-semibold text-slate-700"
               >
-                Warehouse Remarks{" "}
+                Reason{" "}
                 <span className="font-normal text-slate-400">(optional)</span>
               </label>
               <textarea
-                id="warehouse-remarks"
-                value={warehouseRemarks}
-                onChange={(e) => setWarehouseRemarks(e.target.value)}
-                placeholder="Add notes saved with this material request…"
+                id="forward-override-reason"
+                value={forwardReason}
+                onChange={(e) => setForwardReason(e.target.value)}
                 rows={3}
-                className="mt-2 w-full resize-none rounded-xl border border-slate-200 p-3 text-sm leading-relaxed text-slate-800 placeholder:text-slate-400 focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-100"
+                placeholder="Why are you forwarding despite available stock?"
+                className="mt-2 w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-[13px] text-slate-800 placeholder:text-slate-400 focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-100"
               />
             </div>
+            <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setForwardDialog(null);
+                  setForwardReason("");
+                }}
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-[13px] font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmForwardDialog}
+                className="rounded-lg bg-orange-500 px-4 py-2 text-[13px] font-semibold text-white hover:bg-orange-600"
+              >
+                Forward
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
-            {!checkingStock && (
-              <div className="flex flex-wrap items-center gap-3">
+      {/* Sticky bottom action bar — pending decisions only */}
+      {isPendingReview && decisionsReady && !checkingStock && (
+        <>
+          <div className="h-16" aria-hidden />
+          <div className="sticky bottom-0 z-30 -mx-1 border border-b-0 border-slate-200 bg-white/95 shadow-[0_-4px_16px_rgba(15,23,42,0.06)] backdrop-blur supports-[backdrop-filter]:bg-white/90 rounded-t-xl">
+            <div className="flex min-h-[52px] flex-wrap items-center justify-between gap-3 px-4 py-2.5 sm:px-5">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-slate-600">
+                <span className="font-semibold tabular-nums text-slate-800">
+                  Selected Items: {mrItems.length}
+                </span>
+                <span className="tabular-nums text-emerald-700">
+                  Issue Material: {issueSelectedItems.length}
+                </span>
+                <span className="tabular-nums text-orange-700">
+                  Forward to Procurement: {procurementItems.length}
+                </span>
+                {import.meta.env.DEV ? (
+                  <span className="hidden text-[10px] text-slate-400 lg:inline">
+                    (
+                    {mrItems
+                      .map(
+                        (i) =>
+                          `${i.item_code}=${getSelectedAction(i.item_code, i.required_qty)}`,
+                      )
+                      .join(", ")}
+                    )
+                  </span>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={processing || rejectMutation.isPending}
+                  onClick={() =>
+                    navigate("/warehouse/material-requests/pending")
+                  }
+                  className="inline-flex h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3.5 text-[13px] font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={processing || rejectMutation.isPending}
+                  onClick={() => setShowReturnDialog(true)}
+                  className="inline-flex h-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-3.5 text-[13px] font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Return to Requester
+                </button>
                 <button
                   type="button"
                   disabled={
                     processing || !decisionsReady || rejectMutation.isPending
                   }
                   onClick={() => void handleProcessAll()}
-                  style={{ background: "#2D6A4F" }}
-                  className="inline-flex items-center gap-2 rounded-xl px-6 py-3 text-sm font-bold text-white shadow-sm transition hover:opacity-90 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary-600 px-4 text-[13px] font-semibold text-white shadow-sm transition hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {processing ? (
                     <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       Processing…
                     </>
                   ) : (
-                    <>
-                      <CheckCircle2 className="h-4 w-4" />
-                      Confirm &amp; Process All Decisions
-                    </>
+                    "Process Selected"
                   )}
                 </button>
-
-                <span
-                  className="hidden h-9 w-px bg-slate-200 sm:block"
-                  aria-hidden
-                />
-
-                <button
-                  type="button"
-                  disabled={processing || rejectMutation.isPending}
-                  onClick={() => setShowRejectPanel((v) => !v)}
-                  className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-5 py-3 text-sm font-semibold text-rose-700 shadow-sm transition hover:bg-rose-100 active:scale-95 disabled:opacity-40"
-                >
-                  <XCircle className="h-4 w-4" />
-                  Reject
-                </button>
               </div>
-            )}
-
-            {/* Inline reject panel */}
-            {showRejectPanel && (
-              <div className="mt-1 space-y-3 rounded-xl border border-rose-100 bg-rose-50/50 p-4 animate-in slide-in-from-top-1 duration-200">
-                <p className="text-sm font-semibold text-rose-800">
-                  Confirm Rejection
-                </p>
-                <p className="text-xs text-rose-600">
-                  Remarks are required. The requesting department will see these
-                  notes.
-                </p>
-                <textarea
-                  value={rejectRemarks}
-                  onChange={(e) => setRejectRemarks(e.target.value)}
-                  placeholder="Reason for rejection…"
-                  rows={3}
-                  className="w-full resize-none rounded-lg border border-rose-200 bg-white p-3 text-sm leading-relaxed text-slate-800 placeholder:text-slate-400 focus:border-rose-400 focus:outline-none focus:ring-2 focus:ring-rose-100"
-                />
-                <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    disabled={rejectMutation.isPending}
-                    onClick={() => {
-                      setShowRejectPanel(false);
-                      setRejectRemarks("");
-                    }}
-                    className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!rejectRemarks.trim() || rejectMutation.isPending}
-                    onClick={() => rejectMutation.mutate()}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-rose-700 disabled:opacity-50"
-                  >
-                    {rejectMutation.isPending && (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    )}
-                    Confirm Reject
-                  </button>
-                </div>
-              </div>
-            )}
+            </div>
           </div>
         </>
       )}
 
+      {showReturnDialog && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        >
+          <button
+            type="button"
+            aria-label="Close"
+            className="absolute inset-0 bg-slate-900/45 backdrop-blur-sm"
+            onClick={() => {
+              if (rejectMutation.isPending) return;
+              setShowReturnDialog(false);
+              setReturnRemarks("");
+            }}
+          />
+          <div className="relative z-10 w-full max-w-md overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+            <div className="border-b border-slate-100 px-5 py-4">
+              <h3 className="text-base font-bold text-slate-900">
+                Return to Requester?
+              </h3>
+              <p className="mt-1.5 text-[13px] leading-relaxed text-slate-600">
+                This Material Request will be returned to the requesting
+                department. A reason is required.
+              </p>
+            </div>
+            <div className="px-5 py-4">
+              <label
+                htmlFor="return-to-requester-reason"
+                className="block text-[13px] font-semibold text-slate-700"
+              >
+                Reason <span className="text-rose-500">*</span>
+              </label>
+              <textarea
+                id="return-to-requester-reason"
+                value={returnRemarks}
+                onChange={(e) => setReturnRemarks(e.target.value)}
+                rows={3}
+                placeholder="Why is this being returned?"
+                className="mt-2 w-full resize-none rounded-lg border border-slate-200 px-3 py-2 text-[13px] text-slate-800 placeholder:text-slate-400 focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-100"
+              />
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
+              <button
+                type="button"
+                disabled={rejectMutation.isPending}
+                onClick={() => {
+                  setShowReturnDialog(false);
+                  setReturnRemarks("");
+                }}
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-[13px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!returnRemarks.trim() || rejectMutation.isPending}
+                onClick={() => rejectMutation.mutate()}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-4 py-2 text-[13px] font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
+              >
+                {rejectMutation.isPending && (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                )}
+                Return to Requester
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Read-only decision summary — shown immediately after processing */}
       {processedResult && (
-        <div className="space-y-5 rounded-2xl border border-emerald-200 bg-white p-6 shadow-sm animate-in fade-in duration-300">
+        <div
+          className={`space-y-5 rounded-2xl border bg-white p-6 shadow-sm animate-in fade-in duration-300 ${
+            processedResult.failedItems > 0
+              ? "border-amber-200"
+              : "border-emerald-200"
+          }`}
+        >
           <div className="flex items-start gap-4">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-600">
-              <CheckCircle2 className="h-6 w-6" />
+            <div
+              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${
+                processedResult.failedItems > 0
+                  ? "bg-amber-100 text-amber-700"
+                  : "bg-emerald-100 text-emerald-600"
+              }`}
+            >
+              {processedResult.failedItems > 0 ? (
+                <AlertTriangle className="h-6 w-6" />
+              ) : (
+                <CheckCircle2 className="h-6 w-6" />
+              )}
             </div>
             <div>
               <h3 className="text-lg font-bold text-slate-900">
                 Warehouse Decision Processed
               </h3>
-              <p className="mt-0.5 text-sm font-semibold text-emerald-700">
-                {processedResult.outcome === "issued"
-                  ? "Material Issued Successfully"
-                  : processedResult.outcome === "forwarded"
-                    ? "Shortage Items Forwarded to Procurement"
-                    : "Partially Issued — Remaining Items Forwarded to Procurement"}
+              <p
+                className={`mt-0.5 text-sm font-semibold ${
+                  processedResult.failedItems > 0
+                    ? "text-amber-700"
+                    : "text-emerald-700"
+                }`}
+              >
+                {processedResult.failedItems > 0
+                  ? "Partial success — some items failed"
+                  : processedResult.outcome === "issued"
+                    ? "Material Issued Successfully"
+                    : processedResult.outcome === "forwarded"
+                      ? "Shortage Items Forwarded to Procurement"
+                      : "Partially Issued — Remaining Items Forwarded to Procurement"}
               </p>
             </div>
           </div>
+
+          <ul className="space-y-2 rounded-xl border border-slate-100 bg-slate-50/80 px-4 py-3">
+            {processedResult.lineResults.map((line) => (
+              <li
+                key={line.item_code}
+                className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm"
+              >
+                <span className="font-mono font-semibold text-slate-900">
+                  {line.item_code}
+                </span>
+                <span
+                  className={
+                    line.status === "issued"
+                      ? "font-semibold text-emerald-700"
+                      : line.status === "forwarded"
+                        ? "font-semibold text-indigo-700"
+                        : "font-semibold text-rose-700"
+                  }
+                >
+                  {line.status === "issued"
+                    ? "Issued"
+                    : line.status === "forwarded"
+                      ? "Forwarded"
+                      : "Forward Failed"}
+                </span>
+                {line.reason ? (
+                  <span className="text-rose-700">· Reason: {line.reason}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
 
           <dl className="grid gap-x-6 gap-y-4 border-t border-slate-100 pt-5 sm:grid-cols-2">
             <div>
@@ -1490,6 +2831,9 @@ export default function WarehouseReviewDetailPage() {
                 {processedResult.forwardedItems} item(s)
                 {processedResult.forwardedItems > 0
                   ? ` · ${processedResult.forwardedQty} qty`
+                  : ""}
+                {processedResult.failedItems > 0
+                  ? ` · ${processedResult.failedItems} failed`
                   : ""}
               </dd>
             </div>
@@ -1595,19 +2939,15 @@ export default function WarehouseReviewDetailPage() {
                   type="button"
                   disabled={processing}
                   onClick={() => void handleLegacyForwardOnly()}
-                  style={{ background: "#2D6A4F" }}
-                  className="mt-4 inline-flex items-center gap-2 rounded-xl px-6 py-3 text-sm font-bold text-white shadow-sm transition hover:opacity-90 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="mt-4 inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary-600 px-4 text-[13px] font-semibold text-white shadow-sm transition hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {processing ? (
                     <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       Processing…
                     </>
                   ) : (
-                    <>
-                      <CheckCircle2 className="h-4 w-4" />
-                      Confirm &amp; Process All Decisions
-                    </>
+                    "Process Selected"
                   )}
                 </button>
               </div>

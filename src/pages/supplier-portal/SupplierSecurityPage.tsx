@@ -33,7 +33,6 @@ import {
   validatePortalPassword,
 } from "../../utils/supplierPortalPassword";
 import { formatDateTime } from "../../utils/format";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 
 export default function SupplierSecurityPage() {
   const queryClient = useQueryClient();
@@ -151,12 +150,8 @@ export default function SupplierSecurityPage() {
   if (!isReady || !isAuthenticated) return null;
 
   return (
-    <SupplierPortalLayout
-      supplierName={supplierName}
-      statusBadge={displayStatus || "Approved"}
-      unlocked
-    >
-      <div className="mx-auto w-full max-w-5xl space-y-4 px-4 py-5 sm:px-6">
+    
+      <div className="flex w-full flex-col gap-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <Link
@@ -444,7 +439,7 @@ export default function SupplierSecurityPage() {
           )}
         </section>
       </div>
-    </SupplierPortalLayout>
+    
   );
 }
 

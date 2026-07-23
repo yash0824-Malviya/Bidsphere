@@ -452,6 +452,10 @@ function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/verify-otp" element={<OtpVerificationPage />} />
           <Route
+            path="/verify/material-issue"
+            element={<MaterialIssueReceiptVerifyPage />}
+          />
+          <Route
             path="/verify/material-issue-receipt/:token"
             element={<MaterialIssueReceiptVerifyPage />}
           />

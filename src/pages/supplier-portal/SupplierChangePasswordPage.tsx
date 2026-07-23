@@ -17,7 +17,6 @@ import {
   logPortalPasswordValidation,
   validatePortalPassword,
 } from "../../utils/supplierPortalPassword";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 
 export default function SupplierChangePasswordPage() {
   const navigate = useNavigate();
@@ -76,7 +75,7 @@ export default function SupplierChangePasswordPage() {
   if (!isReady || !isAuthenticated) return null;
 
   return (
-    <SupplierPortalLayout supplierName={supplierName} statusBadge="Pending">
+    
       <div className="mx-auto max-w-lg px-4 py-10">
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mb-6 flex items-center gap-3">
@@ -142,6 +141,6 @@ export default function SupplierChangePasswordPage() {
           </form>
         </div>
       </div>
-    </SupplierPortalLayout>
+    
   );
 }

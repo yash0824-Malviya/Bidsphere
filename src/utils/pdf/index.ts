@@ -21,6 +21,21 @@ export {
 } from "./grnPdf";
 
 export {
+  buildMaterialIssuePdf,
+  downloadMaterialIssuePdf,
+  printMaterialIssuePdf,
+  materialIssuePdfFilename,
+  type MaterialIssuePdfData,
+} from "./materialIssuePdf";
+
+export {
+  buildMaterialIssueReceiptPdf,
+  downloadMaterialIssueReceiptPdf,
+  printMaterialIssueReceiptPdf,
+  materialIssueReceiptPdfFilename,
+} from "./materialIssueReceiptPdf";
+
+export {
   downloadPaymentReceiptPdf,
   printPaymentReceiptPdf,
   paymentPdfFilename,

@@ -1,35 +1,16 @@
 import {
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
-import { useTranslation } from "react-i18next";
+import { useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import {
   Activity,
-  ArrowLeft,
   Ban,
-  Bot,
-  Building2,
-  Check,
-  CheckCircle2,
-  Clock,
-  FileText,
-  Gavel,
-  Info,
-  Layers,
-  Loader2,
-  Scale,
-  Send,
-  ShoppingCart,
   Sparkles,
-  Users,
-  Wallet,
 } from "lucide-react";
 
 import {
@@ -81,7 +62,6 @@ import {
 import { getApprovalStateFromErp } from "../../api/legalReviews";
 import type { LegalDocumentItemSummary, LegalDocumentSet } from "../../api/legalDocs";
 import { deriveRfqProcurementWorkflow } from "../../api/rfqProcurementWorkflow";
-import type { RfqWorkflowStep } from "../../api/rfqProcurementWorkflow";
 import { invalidateApprovalWorkflow } from "../../api/approvalWorkflow";
 import { ANALYSIS_STEPS } from "../../components/aiAnalysisSteps";
 import AIAnalysisModal, {
@@ -89,28 +69,26 @@ import AIAnalysisModal, {
 } from "../../components/AIAnalysisModal";
 import AIInsightsErrorBoundary from "../../components/AIInsightsErrorBoundary";
 import SupplierSelectionSummary from "../../components/SupplierSelectionSummary";
-import EmptyState from "../../components/EmptyState";
 import { AppLoading, EnterpriseError } from "../../components/enterprise";
-import { useOptionalLayout } from "../../contexts/LayoutContext";
-import StatusBadge from "../../components/StatusBadge";
-import {
-  PartNameCell,
-} from "../../components/warehouse/EngineeringDocCells";
-import LineEngineeringDocsCell from "../../components/attachments/LineEngineeringDocsCell";
 import { useAuthStore } from "../../store/authStore";
-import { canManageRFQs, canManageReverseBidding } from "../../config/roles";
+import {
+  canManagePurchaseOrders,
+  canManageRFQs,
+  canManageReverseBidding,
+} from "../../config/roles";
 import {
   createReverseBiddingFromRFQ,
   getReverseBiddingForRFQ,
 } from "../../api/reverseBidding";
 import type { RFQ, RFQSupplier, SupplierQuotation } from "../../types/erpnext";
-import { formatCurrency, formatDate } from "../../utils/format";
+import { formatDate } from "../../utils/format";
 import RejectedReviewActions from "../../components/sourcing/RejectedReviewActions";
 import CheckBudgetModal from "../../components/sourcing/CheckBudgetModal";
 import ViewQuotationModal from "../../components/sourcing/ViewQuotationModal";
 import CompareQuotationsModal, {
   type ComparisonQuote,
 } from "../../components/sourcing/CompareQuotationsModal";
+import RFQDetailEnterpriseLayout from "./rfq-detail/RFQDetailEnterpriseLayout";
 import {
   formatERPNextDate,
   formatUsDisplayDate,
@@ -125,10 +103,6 @@ import dayjs from "dayjs";
 const HAS_ANTHROPIC_KEY = !!(
   import.meta.env.VITE_ANTHROPIC_API_KEY as string | undefined
 );
-
-function clampScore(n: number): number {
-  return Math.max(0, Math.min(100, Math.round(n)));
-}
 
 type RiskLevel = "Low" | "Medium" | "High";
 
@@ -402,7 +376,6 @@ function supplierStatusTone(
 }
 
 export default function RFQDetailPage() {
-  const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { id = "" } = useParams();
@@ -1854,7 +1827,9 @@ export default function RFQDetailPage() {
   const legalApproved = workflow.legalApproved;
   const financeApproved = workflow.financeApproved;
   const fullyApproved = legalApproved && financeApproved;
-  const canCreatePO = workflow.canCreatePO;
+  // PO creation is owned by Procurement Team after Manager approval.
+  const canCreatePO =
+    workflow.canCreatePO && canManagePurchaseOrders(userRole);
 
   const quoteTotals = Array.from(localQuotes.values())
     .map((q) => q.total)
@@ -1899,603 +1874,145 @@ export default function RFQDetailPage() {
   const ownerLabel = rfq.owner || "—";
   const companyLabel = rfq.company || COMPANY;
 
+  const selectionReason =
+    copilotRecommendedRow?.why_best_or_worst ||
+    savedAnalysis?.analysis?.recommendation_summary ||
+    savedAnalysis?.analysis?.reason ||
+    null;
+
+  const recommendedSupplierLabel = hasSelectedSupplier
+    ? resolvedSelectedSupplier
+    : copilotHasAnalysis
+      ? savedAnalysis!.recommended_supplier
+      : hasQuotations && aiReady
+        ? "Ready to analyze"
+        : "Not Available";
+
   return (
-    <div>
-      {isReadOnly && (
-        <div className="mb-3 flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-4 py-2.5 text-sm text-primary-700">
-          <Info className="h-4 w-4 flex-shrink-0" />
-          <span className="font-medium">Read-only view — Legal Reviewer access. Use Legal Reviews to approve or reject.</span>
-        </div>
-      )}
-
-      {/* ── Approval Workflow Progress Tracker ── */}
-      {hasSelectedSupplier && !isReadOnly && (
-        <ApprovalWorkflowTracker
-          legalDoc={legalDoc}
-          poExists={poExists}
-          fullyApproved={fullyApproved}
-          selectedSupplier={resolvedSelectedSupplier}
-          selectedSupplierTotal={
-            approvalState?.selected_supplier_total ?? legalDoc?.grand_total ?? 0
-          }
-        />
-      )}
-
-      <RfqDetailHeader
-        rfqName={rfq.name}
-        isCompleted={isCompleted}
-        status={rfq.status ?? "Draft"}
-        materialRequest={materialRequestLabel}
-        department={departmentLabel}
-        company={companyLabel}
-        owner={ownerLabel}
-        createdDate={formatDate(rfq.transaction_date)}
-        validTill={validTillDisplay}
-        timeline={timeline}
-        actions={
-          showSubmitRFQ ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setCheckBudgetOpen(true)}
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-primary-300 bg-white px-4 py-2 text-sm font-semibold text-primary-700 shadow-sm hover:bg-primary-50"
-              >
-                <Wallet className="h-4 w-4" />
-                Check Budget
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleSubmitRFQ()}
-                disabled={submittingRFQ}
-                className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-accent-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {submittingRFQ ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Submitting…
-                  </>
-                ) : (
-                  <>
-                    <Check className="h-4 w-4" />
-                    Submit RFQ
-                  </>
-                )}
-              </button>
-            </div>
-          ) : undefined
-        }
-      />
-
-      <CheckBudgetModal
-        open={checkBudgetOpen}
-        onClose={() => setCheckBudgetOpen(false)}
-        onContinue={() => {
-          setCheckBudgetOpen(false);
-          void handleSubmitRFQ();
-        }}
-        rfqName={rfq.name}
-        company={rfq.company ?? null}
-        costCenter={
-          (rfq as { cost_center?: string }).cost_center ?? null
-        }
-        fiscalYear={
-          (rfq as { fiscal_year?: string }).fiscal_year ?? null
-        }
-        items={(rfq.items ?? []) as never}
-      />
-
-      {!isReadOnly && legalDoc?.review_status === "Rejected" && (
-        <div className="mb-4 rounded-xl border border-danger-200 bg-danger-50/60 px-4 py-3">
-          <p className="mb-2 text-sm font-semibold text-danger-800">Legal Rejected</p>
-          <p className="mb-3 text-xs text-danger-700">
-            Edit the RFQ if needed, then resubmit for legal review.
-          </p>
-          <RejectedReviewActions
-            rfqName={rfq.name}
-            reviewType="legal"
-            onResubmitted={() => {
-              invalidateApprovalWorkflow(queryClient);
-              void legalDocQuery.refetch();
-            }}
-          />
-        </div>
-      )}
-
-      {!isReadOnly &&
-        legalDoc?.review_status === "Approved" &&
-        legalDoc.finance_status === "Rejected" && (
-          <div className="mb-4 rounded-xl border border-danger-200 bg-danger-50/60 px-4 py-3">
-            <p className="mb-2 text-sm font-semibold text-danger-800">Finance Rejected</p>
-            <p className="mb-3 text-xs text-danger-700">
-              Edit the RFQ if needed, then resubmit for finance review.
-            </p>
-            <RejectedReviewActions
-              rfqName={rfq.name}
-              reviewType="finance"
-              onResubmitted={() => {
-                invalidateApprovalWorkflow(queryClient);
-                void legalDocQuery.refetch();
-              }}
-            />
-          </div>
-        )}
-
-      {/* ── Procurement Command Center ── */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {/* Row 1 · Document Details */}
-        <CommandCard icon={FileText} title={t("rfq.documentDetails")}>
-          <div className="divide-y divide-neutral-100">
-            <KeyRow label={t("rfq.rfqNumber")} value={rfq.name} mono strong />
-            <KeyRow label={t("rfq.issuedDate")} value={formatDate(rfq.transaction_date)} />
-            <KeyRow label={t("rfq.validTill")} value={validTillDisplay} />
-            <KeyRow label={t("common.company")} value={COMPANY} />
-          </div>
-        </CommandCard>
-
-        {/* Row 1 · Requested Items Summary */}
-        <CommandCard
-          icon={Layers}
-          title={t("rfq.requestedItemsSummary")}
-          badge={<Pill tone="brand">{t("rfq.itemsCount", { count: rfq.items?.length ?? 0 })}</Pill>}
-        >
-          <div className="grid grid-cols-3 gap-2">
-            <MiniStat value={rfq.items?.length ?? 0} label={t("rfq.lineItems")} />
-            <MiniStat value={totalQty} label={t("rfq.totalQty")} />
-            <MiniStat value={uomCount} label={t("rfq.uoms")} />
-          </div>
-          <div className="mt-3 space-y-1.5 border-t border-neutral-100 pt-2.5 text-sm">
-            <div className="flex justify-between gap-2">
-              <span className="text-neutral-500">Estimated Budget</span>
-              <span className="font-semibold text-neutral-900">
-                {estimatedBudget > 0 ? formatCurrency(estimatedBudget) : "—"}
-              </span>
-            </div>
-            <div className="flex justify-between gap-2">
-              <span className="text-neutral-500">Expected Delivery</span>
-              <span className="font-semibold text-neutral-900">{expectedDelivery}</span>
-            </div>
-            <div className="flex justify-between gap-2">
-              <span className="text-neutral-500">Currency</span>
-              <span className="font-semibold text-neutral-900">{currencyLabel}</span>
-            </div>
-            <div className="flex justify-between gap-2">
-              <span className="text-neutral-500">Delivery Location</span>
-              <span className="truncate font-semibold text-neutral-900" title={deliveryLocation}>
-                {deliveryLocation}
-              </span>
-            </div>
-          </div>
-        </CommandCard>
-
-        {/* Row 1 · RFQ Status Center — same workflow object as timeline */}
-        <CommandCard icon={Activity} title={t("rfq.statusCenter")}>
-          <div className="space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-500">Workflow Stage</span>
-              <span className="text-sm font-bold text-primary-700">{workflow.currentStage}</span>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-500">Overall Status</span>
-              <Pill
-                tone={
-                  workflow.workflowStatus === "Completed"
-                    ? "success"
-                    : workflow.workflowStatus === "Rejected"
-                      ? "danger"
-                      : "amber"
-                }
-              >
-                {workflow.workflowStatus}
-              </Pill>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-500">Document Status</span>
-              <Pill tone={rfq.docstatus === 1 ? "brand" : "neutral"}>
-                {workflow.documentStatus}
-              </Pill>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-500">Current Owner</span>
-              <span className="text-sm font-semibold text-neutral-900">{workflow.currentOwner}</span>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-500">Next Approver</span>
-              <span className="text-sm font-semibold text-neutral-900">{workflow.nextApprover}</span>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-500">Last Updated</span>
-              <span className="text-sm font-semibold text-neutral-900">
-                {legalDoc?.modified
-                  ? formatDate(legalDoc.modified)
-                  : formatDate(rfq.modified || rfq.transaction_date)}
-              </span>
-            </div>
-          </div>
-        </CommandCard>
-
-        {/* Row 2 · Workflow Timeline — identical current stage as Status Center */}
-        <CommandCard icon={Clock} title={t("rfq.rfqStatus")}>
-          <div className="mb-3 flex items-center justify-between rounded-lg border border-primary/15 bg-primary/5 px-3 py-2">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-500">{t("rfq.currentStage")}</span>
-            <span className="text-xs font-bold text-primary-700">{currentStage}</span>
-          </div>
-          <ol>
-            {timeline.map((step, i) => (
-              <TimelineStep
-                key={step.id}
-                label={step.label}
-                meta={step.meta}
-                done={step.done}
-                active={step.active && !step.rejected}
-                rejected={step.rejected}
-                last={i === timeline.length - 1}
+    <RFQDetailEnterpriseLayout
+      rfq={rfq}
+      isReadOnly={isReadOnly}
+      isCompleted={isCompleted}
+      companyLabel={companyLabel}
+      departmentLabel={departmentLabel}
+      ownerLabel={ownerLabel}
+      materialRequestLabel={materialRequestLabel}
+      validTillDisplay={validTillDisplay}
+      currencyLabel={currencyLabel}
+      expectedDelivery={expectedDelivery}
+      deliveryLocation={deliveryLocation}
+      estimatedBudget={estimatedBudget}
+      totalQty={totalQty}
+      workflow={workflow}
+      timeline={timeline}
+      supplierCount={supplierCount}
+      quotedCount={quotedCount}
+      respondedCount={respondedCount}
+      declinedCount={declinedCount}
+      awaitingCount={awaitingCount}
+      responseRate={responseRate}
+      lowestQuote={lowestQuote}
+      avgQuote={avgQuote}
+      highestQuote={highestQuote}
+      allSuppliersResponded={allSuppliersResponded}
+      hasSelectedSupplier={hasSelectedSupplier}
+      resolvedSelectedSupplier={resolvedSelectedSupplier}
+      selectedSupplierTotal={
+        approvalState?.selected_supplier_total ?? legalDoc?.grand_total ?? 0
+      }
+      selectionReason={selectionReason}
+      legalDoc={legalDoc}
+      poExists={poExists}
+      poName={completionSummary.poName !== "—" ? completionSummary.poName : null}
+      fullyApproved={fullyApproved}
+      canCreatePO={canCreatePO}
+      procurementFinalized={procurementFinalized}
+      copilotHasAnalysis={copilotHasAnalysis}
+      aiConfidence={aiConfidence}
+      copilotRiskLevel={copilotRiskLevel}
+      copilotSavings={copilotSavings}
+      recommendedSupplierLabel={recommendedSupplierLabel}
+      aiReady={aiReady}
+      aiLoading={aiLoading}
+      aiButtonMode={workflow.aiButtonMode}
+      hasQuotations={hasQuotations}
+      hasAnthropicKey={HAS_ANTHROPIC_KEY}
+      canCompareQuotations={canCompareQuotations}
+      canViewQuotations={canViewQuotations}
+      showSubmitRFQ={showSubmitRFQ}
+      submittingRFQ={submittingRFQ}
+      creatingPO={creatingPO}
+      localQuotes={localQuotes}
+      declineBySupplier={declineBySupplier}
+      supplierAnalysisRows={savedAnalysis?.analysis?.supplier_analysis ?? []}
+      quotesQueryError={quotesQuery.isError}
+      onRetryQuotes={() => void quotesQuery.refetch()}
+      onCheckBudget={() => setCheckBudgetOpen(true)}
+      onSubmitRFQ={() => void handleSubmitRFQ()}
+      onCompareQuotations={() => setCompareModalOpen(true)}
+      onViewQuotation={(sq) => setViewQuotationSq(sq)}
+      onViewDeclineReason={(d) => setReasonPopup(d)}
+      onPerformAnalysis={handlePerformAnalysis}
+      onViewAnalysis={handleViewAnalysis}
+      onReAnalyze={handleReAnalyze}
+      onCreatePO={() => void handleCreatePO(resolvedSelectedSupplier)}
+      onPrint={() => window.print()}
+      onExportPdf={() => window.print()}
+      resolveSupplierStatus={(s, hasQuote, validTill, hasDecline) =>
+        resolveSupplierStatus(
+          s,
+          hasQuote,
+          validTill || parsedMessage.validTill || undefined,
+          hasDecline,
+        )
+      }
+      supplierStatusTone={supplierStatusTone}
+      quoteForSupplier={quoteForSupplier}
+      rejectionBanners={
+        <>
+          {!isReadOnly && legalDoc?.review_status === "Rejected" && (
+            <div className="mb-4 rounded-2xl border border-danger-200 bg-danger-50/60 px-4 py-3">
+              <p className="mb-2 text-sm font-semibold text-danger-800">Legal Rejected</p>
+              <p className="mb-3 text-xs text-danger-700">
+                Edit the RFQ if needed, then resubmit for legal review.
+              </p>
+              <RejectedReviewActions
+                rfqName={rfq.name}
+                reviewType="legal"
+                onResubmitted={() => {
+                  invalidateApprovalWorkflow(queryClient);
+                  void legalDocQuery.refetch();
+                }}
               />
-            ))}
-          </ol>
-        </CommandCard>
-
-        {/* Row 2 · Supplier Response Summary (neutral — no winner/ranking) */}
-        <CommandCard
-          icon={Users}
-          title={t("rfq.supplierResponseSummary")}
-          badge={<Pill tone="brand">{t("rfq.invitedCount", { count: supplierCount })}</Pill>}
-        >
-          <div className="space-y-3">
-            {quotesQuery.isError && (
-              <div className="flex items-center justify-between gap-2 rounded-lg border border-danger-200 bg-danger-50 px-3 py-2 text-[11px] text-danger-800">
-                <span>
-                  Unable to load quotations — counts below may be incomplete.
-                </span>
-                <button
-                  type="button"
-                  onClick={() => quotesQuery.refetch()}
-                  className="font-semibold underline"
-                >
-                  Retry
-                </button>
-              </div>
-            )}
-            {allSuppliersResponded ? (
-              <div className="grid grid-cols-2 gap-2">
-                <MiniStat
-                  value={avgQuote > 0 ? formatCurrency(avgQuote) : "—"}
-                  label="Average Quote"
-                />
-                <MiniStat
-                  value={lowestQuote > 0 ? formatCurrency(lowestQuote) : "—"}
-                  label="Lowest Quote"
-                />
-                <MiniStat
-                  value={highestQuote > 0 ? formatCurrency(highestQuote) : "—"}
-                  label="Highest Quote"
-                />
-                <MiniStat value={`${responseRate}%`} label="Response Rate" />
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-2">
-                <MiniStat value={quotedCount} label="Quoted" />
-                <MiniStat value={declinedCount} label="No Quote" />
-                <MiniStat value={awaitingCount} label="Pending" />
-                <MiniStat value={respondedCount} label="Responded" />
-              </div>
-            )}
-            <div>
-              <div className="mb-1 flex items-center justify-between text-[11px] text-neutral-500">
-                <span>Response rate</span>
-                <span className="font-semibold text-neutral-700">
-                  {responseRate}%
-                </span>
-              </div>
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-neutral-100">
-                <div
-                  className="h-full rounded-full bg-[#0ea5e9] transition-all"
-                  style={{ width: `${responseRate}%` }}
+            </div>
+          )}
+          {!isReadOnly &&
+            legalDoc?.review_status === "Approved" &&
+            legalDoc.finance_status === "Rejected" && (
+              <div className="mb-4 rounded-2xl border border-danger-200 bg-danger-50/60 px-4 py-3">
+                <p className="mb-2 text-sm font-semibold text-danger-800">Finance Rejected</p>
+                <p className="mb-3 text-xs text-danger-700">
+                  Edit the RFQ if needed, then resubmit for finance review.
+                </p>
+                <RejectedReviewActions
+                  rfqName={rfq.name}
+                  reviewType="finance"
+                  onResubmitted={() => {
+                    invalidateApprovalWorkflow(queryClient);
+                    void legalDocQuery.refetch();
+                  }}
                 />
               </div>
-            </div>
-          </div>
-        </CommandCard>
-
-        {/* Row 2 · AI Procurement Copilot */}
-        <CommandCard
-          icon={Bot}
-          title="AI Procurement Copilot"
-          tone="ai"
-          badge={
-            procurementFinalized ? (
-              <Pill tone="success">
-                <CheckCircle2 className="h-3 w-3" />
-                Purchase Order Created
-              </Pill>
-            ) : hasSelectedSupplier ? (
-              <Pill tone="success">Complete</Pill>
-            ) : hasQuotations && aiReady ? (
-              <Pill tone="brand">Ready</Pill>
-            ) : (
-              <Pill tone="amber">Pending</Pill>
-            )
-          }
-        >
-          <div className="space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-500">Confidence Score</span>
-              <span className="text-sm font-bold text-neutral-900">
-                {copilotHasAnalysis
-                  ? `${clampScore(savedAnalysis!.confidence_score)}%`
-                  : "Not analyzed"}
-              </span>
-            </div>
-            {copilotHasAnalysis ? (
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-neutral-100">
-                <div
-                  className="h-full rounded-full bg-[#0ea5e9]"
-                  style={{ width: `${clampScore(savedAnalysis!.confidence_score)}%` }}
-                />
-              </div>
-            ) : (
-              <p className="text-xs text-neutral-400">
-                Run AI Analysis to generate confidence score.
-              </p>
             )}
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-500">Supplier Coverage</span>
-              <span className="text-sm font-bold text-neutral-900">
-                {hasQuotations ? `${respondedCount}/${supplierCount}` : `0/${supplierCount}`}
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-sm text-neutral-500">
-                {workflow.supplierSelectionStatus === "Selected"
-                  ? "Selected Supplier"
-                  : "Recommended Supplier"}
-              </span>
-              <div className="flex max-w-[60%] flex-col items-end gap-0.5">
-                <Pill
-                  tone={
-                    workflow.supplierSelectionStatus === "Selected"
-                      ? "success"
-                      : workflow.supplierSelectionStatus === "Recommended"
-                        ? "brand"
-                        : "amber"
-                  }
-                >
-                  {workflow.supplierSelectionStatus}
-                </Pill>
-                <span className="truncate text-xs font-semibold text-neutral-800">
-                  {hasSelectedSupplier
-                    ? resolvedSelectedSupplier
-                    : copilotHasAnalysis
-                      ? savedAnalysis!.recommended_supplier
-                      : hasQuotations && aiReady
-                        ? "Ready to analyze"
-                        : "Not Available"}
-                </span>
-              </div>
-            </div>
-            {copilotHasAnalysis && copilotRiskLevel && (
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm text-neutral-500">Risk Level</span>
-                <Pill
-                  tone={
-                    copilotRiskLevel === "Low"
-                      ? "success"
-                      : copilotRiskLevel === "Medium"
-                      ? "amber"
-                      : "danger"
-                  }
-                >
-                  {copilotRiskLevel}
-                </Pill>
-              </div>
-            )}
-            {copilotHasAnalysis && copilotSavings && copilotSavings.amount > 0 && (
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm text-neutral-500">Savings Potential</span>
-                <span className="text-sm font-bold text-success-700">
-                  {copilotSavings.pct}% · {formatCurrency(copilotSavings.amount)}
-                </span>
-              </div>
-            )}
-
-            {/* ── AI Action Buttons — never show Perform when analysis exists ── */}
-            {workflow.aiButtonMode === "finalized" || procurementFinalized ? (
-              <div className="mt-1 space-y-2.5">
-                <div className="flex items-start gap-2 rounded-lg border border-success-200 bg-success-50/70 px-3 py-2.5">
-                  <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0 text-success-600" />
-                  <p className="text-xs leading-relaxed text-success-800">
-                    Procurement analysis has been finalized and a Purchase Order
-                    has already been created.
-                  </p>
-                </div>
-                {poExists && completionPO?.name ? (
-                  <Link
-                    to={`/p2p/purchase-orders/${encodeURIComponent(completionPO.name)}`}
-                    className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white no-underline shadow-sm transition hover:brightness-110"
-                  >
-                    <FileText className="h-4 w-4" />
-                    View Purchase Order
-                  </Link>
-                ) : null}
-              </div>
-            ) : workflow.aiButtonMode === "view_and_rerun" ? (
-              <div className="mt-1 flex gap-2">
-                <button
-                  type="button"
-                  onClick={handleViewAnalysis}
-                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110"
-                >
-                  <Sparkles className="h-4 w-4" />
-                  View AI Report
-                </button>
-                {!isReadOnly && !isCompleted && (
-                  <button
-                    type="button"
-                    onClick={handleReAnalyze}
-                    disabled={aiLoading}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm font-medium text-neutral-700 shadow-sm transition hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {aiLoading ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Activity className="h-4 w-4" />
-                    )}
-                    {aiLoading ? "Analyzing…" : "Re-run Analysis"}
-                  </button>
-                )}
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={handlePerformAnalysis}
-                disabled={!aiReady || aiLoading || isReadOnly}
-                className="mt-1 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {aiLoading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    {t("rfq.analyzing")}
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="h-4 w-4" />
-                    {t("rfq.performAiAnalysis")}
-                  </>
-                )}
-              </button>
-            )}
-            {!isReadOnly && hasSelectedSupplier && !poExists && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => void handleCreatePO(resolvedSelectedSupplier)}
-                  disabled={creatingPO || !canCreatePO}
-                  className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-accent-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-accent-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {creatingPO ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <ShoppingCart className="h-4 w-4" />
-                  )}
-                  {creatingPO ? "Creating PO…" : "Generate Purchase Order"}
-                </button>
-                {!canCreatePO && (
-                  <p className="text-center text-[11px] text-neutral-400">
-                    Generate PO unlocks after Supplier Selected, Legal Approved,
-                    and Finance Approved.
-                  </p>
-                )}
-              </>
-            )}
-            {!procurementFinalized && !hasQuotations && !hasSelectedSupplier && (
-              <p className="text-center text-[11px] text-neutral-400">
-                AI Analysis will be available after supplier quotations are submitted.
-              </p>
-            )}
-            {!procurementFinalized && hasQuotations && !HAS_ANTHROPIC_KEY && !hasSelectedSupplier && (
-              <p className="text-center text-[11px] text-neutral-400">
-                AI key not configured — local quotation comparison will be used.
-              </p>
-            )}
-            {!procurementFinalized && hasQuotations && HAS_ANTHROPIC_KEY && !aiReady && !hasSelectedSupplier && (
-              <p className="text-center text-[11px] text-neutral-400">
-                Need at least 2 quotations.
-              </p>
-            )}
-          </div>
-        </CommandCard>
-      </div>
-
-      {/* Approval Information — live LDR fields */}
-      {hasSelectedSupplier && (
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          <CommandCard icon={Gavel} title="Legal Review">
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between gap-2">
-                <span className="text-neutral-500">Status</span>
-                <Pill
-                  tone={
-                    workflow.legalRejected
-                      ? "danger"
-                      : workflow.legalApproved
-                        ? "success"
-                        : "amber"
-                  }
-                >
-                  {workflow.legalStatus}
-                </Pill>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span className="text-neutral-500">Approved By</span>
-                <span className="font-semibold text-neutral-900">
-                  {legalDoc?.approved_by || "—"}
-                </span>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span className="text-neutral-500">Approved Date</span>
-                <span className="font-semibold text-neutral-900">
-                  {legalDoc?.approved_on ? formatDate(legalDoc.approved_on) : "—"}
-                </span>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span className="text-neutral-500">Signature</span>
-                <span className="font-semibold text-neutral-900">
-                  {legalDoc?.esign_status === "signed" ||
-                  legalDoc?.esign_status === "locked" ||
-                  legalDoc?.esign_signed_by
-                    ? legalDoc.esign_signed_by || "Signed"
-                    : "—"}
-                </span>
-              </div>
-            </div>
-          </CommandCard>
-          <CommandCard icon={Wallet} title="Finance Review">
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between gap-2">
-                <span className="text-neutral-500">Status</span>
-                <Pill
-                  tone={
-                    workflow.financeRejected
-                      ? "danger"
-                      : workflow.financeApproved
-                        ? "success"
-                        : "amber"
-                  }
-                >
-                  {workflow.financeStatus}
-                </Pill>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span className="text-neutral-500">Approved By</span>
-                <span className="font-semibold text-neutral-900">
-                  {legalDoc?.finance_approved_by || "—"}
-                </span>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span className="text-neutral-500">Approval Date</span>
-                <span className="font-semibold text-neutral-900">
-                  {legalDoc?.finance_approved_on
-                    ? formatDate(legalDoc.finance_approved_on)
-                    : "—"}
-                </span>
-              </div>
-              <div className="flex justify-between gap-2">
-                <span className="text-neutral-500">Budget Approved</span>
-                <Pill tone={workflow.financeApproved ? "success" : "neutral"}>
-                  {workflow.financeApproved ? "Yes" : "No"}
-                </Pill>
-              </div>
-            </div>
-          </CommandCard>
-        </div>
-      )}
-
-      {/* Reverse Bidding — available after AI analysis, before PO */}
-      {!procurementFinalized &&
+        </>
+      }
+      reverseBiddingSlot={
+        !procurementFinalized &&
         hasQuotations &&
         aiReady &&
         aiAnalysisDone &&
         savedAnalysis &&
-        canManageReverseBidding(userRole) && (
+        canManageReverseBidding(userRole) ? (
           <ReverseBiddingCTA
             rfqName={rfq.name}
             approvedSuppliers={(savedAnalysis.analysis.supplier_analysis ?? [])
@@ -2504,352 +2021,118 @@ export default function RFQDetailPage() {
             procurementManager={user?.email}
             allowCreate={!hasSelectedSupplier}
           />
-        )}
-
-      {/* Items requested */}
-      <div className="mt-6 overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
-        <div className="flex items-center justify-between gap-3 border-b border-neutral-200 bg-[#0ea5e9]/5 px-5 py-3.5">
-          <div className="flex items-center gap-2">
-            <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-[#0ea5e9]/10 text-[#0ea5e9]">
-              <ShoppingCart className="h-4 w-4" />
-            </span>
-            <h3 className="text-sm font-semibold text-neutral-900">
-              Items Requested
-            </h3>
-          </div>
-          <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-semibold text-[#0ea5e9] ring-1 ring-inset ring-[#0ea5e9]/20">
-            {rfq.items?.length ?? 0} item
-            {(rfq.items?.length ?? 0) === 1 ? "" : "s"}
-          </span>
-        </div>
-        {(rfq.items ?? []).length === 0 ? (
-          <EmptyState
-            icon={ShoppingCart}
-            title="No items"
-            description="This RFQ has no line items."
-          />
-        ) : (
-          <div className="max-h-[28rem] overflow-auto">
-            <table className="min-w-full border-separate border-spacing-0 text-sm">
-              <thead className="sticky top-0 z-10">
-                <tr className="text-left text-xs font-semibold uppercase tracking-wider text-neutral-500">
-                  <th className="border-b border-neutral-200 bg-neutral-50 px-5 py-3">
-                    Item
-                  </th>
-                  <th className="hidden border-b border-neutral-200 bg-neutral-50 px-5 py-3 sm:table-cell">
-                    Description
-                  </th>
-                  <th className="border-b border-neutral-200 bg-neutral-50 px-5 py-3 text-right">
-                    Qty
-                  </th>
-                  <th className="border-b border-neutral-200 bg-neutral-50 px-5 py-3 text-right">
-                    UOM
-                  </th>
-                  <th className="border-b border-neutral-200 bg-neutral-50 px-5 py-3">
-                    Part Name
-                  </th>
-                  <th className="border-b border-neutral-200 bg-neutral-50 px-5 py-3">
-                    Attachments
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {(rfq.items ?? []).map((it) => (
-                  <tr
-                    key={it.name}
-                    className="transition-colors hover:bg-[#0ea5e9]/[0.04]"
-                  >
-                    <td className="border-b border-neutral-100 px-5 py-3.5 align-top">
-                      <div className="font-medium text-neutral-900">
-                        {it.item_name ?? it.item_code}
-                      </div>
-                      {it.item_code &&
-                        it.item_name &&
-                        it.item_code !== it.item_name && (
-                          <div className="mt-0.5 font-mono text-xs text-neutral-400">
-                            {it.item_code}
-                          </div>
-                        )}
-                      {it.description && (
-                        <div className="mt-1 text-xs leading-relaxed text-neutral-500 sm:hidden">
-                          {it.description}
-                        </div>
-                      )}
-                    </td>
-                    <td className="hidden border-b border-neutral-100 px-5 py-3.5 align-top text-neutral-600 sm:table-cell">
-                      {it.description ?? "—"}
-                    </td>
-                    <td className="border-b border-neutral-100 px-5 py-3.5 text-right align-top font-semibold tabular-nums text-neutral-900">
-                      {it.qty}
-                    </td>
-                    <td className="border-b border-neutral-100 px-5 py-3.5 text-right align-top text-neutral-600">
-                      {it.uom ?? "—"}
-                    </td>
-                    <td className="border-b border-neutral-100 px-5 py-3.5 align-top">
-                      <PartNameCell value={it.custom_part_name} />
-                    </td>
-                    <td className="border-b border-neutral-100 px-5 py-3.5 align-top">
-                      <LineEngineeringDocsCell
-                        lookup={{
-                          item_code: it.item_code,
-                          material_request: it.material_request,
-                          material_request_item: it.material_request_item,
-                          custom_part_name: it.custom_part_name,
-                          custom_2d_drawing: it.custom_2d_drawing,
-                          custom_engineering_attachments:
-                            it.custom_engineering_attachments,
-                        }}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      {/* Suppliers — portal responses only (buyer monitors, no manual entry) */}
-      <div className="mt-4 overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
-        <div className="flex items-center justify-between gap-3 border-b border-neutral-200 bg-[#0ea5e9]/5 px-4 py-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-[#0ea5e9]/10 text-[#0ea5e9]">
-              <Building2 className="h-4 w-4" />
-            </span>
-            <div className="min-w-0">
-              <h3 className="text-sm font-semibold text-neutral-900">
-                Suppliers Invited
-              </h3>
-              <p className="text-xs text-neutral-500">
-                {isCompleted
-                  ? "Supplier quotations received for this RFQ. Procurement is complete."
-                  : "Monitor supplier response status. Quotations are submitted via the Supplier Portal."}
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-shrink-0 items-center gap-2">
-            {canCompareQuotations && (
-              <button
-                type="button"
-                onClick={() => setCompareModalOpen(true)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-[#0ea5e9]/30 bg-white px-3 py-1.5 text-xs font-semibold text-[#0ea5e9] shadow-sm hover:bg-[#0ea5e9]/5"
+        ) : null
+      }
+      legalRejectedActions={null}
+      financeRejectedActions={null}
+      checkBudgetModal={
+        <CheckBudgetModal
+          open={checkBudgetOpen}
+          onClose={() => setCheckBudgetOpen(false)}
+          onContinue={() => {
+            setCheckBudgetOpen(false);
+            void handleSubmitRFQ();
+          }}
+          rfqName={rfq.name}
+          company={rfq.company ?? null}
+          costCenter={(rfq as { cost_center?: string }).cost_center ?? null}
+          fiscalYear={(rfq as { fiscal_year?: string }).fiscal_year ?? null}
+          items={(rfq.items ?? []) as never}
+        />
+      }
+      modals={
+        <>
+          {aiModals}
+          {reasonPopup && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              className="modal-overlay"
+              onClick={() => setReasonPopup(null)}
+            >
+              <div
+                className="modal-panel relative max-w-md p-5"
+                onClick={(e) => e.stopPropagation()}
               >
-                <Scale className="h-3.5 w-3.5" />
-                Compare Quotations
-              </button>
-            )}
-            <span className="rounded-full bg-white px-2.5 py-0.5 text-xs font-semibold text-[#0ea5e9] ring-1 ring-inset ring-[#0ea5e9]/20">
-              {(rfq.suppliers ?? []).length} invited
-            </span>
-          </div>
-        </div>
-
-        {!isCompleted && (
-          <div className="mx-4 mt-3 flex gap-2.5 rounded-lg border border-[#0ea5e9]/20 bg-[#0ea5e9]/5 px-3.5 py-2.5">
-            <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-[#0ea5e9]" />
-            <p className="text-sm leading-relaxed text-neutral-700">
-              Suppliers will submit quotations through the Supplier Portal.
-              Pricing remains hidden until AI analysis is performed.
-            </p>
-          </div>
-        )}
-
-        <ul className="space-y-2 px-4 py-3">
-          {(rfq.suppliers ?? []).map((s) => {
-            const quote = quoteForSupplier(localQuotes, s.supplier);
-            const validTill =
-              rfq.valid_till ?? parsedMessage.validTill ?? undefined;
-            const decline = declineBySupplier.get(
-              (s.supplier ?? "").toLowerCase()
-            );
-            const status = resolveSupplierStatus(
-              s,
-              !!quote,
-              validTill,
-              !!decline
-            );
-            const itemsQuoted = quote
-              ? (rfq.items ?? []).filter((it) => {
-                  const cell = quote.byItem.get(it.item_code);
-                  return cell && cell.unit_price > 0;
-                }).length
-              : 0;
-
-            // Neutral list — submission status only. No quote amounts, no
-            // ranking or winner/runner-up indicators. Procurement decisions are
-            // shown exclusively in the AI Procurement Decision section after a PO.
-            return (
-              <li key={s.name} data-supplier={s.supplier}>
-                <div className="flex flex-col gap-2.5 rounded-lg border border-neutral-200 bg-white px-3.5 py-3 shadow-sm transition-colors hover:border-neutral-300 sm:flex-row sm:items-center sm:justify-between">
-                  {/* Identity */}
-                  <div className="flex min-w-0 items-center gap-2.5">
-                    <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-neutral-50 text-neutral-500 ring-1 ring-inset ring-neutral-200">
-                      <Building2 className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-neutral-900">
-                        {s.supplier}
-                      </p>
-                      <p className="inline-flex items-center gap-1 text-xs text-neutral-500">
-                        {quote ? (
-                          <>
-                            <FileText className="h-3 w-3" />
-                            {itemsQuoted} item{itemsQuoted === 1 ? "" : "s"} submitted
-                          </>
-                        ) : decline ? (
-                          <>
-                            <Ban className="h-3 w-3" />
-                            {decline.decline_reason || "Declined to quote"}
-                          </>
-                        ) : (
-                          "Awaiting quotation"
-                        )}
-                      </p>
-                    </div>
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-warning-50 text-warning-600">
+                    <Ban className="h-5 w-5" />
                   </div>
-
-                  {/* Neutral submission status — no ranking, no amounts */}
-                  <div className="flex items-center gap-2 sm:justify-end">
-                    {quote ? (
-                      <>
-                        <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-success-50 px-2.5 py-0.5 text-xs font-semibold text-success-600 ring-1 ring-inset ring-success-100">
-                          <CheckCircle2 className="h-3 w-3" />
-                          Quotation Submitted
-                        </span>
-                        {canViewQuotations && (
-                          <button
-                            type="button"
-                            onClick={() => setViewQuotationSq(quote.sqName)}
-                            disabled={!quote.sqName}
-                            className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            <FileText className="h-3 w-3" />
-                            View Quotation
-                          </button>
-                        )}
-                      </>
-                    ) : decline ? (
-                      <>
-                        <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-warning-50 px-2.5 py-0.5 text-xs font-semibold text-warning-700 ring-1 ring-inset ring-warning-200">
-                          <Ban className="h-3 w-3" />
-                          No Quote
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setReasonPopup(decline)}
-                          className="whitespace-nowrap rounded-md border border-neutral-300 bg-white px-2 py-0.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
-                        >
-                          View Reason
-                        </button>
-                      </>
-                    ) : (
-                      <StatusBadge
-                        status={status}
-                        tone={supplierStatusTone(status)}
-                      />
-                    )}
+                  <div className="min-w-0 flex-1">
+                    <h2 className="text-base font-semibold text-neutral-900">
+                      Supplier Declined RFQ
+                    </h2>
+                    <p className="text-sm text-neutral-500">
+                      {reasonPopup.supplier_name || reasonPopup.supplier}
+                    </p>
                   </div>
                 </div>
-              </li>
-            );
-          })}
-        </ul>
-      </div>
-
-      {aiModals}
-
-      {reasonPopup && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="modal-overlay"
-          onClick={() => setReasonPopup(null)}
-        >
-          <div
-            className="modal-panel relative max-w-md p-5"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-warning-50 text-warning-600">
-                <Ban className="h-5 w-5" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <h2 className="text-base font-semibold text-neutral-900">
-                  Supplier Declined RFQ
-                </h2>
-                <p className="text-sm text-neutral-500">
-                  {reasonPopup.supplier_name || reasonPopup.supplier}
-                </p>
+                <div className="mt-4 divide-y divide-neutral-100 rounded-lg border border-neutral-200">
+                  <Row label="Supplier" value={reasonPopup.supplier_name || reasonPopup.supplier} />
+                  <Row label="Reason" value={reasonPopup.decline_reason || "—"} />
+                  {reasonPopup.reason_details ? (
+                    <Row label="Details" value={reasonPopup.reason_details} />
+                  ) : null}
+                  <Row label="Comment" value={reasonPopup.comment || "—"} />
+                  <Row
+                    label="Submitted On"
+                    value={
+                      reasonPopup.response_date
+                        ? formatDate(reasonPopup.response_date)
+                        : "—"
+                    }
+                  />
+                </div>
+                <div className="mt-5 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setReasonPopup(null)}
+                    className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
             </div>
-
-            <div className="mt-4 divide-y divide-neutral-100 rounded-lg border border-neutral-200">
-              <Row label="Supplier" value={reasonPopup.supplier_name || reasonPopup.supplier} />
-              <Row label="Reason" value={reasonPopup.decline_reason || "—"} />
-              {reasonPopup.reason_details ? (
-                <Row label="Details" value={reasonPopup.reason_details} />
-              ) : null}
-              <Row label="Comment" value={reasonPopup.comment || "—"} />
-              <Row
-                label="Submitted On"
-                value={
-                  reasonPopup.response_date
-                    ? formatDate(reasonPopup.response_date)
-                    : "—"
-                }
-              />
-            </div>
-
-            <div className="mt-5 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setReasonPopup(null)}
-                className="rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {viewQuotationSq && (
-        <ViewQuotationModal
-          sqName={viewQuotationSq}
-          rfqName={rfqName}
-          onClose={() => setViewQuotationSq(null)}
-        />
-      )}
-
-      {compareModalOpen && (
-        <CompareQuotationsModal
-          rfqName={rfqName}
-          items={(rfq?.items ?? []).map((it) => ({
-            item_code: it.item_code,
-            item_name: it.item_name,
-            qty: it.qty,
-            uom: it.uom,
-          }))}
-          quotes={Array.from(localQuotes.values())
-            .filter((q) => q.sqName)
-            .map<ComparisonQuote>((q) => ({
-              sqName: q.sqName,
-              supplier: q.supplier,
-              supplierName: q.supplier_name,
-              total: q.total,
-              paymentTerms: q.payment_terms,
-              notes: q.notes,
-              byItem: q.byItem,
-            }))}
-          onViewQuotation={(sqName) => {
-            setCompareModalOpen(false);
-            setViewQuotationSq(sqName);
-          }}
-          canViewQuotation={canViewQuotations}
-          onClose={() => setCompareModalOpen(false)}
-        />
-      )}
-    </div>
+          )}
+          {viewQuotationSq && (
+            <ViewQuotationModal
+              sqName={viewQuotationSq}
+              rfqName={rfqName}
+              onClose={() => setViewQuotationSq(null)}
+            />
+          )}
+          {compareModalOpen && (
+            <CompareQuotationsModal
+              rfqName={rfqName}
+              items={(rfq?.items ?? []).map((it) => ({
+                item_code: it.item_code,
+                item_name: it.item_name,
+                qty: it.qty,
+                uom: it.uom,
+              }))}
+              quotes={Array.from(localQuotes.values())
+                .filter((q) => q.sqName)
+                .map<ComparisonQuote>((q) => ({
+                  sqName: q.sqName,
+                  supplier: q.supplier,
+                  supplierName: q.supplier_name,
+                  total: q.total,
+                  paymentTerms: q.payment_terms,
+                  notes: q.notes,
+                  byItem: q.byItem,
+                }))}
+              onViewQuotation={(sqName) => {
+                setCompareModalOpen(false);
+                setViewQuotationSq(sqName);
+              }}
+              canViewQuotation={canViewQuotations}
+              onClose={() => setCompareModalOpen(false)}
+            />
+          )}
+        </>
+      }
+    />
   );
 }
 
@@ -2866,382 +2149,7 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-/* ============================================================================
- * Helper components
- * ========================================================================== */
-
-function BackLink() {
-  return (
-    <Link
-      to="/sourcing/rfq"
-      className="mb-3 inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-primary-600"
-    >
-      <ArrowLeft className="h-4 w-4" />
-      Back to RFQs
-    </Link>
-  );
-}
-
-/**
- * Redesigned RFQ detail header: back link, RFQ title + name, status / PO
- * completion badge and an optional actions slot. Registers with the global
- * layout (same as PageHeader) so the top-bar title is suppressed while mounted.
- */
-function RfqDetailHeader({
-  rfqName,
-  isCompleted,
-  status,
-  materialRequest,
-  department,
-  company,
-  owner,
-  createdDate,
-  validTill,
-  timeline,
-  actions,
-}: {
-  rfqName: string;
-  isCompleted: boolean;
-  status: string;
-  materialRequest: string;
-  department: string;
-  company: string;
-  owner: string;
-  createdDate: string;
-  validTill: string;
-  timeline: RfqWorkflowStep[];
-  actions?: ReactNode;
-}) {
-  const { t } = useTranslation();
-  const layout = useOptionalLayout();
-  const register = layout?.registerPageHeader;
-  const unregister = layout?.unregisterPageHeader;
-
-  useLayoutEffect(() => {
-    if (!register || !unregister) return;
-    register();
-    return () => unregister();
-  }, [register, unregister]);
-
-  return (
-    <div className="mb-4">
-      <BackLink />
-
-      <div className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
-        {/* Toolbar — document reference + status + actions (no page title) */}
-        <div className="flex flex-col gap-2.5 border-b border-neutral-100 px-5 py-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded-md bg-neutral-50 px-2 py-0.5 font-mono text-xs font-semibold text-neutral-500 ring-1 ring-inset ring-neutral-200">
-                <Sparkles className="h-3 w-3 text-primary-500" />
-                {rfqName}
-              </span>
-              {isCompleted ? (
-                <span className="inline-flex items-center gap-1 rounded-full bg-success-50 px-2.5 py-0.5 text-[11px] font-semibold text-success-700 ring-1 ring-inset ring-success-200">
-                  <CheckCircle2 className="h-3 w-3" />
-                  Completed
-                </span>
-              ) : (
-                <StatusBadge status={status} />
-              )}
-            </div>
-          </div>
-          {actions && (
-            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
-              {actions}
-            </div>
-          )}
-        </div>
-
-        {/* Overview — responsive two-column metadata grid */}
-        <div className="grid grid-cols-1 gap-x-10 gap-y-1.5 px-5 py-3 sm:grid-cols-2">
-          <dl className="divide-y divide-neutral-100/70">
-            <OverviewRow label={t("rfq.rfqNumber")} value={rfqName} mono />
-            <OverviewRow label={t("rfq.materialRequest")} value={materialRequest} mono={materialRequest !== "—"} />
-            <OverviewRow label={t("rfq.createdDate")} value={createdDate} />
-            <OverviewRow label={t("rfq.validTill")} value={validTill} />
-          </dl>
-          <dl className="divide-y divide-neutral-100/70">
-            <OverviewRow label={t("rfq.department")} value={department} />
-            <OverviewRow label={t("common.company")} value={company} />
-            <OverviewRow label={t("rfq.procurementOwner")} value={owner} />
-            <OverviewRow label={t("rfq.currentStatus")} node={<StatusBadge status={status} />} />
-          </dl>
-        </div>
-
-        {/* Workflow timeline — clean horizontal, green/blue/gray */}
-        <div className="border-t border-neutral-100 bg-neutral-50/50 px-5 py-2.5">
-          <HeaderTimeline steps={timeline} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function OverviewRow({
-  label,
-  value,
-  node,
-  mono,
-}: {
-  label: string;
-  value?: string;
-  node?: ReactNode;
-  mono?: boolean;
-}) {
-  const muted = !node && (!value || value === "—");
-  return (
-    <div className="flex items-center justify-between gap-3 py-1.5">
-      <dt className="flex-shrink-0 text-[11px] font-medium uppercase tracking-wide text-neutral-400">
-        {label}
-      </dt>
-      <dd className="min-w-0 text-right">
-        {node ?? (
-          <span
-            className={`truncate text-sm font-semibold ${
-              muted ? "text-neutral-300" : "text-neutral-800"
-            } ${mono ? "font-mono" : ""}`}
-          >
-            {value || "—"}
-          </span>
-        )}
-      </dd>
-    </div>
-  );
-}
-
-function HeaderTimeline({ steps }: { steps: RfqWorkflowStep[] }) {
-  return (
-    <div className="flex items-center gap-0 overflow-x-auto pb-0.5">
-      {steps.map((step, i) => {
-        const tone = step.rejected
-          ? "bg-red-50 text-red-700 ring-red-200"
-          : step.done
-            ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-            : step.active
-              ? "bg-amber-50 text-amber-800 ring-amber-300"
-              : "bg-neutral-100 text-neutral-400 ring-neutral-200";
-        const lineTone = step.done ? "bg-emerald-400" : "bg-neutral-200";
-        return (
-          <div key={step.id} className="flex flex-shrink-0 items-center">
-            <span
-              title={step.meta}
-              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ring-inset ${tone}`}
-            >
-              {step.rejected ? (
-                <Ban className="h-3 w-3" />
-              ) : step.done ? (
-                <Check className="h-3 w-3" />
-              ) : step.active ? (
-                <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-              ) : (
-                <span className="h-1.5 w-1.5 rounded-full bg-neutral-300" />
-              )}
-              {step.label}
-            </span>
-            {i < steps.length - 1 && (
-              <span
-                aria-hidden
-                className={`mx-1 h-0.5 w-4 flex-shrink-0 rounded-full ${lineTone}`}
-              />
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/* ── Procurement Command Center building blocks ── */
-
-const CARD_ICON_TONES = {
-  brand: "bg-[#0ea5e9]/10 text-[#0ea5e9]",
-  ai: "bg-primary text-white",
-} as const;
-
-function CommandCard({
-  icon: Icon,
-  title,
-  badge,
-  tone = "brand",
-  children,
-}: {
-  icon: typeof FileText;
-  title: string;
-  badge?: ReactNode;
-  tone?: keyof typeof CARD_ICON_TONES;
-  children: ReactNode;
-}) {
-  return (
-    <section className="flex flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
-      <header className="flex items-center justify-between gap-2 border-b border-neutral-100 px-4 py-2.5">
-        <div className="flex min-w-0 items-center gap-2">
-          <span
-            className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg ${CARD_ICON_TONES[tone]}`}
-          >
-            <Icon className="h-3.5 w-3.5" />
-          </span>
-          <h3 className="truncate text-xs font-bold uppercase tracking-wide text-neutral-700">
-            {title}
-          </h3>
-        </div>
-        {badge}
-      </header>
-      <div className="flex-1 px-4 py-3">{children}</div>
-    </section>
-  );
-}
-
-function KeyRow({
-  label,
-  value,
-  mono,
-  strong,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-  strong?: boolean;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 py-1.5 text-sm first:pt-0 last:pb-0">
-      <span className="flex-shrink-0 text-neutral-500">{label}</span>
-      <span
-        className={[
-          "truncate text-right text-neutral-900",
-          mono ? "font-mono tracking-tight" : "",
-          strong
-            ? "text-[18px] font-bold leading-tight"
-            : mono
-            ? "text-xs font-semibold"
-            : "font-semibold",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-      >
-        {value}
-      </span>
-    </div>
-  );
-}
-
-function MiniStat({ value, label }: { value: number | string; label: string }) {
-  return (
-    <div className="rounded-lg bg-neutral-50 px-2 py-2.5 text-center ring-1 ring-inset ring-neutral-100">
-      <div className="text-xl font-bold tabular-nums text-neutral-900">
-        {value}
-      </div>
-      <div className="mt-0.5 text-[10px] font-medium uppercase tracking-wide text-neutral-500">
-        {label}
-      </div>
-    </div>
-  );
-}
-
-function TimelineStep({
-  label,
-  meta,
-  done,
-  active,
-  rejected,
-  last,
-}: {
-  label: string;
-  meta: string;
-  done: boolean;
-  active: boolean;
-  rejected?: boolean;
-  last: boolean;
-}) {
-  const dotBg = rejected
-    ? "bg-red-500"
-    : done
-      ? "bg-emerald-500"
-      : active
-        ? "bg-amber-500 ring-4 ring-amber-100"
-        : "bg-neutral-200";
-
-  const connectorBg = done ? "bg-emerald-300" : "bg-neutral-200";
-
-  return (
-    <li className="relative flex gap-2.5 pb-3 last:pb-0">
-      {!last && (
-        <span
-          aria-hidden
-          className={`absolute left-[5.5px] top-3.5 h-full w-px ${connectorBg}`}
-        />
-      )}
-      <span
-        className={`relative z-10 mt-0.5 flex h-3 w-3 flex-shrink-0 items-center justify-center rounded-full ${dotBg}`}
-      >
-        {done && !rejected && (
-          <Check className="h-2 w-2 text-white" strokeWidth={3} />
-        )}
-      </span>
-      <div className="-mt-0.5 min-w-0 flex-1">
-        <p
-          className={`text-sm font-semibold ${
-            rejected
-              ? "text-red-700"
-              : done
-                ? "text-neutral-900"
-                : active
-                  ? "text-amber-700"
-                  : "text-neutral-400"
-          }`}
-        >
-          {label}
-        </p>
-        <p
-          className={`truncate text-xs ${
-            rejected
-              ? "text-red-600"
-              : active
-                ? "text-amber-600"
-                : "text-neutral-500"
-          }`}
-        >
-          {meta}
-        </p>
-      </div>
-      {rejected ? (
-        <span className="mt-0.5 shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-red-700">
-          Rejected
-        </span>
-      ) : active ? (
-        <span className="mt-0.5 shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-700">
-          Current
-        </span>
-      ) : null}
-    </li>
-  );
-}
-
-const PILL_TONES = {
-  brand: "bg-[#0ea5e9]/10 text-[#0ea5e9] ring-[#0ea5e9]/20",
-  success: "bg-success-50 text-success-600 ring-success-100",
-  amber: "bg-warning-50 text-warning-600 ring-warning-100",
-  danger: "bg-danger-50 text-danger-600 ring-danger-100",
-  neutral: "bg-neutral-100 text-neutral-600 ring-neutral-200",
-} as const;
-
-function Pill({
-  children,
-  tone = "neutral",
-}: {
-  children: ReactNode;
-  tone?: keyof typeof PILL_TONES;
-}) {
-  return (
-    <span
-      className={`inline-flex flex-shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${PILL_TONES[tone]}`}
-    >
-      {children}
-    </span>
-  );
-}
-
-/* ============================================================================
+/* ==========================================================================
  * Utilities
  * ========================================================================== */
 
@@ -3249,149 +2157,6 @@ function sumQuotation(sq: SupplierQuotation): number {
   return (sq.items ?? []).reduce(
     (s, it) => s + (it.amount ?? (it.rate ?? 0) * (it.qty ?? 0)),
     0
-  );
-}
-
-/* ============================================================================
- * Approval Workflow Progress Tracker
- * ========================================================================== */
-
-function ApprovalWorkflowTracker({
-  legalDoc,
-  poExists,
-  fullyApproved,
-  selectedSupplier,
-  selectedSupplierTotal,
-}: {
-  legalDoc: LegalDocumentSet | null | undefined;
-  poExists: boolean;
-  fullyApproved: boolean;
-  selectedSupplier: string;
-  selectedSupplierTotal: number;
-}) {
-  // Post-selection slice of the same sequential workflow (never ahead of priors).
-  const slice = deriveRfqProcurementWorkflow({
-    supplierCount: 1,
-    respondedCount: 1,
-    hasQuotations: true,
-    hasAnalysis: true,
-    selectedSupplier,
-    legalStatus: legalDoc?.review_status ?? "Pending",
-    financeStatus: legalDoc?.finance_status ?? "",
-    poExists,
-    poName: null,
-  });
-
-  const iconFor = (id: string) => {
-    if (id === "supplier_selected") return CheckCircle2;
-    if (id === "legal_review") return Gavel;
-    if (id === "finance_review") return Wallet;
-    return ShoppingCart;
-  };
-
-  const steps = slice.stages
-    .filter((s) =>
-      ["supplier_selected", "legal_review", "finance_review", "purchase_order"].includes(
-        s.id,
-      ),
-    )
-    .map((s) => ({
-      label: s.id === "purchase_order" ? "Create PO" : s.label,
-      icon: iconFor(s.id),
-      done: s.done,
-      active: s.active && !s.rejected,
-      rejected: s.rejected,
-    }));
-
-  const stepBadge = (s: (typeof steps)[number]) => {
-    if (s.done)
-      return "border-emerald-500 bg-emerald-500 text-white";
-    if (s.rejected)
-      return "border-red-500 bg-red-500 text-white";
-    if (s.active)
-      return "border-amber-500 bg-amber-500 text-white";
-    return "border-neutral-300 bg-white text-neutral-400";
-  };
-
-  const statusLabel = (() => {
-    if (poExists) return { text: "PO Created", tone: "bg-emerald-100 text-emerald-700" };
-    if (fullyApproved) return { text: "Approved for PO", tone: "bg-emerald-100 text-emerald-700" };
-    if (slice.legalRejected)
-      return { text: "Legal Rejected", tone: "bg-red-100 text-red-700" };
-    if (slice.financeRejected)
-      return { text: "Finance Rejected", tone: "bg-red-100 text-red-700" };
-    return { text: slice.currentStage, tone: "bg-amber-100 text-amber-800" };
-  })();
-
-  return (
-    <div className="mb-4 rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Scale className="h-4 w-4 text-primary" />
-          <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-500">
-            RFQ Status
-          </h3>
-        </div>
-        <span
-          className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${statusLabel.tone}`}
-        >
-          {statusLabel.text}
-        </span>
-      </div>
-
-      {/* Step indicators */}
-      <div className="flex items-center">
-        {steps.map((s, i) => {
-          const SIcon = s.icon;
-          return (
-            <div key={s.label} className="flex flex-1 items-center">
-              <div className="flex flex-col items-center">
-                <div
-                  className={`flex h-8 w-8 items-center justify-center rounded-full border-2 transition ${stepBadge(s)}`}
-                >
-                  {s.done ? (
-                    <Check className="h-4 w-4" />
-                  ) : (
-                    <SIcon className="h-3.5 w-3.5" />
-                  )}
-                </div>
-                <span
-                  className={`mt-1.5 text-center text-[10px] font-semibold ${
-                    s.done
-                      ? "text-emerald-600"
-                      : s.rejected
-                        ? "text-red-600"
-                        : s.active
-                          ? "text-primary"
-                          : "text-neutral-400"
-                  }`}
-                >
-                  {s.label}
-                </span>
-              </div>
-              {i < steps.length - 1 && (
-                <div
-                  className={`mx-1 h-0.5 flex-1 rounded-full ${
-                    s.done ? "bg-emerald-500" : "bg-neutral-200"
-                  }`}
-                />
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Supplier info */}
-      <div className="mt-3 flex items-center gap-2 rounded-lg bg-neutral-50 px-3 py-2 text-xs text-neutral-600">
-        <Send className="h-3 w-3 flex-shrink-0 text-neutral-400" />
-        <span>
-          Selected supplier: <strong className="text-neutral-900">{selectedSupplier}</strong>
-          {selectedSupplierTotal > 0 && (
-            <> · {formatCurrency(selectedSupplierTotal)}</>
-          )}
-        </span>
-      </div>
-    </div>
   );
 }
 
@@ -3441,9 +2206,9 @@ function ReverseBiddingCTA({
   if (!allowCreate && !existing) return null;
 
   return (
-    <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-[#0ea5e9]/30 bg-[#0ea5e9]/5 p-5 sm:flex-row sm:items-center sm:justify-between">
+    <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-[#0098EA]/30 bg-[#0098EA]/5 p-5 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex items-start gap-3">
-        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-[#0ea5e9]/15 text-[#0ea5e9]">
+        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-[#0098EA]/15 text-[#0098EA]">
           <Activity className="h-5 w-5" />
         </span>
         <div>
@@ -3464,7 +2229,7 @@ function ReverseBiddingCTA({
               `/sourcing/reverse-bidding/${encodeURIComponent(existing.name)}`
             )
           }
-          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-[#0ea5e9] bg-white px-4 py-2 text-sm font-semibold text-[#0ea5e9] shadow-sm transition hover:bg-[#0ea5e9]/5"
+          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-[#0098EA] bg-white px-4 py-2 text-sm font-semibold text-[#0098EA] shadow-sm transition hover:bg-[#0098EA]/5"
         >
           <Sparkles className="h-4 w-4" />
           View Reverse Auction
@@ -3474,7 +2239,7 @@ function ReverseBiddingCTA({
           type="button"
           onClick={() => createMutation.mutate()}
           disabled={createMutation.isPending || !allowCreate}
-          className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#0ea5e9] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#0098EA] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Sparkles className="h-4 w-4" />
           {createMutation.isPending ? "Creating…" : "Create Reverse Bidding"}

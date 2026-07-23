@@ -120,8 +120,11 @@ export function canAccessMaterialRequestPath(
       "/material-requests",
       "/material-requests/list",
       "/material-requests/new",
+      // Issued Items module (legacy paths — prefer /department/issued-items/*)
+      "/material-requests/issued-items",
+      "/material-requests/receipts",
     ];
-    if (allowed.some((p) => path === p)) return true;
+    if (allowed.some((p) => path === p || path.startsWith(`${p}/`))) return true;
     if (/^\/material-requests\/[^/]+$/.test(path)) {
       return !path.includes("/warehouse") && !path.includes("/procurement");
     }

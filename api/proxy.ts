@@ -240,6 +240,34 @@ export default async function handler(
     console.log("[erpnext-proxy] Budget POST body → ERPNext:", JSON.stringify(parsedBody));
   }
 
+  // Structured resource-list diagnostics (DocType / fields / filters).
+  const resourceMatch = /^resource\/([^/?]+)/.exec(apiPath);
+  if (resourceMatch && method === "GET") {
+    const doctype = decodeURIComponent(resourceMatch[1].replace(/\+/g, " "));
+    const q = req.query as Record<string, string | string[] | undefined>;
+    const rawFields = q.fields;
+    const rawFilters = q.filters;
+    let fields: unknown = rawFields;
+    let filters: unknown = rawFilters;
+    try {
+      if (typeof rawFields === "string") fields = JSON.parse(rawFields);
+    } catch {
+      /* keep raw */
+    }
+    try {
+      if (typeof rawFilters === "string") filters = JSON.parse(rawFilters);
+    } catch {
+      /* keep raw */
+    }
+    console.log("[erpnext-proxy] ERP list query", {
+      doctype,
+      fields,
+      filters,
+      order_by: q.order_by ?? null,
+      path: apiPath,
+    });
+  }
+
   try {
     const upstream = await fetch(targetUrl, {
       method,
@@ -269,6 +297,25 @@ export default async function handler(
         upstream.status,
         upstream.headers.get("content-encoding")
       );
+      const errText = JSON.stringify(data);
+      if (
+        !upstream.ok &&
+        /Field not permitted in query/i.test(errText)
+      ) {
+        console.error("[erpnext-proxy] INVALID FIELD in ERP query", {
+          status: upstream.status,
+          path: apiPath,
+          targetUrl,
+          response: data,
+        });
+      } else if (resourceMatch && method === "GET") {
+        const rows = (data as { data?: unknown })?.data;
+        console.log("[erpnext-proxy] ERP response", {
+          doctype: decodeURIComponent(resourceMatch[1].replace(/\+/g, " ")),
+          status: upstream.status,
+          count: Array.isArray(rows) ? rows.length : rows ? 1 : 0,
+        });
+      }
       res.status(upstream.status).json(data);
       return;
     }

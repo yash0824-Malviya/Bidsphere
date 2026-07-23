@@ -39,7 +39,7 @@ import { formatCurrencyCompactIn, formatCurrencyIn } from "../../utils/format";
  * these buckets by `bucketForItemGroup`.
  */
 const CATEGORY_META: Array<{ name: string; color: string }> = [
-  { name: "Raw Materials", color: "#0ea5e9" },
+  { name: "Raw Materials", color: "#0098EA" },
   { name: "Electrical", color: "#f59e0b" },
   { name: "Mechanical", color: "#6366f1" },
   { name: "Packaging", color: "#10b981" },
@@ -456,7 +456,7 @@ function SpendFallback({
 
   const c = summary.currency;
   const funnelData = [
-    { name: "Open", value: summary.funnel.open, color: "#0ea5e9" },
+    { name: "Open", value: summary.funnel.open, color: "#0098EA" },
     { name: "Under Review", value: summary.funnel.underReview, color: "#f59e0b" },
     { name: "Approved", value: summary.funnel.approved, color: "#6366f1" },
     { name: "Completed", value: summary.funnel.completed, color: "#10b981" },

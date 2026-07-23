@@ -112,7 +112,7 @@ export default function WarehouseForwardedHistoryPage() {
 
   if (isError) {
     return (
-      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <div className="w-full">
         <ErrorState
           title="Could not load Forwarded History"
           description="Failed to load the forwarded Material Request history."
@@ -123,7 +123,7 @@ export default function WarehouseForwardedHistoryPage() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
+    <div className="flex w-full flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="flex items-center gap-2 text-xl font-bold text-slate-900">

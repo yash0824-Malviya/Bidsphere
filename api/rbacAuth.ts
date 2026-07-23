@@ -10,6 +10,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 export type AppRole =
   | "admin"
   | "procurement"
+  | "procurement_team"
   | "finance"
   | "finance_executive"
   | "warehouse"
@@ -48,6 +49,7 @@ export class RbacError extends Error {
 const ROLE_USER_EMAILS: Record<string, AppRole> = {
   "admin@netlink.com": "admin",
   "procurement@netlink.com": "procurement",
+  "procurement.team@netlink.com": "procurement_team",
   "finance@netlink.com": "finance",
   "finance.executive@netlink.com": "finance_executive",
   "warehouse@netlink.com": "warehouse",
@@ -62,8 +64,10 @@ const ERPNEXT_ROLE_MAP: Record<string, AppRole> = {
   System: "admin",
   "Finance Admin": "admin",
   "Purchase Manager": "procurement",
-  "Purchase User": "procurement",
   "Procurement Manager": "procurement",
+  /** Operational PO ownership — distinct from Procurement Manager. */
+  "Procurement Team": "procurement_team",
+  "Purchase User": "procurement_team",
   "Accounts Manager": "finance",
   "Accounts Payable": "finance",
   "Accounts User": "finance_executive",
@@ -199,6 +203,7 @@ export function resolveServerRole(user: {
       "manufacturing",
       "warehouse",
       "procurement",
+      "procurement_team",
       "department",
     ];
     const resolved = new Set<AppRole>();

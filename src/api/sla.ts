@@ -439,6 +439,7 @@ async function getConfigMap(): Promise<Map<string, SlaConfiguration>> {
 const APP_ROLE_SET = new Set<AppRole>([
   "admin",
   "procurement",
+  "procurement_team",
   "finance",
   "finance_executive",
   "warehouse",

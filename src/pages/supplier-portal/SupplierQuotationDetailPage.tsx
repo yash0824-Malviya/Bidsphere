@@ -24,7 +24,6 @@ import StatusBadge from "../../components/StatusBadge";
 import SupplierLegalDocuments from "../../components/supplier/SupplierLegalDocuments";
 import { isSelectedAsWinner } from "../../utils/supplierLegalDocs";
 import { formatCurrency, formatDate, formatDateTime } from "../../utils/format";
-import SupplierPortalLayout from "./SupplierPortalLayout";
 
 /* -------------------------------------------------------------------------- */
 /*  Helper sub-components                                                      */
@@ -205,20 +204,20 @@ export default function SupplierQuotationDetailPage() {
   /* ── Loading ── */
   if (!supplierName || sqQuery.isLoading) {
     return (
-      <SupplierPortalLayout>
+      
         <div className="space-y-4 p-6">
           <Skeleton className="h-6 w-48" />
           <Skeleton className="h-40 w-full" />
           <Skeleton className="h-60 w-full" />
         </div>
-      </SupplierPortalLayout>
+      
     );
   }
 
   /* ── Error / not found ── */
   if (sqQuery.isError || !sq) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <Link
           to="/supplier/quotations"
           className="mb-4 inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-primary-600"
@@ -230,14 +229,14 @@ export default function SupplierQuotationDetailPage() {
           title="Quotation not found"
           description={`Supplier Quotation "${sqName}" could not be loaded. It may have been deleted or you may not have access to view it.`}
         />
-      </SupplierPortalLayout>
+      
     );
   }
 
   /* ── Access denied ── */
   if (accessDenied) {
     return (
-      <SupplierPortalLayout supplierName={supplierName}>
+      
         <Link
           to="/supplier/quotations"
           className="mb-4 inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-primary-600"
@@ -249,12 +248,12 @@ export default function SupplierQuotationDetailPage() {
           title="Access denied"
           description="This quotation belongs to a different supplier."
         />
-      </SupplierPortalLayout>
+      
     );
   }
 
   return (
-    <SupplierPortalLayout supplierName={supplierName}>
+    
       {/* Back link */}
       <Link
         to="/supplier/quotations"
@@ -493,6 +492,6 @@ export default function SupplierQuotationDetailPage() {
           </div>
         </section>
       </div>
-    </SupplierPortalLayout>
+    
   );
 }

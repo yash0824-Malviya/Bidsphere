@@ -901,10 +901,10 @@ export default function LegalReviewDetailPage() {
             </div>
           ) : (
             <div className="space-y-3">
-              <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#f9fafb', padding: '12px 16px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+              <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#f9fafb', padding: '12px 16px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
                 <span style={{ fontSize: '13px', fontWeight: 600, color: '#374151' }}>Approval Progress</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <div style={{ width: '100px', height: '8px', background: '#e5e7eb', borderRadius: '4px', overflow: 'hidden' }}>
+                  <div style={{ width: '100px', height: '8px', background: '#E2E8F0', borderRadius: '4px', overflow: 'hidden' }}>
                     <div style={{ width: `${(approvedCount / 3) * 100}%`, height: '100%', background: approvedCount === 3 ? '#2D6A4F' : '#f59e0b', transition: 'width 0.3s ease' }} />
                   </div>
                   <span style={{ fontSize: '13px', fontWeight: 700, color: approvedCount === 3 ? '#2D6A4F' : '#f59e0b' }}>{approvedCount}/3</span>
@@ -954,7 +954,7 @@ export default function LegalReviewDetailPage() {
                       isApproved
                         ? "border-emerald-200"
                         : isOpen
-                          ? "border-sky-300 ring-2 ring-sky-100"
+                          ? "border-primary-300 ring-2 ring-primary-100"
                           : "border-slate-200"
                     }`}
                   >

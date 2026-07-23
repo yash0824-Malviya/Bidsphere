@@ -309,7 +309,7 @@ export default function EditSupplierModal({
             className={`mb-4 rounded-lg border px-3 py-2 text-xs ${
               needsLegacyClassification
                 ? "border-amber-200 bg-amber-50 text-amber-900"
-                : "border-sky-200 bg-sky-50 text-sky-900"
+                : "border-primary-200 bg-primary-50 text-primary-900"
             }`}
           >
             {needsLegacyClassification
