@@ -1,15 +1,22 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Loader2 } from "lucide-react";
 
 import {
   countDepartmentAcceptedItems,
   countDepartmentPendingAcceptance,
   departmentReceiptStatusLabel,
+  isDepartmentIssuedSyncInProgress,
   listDepartmentAcceptedItems,
+  listDepartmentAcceptedItemsLocal,
   listDepartmentIssueReceipts,
+  listDepartmentIssueReceiptsLocal,
   listDepartmentPendingAcceptance,
+  listDepartmentPendingAcceptanceLocal,
+  onDepartmentIssuedItemsSynced,
+  scheduleDepartmentIssuedBackgroundSync,
+  wasDepartmentIssuedSyncTimedOut,
   type DepartmentIssuedFilter,
 } from "../../api/departmentIssuedItems";
 import PageHeader from "../../components/PageHeader";
@@ -19,6 +26,8 @@ import { downloadMaterialIssueReceiptPdf } from "../../utils/pdf/materialIssueRe
 import type { MaterialIssueReceipt } from "../../types/materialIssueReceipt";
 
 type Mode = "pending" | "accepted" | "all";
+
+const CACHE_STALE_MS = 45_000;
 
 function totals(r: MaterialIssueReceipt) {
   return r.items.reduce(
@@ -33,13 +42,15 @@ function totals(r: MaterialIssueReceipt) {
 
 /**
  * Department → Issued Items module lists.
- * Data source: syncDepartmentIssuedItems (Stock Entry + MR MIR + local cache).
+ * Cache-first: render local receipts immediately, sync ERP in background.
  */
 export default function DepartmentIssuedItemsPage({
   mode = "pending",
 }: {
   mode?: Mode;
 }) {
+  const queryClient = useQueryClient();
+  const pageStart = useMemo(() => performance.now(), []);
   const [mrFilter, setMrFilter] = useState("");
   const [deptFilter, setDeptFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -47,10 +58,16 @@ export default function DepartmentIssuedItemsPage({
   const [statusFilter, setStatusFilter] = useState<
     "all" | "pending" | "accepted"
   >("all");
+  const [syncBanner, setSyncBanner] = useState(false);
 
   const filter: DepartmentIssuedFilter = useMemo(
     () => ({
-      status: mode === "all" ? statusFilter : mode === "pending" ? "pending" : "accepted",
+      status:
+        mode === "all"
+          ? statusFilter
+          : mode === "pending"
+            ? "pending"
+            : "accepted",
       mrName: mrFilter,
       department: deptFilter,
       dateFrom,
@@ -59,29 +76,87 @@ export default function DepartmentIssuedItemsPage({
     [mode, statusFilter, mrFilter, deptFilter, dateFrom, dateTo],
   );
 
+  const localSeed = useMemo(() => {
+    if (mode === "pending") return listDepartmentPendingAcceptanceLocal();
+    if (mode === "accepted") return listDepartmentAcceptedItemsLocal();
+    return listDepartmentIssueReceiptsLocal(filter);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
   const listQuery = useQuery({
     queryKey: ["department-issued-items", mode, filter],
     queryFn: async () => {
-      if (mode === "pending") return listDepartmentPendingAcceptance();
-      if (mode === "accepted") return listDepartmentAcceptedItems();
-      return listDepartmentIssueReceipts(filter);
+      const start = performance.now();
+      const rows =
+        mode === "pending"
+          ? await listDepartmentPendingAcceptance()
+          : mode === "accepted"
+            ? await listDepartmentAcceptedItems()
+            : await listDepartmentIssueReceipts(filter);
+      // eslint-disable-next-line no-console
+      console.log("[DeptIssued Perf] page listQuery", {
+        mode,
+        rowCount: rows.length,
+        durationMs: Math.round(performance.now() - start),
+        totalSinceMountMs: Math.round(performance.now() - pageStart),
+      });
+      return rows;
     },
-    refetchOnMount: "always",
-    refetchOnWindowFocus: true,
-    staleTime: 0,
+    initialData: localSeed,
+    placeholderData: (prev) => prev ?? localSeed,
+    staleTime: CACHE_STALE_MS,
+    refetchOnMount: true,
+    refetchOnWindowFocus: false,
   });
 
   const kpiQuery = useQuery({
     queryKey: ["department-issued-items", "kpi"],
-    queryFn: async () => ({
-      pending: await countDepartmentPendingAcceptance(),
-      accepted: await countDepartmentAcceptedItems(),
-    }),
-    staleTime: 0,
-    refetchOnMount: "always",
+    queryFn: async () => {
+      const [pending, accepted] = await Promise.all([
+        countDepartmentPendingAcceptance(),
+        countDepartmentAcceptedItems(),
+      ]);
+      return { pending, accepted };
+    },
+    initialData: {
+      pending: listDepartmentPendingAcceptanceLocal().length,
+      accepted: listDepartmentAcceptedItemsLocal().length,
+    },
+    staleTime: CACHE_STALE_MS,
+    refetchOnMount: true,
+    refetchOnWindowFocus: false,
   });
 
-  const rows = listQuery.data ?? [];
+  // Background sync — never block first paint; refresh when sync finishes.
+  useEffect(() => {
+    scheduleDepartmentIssuedBackgroundSync();
+    setSyncBanner(
+      isDepartmentIssuedSyncInProgress() || wasDepartmentIssuedSyncTimedOut(),
+    );
+    const off = onDepartmentIssuedItemsSynced(() => {
+      setSyncBanner(isDepartmentIssuedSyncInProgress());
+      void queryClient.invalidateQueries({
+        queryKey: ["department-issued-items"],
+      });
+      // eslint-disable-next-line no-console
+      console.log("[DeptIssued Perf] background sync notified UI", {
+        totalSinceMountMs: Math.round(performance.now() - pageStart),
+      });
+    });
+    const poll = window.setInterval(() => {
+      setSyncBanner(
+        isDepartmentIssuedSyncInProgress() || wasDepartmentIssuedSyncTimedOut(),
+      );
+    }, 500);
+    return () => {
+      off();
+      window.clearInterval(poll);
+    };
+  }, [queryClient, pageStart]);
+
+  const rows = listQuery.data ?? localSeed;
+  const showInitialSpinner =
+    listQuery.isLoading && rows.length === 0 && !listQuery.isFetching;
   const title =
     mode === "pending"
       ? "Pending Acceptance"
@@ -121,6 +196,13 @@ export default function DepartmentIssuedItemsPage({
           </div>
         }
       />
+
+      {(syncBanner || listQuery.isFetching) && rows.length > 0 ? (
+        <div className="flex items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Background sync in progress…
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap gap-2 text-sm">
         <Link
@@ -211,19 +293,28 @@ export default function DepartmentIssuedItemsPage({
       ) : null}
 
       <div className="rounded-xl border border-[#E2E8F0] bg-white shadow-sm">
-        {listQuery.isLoading ? (
+        {showInitialSpinner ? (
           <div className="flex items-center gap-2 p-8 text-sm text-slate-500">
-            <Loader2 className="h-4 w-4 animate-spin" /> Synchronizing receipts…
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading receipts…
           </div>
-        ) : listQuery.isError ? (
+        ) : listQuery.isError && rows.length === 0 ? (
           <div className="px-6 py-12 text-center text-sm text-rose-600">
             Could not load Material Issue Receipts.{" "}
             {listQuery.error instanceof Error ? listQuery.error.message : ""}
           </div>
         ) : rows.length === 0 ? (
           <div className="px-6 py-12 text-center text-sm text-slate-500">
-            No receipts in this view yet. After Warehouse issues material, records
-            appear here automatically.
+            {listQuery.isFetching || syncBanner ? (
+              <span className="inline-flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Background sync in progress…
+              </span>
+            ) : (
+              <>
+                No receipts in this view yet. After Warehouse issues material,
+                records appear here automatically.
+              </>
+            )}
           </div>
         ) : (
           <div className="overflow-x-auto">

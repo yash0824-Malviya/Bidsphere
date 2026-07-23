@@ -2,17 +2,19 @@
  * Department Issued Items — single data source for:
  *   Pending Acceptance · Accepted Items · Issue Receipts · Dashboard KPIs
  *
- * Syncs Material Issue Receipts from:
- *   1) localStorage cache
- *   2) Material Request MIR / MaterialIssue remark tags (full doc fetch)
- *   3) ERPNext Stock Entry (Material Issue) linked to Material Requests
+ * Performance model:
+ *   1) Render from localStorage cache immediately (< 1s)
+ *   2) ERP sync runs in the background (deduped, 45s TTL, 5s soft timeout)
+ *   3) UI refreshes when sync completes
  *
- * Does not touch RFQ / Procurement / Supplier / PO / Finance.
+ * Sync sources:
+ *   1) localStorage cache
+ *   2) Material Request MIR tags (list query — no N+1 get_doc)
+ *   3) ERPNext Stock Entry (Material Issue) — 2 list calls, not per-receipt
  */
 
 import { apiGet, buildListConfig, buildResourceUrl } from "./erpnext";
 import {
-  fetchMaterialRequestWorkflow,
   listMaterialRequestsWorkflow,
   type MaterialRequestWorkflowRecord,
 } from "./materialRequestWorkflow";
@@ -29,7 +31,6 @@ import { todayERPNextDate } from "../utils/erpNextDate";
 import { captureSignatureTimestamp } from "../services/digitalSignatureService";
 import type { MaterialIssueReceipt } from "../types/materialIssueReceipt";
 import { normalizeReceiptStatus } from "../types/materialIssueReceipt";
-import { parseMirSidecarsFromRemarks } from "../utils/warehouseIssueFulfillmentSync";
 
 export type DepartmentIssuedFilter = {
   status?: "all" | "pending" | "accepted";
@@ -38,6 +39,130 @@ export type DepartmentIssuedFilter = {
   dateFrom?: string;
   dateTo?: string;
 };
+
+const SYNC_CACHE_TTL_MS = 45_000;
+const SYNC_SOFT_TIMEOUT_MS = 5_000;
+
+type PerfEntry = {
+  url: string;
+  start: number;
+  end: number;
+  durationMs: number;
+  ok: boolean;
+  error?: string;
+};
+
+let lastSyncAt = 0;
+let syncInflight: Promise<{
+  total: number;
+  pending: number;
+  accepted: number;
+}> | null = null;
+let lastSyncBackground = false;
+const syncListeners = new Set<() => void>();
+
+/** Subscribe to background sync completion (for React Query invalidation). */
+export function onDepartmentIssuedItemsSynced(cb: () => void): () => void {
+  syncListeners.add(cb);
+  return () => {
+    syncListeners.delete(cb);
+  };
+}
+
+function notifySynced() {
+  for (const cb of syncListeners) {
+    try {
+      cb();
+    } catch {
+      /* ignore listener errors */
+    }
+  }
+}
+
+function isSyncCacheFresh(): boolean {
+  return lastSyncAt > 0 && Date.now() - lastSyncAt < SYNC_CACHE_TTL_MS;
+}
+
+/** True while a background sync is running (for UI banner). */
+export function isDepartmentIssuedSyncInProgress(): boolean {
+  return Boolean(syncInflight);
+}
+
+export function wasDepartmentIssuedSyncTimedOut(): boolean {
+  return lastSyncBackground;
+}
+
+async function timedApi<T>(
+  label: string,
+  url: string,
+  fn: () => Promise<T>,
+  log: PerfEntry[],
+): Promise<T> {
+  const start = performance.now();
+  // eslint-disable-next-line no-console
+  console.log(`[DeptIssued Perf] START ${label}`, { url, startTime: start });
+  try {
+    const result = await fn();
+    const end = performance.now();
+    const entry: PerfEntry = {
+      url: `${label} ${url}`,
+      start,
+      end,
+      durationMs: Math.round(end - start),
+      ok: true,
+    };
+    log.push(entry);
+    // eslint-disable-next-line no-console
+    console.log(`[DeptIssued Perf] END ${label}`, {
+      url,
+      endTime: end,
+      durationMs: entry.durationMs,
+    });
+    return result;
+  } catch (err) {
+    const end = performance.now();
+    const entry: PerfEntry = {
+      url: `${label} ${url}`,
+      start,
+      end,
+      durationMs: Math.round(end - start),
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+    log.push(entry);
+    // eslint-disable-next-line no-console
+    console.error(`[DeptIssued Perf] FAIL ${label}`, {
+      url,
+      durationMs: entry.durationMs,
+      error: entry.error,
+    });
+    throw err;
+  }
+}
+
+function logPerfSummary(pageStart: number, log: PerfEntry[], label: string) {
+  const totalMs = Math.round(performance.now() - pageStart);
+  const slowest = [...log].sort((a, b) => b.durationMs - a.durationMs)[0];
+  // eslint-disable-next-line no-console
+  console.log(`[DeptIssued Perf] ${label} SUMMARY`, {
+    totalPageLoadMs: totalMs,
+    apiCount: log.length,
+    apiDurations: log.map((e) => ({
+      url: e.url,
+      durationMs: e.durationMs,
+      ok: e.ok,
+    })),
+    slowestApi: slowest
+      ? { url: slowest.url, durationMs: slowest.durationMs }
+      : null,
+  });
+  if (slowest && slowest.durationMs >= 1000) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[DeptIssued Perf] SLOWEST API causing delay: ${slowest.url} (${slowest.durationMs}ms)`,
+    );
+  }
+}
 
 function isPendingStatus(status: string): boolean {
   const s = normalizeReceiptStatus(status);
@@ -180,61 +305,74 @@ async function ensureReceiptFromStockEntry(input: {
 
 async function syncFromStockEntries(
   mrByName: Map<string, MaterialRequestWorkflowRecord>,
+  perfLog: PerfEntry[],
 ): Promise<void> {
   try {
-    const stockEntries = await apiGet<
-      Array<{
-        name: string;
-        posting_date?: string;
-        owner?: string;
-        remarks?: string;
-        from_warehouse?: string;
-      }>
-    >(buildResourceUrl("Stock Entry"), {
-      ...buildListConfig({
-        fields: [
-          "name",
-          "posting_date",
-          "owner",
-          "remarks",
-          "from_warehouse",
-        ],
-        filters: [
-          ["purpose", "=", "Material Issue"],
-          ["docstatus", "=", 1],
-        ],
-        limit_page_length: 200,
-        order_by: "creation desc",
-      }),
-    });
+    const stockEntries = await timedApi(
+      "Stock Entry list",
+      "/api/resource/Stock Entry",
+      () =>
+        apiGet<
+          Array<{
+            name: string;
+            posting_date?: string;
+            owner?: string;
+            remarks?: string;
+            from_warehouse?: string;
+          }>
+        >(buildResourceUrl("Stock Entry"), {
+          ...buildListConfig({
+            fields: [
+              "name",
+              "posting_date",
+              "owner",
+              "remarks",
+              "from_warehouse",
+            ],
+            filters: [
+              ["purpose", "=", "Material Issue"],
+              ["docstatus", "=", 1],
+            ],
+            limit_page_length: 200,
+            order_by: "creation desc",
+          }),
+        }),
+      perfLog,
+    );
     if (!stockEntries?.length) return;
 
     const seNames = stockEntries.map((s) => s.name);
-    const details = await apiGet<
-      Array<{
-        parent?: string;
-        material_request?: string;
-        item_code?: string;
-        item_name?: string;
-        qty?: number;
-        uom?: string;
-        s_warehouse?: string;
-      }>
-    >(buildResourceUrl("Stock Entry Detail"), {
-      ...buildListConfig({
-        fields: [
-          "parent",
-          "material_request",
-          "item_code",
-          "item_name",
-          "qty",
-          "uom",
-          "s_warehouse",
-        ],
-        filters: [["parent", "in", seNames]],
-        limit_page_length: 2000,
-      }),
-    });
+    const details = await timedApi(
+      "Stock Entry Detail batch",
+      "/api/resource/Stock Entry Detail",
+      () =>
+        apiGet<
+          Array<{
+            parent?: string;
+            material_request?: string;
+            item_code?: string;
+            item_name?: string;
+            qty?: number;
+            uom?: string;
+            s_warehouse?: string;
+          }>
+        >(buildResourceUrl("Stock Entry Detail"), {
+          ...buildListConfig({
+            fields: [
+              "parent",
+              "material_request",
+              "item_code",
+              "item_name",
+              "qty",
+              "uom",
+              "s_warehouse",
+            ],
+            filters: [["parent", "in", seNames]],
+            limit_page_length: 2000,
+          }),
+        }),
+      perfLog,
+    );
 
     const linesBySe = new Map<string, NonNullable<typeof details>>();
     const mrBySe = new Map<string, string>();
@@ -252,59 +390,62 @@ async function syncFromStockEntries(
       }
     }
 
-    for (const se of stockEntries) {
-      const mrName = mrBySe.get(se.name) || "";
-      if (!mrName) continue;
-      const mr = mrByName.get(mrName);
-      const audit = parseMaterialIssueAudit(se.remarks);
-      const lines = (linesBySe.get(se.name) || []).filter(
-        (l) => l.item_code && Number(l.qty) > 0,
-      );
-      const items = lines.map((l) => {
-        const issued = Number(l.qty) || 0;
-        return {
-          item_code: String(l.item_code),
-          item_name: l.item_name || String(l.item_code),
-          uom: l.uom || "Nos",
-          requested_qty: issued,
-          issued_qty: issued,
-          remaining_qty: 0,
-        };
-      });
-      if (mr?.items?.length) {
-        const byCode = new Map(mr.items.map((i) => [i.item_code, i]));
-        for (const it of items) {
-          const row = byCode.get(it.item_code);
-          if (row) {
-            it.requested_qty = Number(row.qty) || it.issued_qty;
-            it.remaining_qty = Math.max(0, it.requested_qty - it.issued_qty);
-            it.item_name = row.item_name || it.item_name;
-            it.uom = row.uom || it.uom;
+    // Parallel receipt upserts — no await-per-receipt ERP calls.
+    await Promise.all(
+      stockEntries.map(async (se) => {
+        const mrName = mrBySe.get(se.name) || "";
+        if (!mrName) return;
+        const mr = mrByName.get(mrName);
+        const audit = parseMaterialIssueAudit(se.remarks);
+        const lines = (linesBySe.get(se.name) || []).filter(
+          (l) => l.item_code && Number(l.qty) > 0,
+        );
+        const items = lines.map((l) => {
+          const issued = Number(l.qty) || 0;
+          return {
+            item_code: String(l.item_code),
+            item_name: l.item_name || String(l.item_code),
+            uom: l.uom || "Nos",
+            requested_qty: issued,
+            issued_qty: issued,
+            remaining_qty: 0,
+          };
+        });
+        if (mr?.items?.length) {
+          const byCode = new Map(mr.items.map((i) => [i.item_code, i]));
+          for (const it of items) {
+            const row = byCode.get(it.item_code);
+            if (row) {
+              it.requested_qty = Number(row.qty) || it.issued_qty;
+              it.remaining_qty = Math.max(0, it.requested_qty - it.issued_qty);
+              it.item_name = row.item_name || it.item_name;
+              it.uom = row.uom || it.uom;
+            }
           }
         }
-      }
 
-      await ensureReceiptFromStockEntry({
-        stockEntry: se.name,
-        mrName,
-        department:
-          mr?.custom_department ||
-          (mr as { department?: string } | undefined)?.department ||
-          "General",
-        warehouse:
-          whBySe.get(se.name) ||
-          se.from_warehouse ||
-          audit?.audit?.warehouse ||
-          "—",
-        issueDate: se.posting_date || todayERPNextDate(),
-        issuedBy: audit?.audit?.created_by || se.owner || "Warehouse",
-        receiver: audit?.receiver || "Department User",
-        issueType: audit?.issue_type || "Full Issue",
-        items,
-        mrCompleted:
-          String(mr?.custom_bidsphere_status || "").trim() === "Completed",
-      });
-    }
+        await ensureReceiptFromStockEntry({
+          stockEntry: se.name,
+          mrName,
+          department:
+            mr?.custom_department ||
+            (mr as { department?: string } | undefined)?.department ||
+            "General",
+          warehouse:
+            whBySe.get(se.name) ||
+            se.from_warehouse ||
+            audit?.audit?.warehouse ||
+            "—",
+          issueDate: se.posting_date || todayERPNextDate(),
+          issuedBy: audit?.audit?.created_by || se.owner || "Warehouse",
+          receiver: audit?.receiver || "Department User",
+          issueType: audit?.issue_type || "Full Issue",
+          items,
+          mrCompleted:
+            String(mr?.custom_bidsphere_status || "").trim() === "Completed",
+        });
+      }),
+    );
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn(
@@ -314,170 +455,102 @@ async function syncFromStockEntries(
   }
 }
 
-async function syncFromFullMaterialRequests(
-  mrs: MaterialRequestWorkflowRecord[],
-): Promise<void> {
-  const candidates = mrs
-    .filter((mr) => {
-      const st = String(mr.custom_bidsphere_status || mr.status || "");
-      return (
-        /Material Issued|Pending|Forwarded|Stock Available|Completed|RFQ/i.test(
-          st,
-        ) || Boolean(mr.custom_warehouse_remarks)
-      );
-    })
-    .slice(0, 80);
-
-  for (const row of candidates) {
-    try {
-      const mr = await fetchMaterialRequestWorkflow(row.name);
-      const remarks = mr.custom_warehouse_remarks ?? mr.remarks ?? "";
-      const sidecars = parseMirSidecarsFromRemarks(remarks);
-
-      for (const side of sidecars) {
-        if (!side.issue_number && !side.stock_entry) continue;
-        const existing = getMaterialIssueReceipt(
-          side.issue_number || side.stock_entry,
-        );
-        if (existing && isAcceptedStatus(existing.status)) continue;
-
-        const status = normalizeReceiptStatus(side.status);
-        const receipt: MaterialIssueReceipt = {
-          id: side.id || side.issue_number,
-          issue_number: side.issue_number,
-          stock_entry: side.stock_entry,
-          mr_name: side.mr_name || mr.name,
-          department: side.department || mr.custom_department || "General",
-          company:
-            side.company ||
-            (mr as { company?: string }).company ||
-            undefined,
-          warehouse: side.warehouse || "—",
-          issue_date: side.issue_date || todayERPNextDate(),
-          issued_by: side.issued_by || "Warehouse",
-          received_by: side.received_by || "Department User",
-          issue_type: side.issue_type || "Full Issue",
-          status:
-            status === "Waiting Warehouse Signature"
-              ? "Pending Department Acceptance"
-              : status,
-          items: (side.items || []).map((i) => ({
-            item_code: i.item_code,
-            item_name: i.item_name || i.item_code,
-            uom: i.uom || "Nos",
-            requested_qty: Number(i.requested_qty) || 0,
-            issued_qty: Number(i.issued_qty) || 0,
-            remaining_qty: Number(i.remaining_qty) || 0,
-          })),
-          document_hash: side.document_hash || "",
-          document_version: side.document_version || "1.0",
-          verification_token: side.verification_token || "",
-          created_at: side.created_at || captureSignatureTimestamp(),
-          modified: side.modified || captureSignatureTimestamp(),
-          confirmed_at: side.confirmed_at,
-          warehouse_signed_at: side.warehouse_signed_at,
-          department_signed_at: side.department_signed_at,
-          department_remarks: side.department_remarks,
-          acceptance_checklist: side.acceptance_checklist,
-          warehouse_signature: side.warehouse_signer
-            ? {
-                signer_name: side.warehouse_signer,
-                role: "Warehouse Manager",
-                signature_type: "typed",
-                typed_name: side.warehouse_signer,
-                signed_at: side.warehouse_signed_at || side.created_at,
-                sha256_hash: side.warehouse_sha256 || "",
-                document_hash: side.document_hash || "",
-                verification_status: "verified",
-                document_version: side.document_version || "1.0",
-              }
-            : undefined,
-          department_signature: side.department_signer
-            ? {
-                signer_name: side.department_signer,
-                role: "Department User",
-                signature_type: "typed",
-                typed_name: side.department_signer,
-                signed_at: side.department_signed_at || side.confirmed_at || "",
-                sha256_hash: side.department_sha256 || "",
-                document_hash: side.document_hash || "",
-                verification_status: "verified",
-                document_version: side.document_version || "1.0",
-              }
-            : undefined,
-          audit_trail: existing?.audit_trail || [],
-        };
-        promoteToPending(receipt);
-        persistExternalMaterialIssueReceipt(receipt);
-      }
-
-      if (sidecars.length === 0) {
-        const audit = parseMaterialIssueAudit(remarks);
-        const lines = audit?.lines || [];
-        if (lines.length === 0) continue;
-        if (listMaterialIssueReceipts().some((r) => r.mr_name === mr.name)) {
-          continue;
-        }
-        const items = lines.map((l) => {
-          const issued = Number(l.issue_qty) || 0;
-          const requested = Number(l.required_qty) || issued;
-          return {
-            item_code: l.item_code,
-            item_name: l.item_code,
-            uom: "Nos",
-            requested_qty: requested,
-            issued_qty: issued,
-            remaining_qty: Math.max(0, requested - issued),
-          };
-        });
-        await ensureReceiptFromStockEntry({
-          stockEntry: `MRISSUE-${mr.name}`,
-          mrName: mr.name,
-          department: mr.custom_department || "General",
-          warehouse: audit?.audit?.warehouse || "—",
-          issueDate: todayERPNextDate(),
-          issuedBy: audit?.audit?.created_by || "Warehouse",
-          receiver: audit?.receiver || "Department User",
-          issueType: audit?.issue_type || "Full Issue",
-          items,
-          mrCompleted:
-            String(mr.custom_bidsphere_status || "").trim() === "Completed",
-        });
-      }
-    } catch {
-      /* skip MR */
-    }
-  }
-}
-
-/** Full sync used by Department Issued Items pages + KPIs. */
+/**
+ * Full ERP sync (deduped). Prefer calling via scheduleBackgroundSync /
+ * list* helpers so the page is never blocked on this.
+ */
 export async function syncDepartmentIssuedItems(): Promise<{
   total: number;
   pending: number;
   accepted: number;
 }> {
-  await hydrateMaterialIssueReceiptsFromErp();
-
-  const mrs = await listMaterialRequestsWorkflow({
-    docstatus: 1,
-    limit: 500,
-  });
-  const mrByName = new Map(mrs.map((m) => [m.name, m]));
-
-  await syncFromFullMaterialRequests(mrs);
-  await syncFromStockEntries(mrByName);
-
-  // Promote any leftover Waiting Warehouse Signature → Pending for department.
-  for (const r of listMaterialIssueReceipts()) {
-    if (r.status === "Waiting Warehouse Signature") promoteToPending(r);
+  if (syncInflight) return syncInflight;
+  if (isSyncCacheFresh()) {
+    const all = listMaterialIssueReceipts();
+    return {
+      total: all.length,
+      pending: all.filter((r) => isPendingStatus(r.status)).length,
+      accepted: all.filter((r) => isAcceptedStatus(r.status)).length,
+    };
   }
 
-  const all = listMaterialIssueReceipts();
-  return {
-    total: all.length,
-    pending: all.filter((r) => isPendingStatus(r.status)).length,
-    accepted: all.filter((r) => isAcceptedStatus(r.status)).length,
-  };
+  const pageStart = performance.now();
+  const perfLog: PerfEntry[] = [];
+
+  syncInflight = (async () => {
+    try {
+      // One MR list, then hydrate (list-only) + Stock Entry batch in parallel.
+      const mrs = await timedApi(
+        "Material Request list",
+        "/api/resource/Material Request",
+        () =>
+          listMaterialRequestsWorkflow({
+            docstatus: 1,
+            limit: 500,
+          }),
+        perfLog,
+      );
+
+      const mrByName = new Map(mrs.map((m) => [m.name, m]));
+      await Promise.all([
+        timedApi(
+          "hydrate MIR from ERP",
+          "hydrateMaterialIssueReceiptsFromErp",
+          () =>
+            hydrateMaterialIssueReceiptsFromErp({
+              skipPerDocFetch: true,
+              preloadedRows: mrs,
+            }),
+          perfLog,
+        ),
+        syncFromStockEntries(mrByName, perfLog),
+      ]);
+
+      for (const r of listMaterialIssueReceipts()) {
+        if (r.status === "Waiting Warehouse Signature") promoteToPending(r);
+      }
+
+      lastSyncAt = Date.now();
+      lastSyncBackground = false;
+      const all = listMaterialIssueReceipts();
+      const summary = {
+        total: all.length,
+        pending: all.filter((r) => isPendingStatus(r.status)).length,
+        accepted: all.filter((r) => isAcceptedStatus(r.status)).length,
+      };
+      logPerfSummary(pageStart, perfLog, "syncDepartmentIssuedItems");
+      notifySynced();
+      return summary;
+    } finally {
+      syncInflight = null;
+    }
+  })();
+
+  return syncInflight;
+}
+
+/**
+ * Kick off sync without blocking. Soft-timeout at 5s marks UI as
+ * "Background sync in progress..." while work continues.
+ */
+export function scheduleDepartmentIssuedBackgroundSync(): void {
+  if (isSyncCacheFresh() || syncInflight) return;
+  const started = syncDepartmentIssuedItems();
+  void Promise.race([
+    started.then(() => "done" as const),
+    new Promise<"timeout">((resolve) =>
+      setTimeout(() => resolve("timeout"), SYNC_SOFT_TIMEOUT_MS),
+    ),
+  ]).then((result) => {
+    if (result === "timeout") {
+      lastSyncBackground = true;
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[DeptIssued Perf] Sync exceeded 5s — showing cached data. Background sync in progress...",
+      );
+      notifySynced();
+    }
+  });
 }
 
 function applyFilters(
@@ -515,35 +588,65 @@ function applyFilters(
   );
 }
 
+/** Synchronous local read — never hits ERP. */
+export function listDepartmentPendingAcceptanceLocal(): MaterialIssueReceipt[] {
+  return applyFilters(listMaterialIssueReceipts(), { status: "pending" });
+}
+
+export function listDepartmentAcceptedItemsLocal(): MaterialIssueReceipt[] {
+  return applyFilters(listAcceptedDepartmentReceipts(), { status: "accepted" });
+}
+
+export function listDepartmentIssueReceiptsLocal(
+  filter?: DepartmentIssuedFilter,
+): MaterialIssueReceipt[] {
+  return applyFilters(listMaterialIssueReceipts(), filter || { status: "all" });
+}
+
+/**
+ * Cache-first list. Returns local data immediately and schedules background sync.
+ * Does NOT await ERP before resolving — page can render in < 1s.
+ */
 export async function listDepartmentPendingAcceptance(): Promise<
   MaterialIssueReceipt[]
 > {
-  await syncDepartmentIssuedItems();
-  return applyFilters(listMaterialIssueReceipts(), { status: "pending" });
+  const pageStart = performance.now();
+  const local = listDepartmentPendingAcceptanceLocal();
+  scheduleDepartmentIssuedBackgroundSync();
+  // eslint-disable-next-line no-console
+  console.log("[DeptIssued Perf] listDepartmentPendingAcceptance (cache-first)", {
+    localCount: local.length,
+    durationMs: Math.round(performance.now() - pageStart),
+    syncInProgress: Boolean(syncInflight),
+    cacheFresh: isSyncCacheFresh(),
+  });
+  return local;
 }
 
 export async function listDepartmentAcceptedItems(): Promise<
   MaterialIssueReceipt[]
 > {
-  await syncDepartmentIssuedItems();
-  return applyFilters(listAcceptedDepartmentReceipts(), { status: "accepted" });
+  const local = listDepartmentAcceptedItemsLocal();
+  scheduleDepartmentIssuedBackgroundSync();
+  return local;
 }
 
 export async function listDepartmentIssueReceipts(
   filter?: DepartmentIssuedFilter,
 ): Promise<MaterialIssueReceipt[]> {
-  await syncDepartmentIssuedItems();
-  return applyFilters(listMaterialIssueReceipts(), filter || { status: "all" });
+  const local = listDepartmentIssueReceiptsLocal(filter);
+  scheduleDepartmentIssuedBackgroundSync();
+  return local;
 }
 
 export async function countDepartmentPendingAcceptance(): Promise<number> {
-  const rows = await listDepartmentPendingAcceptance();
-  return rows.length;
+  scheduleDepartmentIssuedBackgroundSync();
+  return listDepartmentPendingAcceptanceLocal().length;
 }
 
 export async function countDepartmentAcceptedItems(): Promise<number> {
-  const rows = await listDepartmentAcceptedItems();
-  return rows.length;
+  scheduleDepartmentIssuedBackgroundSync();
+  return listDepartmentAcceptedItemsLocal().length;
 }
 
 export function departmentReceiptStatusLabel(status: string): string {

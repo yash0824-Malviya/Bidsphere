@@ -57,7 +57,7 @@ function DeliveryBadge({ status }: { status: PODeliveryStatus }) {
 }
 
 export default function SupplierPOListPage() {
-  const { supplierName, erpSupplierName, isReady } = useSupplierSession();
+  const { erpSupplierName, isReady } = useSupplierSession();
   const [activeTab, setActiveTab] = useState<FilterTab>("All");
 
   // Always filter by ERP Supplier.name (Link id). Display company name
@@ -102,17 +102,15 @@ export default function SupplierPOListPage() {
 
   if (!isReady) {
     return (
-      
-        <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
-          Loading…
-        </div>
-      
+      <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
+        Loading…
+      </div>
     );
   }
 
   if (!erpSupplierName) {
     return (
-      
+      <>
         <PageHeader
           title="Purchase Orders"
           description="Purchase orders issued to your company by Netlink procurement."
@@ -122,12 +120,12 @@ export default function SupplierPOListPage() {
           title="Supplier account not linked"
           description="Your portal login is not linked to an ERPNext Supplier record yet, so purchase orders cannot be loaded. Contact procurement after onboarding is approved."
         />
-      
+      </>
     );
   }
 
   return (
-    
+    <>
       <PageHeader
         title="Purchase Orders"
         description="Purchase orders issued to your company by Netlink procurement."
@@ -250,6 +248,6 @@ export default function SupplierPOListPage() {
           </>
         )}
       </section>
-    
+    </>
   );
 }

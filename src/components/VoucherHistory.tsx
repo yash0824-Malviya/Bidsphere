@@ -26,7 +26,12 @@ export default function VoucherHistory({
 }) {
   if (!history?.length) {
     return (
-      <p className="text-sm text-neutral-500">No activity recorded yet.</p>
+      <div className="rounded-xl border border-dashed border-neutral-200 bg-neutral-50 px-3 py-6 text-center">
+        <p className="text-sm font-medium text-neutral-700">No activity yet</p>
+        <p className="mt-1 text-xs text-neutral-500">
+          Lifecycle events will appear here as the voucher progresses.
+        </p>
+      </div>
     );
   }
 

@@ -76,13 +76,6 @@ export interface ReportPoFetchResult {
   removedFields: string[];
 }
 
-function isDev(): boolean {
-  try {
-    return Boolean(import.meta.env?.DEV);
-  } catch {
-    return false;
-  }
-}
 
 function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;

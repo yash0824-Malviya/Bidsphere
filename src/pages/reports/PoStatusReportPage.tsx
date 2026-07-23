@@ -39,7 +39,6 @@ import FilterBar, { FilterField } from "../../components/ui/FilterBar";
 import { DASHBOARD_QUERY_OPTIONS } from "../../api/queryPresets";
 import { useClientPagination } from "../../hooks/usePagination";
 import type { ExportColumn } from "../../utils/export";
-import { formatDate } from "../../utils/format";
 import {
   buildPoTrend,
   daysBetween,

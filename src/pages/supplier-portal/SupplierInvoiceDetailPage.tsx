@@ -39,35 +39,35 @@ export default function SupplierInvoiceDetailPage() {
 
   if (!isReady || isLoading) {
     return (
-      
+      <>
         <div className="space-y-4">
           <Skeleton className="h-6 w-48" />
           <Skeleton className="h-32 w-full" />
           <Skeleton className="h-64 w-full" />
         </div>
-      
+      </>
     );
   }
 
   if (isError || !invoice) {
     return (
-      
+      <>
         <BackLink />
         <EmptyState
           icon={FileText}
           title="Invoice not found"
           description={`"${name}" may have been deleted or you may not have access.`}
         />
-      
+      </>
     );
   }
 
   if (!supplierOwnsRecord(supplierName, invoice)) {
     return (
-      
+      <>
         <BackLink />
         <SupplierAccessDenied description="This invoice does not belong to your supplier account." />
-      
+      </>
     );
   }
 
@@ -76,7 +76,7 @@ export default function SupplierInvoiceDetailPage() {
   const hasOutstanding = (invoice.outstanding_amount ?? 0) > 0;
 
   return (
-    
+    <>
       <BackLink />
 
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -235,7 +235,7 @@ export default function SupplierInvoiceDetailPage() {
         This is a read-only view. Contact Netlink accounts payable for payment
         queries.
       </p>
-    
+    </>
   );
 }
 

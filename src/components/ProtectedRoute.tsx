@@ -2,20 +2,43 @@ import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { useEffect, useRef } from "react";
 
-import { canAccessPath, getRoleHome } from "../config/roles";
+import { canAccessPath, getRoleHome, type AppRole } from "../config/roles";
 import { authLog } from "../store/authStorage";
 import { useAuthStore } from "../store/authStore";
-import { readSupplierSession } from "../hooks/useSupplierSession";
 import { hydrateAccessTokenFromRemember } from "../utils/accessToken";
 import { notifyAccessDenied } from "../utils/rbacNavigate";
+import {
+  detectAuthSource,
+  getActivePortal,
+  hasActiveSupplierSession,
+  logPortalAuthDecision,
+  portalForRole,
+  PORTAL_LOGIN_PATH,
+  replacePreviousSupplierSession,
+  resolvePortalLoginForPath,
+  setActivePortal,
+} from "../utils/portalAuth";
 
 interface Props {
   children?: React.ReactNode;
 }
 
+function isWarehousePath(path: string): boolean {
+  return path === "/warehouse" || path.startsWith("/warehouse/");
+}
+
+function isDepartmentPath(path: string): boolean {
+  return path === "/department" || path.startsWith("/department/");
+}
+
+function isSupplierPath(path: string): boolean {
+  return path === "/supplier" || path.startsWith("/supplier/");
+}
+
 /**
  * Guards internal app routes behind authentication and role-based access.
- * Never renders unauthorized pages — redirects to the role's own dashboard.
+ * Portal boundaries always validate role — never redirect on auth alone.
+ * Wrong-portal navigation keeps the session and sends the user to their home.
  */
 export default function ProtectedRoute({ children }: Props) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -40,45 +63,130 @@ export default function ProtectedRoute({ children }: Props) {
     );
   }
 
-  // Supplier portal session must not open internal procurement/admin URLs
-  const supplierSession = readSupplierSession();
-  if ((!isAuthenticated || !user) && supplierSession?.loggedIn) {
-    const key = `supplier→internal:${location.pathname}`;
+  const path = location.pathname;
+  const search = location.search;
+  const loginForPath = resolvePortalLoginForPath(path);
+
+  // Supplier session alone must not open an internal portal — replace it, then login.
+  if ((!isAuthenticated || !user) && hasActiveSupplierSession()) {
+    const key = `supplier→internal:${path}`;
     if (deniedRef.current !== key) {
       deniedRef.current = key;
-      notifyAccessDenied(location.pathname);
+      replacePreviousSupplierSession(
+        "replace-supplier-session-on-internal-route",
+      );
+      logPortalAuthDecision({
+        currentUrl: path,
+        previousPortal: "supplier",
+        newPortal: null,
+        redirectTarget: loginForPath,
+        reason: "supplier-session-replaced-on-internal-route",
+      });
     }
-    authLog("redirect decision", "ProtectedRoute → /supplier/dashboard (supplier session)");
-    return <Navigate to="/supplier/dashboard" replace />;
+    return <Navigate to={loginForPath} replace state={{ from: location }} />;
   }
 
   if (!isAuthenticated || !user) {
-    authLog("redirect decision", "ProtectedRoute → /login");
-    return <Navigate to="/login" replace state={{ from: location }} />;
+    logPortalAuthDecision({
+      currentUrl: path,
+      currentRole: null,
+      redirectTarget: loginForPath,
+      authSource: detectAuthSource(),
+      reason: "unauthenticated-internal-route",
+    });
+    authLog("redirect decision", `ProtectedRoute → ${loginForPath}`);
+    return <Navigate to={loginForPath} replace state={{ from: location }} />;
   }
 
-  const role = user.role ?? "procurement";
-  const path = location.pathname;
-  const search = location.search;
+  const role = (user.role ?? "procurement") as AppRole;
+  const active = portalForRole(role);
+  if (active && getActivePortal() !== active) {
+    setActivePortal(active);
+  }
 
-  // Hard block: internal users never render supplier portal under this guard
-  if (path === "/supplier" || path.startsWith("/supplier/")) {
-    const key = `internal→supplier:${path}`;
+  // Staff must never render supplier portal under this guard.
+  if (isSupplierPath(path)) {
+    logPortalAuthDecision({
+      username: user.name || user.email,
+      currentUrl: path,
+      currentRole: role,
+      previousPortal: getActivePortal(),
+      newPortal: "supplier",
+      redirectTarget: PORTAL_LOGIN_PATH.supplier,
+      reason: "staff-session-on-supplier-path",
+    });
+    return (
+      <Navigate
+        to={PORTAL_LOGIN_PATH.supplier}
+        replace
+        state={{ from: location.pathname }}
+      />
+    );
+  }
+
+  // Warehouse / department prefixes: keep session, send user to their own home.
+  if (isWarehousePath(path) && role !== "warehouse" && role !== "admin") {
+    const home = getRoleHome(role);
+    const key = `portal:warehouse:${role}:${path}`;
     if (deniedRef.current !== key) {
       deniedRef.current = key;
-      notifyAccessDenied(path);
+      notifyAccessDenied(`${path}${search}`);
+      logPortalAuthDecision({
+        username: user.name || user.email,
+        requestedPortal: "warehouse",
+        erpRoles: user.erpnext_roles ?? null,
+        previousPortal: getActivePortal(),
+        newPortal: portalForRole(role),
+        redirectTarget: home,
+        currentUrl: path,
+        currentRole: role,
+        reason: "role-mismatch-warehouse-portal-keep-session",
+      });
     }
-    return <Navigate to={getRoleHome(role)} replace />;
+    return <Navigate to={home} replace />;
+  }
+
+  if (isDepartmentPath(path) && role !== "department" && role !== "admin") {
+    const home = getRoleHome(role);
+    const key = `portal:department:${role}:${path}`;
+    if (deniedRef.current !== key) {
+      deniedRef.current = key;
+      notifyAccessDenied(`${path}${search}`);
+      logPortalAuthDecision({
+        username: user.name || user.email,
+        requestedPortal: "department",
+        erpRoles: user.erpnext_roles ?? null,
+        previousPortal: getActivePortal(),
+        newPortal: portalForRole(role),
+        redirectTarget: home,
+        currentUrl: path,
+        currentRole: role,
+        reason: "role-mismatch-department-portal-keep-session",
+      });
+    }
+    return <Navigate to={home} replace />;
   }
 
   if (!canAccessPath(role, path, search)) {
+    const home = getRoleHome(role);
     const key = `role:${role}:${path}${search}`;
     if (deniedRef.current !== key) {
       deniedRef.current = key;
       notifyAccessDenied(`${path}${search}`);
+      logPortalAuthDecision({
+        username: user.name || user.email,
+        erpRoles: user.erpnext_roles ?? null,
+        previousPortal: getActivePortal(),
+        newPortal: portalForRole(role),
+        redirectTarget: home,
+        currentUrl: `${path}${search}`,
+        currentRole: role,
+        authSource: detectAuthSource(),
+        reason: "rbac-path-denied",
+      });
     }
-    authLog("redirect decision", `ProtectedRoute → ${getRoleHome(role)} (RBAC deny)`);
-    return <Navigate to={getRoleHome(role)} replace />;
+    authLog("redirect decision", `ProtectedRoute → ${home} (RBAC deny)`);
+    return <Navigate to={home} replace />;
   }
 
   return <>{children ?? <Outlet />}</>;

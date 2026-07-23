@@ -1,6 +1,6 @@
 import type { FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import {
@@ -28,6 +28,16 @@ import {
   writeSupplierSession,
 } from "../../hooks/useSupplierSession";
 import { buildPortalClientMeta } from "../../utils/supplierClientMeta";
+import { useAuthStore } from "../../store/authStore";
+import {
+  detectAuthSource,
+  getActivePortal,
+  logPortalAuthDecision,
+  PORTAL_LOGIN_PATH,
+  replacePreviousStaffSession,
+  setActivePortal,
+  setLoginPortalAffinity,
+} from "../../utils/portalAuth";
 
 const SUPPORT_EMAIL = "support@netlink.com";
 const TAB_STORAGE_KEY = "supplier_login_tab";
@@ -62,8 +72,13 @@ function postAccountLoginPath(session: {
 
 export default function SupplierLoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   useDocumentTitle();
   const [tab, setTab] = useState<LoginTab>(() => readStoredTab());
+
+  const hasHydrated = useAuthStore((s) => s.hasHydrated);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const user = useAuthStore((s) => s.user);
 
   // Account login
   const [email, setEmail] = useState("");
@@ -77,14 +92,60 @@ export default function SupplierLoginPage() {
   const [pinSubmitting, setPinSubmitting] = useState(false);
 
   useEffect(() => {
+    setLoginPortalAffinity("supplier");
+  }, []);
+
+  useEffect(() => {
+    if (!hasHydrated) return;
+
+    // Internal staff sessions must not auto-enter Supplier — replace silently.
+    if (isAuthenticated && user) {
+      const previousPortal = getActivePortal();
+      replacePreviousStaffSession("replace-staff-on-supplier-login");
+      logPortalAuthDecision({
+        username: user.name || user.email,
+        requestedPortal: "supplier",
+        previousPortal,
+        newPortal: null,
+        redirectTarget: PORTAL_LOGIN_PATH.supplier,
+        currentUrl: location.pathname,
+        currentRole: user.role,
+        reason: "replace-staff-on-supplier-login",
+      });
+      return;
+    }
+
     const existing = readSupplierSession();
     if (!existing?.loggedIn) return;
-    if (existing.authMode === "account") {
-      navigate(postAccountLoginPath(existing), { replace: true });
-    } else {
-      navigate("/supplier/dashboard", { replace: true });
-    }
-  }, [navigate]);
+
+    const destination =
+      existing.authMode === "account"
+        ? postAccountLoginPath(existing)
+        : "/supplier/dashboard";
+    setActivePortal("supplier");
+    logPortalAuthDecision({
+      username:
+        existing.portalUser ??
+        existing.companyName ??
+        existing.supplierName ??
+        null,
+      requestedPortal: "supplier",
+      previousPortal: getActivePortal(),
+      newPortal: "supplier",
+      redirectTarget: destination,
+      currentUrl: location.pathname,
+      currentRole: "supplier",
+      authSource: detectAuthSource(),
+      reason: "supplier-session-on-supplier-login",
+    });
+    navigate(destination, { replace: true });
+  }, [
+    hasHydrated,
+    isAuthenticated,
+    user,
+    navigate,
+    location.pathname,
+  ]);
 
   function selectTab(next: LoginTab) {
     setTab(next);
@@ -162,6 +223,10 @@ export default function SupplierLoginPage() {
 
     setAccountSubmitting(true);
     try {
+      // Never keep a staff session alongside a supplier session.
+      if (useAuthStore.getState().isAuthenticated) {
+        replacePreviousStaffSession("replace-staff-before-supplier-login");
+      }
       const res = await portalLogin({
         username,
         password,
@@ -189,6 +254,7 @@ export default function SupplierLoginPage() {
         loginTime: new Date().toISOString(),
       };
       writeSupplierSession(session);
+      setActivePortal("supplier");
       toast.success(`Welcome, ${res.company_name || username}`);
       navigate(postAccountLoginPath(session), { replace: true });
     } catch (err) {
@@ -222,6 +288,9 @@ export default function SupplierLoginPage() {
 
     void (async () => {
       try {
+        if (useAuthStore.getState().isAuthenticated) {
+          replacePreviousStaffSession("replace-staff-before-supplier-pin-login");
+        }
         const tokenRes = await legacyPinIssueToken(
           supplier.name,
           pin,
@@ -254,6 +323,7 @@ export default function SupplierLoginPage() {
         loggedIn: true,
         loginTime: new Date().toISOString(),
       });
+      setActivePortal("supplier");
 
       toast.success(`Welcome, ${supplier.supplier_name || supplier.name}`);
       navigate("/supplier/dashboard", { replace: true });

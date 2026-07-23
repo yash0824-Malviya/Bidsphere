@@ -193,6 +193,16 @@ export function toEnterpriseUserMessage(
     console.error("[BidSphere] Error (details for developers):", error);
   }
 
+  // UpdateAfterSubmit — never show raw ERPNext exception text.
+  if (
+    /\bUpdateAfterSubmitError\b/i.test(raw) ||
+    /Not allowed to change .+ after submission/i.test(raw)
+  ) {
+    return /warehouse\s*e-?sign|warehouse_/i.test(raw)
+      ? "The GRN has already been finalized."
+      : "This document has already been submitted and cannot be changed.";
+  }
+
   // ── ERPNext validation — NEVER replace with the generic fallback ──
   if (isErpValidationUserMessage(raw)) {
     const cleaned = stripFrappeExceptionNoise(raw);

@@ -1405,6 +1405,7 @@ export interface GrnListRow {
   supplier_name?: string;
   status?: PurchaseReceiptStatus;
   posting_date?: string;
+  modified?: string;
   creation?: string;
   owner?: string;
   total_qty?: number;
@@ -1676,17 +1677,39 @@ export async function getPurchaseReceipt(
 export async function updatePurchaseReceipt(
   name: string,
   data: Partial<PurchaseReceipt> | Record<string, unknown>,
-  opts?: { allowSignedEsignFields?: boolean },
+  opts?: { allowSignedEsignFields?: boolean; silent?: boolean },
 ): Promise<PurchaseReceipt> {
   const endpoint = buildResourceUrl(PRECEIPT_DOCTYPE, name);
+  let payload: Record<string, unknown> = { ...data };
+
+  // Never mutate Warehouse E-Sign Envelope on a submitted GRN.
+  if (Object.prototype.hasOwnProperty.call(payload, "warehouse_esign_envelope")) {
+    try {
+      const fresh = await apiGet<PurchaseReceipt>(endpoint);
+      if (Number(fresh?.docstatus) === 1) {
+        delete payload.warehouse_esign_envelope;
+      }
+    } catch {
+      delete payload.warehouse_esign_envelope;
+    }
+  }
+
   if (opts?.allowSignedEsignFields) {
     const { assertSignedGrnMutationAllowed } = await import(
       "./warehouseSignatureIntegrity"
     );
     const fresh = await apiGet<PurchaseReceipt>(endpoint);
-    assertSignedGrnMutationAllowed(fresh, data);
+    if (Number(fresh?.docstatus) === 1) {
+      delete payload.warehouse_esign_envelope;
+    }
+    assertSignedGrnMutationAllowed(fresh, payload);
   }
-  return apiPut<PurchaseReceipt>(endpoint, data);
+
+  return apiPut<PurchaseReceipt>(
+    endpoint,
+    payload,
+    opts?.silent ? withSilent() : undefined,
+  );
 }
 
 /**

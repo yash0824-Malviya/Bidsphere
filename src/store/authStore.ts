@@ -133,7 +133,11 @@ interface AuthState {
   login: (
     username: string,
     password: string,
-    rememberMe: boolean
+    rememberMe: boolean,
+    portalContext?: {
+      requestedPortal?: string;
+      previousPortal?: string | null;
+    },
   ) => Promise<"mfa" | "complete">;
   completeMfaLogin: () => void;
   cancelMfaLogin: () => Promise<void>;
@@ -158,15 +162,19 @@ export const useAuthStore = create<AuthState>()(
       sessionProof: null,
       sessionRestoreError: null,
 
-      login: async (username, password, rememberMe) => {
+      login: async (username, password, rememberMe, portalContext) => {
         authLog("login start", { username });
         // Always log on VM/production too (authLog is DEV-only).
         // eslint-disable-next-line no-console
-        console.log("[MFA:login] Login request sent", { username });
+        console.log("[MFA:login] Login request sent", {
+          username,
+          requestedPortal: portalContext?.requestedPortal ?? "staff",
+          previousPortal: portalContext?.previousPortal ?? null,
+        });
         logMfaEnvDiagnostics("login");
         set({ isLoading: true, sessionRestoreError: null });
         try {
-          const user = await loginWithPassword(username, password);
+          const user = await loginWithPassword(username, password, portalContext);
 
           // eslint-disable-next-line no-console
           console.log("[MFA:login] Login response received (password OK)", {

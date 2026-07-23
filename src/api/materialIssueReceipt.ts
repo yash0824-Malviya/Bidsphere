@@ -608,21 +608,98 @@ async function syncReceiptSidecarToMr(
   }
 }
 
+export type HydrateMaterialIssueReceiptsOptions = {
+  /**
+   * When true (Department Pending Acceptance fast path):
+   * - Parse MIR / MaterialIssue tags from the MR *list* payload only
+   * - Do NOT call get_doc once per Material Request (N+1)
+   * - Do NOT write sidecars back to ERP during hydrate
+   */
+  skipPerDocFetch?: boolean;
+  /** Reuse an already-fetched MR list (avoids a second list call). */
+  preloadedRows?: Array<{
+    name: string;
+    status?: string;
+    custom_bidsphere_status?: string | null;
+    custom_warehouse_remarks?: string | null;
+    custom_department?: string | null;
+    remarks?: string | null;
+  }>;
+};
+
+function importSidecarsFromMrRemarks(mr: {
+  name: string;
+  custom_warehouse_remarks?: string | null;
+  remarks?: string | null;
+  custom_department?: string | null;
+  custom_bidsphere_status?: string | null;
+}): number {
+  let imported = 0;
+  const remarks = mr.custom_warehouse_remarks ?? mr.remarks ?? "";
+  const sidecars = parseMirSidecarsFromRemarks(remarks);
+  for (const side of sidecars) {
+    if (!side.issue_number && !side.stock_entry) continue;
+    const existing = getMaterialIssueReceipt(
+      side.issue_number || side.stock_entry,
+    );
+    const incoming = fromMirSidecar({
+      ...side,
+      mr_name: side.mr_name || mr.name,
+    });
+    if (!existing) {
+      persist(incoming);
+      imported += 1;
+      continue;
+    }
+    const existingTs = Date.parse(existing.modified || "") || 0;
+    const incomingTs = Date.parse(incoming.modified || "") || 0;
+    const erpAhead =
+      incomingTs >= existingTs ||
+      (incoming.status === "Pending Department Acceptance" &&
+        existing.status === "Waiting Warehouse Signature") ||
+      (incoming.status === "Confirmed" && existing.status !== "Confirmed");
+    if (erpAhead) {
+      persist(mergeReceiptPreservingBusinessLock(existing, incoming));
+      imported += 1;
+    }
+  }
+  return imported;
+}
+
 /**
  * Hydrate local receipt store from Material Request MIR tags (ERP remarks).
- * Call before Department / Warehouse pending lists so cross-user sync works.
- * Also synthesizes a pending receipt from MaterialIssue tags when MIR is missing
- * (covers issues created before cross-user sync).
+ * Fast path uses the list payload only (no per-MR get_doc / N+1).
  */
-export async function hydrateMaterialIssueReceiptsFromErp(): Promise<number> {
+export async function hydrateMaterialIssueReceiptsFromErp(
+  options?: HydrateMaterialIssueReceiptsOptions,
+): Promise<number> {
+  const skipPerDoc = Boolean(options?.skipPerDocFetch);
+  const hydrateStart = performance.now();
   let imported = 0;
   try {
-    const rows = await listMaterialRequestsWorkflow({
-      docstatus: 1,
-      limit: 500,
+    // eslint-disable-next-line no-console
+    console.log("[MaterialIssueReceipt] hydrate START", {
+      skipPerDocFetch: skipPerDoc,
+      startTime: hydrateStart,
+      url: "/api/resource/Material Request",
     });
-    // List endpoints often omit / blank custom_warehouse_remarks — fetch full
-    // docs for issue-related MRs so Department can hydrate MIR sidecars.
+    const listStart = performance.now();
+    const rows =
+      options?.preloadedRows && options.preloadedRows.length > 0
+        ? options.preloadedRows
+        : await listMaterialRequestsWorkflow({
+            docstatus: 1,
+            limit: 500,
+          });
+    // eslint-disable-next-line no-console
+    console.log("[MaterialIssueReceipt] hydrate MR list END", {
+      url: options?.preloadedRows?.length
+        ? "(preloaded)"
+        : "/api/resource/Material Request",
+      count: rows.length,
+      durationMs: Math.round(performance.now() - listStart),
+    });
+
     const candidates = rows
       .filter((mr) => {
         const st = String(
@@ -638,130 +715,132 @@ export async function hydrateMaterialIssueReceiptsFromErp(): Promise<number> {
       })
       .slice(0, 120);
 
+    const needsDoc: typeof candidates = [];
     for (const row of candidates) {
-      let mr = row;
-      try {
-        // Always get_doc — list payloads frequently omit full remarks text.
-        mr = await fetchMaterialRequestWorkflow(row.name);
-      } catch {
-        mr = row;
-      }
-      const remarks = mr.custom_warehouse_remarks ?? mr.remarks ?? "";
-      const sidecars = parseMirSidecarsFromRemarks(remarks);
-      for (const side of sidecars) {
-        if (!side.issue_number && !side.stock_entry) continue;
-        const existing = getMaterialIssueReceipt(
-          side.issue_number || side.stock_entry,
-        );
-        const incoming = fromMirSidecar({
-          ...side,
-          mr_name: side.mr_name || mr.name,
-        });
-        if (!existing) {
-          persist(incoming);
-          imported += 1;
-          continue;
-        }
-        // Prefer newer modified / richer signature state from ERP sidecar.
-        const existingTs = Date.parse(existing.modified || "") || 0;
-        const incomingTs = Date.parse(incoming.modified || "") || 0;
-        const erpAhead =
-          incomingTs >= existingTs ||
-          (incoming.status === "Pending Department Acceptance" &&
-            existing.status === "Waiting Warehouse Signature") ||
-          (incoming.status === "Confirmed" && existing.status !== "Confirmed");
-        if (erpAhead) {
-          persist(mergeReceiptPreservingBusinessLock(existing, incoming));
-          imported += 1;
-        }
-      }
+      const remarks = row.custom_warehouse_remarks ?? "";
+      const before = imported;
+      imported += importSidecarsFromMrRemarks(row);
+      if (imported > before) continue;
 
-      // Legacy fallback: MaterialIssue tag present, no MIR sidecar yet.
-      if (sidecars.length === 0) {
-        const issueAudit = parseMaterialIssueAudit(remarks);
-        const lines = issueAudit?.lines || [];
-        const totalIssued = lines.reduce(
-          (s, l) => s + (Number(l.issue_qty) || 0),
-          0,
-        );
-        if (totalIssued <= 0) continue;
-        const already = listMaterialIssueReceipts().some(
-          (r) => r.mr_name === mr.name && r.status !== "Acceptance Rejected",
-        );
-        if (already) continue;
-        const wf = String(
-          (mr as { custom_bidsphere_status?: string }).custom_bidsphere_status ||
-            "",
-        );
-        if (wf === "Completed" || wf === "Cancelled") continue;
+      const st = String(row.custom_bidsphere_status || row.status || "");
+      if (
+        !skipPerDoc &&
+        !remarks &&
+        /Material Issued|Pending Department|Acceptance|Stock Available/i.test(st)
+      ) {
+        needsDoc.push(row);
+        continue;
+      }
+      if (!remarks) continue;
 
-        const issueNumber = `MIR-SYNC-${mr.name}`.slice(0, 40);
-        const now = captureSignatureTimestamp();
-        const items = lines.map((l) => {
-          const issued = Math.max(0, Number(l.issue_qty) || 0);
-          const requested = Math.max(
-            0,
-            Number(l.required_qty) || issued,
-          );
-          return {
-            item_code: l.item_code,
-            item_name: l.item_code,
-            uom: "Nos",
-            requested_qty: requested,
-            issued_qty: issued,
-            remaining_qty: Math.max(0, requested - issued),
-          };
-        });
-        const synthetic: MaterialIssueReceipt = {
-          id: issueNumber,
-          issue_number: issueNumber,
-          stock_entry: `SYNC-${mr.name}`,
-          mr_name: mr.name,
-          department:
-            (mr as { custom_department?: string }).custom_department ||
-            "General",
-          warehouse: issueAudit?.audit?.warehouse || "—",
-          issue_date: todayERPNextDate(),
-          issued_by: issueAudit?.audit?.created_by || "Warehouse",
-          received_by: issueAudit?.receiver || "Department User",
-          issue_type: issueAudit?.issue_type || "Full Issue",
-          status: "Pending Department Acceptance",
-          items,
-          document_hash: await sha256Hex(issueNumber),
-          document_version: "1.0",
-          verification_token: (await sha256Hex(`sync:${mr.name}`)).slice(0, 24),
-          created_at: now,
-          modified: now,
-          warehouse_signed_at: now,
-          warehouse_signature: {
-            signer_name: issueAudit?.audit?.created_by || "Warehouse",
-            role: "Warehouse Manager",
-            signature_type: "typed",
-            typed_name: issueAudit?.audit?.created_by || "Warehouse",
-            signed_at: now,
-            sha256_hash: "",
-            document_hash: "",
-            verification_status: "verified",
-            document_version: "1.0",
-          },
-          audit_trail: [],
+      const issueAudit = parseMaterialIssueAudit(remarks);
+      const lines = issueAudit?.lines || [];
+      const totalIssued = lines.reduce(
+        (s, l) => s + (Number(l.issue_qty) || 0),
+        0,
+      );
+      if (totalIssued <= 0) continue;
+      const already = listMaterialIssueReceipts().some(
+        (r) => r.mr_name === row.name && r.status !== "Acceptance Rejected",
+      );
+      if (already) continue;
+      const wf = String(row.custom_bidsphere_status || "");
+      if (wf === "Completed" || wf === "Cancelled") continue;
+
+      const issueNumber = `MIR-SYNC-${row.name}`.slice(0, 40);
+      const now = captureSignatureTimestamp();
+      const items = lines.map((l) => {
+        const issued = Math.max(0, Number(l.issue_qty) || 0);
+        const requested = Math.max(0, Number(l.required_qty) || issued);
+        return {
+          item_code: l.item_code,
+          item_name: l.item_code,
+          uom: "Nos",
+          requested_qty: requested,
+          issued_qty: issued,
+          remaining_qty: Math.max(0, requested - issued),
         };
-        persist(synthetic);
-        imported += 1;
-        try {
-          await syncReceiptSidecarToMr(synthetic, {
-            status: "Pending Department Acceptance",
-            proseLine: `Recovered Material Issue Receipt ${issueNumber} for Department acceptance.`,
-          });
-        } catch {
-          /* ignore */
-        }
-      }
+      });
+      const [document_hash, verification_token] = await Promise.all([
+        sha256Hex(issueNumber),
+        sha256Hex(`sync:${row.name}`).then((h) => h.slice(0, 24)),
+      ]);
+      persist({
+        id: issueNumber,
+        issue_number: issueNumber,
+        stock_entry: `SYNC-${row.name}`,
+        mr_name: row.name,
+        department: row.custom_department || "General",
+        warehouse: issueAudit?.audit?.warehouse || "—",
+        issue_date: todayERPNextDate(),
+        issued_by: issueAudit?.audit?.created_by || "Warehouse",
+        received_by: issueAudit?.receiver || "Department User",
+        issue_type: issueAudit?.issue_type || "Full Issue",
+        status: "Pending Department Acceptance",
+        items,
+        document_hash,
+        document_version: "1.0",
+        verification_token,
+        created_at: now,
+        modified: now,
+        warehouse_signed_at: now,
+        warehouse_signature: {
+          signer_name: issueAudit?.audit?.created_by || "Warehouse",
+          role: "Warehouse Manager",
+          signature_type: "typed",
+          typed_name: issueAudit?.audit?.created_by || "Warehouse",
+          signed_at: now,
+          sha256_hash: "",
+          document_hash: "",
+          verification_status: "verified",
+          document_version: "1.0",
+        },
+        audit_trail: [],
+      });
+      imported += 1;
+      // Skip syncReceiptSidecarToMr — was an N+1 ERP write per synthetic receipt.
+    }
+
+    if (!skipPerDoc && needsDoc.length > 0) {
+      const docStart = performance.now();
+      const CONCURRENCY = 8;
+      let cursor = 0;
+      const importedParts = new Array<number>(needsDoc.length).fill(0);
+      const workers = Array.from(
+        { length: Math.min(CONCURRENCY, needsDoc.length) },
+        async () => {
+          while (cursor < needsDoc.length) {
+            const idx = cursor++;
+            const row = needsDoc[idx];
+            try {
+              const mr = await fetchMaterialRequestWorkflow(row.name);
+              importedParts[idx] = importSidecarsFromMrRemarks(mr);
+            } catch {
+              importedParts[idx] = 0;
+            }
+          }
+        },
+      );
+      await Promise.all(workers);
+      imported += importedParts.reduce((a, b) => a + b, 0);
+      // eslint-disable-next-line no-console
+      console.log("[MaterialIssueReceipt] hydrate get_doc batch", {
+        url: "/api/resource/Material Request/{name}",
+        count: needsDoc.length,
+        concurrency: CONCURRENCY,
+        durationMs: Math.round(performance.now() - docStart),
+      });
     }
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn("[MaterialIssueReceipt] hydrate from ERP failed:", err);
   }
+  // eslint-disable-next-line no-console
+  console.log("[MaterialIssueReceipt] hydrate END", {
+    imported,
+    durationMs: Math.round(performance.now() - hydrateStart),
+    skipPerDocFetch: skipPerDoc,
+  });
   return imported;
 }
 
@@ -1004,42 +1083,6 @@ async function enrichReceiptInput(
     lines,
     remarks,
   };
-}
-
-async function updateMrRemarksPreservingTags(
-  mrName: string,
-  status: Parameters<typeof updateMaterialRequestWorkflowStatus>[1],
-  proseLine: string,
-  issuedLines?: Array<{ item_code: string; issued_qty: number; required_qty?: number }>,
-  warehouse?: string,
-): Promise<void> {
-  let existingRemarks = "";
-  let existingForwarded: ReturnType<typeof parseForwardedItemsFromMr> = [];
-  try {
-    const mr = await fetchMaterialRequestWorkflow(mrName);
-    existingRemarks = mr.custom_warehouse_remarks ?? mr.remarks ?? "";
-    existingForwarded = parseForwardedItemsFromMr(mr);
-  } catch {
-    /* ignore */
-  }
-  const tags = extractWarehouseMachineTags(existingRemarks);
-  let forwardedTag = tags.forwardedTag;
-  if (issuedLines?.length) {
-    const merged = mergeIssuedIntoForwardedItems(
-      existingForwarded,
-      issuedLines,
-      { warehouse },
-    );
-    forwardedTag = formatForwardedItemsTag(merged);
-  }
-  const prose = [tags.prose, proseLine].filter(Boolean).join("\n");
-  await updateMaterialRequestWorkflowStatus(mrName, status, {
-    custom_warehouse_remarks: composeWarehouseRemarks(prose, {
-      materialIssueTag: tags.materialIssueTag,
-      forwardedTag,
-      mirTag: tags.mirTag,
-    }),
-  });
 }
 
 /**

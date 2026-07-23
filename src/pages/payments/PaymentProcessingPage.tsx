@@ -511,10 +511,10 @@ export default function PaymentProcessingPage() {
         </div>
       )}
 
-      <div className="mt-2 grid gap-6 lg:grid-cols-3">
+      <div className="mt-2 grid items-start gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           {/* Payment date */}
-          <section className="card p-5 shadow-sm">
+          <section className="rounded-[12px] border border-neutral-200 bg-white p-5 shadow-sm">
             <h3 className="mb-3 text-sm font-semibold text-neutral-900">
               Payment Date
             </h3>
@@ -538,7 +538,7 @@ export default function PaymentProcessingPage() {
           />
 
           {/* Payment reference */}
-          <section className="card p-5 shadow-sm">
+          <section className="rounded-[12px] border border-neutral-200 bg-white p-5 shadow-sm">
             <h3 className="mb-3 text-sm font-semibold text-neutral-900">
               Payment Reference
             </h3>
@@ -559,7 +559,7 @@ export default function PaymentProcessingPage() {
                   setReferenceLocked(false);
                   setPaymentReference(e.target.value);
                 }}
-                className="flex-1 rounded-md border border-neutral-300 bg-white px-3 py-2 font-mono text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-neutral-50 disabled:opacity-60"
+                className="min-w-0 flex-1 rounded-md border border-neutral-300 bg-white px-3 py-2 font-mono text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-neutral-50 disabled:opacity-60"
               />
               {!alreadyPaid && (
                 <button
@@ -600,7 +600,7 @@ export default function PaymentProcessingPage() {
           />
 
           {/* Attachments */}
-          <section className="card p-5 shadow-sm">
+          <section className="rounded-[12px] border border-neutral-200 bg-white p-5 shadow-sm">
             <PaymentAttachments
               attachments={attachments}
               onAdd={handleAddAttachment}
@@ -611,8 +611,8 @@ export default function PaymentProcessingPage() {
           </section>
         </div>
 
-        {/* Summary + actions */}
-        <div className="lg:col-span-1">
+        {/* Summary + actions — content height, top-aligned */}
+        <div className="self-start lg:col-span-1">
           <PaymentSummary
             supplier={summary.supplier}
             invoiceNumber={summary.invoiceNumber}

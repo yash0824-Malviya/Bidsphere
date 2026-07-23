@@ -26,7 +26,7 @@ export default function PaymentMethodSelector({
   disabled = false,
 }: Props) {
   return (
-    <section className="card p-5 shadow-sm">
+    <section className="rounded-[12px] border border-neutral-200 bg-white p-5 shadow-sm">
       <div className="mb-4 flex items-center gap-2">
         <ShieldCheck className="h-5 w-5 text-primary" />
         <h3 className="text-sm font-semibold text-neutral-900">

@@ -610,12 +610,12 @@ export function syncDeliveryStateFromERPNext(
 
   let next: PODeliveryStatus = state.status;
 
-  if (hasGrn && metrics.hasSubmittedInvoice && fullyReceived && paymentDone) {
+  // Fully received must never remain "In Transit".
+  if (fullyReceived && hasGrn && metrics.hasSubmittedInvoice && paymentDone) {
     next = "Completed";
-  } else if (hasGrn && state.status === "In Transit") {
-    // Goods received — cannot remain "In Transit".
-    next = "Partially Received";
-  } else if (hasGrn && (metrics.perReceived > 0 || fullyReceived)) {
+  } else if (fullyReceived || (hasGrn && fullyReceived)) {
+    next = "Delivered";
+  } else if (hasGrn && (metrics.perReceived > 0 || state.status === "In Transit")) {
     next = "Partially Received";
   }
 

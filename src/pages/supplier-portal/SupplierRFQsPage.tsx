@@ -341,16 +341,16 @@ export default function SupplierRFQsPage() {
 
   if (!isReady) {
     return (
-      
+      <>
         <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
           Loading…
         </div>
-      
+      </>
     );
   }
 
   return (
-    
+    <>
       <div className="flex w-full flex-col gap-6">
         <header>
           <h1 className="text-[22px] font-semibold tracking-tight text-[#111827]">
@@ -558,6 +558,6 @@ export default function SupplierRFQsPage() {
           )}
         </section>
       </div>
-    
+    </>
   );
 }

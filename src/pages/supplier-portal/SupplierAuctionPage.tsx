@@ -164,33 +164,29 @@ export default function SupplierAuctionPage() {
 
   if (isReady && !isAuthenticated) {
     return (
-      
         <SupplierAccessDenied
           title={t("reverseBidding.signInRequired")}
           description={t("reverseBidding.signInToParticipate")}
         />
-      
     );
   }
 
   if (query.isLoading || !auction) {
     return (
-      
+      <>
         <div className="table-shell">
           <TableSkeleton rows={4} columns={2} />
         </div>
-      
+      </>
     );
   }
 
   if (!supplierIsInvited(auction, supplierName)) {
     return (
-      
         <SupplierAccessDenied
           title={t("reverseBidding.notInvited")}
           description={t("reverseBidding.notInvitedDesc")}
         />
-      
     );
   }
 
@@ -235,7 +231,7 @@ export default function SupplierAuctionPage() {
     !(auction.winner_price ?? auction.lowest_bid);
 
   return (
-    
+    <>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <AuctionCountdownAlert
           phase={alerts.phase}
@@ -633,6 +629,6 @@ export default function SupplierAuctionPage() {
           </div>
         )}
       </div>
-    
+    </>
   );
 }

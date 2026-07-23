@@ -44,7 +44,6 @@ const STATUS_KEYS: Record<string, string> = {
   "Pending Department Acceptance": "statusBadge.waitingForAcceptance",
   "Waiting for Department Acceptance": "statusBadge.waitingForDepartmentAcceptance",
   "Waiting for Acceptance": "statusBadge.waitingForAcceptance",
-  Accepted: "statusBadge.accepted",
   "Partially Issued": "statusBadge.partiallyIssued",
   "Waiting Warehouse Signature": "statusBadge.waitingWarehouseSignature",
   Confirmed: "statusBadge.confirmed",

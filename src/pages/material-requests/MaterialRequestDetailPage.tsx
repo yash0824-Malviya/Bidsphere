@@ -12,6 +12,7 @@ import {
   Pencil,
   Send,
   Trash2,
+  Truck,
   XCircle,
 } from "lucide-react";
 

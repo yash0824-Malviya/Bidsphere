@@ -1,8 +1,9 @@
 /**
  * Cost Breakdown — supplier quotation cost structure module.
  *
- * Intentionally decoupled from AI / award / PO so future AI Cost Analysis
- * can hang off these types without rewriting the module surface.
+ * Item-wise UI: one card per RFQ item with cost-head amounts loaded from
+ * ERPNext Cost Head Master (never hardcoded on the frontend).
+ * Persistence maps to ERPNext Cost Breakdown + Detail (qty=1, unit_cost=amount).
  */
 
 export type CostBreakdownUploadType = "Manual" | "Excel";
@@ -44,7 +45,7 @@ export interface CostBreakdown {
   creation?: string;
 }
 
-/** Flat editable row used by Manual Entry + Excel preview (item-scoped). */
+/** Flat editable row used when persisting / comparing (item × cost head). */
 export interface CostBreakdownLineDraft {
   id: string;
   item_code: string;
@@ -54,6 +55,29 @@ export interface CostBreakdownLineDraft {
   quantity: number;
   unit_cost: number;
   total_cost: number;
+  /** 1-based Excel row (header = 1) when the line came from an upload. */
+  excel_row?: number;
+}
+
+/** One cost-head cell inside an item card. */
+export interface ItemCostHeadEntry {
+  /** ERP Cost Head Master.name — exact Link value for save. */
+  cost_head: string;
+  /** Display label (cost_head_name or name). */
+  label: string;
+  description: string;
+  /** Per-unit amount that contributes to the item breakdown total. */
+  amount: number;
+}
+
+/** Item-wise draft used by the expandable card UI. */
+export interface ItemCostBreakdownDraft {
+  item_code: string;
+  item_name: string;
+  qty: number;
+  quoted_unit_price: number;
+  heads: ItemCostHeadEntry[];
+  excel_row?: number;
 }
 
 export interface CostBreakdownSaveInput {
@@ -77,17 +101,29 @@ export interface CostBreakdownSaveInput {
 }
 
 export interface ExcelValidationIssue {
+  /** 1-based Excel / grid row (0 = file-level). */
   row: number;
   column?: string;
   message: string;
   severity: "error" | "warning";
+  /** Item Code value from the failing row (when available). */
+  item_code?: string;
+  /** Draft line id — used to highlight cells when applicable. */
+  line_id?: string;
 }
 
 export interface ExcelParseResult {
   ok: boolean;
   issues: ExcelValidationIssue[];
+  /** Flat lines (qty=1, unit_cost=amount) for persistence compatibility. */
   lines: CostBreakdownLineDraft[];
+  /** Rows that passed validation — safe to keep on partial import. */
+  valid_lines: CostBreakdownLineDraft[];
+  /** Distinct Excel row numbers that failed validation. */
+  failed_rows: number[];
   grand_total: number;
+  /** Item-wise drafts for the card UI (preferred). */
+  items?: ItemCostBreakdownDraft[];
 }
 
 /** Matrix for procurement comparison: cost_head → supplier → amount. */
@@ -111,7 +147,18 @@ export interface CostBreakdownComparison {
   }>;
 }
 
-export const COST_BREAKDOWN_EXCEL_COLUMNS = [
+/** Build item-wise Excel headers from active Cost Head Master records. */
+export function buildCostBreakdownExcelColumns(
+  heads: Array<{ name: string; cost_head_name?: string }>,
+): string[] {
+  const headCols = heads.map((h) =>
+    String(h.cost_head_name || h.name || "").trim(),
+  ).filter(Boolean);
+  return ["Item Code", "Item Name", ...headCols, "Total"];
+}
+
+/** Legacy row-wise columns — still accepted on upload for migration. */
+export const COST_BREAKDOWN_EXCEL_COLUMNS_LEGACY = [
   "Item Code",
   "Item Name",
   "Cost Head",

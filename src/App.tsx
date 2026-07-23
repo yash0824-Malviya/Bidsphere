@@ -450,6 +450,18 @@ function App() {
         <Suspense fallback={<RouteFallback />}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route
+            path="/warehouse/login"
+            element={<LoginPage portal="warehouse" />}
+          />
+          <Route
+            path="/procurement/login"
+            element={<LoginPage portal="procurement" />}
+          />
+          <Route
+            path="/department/login"
+            element={<LoginPage portal="department" />}
+          />
           <Route path="/verify-otp" element={<OtpVerificationPage />} />
           <Route
             path="/verify/material-issue"
@@ -462,8 +474,9 @@ function App() {
 
           {/*
             Public Supplier Portal — outside ProtectedRoute / MainLayout.
-            SupplierPortalGuard blocks internal staff from /supplier/* URLs
-            and requires a supplier session for operational pages.
+            SupplierPortalGuard clears staff sessions on /supplier/* (never
+            redirects to warehouse/procurement homes) and requires a supplier
+            session for operational pages.
           */}
           <Route path="/supplier/login" element={<SupplierLoginPage />} />
           <Route

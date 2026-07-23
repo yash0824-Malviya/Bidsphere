@@ -51,6 +51,8 @@ export interface PORow {
   schedule_date?: string;
   grand_total?: number;
   status?: string;
+  /** ERPNext received % (0–100) — used for Delivery Schedule status. */
+  per_received?: number;
   docstatus?: number;
   modified?: string;
 }
@@ -217,7 +219,7 @@ async function resolveSupplierRfqFieldPlan(): Promise<SupplierRfqFieldPlan> {
     const titleField =
       RFQ_TITLE_CANDIDATES.find((f) => fieldSet.has(f)) ?? null;
 
-    const fields = [...CORE_SUPPLIER_RFQ_FIELDS];
+    const fields: string[] = [...CORE_SUPPLIER_RFQ_FIELDS];
     if (titleField) fields.push(titleField);
     if (dueDateField) fields.push(dueDateField);
 
@@ -570,8 +572,10 @@ export async function getSupplierPurchaseOrders(
       "supplier",
       "supplier_name",
       "transaction_date",
+      "schedule_date",
       "grand_total",
       "status",
+      "per_received",
       "docstatus",
       "modified",
     ],

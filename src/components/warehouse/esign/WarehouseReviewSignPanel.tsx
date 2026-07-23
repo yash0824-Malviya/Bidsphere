@@ -31,6 +31,7 @@ export default function WarehouseReviewSignPanel({
   const ready = hasReviewSignatureReady(value);
 
   async function applyDrawn(dataUrl: string) {
+    if (disabled || value.locked) return;
     setBusy(true);
     try {
       const next = await finalizeWarehouseSignatureForReview({
@@ -50,6 +51,7 @@ export default function WarehouseReviewSignPanel({
   }
 
   async function applyTyped() {
+    if (disabled || value.locked) return;
     if (value.typedName.trim().length < 2) {
       toast.error("Enter your full name to sign.");
       return;
@@ -73,8 +75,15 @@ export default function WarehouseReviewSignPanel({
     }
   }
 
+  const readOnly = Boolean(disabled || value.locked);
+
   return (
     <section className="rounded-2xl border border-primary-200 bg-primary-50/40 p-5 space-y-4">
+      {value.locked && (
+        <div className="rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2.5 text-sm font-semibold text-emerald-900">
+          GRN successfully signed and finalized.
+        </div>
+      )}
       <div className="flex items-start gap-3">
         <span className="grid h-10 w-10 place-items-center rounded-xl bg-primary-100 text-primary-700">
           <ShieldCheck className="h-5 w-5" />
@@ -84,8 +93,9 @@ export default function WarehouseReviewSignPanel({
             Warehouse Digital Signature
           </h3>
           <p className="text-xs text-slate-600">
-            Mandatory before Sign &amp; Finalize GRN. Finance cannot create a voucher until
-            this is completed.
+            {value.locked
+              ? "This signature is locked after finalization and cannot be changed."
+              : "Mandatory before Sign & Finalize GRN. Finance cannot create a voucher until this is completed."}
           </p>
         </div>
       </div>
@@ -98,9 +108,9 @@ export default function WarehouseReviewSignPanel({
           <input
             type="text"
             value={value.fullName}
-            disabled={disabled || value.locked}
+            disabled={readOnly}
             onChange={(e) => onChange({ ...value, fullName: e.target.value, typedName: e.target.value })}
-            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-70"
             placeholder="Warehouse Manager"
           />
         </label>
@@ -111,7 +121,7 @@ export default function WarehouseReviewSignPanel({
           <input
             type="text"
             value={value.role || value.designation}
-            disabled={disabled || value.locked}
+            disabled={readOnly}
             onChange={(e) =>
               onChange({
                 ...value,
@@ -119,7 +129,7 @@ export default function WarehouseReviewSignPanel({
                 designation: e.target.value,
               })
             }
-            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-70"
             placeholder="Warehouse Manager"
           />
         </label>
@@ -128,9 +138,9 @@ export default function WarehouseReviewSignPanel({
       <div className="flex gap-2">
         <button
           type="button"
-          disabled={disabled || value.locked}
+          disabled={readOnly}
           onClick={() => setMode("drawn")}
-          className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold ${
+          className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${
             mode === "drawn"
               ? "bg-primary-600 text-white"
               : "border border-slate-200 bg-white text-slate-700"
@@ -141,9 +151,9 @@ export default function WarehouseReviewSignPanel({
         </button>
         <button
           type="button"
-          disabled={disabled || value.locked}
+          disabled={readOnly}
           onClick={() => setMode("typed")}
-          className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold ${
+          className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${
             mode === "typed"
               ? "bg-primary-600 text-white"
               : "border border-slate-200 bg-white text-slate-700"
@@ -160,7 +170,7 @@ export default function WarehouseReviewSignPanel({
             Signature pad
           </p>
           <WarehouseSignaturePad
-            disabled={disabled || value.locked || busy}
+            disabled={readOnly || busy}
             saveLabel="Use this signature"
             onSaved={(dataUrl) => void applyDrawn(dataUrl)}
           />
@@ -173,17 +183,17 @@ export default function WarehouseReviewSignPanel({
           <input
             type="text"
             value={value.typedName}
-            disabled={disabled || value.locked}
+            disabled={readOnly}
             onChange={(e) => onChange({ ...value, typedName: e.target.value })}
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-lg italic text-slate-900"
+            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-lg italic text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-70"
             placeholder="Sign your name"
             style={{ fontFamily: "Georgia, 'Times New Roman', serif" }}
           />
           <button
             type="button"
-            disabled={disabled || value.locked || busy}
+            disabled={readOnly || busy}
             onClick={() => void applyTyped()}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Type className="h-3.5 w-3.5" />}
             Apply typed signature
@@ -204,7 +214,7 @@ export default function WarehouseReviewSignPanel({
           type="checkbox"
           className="mt-0.5 h-4 w-4 rounded border-slate-300"
           checked={value.certified}
-          disabled={disabled || value.locked}
+          disabled={readOnly}
           onChange={(e) => onChange({ ...value, certified: e.target.checked })}
         />
         <span>
@@ -215,7 +225,7 @@ export default function WarehouseReviewSignPanel({
         </span>
       </label>
 
-      {!ready && (
+      {!ready && !value.locked && (
         <p className="text-xs text-amber-800">
           Capture a signature and check the certification box to enable{" "}
           <span className="font-semibold">Sign &amp; Finalize GRN</span>.

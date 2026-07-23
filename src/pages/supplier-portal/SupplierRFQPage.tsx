@@ -28,7 +28,7 @@ import {
   Upload,
 } from "lucide-react";
 
-import { checkQuotationStatus, createSupplierQuotation, getRFQ } from "../../api/sourcing";
+import { checkQuotationStatus, createSupplierQuotation } from "../../api/sourcing";
 import {
   attachCostBreakdownToQuotation,
   rfqRequiresCostBreakdown,
@@ -38,16 +38,22 @@ import {
   getSupplierResponse,
   type SupplierRfqResponse,
 } from "../../api/supplierRfqResponse";
+import {
+  getSupplierRfqDetail,
+  SupplierRfqAccessError,
+  supplierRfqFailureTitle,
+} from "../../api/supplierRfqDetail";
 import { triggerQuotationDeclined } from "../../api/notifications";
 import NoQuoteDialog, {
   type NoQuotePayload,
 } from "../../components/supplier-portal/NoQuoteDialog";
 import { uploadFileToERPNext, getFullFileUrl } from "../../api/legalDocsStorage";
-import { AppLoading, EnterpriseError } from "../../components/enterprise";
+import { AppLoading } from "../../components/enterprise";
 import EngineeringDocumentsPanel from "../../components/supplier-portal/EngineeringDocumentsPanel";
 import CostBreakdownPanel, {
   type CostBreakdownPanelHandle,
 } from "../../components/supplier-portal/CostBreakdownPanel";
+import SectionErrorBoundary from "../../components/supplier-portal/SectionErrorBoundary";
 import {
   Drawing2dCell,
   PartNameCell,
@@ -186,21 +192,39 @@ export default function SupplierRFQPage() {
   /* ─────────────── RFQ data ─────────────── */
 
   const rfqQuery = useQuery<RFQ>({
-    queryKey: ["supplier-portal-rfq", rfqName],
-    enabled: !!rfqName && !!session,
-    queryFn: () => getRFQ(rfqName),
+    queryKey: ["supplier-portal-rfq", rfqName, supplierName],
+    enabled: !!rfqName && !!session && !!supplierName,
+    retry: 1,
+    queryFn: async () => {
+      // eslint-disable-next-line no-console
+      console.info("[SupplierRFQPage] Loading RFQ detail", {
+        path: `/supplier/rfq/${rfqName}`,
+        rfqName,
+        supplierName,
+      });
+      const doc = await getSupplierRfqDetail(rfqName, supplierName);
+      // eslint-disable-next-line no-console
+      console.info("[SupplierRFQPage] RFQ detail loaded", {
+        name: doc.name,
+        docstatus: doc.docstatus,
+        status: doc.status,
+        items: doc.items?.length ?? 0,
+        suppliers: doc.suppliers?.length ?? 0,
+      });
+      return doc;
+    },
   });
 
   const rfq = rfqQuery.data;
+  const rfqLoading =
+    !session ||
+    rfqQuery.isPending ||
+    rfqQuery.isLoading ||
+    (rfqQuery.isFetching && !rfq);
   const parsedMessage = useMemo(
     () => parseRfqMessage(rfq?.message_for_supplier),
     [rfq?.message_for_supplier]
   );
-
-  const isInvited = useMemo(() => {
-    if (!rfq || !supplierName) return false;
-    return (rfq.suppliers ?? []).some((s) => s.supplier === supplierName);
-  }, [rfq, supplierName]);
 
   /* ─────────────── Already-submitted detection ─────────────── */
 
@@ -953,11 +977,11 @@ export default function SupplierRFQPage() {
 
   if (!session) {
     return (
-      
+      <>
         <div className="flex min-h-[40vh] items-center justify-center">
           <Loader2 className="h-5 w-5 animate-spin text-neutral-400" />
         </div>
-      
+      </>
     );
   }
 
@@ -965,7 +989,7 @@ export default function SupplierRFQPage() {
   if (submittedQuote) {
     const isSubmitted = submittedQuote.status === "Submitted";
     return (
-      
+      <>
         <div className="mx-auto max-w-lg py-16 text-center">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-accent-100">
             <CheckCircle2 className="h-7 w-7 text-accent-600" />
@@ -1008,85 +1032,91 @@ export default function SupplierRFQPage() {
             Back to Dashboard
           </button>
         </div>
-      
+      </>
     );
   }
 
-  if (rfqQuery.isLoading) {
-    return (
-      
-        <AppLoading variant="document" />
-      
-    );
+  if (rfqLoading) {
+    return <AppLoading variant="document" />;
   }
 
   if (rfqQuery.isError || !rfq) {
-    return (
-      
-        <EnterpriseError
-          error={rfqQuery.error ?? new Error("not found")}
-          onRetry={() => void rfqQuery.refetch()}
-          onBack={() => window.history.back()}
-        />
-      
-    );
-  }
+    const err = rfqQuery.error;
+    // eslint-disable-next-line no-console
+    console.error("[SupplierRFQPage] RFQ detail failed", {
+      path: `/supplier/rfq/${rfqName}`,
+      rfqName,
+      supplierName,
+      error: err,
+    });
 
-  // Draft RFQs (docstatus 0) are internal to Procurement and must never be
-  // accessible to suppliers — block access even via a direct link.
-  const isPublished = (rfq as { docstatus?: number }).docstatus === 1;
-  if (!isPublished) {
-    return (
-      
-        <BackToDashboard />
-        <div className="rounded-2xl border border-warning-200 bg-warning-50 p-6 text-center">
-          <ShieldAlert className="mx-auto h-6 w-6 text-warning-600" />
-          <h2 className="mt-2 text-base font-semibold text-warning-800">
-            This RFQ is not available
-          </h2>
-          <p className="mt-1 text-sm text-warning-700">
-            This request for quotation has not been published yet. You'll be
-            able to view it and submit a quotation once the buyer opens it.
-          </p>
-        </div>
-      
-    );
-  }
+    const accessErr =
+      err instanceof SupplierRfqAccessError
+        ? err
+        : null;
+    const title = accessErr
+      ? supplierRfqFailureTitle(accessErr.code)
+      : err instanceof Error && /not found/i.test(err.message)
+        ? "RFQ not found"
+        : err instanceof Error && /permission|forbidden/i.test(err.message)
+          ? "Permission denied"
+          : err instanceof Error && /server|500|502|503/i.test(err.message)
+            ? "Backend server error"
+            : "Unable to load RFQ";
+    const description =
+      accessErr?.message ||
+      (err instanceof Error ? err.message : null) ||
+      "The RFQ could not be loaded. Check the browser console for API details.";
 
-  if (!isInvited) {
     return (
-      
+      <>
         <BackToDashboard />
-        <div className="rounded-2xl border border-warning-200 bg-warning-50 p-6 text-center">
-          <ShieldAlert className="mx-auto h-6 w-6 text-warning-600" />
-          <h2 className="mt-2 text-base font-semibold text-warning-800">
-            You are not invited to this RFQ
-          </h2>
-          <p className="mt-1 text-sm text-warning-700">
-            {supplierName} is not on the supplier list for {rfqName}. If you
-            believe this is an error, please contact the buyer.
-          </p>
+        <div className="mx-auto max-w-lg rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center">
+          <ShieldAlert className="mx-auto h-6 w-6 text-rose-600" />
+          <h2 className="mt-2 text-base font-semibold text-rose-900">{title}</h2>
+          <p className="mt-1 text-sm text-rose-800">{description}</p>
+          {accessErr?.httpStatus != null ? (
+            <p className="mt-2 text-xs font-mono text-rose-700">
+              HTTP {accessErr.httpStatus}
+            </p>
+          ) : null}
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+            <button
+              type="button"
+              onClick={() => window.history.back()}
+              className="rounded-lg border border-rose-300 bg-white px-4 py-2 text-sm font-semibold text-rose-800 hover:bg-rose-50"
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              onClick={() => void rfqQuery.refetch()}
+              className="rounded-lg bg-rose-700 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-800"
+            >
+              Retry
+            </button>
+          </div>
         </div>
-      
+      </>
     );
   }
 
   /* ── Checking status spinner ──────────────────────────────────────── */
   if (checkingStatus) {
     return (
-      
+      <>
         <div className="flex min-h-[40vh] items-center justify-center gap-2">
           <Loader2 className="h-5 w-5 animate-spin text-neutral-400" />
           <span className="text-sm text-neutral-500">Checking quotation status…</span>
         </div>
-      
+      </>
     );
   }
 
   /* ── Read-only view: Supplier declined (No Quote) ─────────────────── */
   if (declined) {
     return (
-      
+      <>
         <BackToDashboard />
 
         <div className="mb-4 rounded-2xl border border-warning-200 bg-warning-50 p-5">
@@ -1153,7 +1183,7 @@ export default function SupplierRFQPage() {
             </div>
           )}
         </div>
-      
+      </>
     );
   }
 
@@ -1166,7 +1196,7 @@ export default function SupplierRFQPage() {
       : subData.grand_total ?? 0;
 
     return (
-      
+      <>
         <BackToDashboard />
 
         {/* Status banner */}
@@ -1388,7 +1418,7 @@ export default function SupplierRFQPage() {
             Back to Dashboard
           </Link>
         </div>
-      
+      </>
     );
   }
 
@@ -1403,7 +1433,7 @@ export default function SupplierRFQPage() {
       : undefined;
 
   return (
-    
+    <>
       {/* Content scrolls above a sticky footer so Submit is never clipped */}
       <div className="-mb-8 flex h-[calc(100dvh-7.5rem)] flex-col overflow-hidden sm:h-[calc(100dvh-4rem)] lg:h-[calc(100dvh-3.75rem)]">
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
@@ -1507,17 +1537,21 @@ export default function SupplierRFQPage() {
             </section>
 
             {requiresCostBreakdown && (
-              <CostBreakdownPanel
-                ref={costBreakdownRef}
-                rfqName={rfq.name}
-                supplier={supplierName}
-                items={lines.map((l) => ({
-                  item_code: l.item_code,
-                  item_name: l.item_name,
-                }))}
-                readOnly={!!alreadySubmitted}
-                onReadyChange={setCostBreakdownReady}
-              />
+              <SectionErrorBoundary title="Cost Breakdown failed to load">
+                <CostBreakdownPanel
+                  ref={costBreakdownRef}
+                  rfqName={rfq.name}
+                  supplier={supplierName}
+                  items={lines.map((l) => ({
+                    item_code: l.item_code,
+                    item_name: l.item_name,
+                    qty: l.qty,
+                    unit_price: l.unit_price,
+                  }))}
+                  readOnly={!!alreadySubmitted}
+                  onReadyChange={setCostBreakdownReady}
+                />
+              </SectionErrorBoundary>
             )}
 
             {/* Additional information — collapsible */}
@@ -1821,7 +1855,7 @@ export default function SupplierRFQPage() {
         onClose={() => setNoQuoteOpen(false)}
         onSubmit={handleDecline}
       />
-    
+    </>
   );
 }
 

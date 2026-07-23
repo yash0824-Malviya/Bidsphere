@@ -204,20 +204,20 @@ export default function SupplierQuotationDetailPage() {
   /* ── Loading ── */
   if (!supplierName || sqQuery.isLoading) {
     return (
-      
+      <>
         <div className="space-y-4 p-6">
           <Skeleton className="h-6 w-48" />
           <Skeleton className="h-40 w-full" />
           <Skeleton className="h-60 w-full" />
         </div>
-      
+      </>
     );
   }
 
   /* ── Error / not found ── */
   if (sqQuery.isError || !sq) {
     return (
-      
+      <>
         <Link
           to="/supplier/quotations"
           className="mb-4 inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-primary-600"
@@ -229,14 +229,14 @@ export default function SupplierQuotationDetailPage() {
           title="Quotation not found"
           description={`Supplier Quotation "${sqName}" could not be loaded. It may have been deleted or you may not have access to view it.`}
         />
-      
+      </>
     );
   }
 
   /* ── Access denied ── */
   if (accessDenied) {
     return (
-      
+      <>
         <Link
           to="/supplier/quotations"
           className="mb-4 inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-primary-600"
@@ -248,12 +248,12 @@ export default function SupplierQuotationDetailPage() {
           title="Access denied"
           description="This quotation belongs to a different supplier."
         />
-      
+      </>
     );
   }
 
   return (
-    
+    <>
       {/* Back link */}
       <Link
         to="/supplier/quotations"
@@ -492,6 +492,6 @@ export default function SupplierQuotationDetailPage() {
           </div>
         </section>
       </div>
-    
+    </>
   );
 }

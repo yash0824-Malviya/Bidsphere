@@ -16,7 +16,7 @@ export default function VoucherStatusBadge({
   const resolvedLabel = label ?? VOUCHER_STATUS_LABEL[status] ?? String(status || "—");
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ring-inset ${tone}`}
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold tracking-wide ring-1 ring-inset shadow-sm ${tone}`}
     >
       {resolvedLabel}
     </span>

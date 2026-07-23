@@ -1,18 +1,22 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
   ArrowLeft,
   ArrowRight,
+  Building2,
   CheckCircle2,
   Clock,
   Eye,
+  FileText,
+  Package,
   Receipt,
   Send,
+  Wallet,
 } from "lucide-react";
 
-import { AppLoading, EnterpriseError } from "../../components/enterprise";
+import { EnterpriseError } from "../../components/enterprise";
 import PageHeader from "../../components/PageHeader";
 import VoucherHistory from "../../components/VoucherHistory";
 import VoucherStatusBadge from "../../components/VoucherStatusBadge";
@@ -84,7 +88,7 @@ export default function VoucherDetailPage() {
   }, [linkedGrn, user]);
 
   if (isLoading) {
-    return <AppLoading variant="document" />;
+    return <VoucherDetailSkeleton />;
   }
 
   if (isError || !voucher) {
@@ -98,6 +102,7 @@ export default function VoucherDetailPage() {
   }
 
   const hasInvoice = !!voucher.invoice;
+  const items = voucher.items ?? [];
 
   async function handleSend() {
     try {
@@ -112,7 +117,7 @@ export default function VoucherDetailPage() {
   }
 
   return (
-    <div>
+    <div className="space-y-5">
       <BackLink />
 
       <PageHeader
@@ -143,7 +148,7 @@ export default function VoucherDetailPage() {
               />
             )}
             {!canAct && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-neutral-100 px-3 py-1 text-xs font-semibold text-neutral-500 ring-1 ring-inset ring-neutral-200">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-neutral-100 px-2.5 py-1 text-xs font-semibold text-neutral-600 ring-1 ring-inset ring-neutral-200">
                 <Eye className="h-3.5 w-3.5" />
                 Read Only
               </span>
@@ -153,118 +158,142 @@ export default function VoucherDetailPage() {
         }
       />
 
-      <p className="mb-4 text-sm font-semibold text-neutral-700">{voucher.id}</p>
+      <p className="text-base font-semibold tracking-tight text-neutral-900">
+        {voucher.id}
+      </p>
 
       {/* Summary */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <SummaryTile label="Supplier" value={voucher.supplier_name} />
         <SummaryTile
+          icon={<Building2 className="h-4 w-4 text-primary-600" />}
+          label="Supplier"
+          value={voucher.supplier_name}
+        />
+        <SummaryTile
+          icon={<Wallet className="h-4 w-4 text-emerald-600" />}
           label="Voucher Amount"
           value={formatCurrency(voucher.amount)}
         />
         <SummaryTile
+          icon={<FileText className="h-4 w-4 text-violet-600" />}
           label="PO Reference"
           value={voucher.po_reference || "—"}
         />
         <SummaryTile
+          icon={<Clock className="h-4 w-4 text-amber-600" />}
           label="Created"
           value={`${formatDate(voucher.created_at)} · ${voucher.created_by}`}
         />
       </div>
 
-      <div className="mt-4">
+      {/* Linked GRN / documents */}
+      <div>
         {grnName ? (
           grnLoading ? (
-            <div className="rounded-xl border border-neutral-200 bg-white px-4 py-6 text-sm text-neutral-500 shadow-sm">
+            <div className="rounded-2xl border border-neutral-200 bg-white px-4 py-5 text-sm text-neutral-500 shadow-sm">
               Loading linked signed GRN…
             </div>
           ) : linkedGrn ? (
             <WarehouseVerificationCard grn={linkedGrn} />
           ) : (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
-              Linked GRN {grnName} could not be loaded. Voucher inventory reference may be incomplete.
-            </div>
+            <EmptyPanel
+              title="Linked GRN unavailable"
+              description={`GRN ${grnName} could not be loaded. Voucher inventory reference may be incomplete.`}
+            />
           )
         ) : (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
-            This voucher has no linked GRN. Warehouse verification cannot be shown.
-          </div>
+          <EmptyPanel
+            title="No linked GRN"
+            description="This voucher has no linked GRN. Warehouse verification cannot be shown."
+          />
         )}
       </div>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-3">
-        <div className="space-y-6 lg:col-span-2">
+      <div className="grid gap-5 lg:grid-cols-3">
+        <div className="space-y-5 lg:col-span-2">
           {/* Items */}
-          <div className="card overflow-hidden">
-            <div className="border-b border-neutral-200 px-5 py-3">
-              <h3 className="text-sm font-semibold text-neutral-900">
+          <section className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
+            <div className="flex items-center gap-2 border-b border-neutral-200 px-4 py-3">
+              <Package className="h-4 w-4 text-primary-600" />
+              <h3 className="text-sm font-semibold tracking-tight text-neutral-900">
                 Line Items
               </h3>
             </div>
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-neutral-200 text-sm">
-                <thead className="bg-neutral-50 text-left text-xs font-medium uppercase tracking-wider text-neutral-500">
-                  <tr>
-                    <th className="px-4 py-2">Item</th>
-                    <th className="px-4 py-2 min-w-[160px]">Attachments</th>
-                    <th className="px-4 py-2 text-right">Qty</th>
-                    <th className="px-4 py-2 text-right">Rate</th>
-                    <th className="px-4 py-2 text-right">Amount</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-neutral-200">
-                  {(voucher.items ?? []).map((it) => (
-                    <tr key={it.item_code}>
-                      <td className="px-4 py-2 font-medium text-neutral-900 align-top">
-                        {it.item_name}
+            {items.length === 0 ? (
+              <EmptyPanel
+                title="No line items"
+                description="Items will appear here once they are added to this voucher."
+                flush
+              />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-neutral-200 text-sm">
+                  <thead className="bg-neutral-50 text-left text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
+                    <tr>
+                      <th className="px-4 py-2.5">Item</th>
+                      <th className="min-w-[160px] px-4 py-2.5">Attachments</th>
+                      <th className="px-4 py-2.5 text-right">Qty</th>
+                      <th className="px-4 py-2.5 text-right">Rate</th>
+                      <th className="px-4 py-2.5 text-right">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-100">
+                    {items.map((it) => (
+                      <tr
+                        key={it.item_code}
+                        className="transition-colors hover:bg-primary-50/50"
+                      >
+                        <td className="px-4 py-2.5 align-top font-medium text-neutral-900">
+                          {it.item_name}
+                        </td>
+                        <td className="px-4 py-2.5 align-top">
+                          <LineEngineeringDocsCell
+                            lookup={{
+                              item_code: it.item_code,
+                              purchase_order: voucher.po_reference || undefined,
+                            }}
+                          />
+                        </td>
+                        <td className="px-4 py-2.5 text-right align-top tabular-nums text-neutral-700">
+                          {it.qty} {it.uom}
+                        </td>
+                        <td className="px-4 py-2.5 text-right align-top tabular-nums text-neutral-700">
+                          {formatCurrency(it.rate)}
+                        </td>
+                        <td className="px-4 py-2.5 text-right align-top font-semibold tabular-nums text-neutral-900">
+                          {formatCurrency(it.amount)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="bg-neutral-50">
+                    <tr>
+                      <td
+                        colSpan={4}
+                        className="px-4 py-2.5 text-right text-[11px] font-semibold uppercase tracking-wide text-neutral-600"
+                      >
+                        Total
                       </td>
-                      <td className="px-4 py-2 align-top">
-                        <LineEngineeringDocsCell
-                          lookup={{
-                            item_code: it.item_code,
-                            purchase_order: voucher.po_reference || undefined,
-                          }}
-                        />
-                      </td>
-                      <td className="px-4 py-2 text-right tabular-nums align-top">
-                        {it.qty} {it.uom}
-                      </td>
-                      <td className="px-4 py-2 text-right tabular-nums align-top">
-                        {formatCurrency(it.rate)}
-                      </td>
-                      <td className="px-4 py-2 text-right tabular-nums align-top">
-                        {formatCurrency(it.amount)}
+                      <td className="px-4 py-2.5 text-right text-sm font-bold tabular-nums text-neutral-900">
+                        {formatCurrency(voucher.amount)}
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-                <tfoot className="bg-neutral-50">
-                  <tr>
-                    <td
-                      colSpan={4}
-                      className="px-4 py-2 text-right text-xs font-semibold uppercase text-neutral-600"
-                    >
-                      Total
-                    </td>
-                    <td className="px-4 py-2 text-right font-bold tabular-nums">
-                      {formatCurrency(voucher.amount)}
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </div>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </section>
 
           {/* Supplier invoice */}
           {voucher.invoice && (
-            <div className="card">
-              <div className="flex items-center gap-2 border-b border-neutral-200 px-5 py-3">
+            <section className="overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-sm">
+              <div className="flex items-center gap-2 border-b border-neutral-200 px-4 py-3">
                 <Receipt className="h-4 w-4 text-orange-500" />
-                <h3 className="text-sm font-semibold text-neutral-900">
+                <h3 className="text-sm font-semibold tracking-tight text-neutral-900">
                   Supplier Invoice — {voucher.invoice.invoice_number}
                 </h3>
               </div>
-              <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
                 <SummaryTile
                   label="Subtotal"
                   value={formatCurrency(voucher.invoice.subtotal)}
@@ -291,23 +320,23 @@ export default function VoucherDetailPage() {
                 />
               </div>
               {voucher.invoice.notes && (
-                <p className="px-5 pb-5 text-sm text-neutral-600">
+                <p className="border-t border-neutral-100 px-4 py-3 text-sm leading-relaxed text-neutral-600">
                   {voucher.invoice.notes}
                 </p>
               )}
-            </div>
+            </section>
           )}
 
           {/* Payment confirmation */}
           {voucher.payment && (
-            <div className="card border-l-4 border-l-teal-500">
-              <div className="flex items-center gap-2 border-b border-neutral-200 px-5 py-3">
+            <section className="overflow-hidden rounded-2xl border border-neutral-200 border-l-4 border-l-teal-500 bg-white shadow-sm">
+              <div className="flex items-center gap-2 border-b border-neutral-200 px-4 py-3">
                 <CheckCircle2 className="h-4 w-4 text-teal-600" />
-                <h3 className="text-sm font-semibold text-neutral-900">
+                <h3 className="text-sm font-semibold tracking-tight text-neutral-900">
                   Payment Confirmed
                 </h3>
               </div>
-              <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
                 <SummaryTile
                   label="Amount Paid"
                   value={formatCurrency(voucher.payment.amount)}
@@ -329,19 +358,19 @@ export default function VoucherDetailPage() {
                   value={formatDate(voucher.payment.confirmed_at)}
                 />
               </div>
-            </div>
+            </section>
           )}
 
           {/* Actions */}
-          <div className="card p-5">
-            <h3 className="mb-3 text-sm font-semibold text-neutral-900">
+          <section className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
+            <h3 className="mb-3 text-sm font-semibold tracking-tight text-neutral-900">
               Actions
             </h3>
             {voucher.status === "draft" && canAct && (
               <button
                 type="button"
                 onClick={handleSend}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-600"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-primary-700"
               >
                 <Send className="h-4 w-4" />
                 Send to Supplier
@@ -352,25 +381,24 @@ export default function VoucherDetailPage() {
               <WaitingMsg text="Waiting for the supplier to review and create an invoice." />
             )}
 
-            {/* Once an invoice exists, review & payment happen on the Invoice page */}
             {hasInvoice &&
               (voucher.status === "invoice_raised" ||
                 voucher.status === "under_review" ||
                 voucher.status === "invoice_approved" ||
                 voucher.status === "invoice_rejected") && (
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3">
-                  <p className="text-sm text-neutral-600">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3">
+                  <p className="text-sm leading-relaxed text-neutral-600">
                     {voucher.status === "invoice_raised"
                       ? "An invoice has been submitted — review it to approve or reject."
                       : voucher.status === "invoice_approved"
-                      ? "Invoice approved — release payment from the invoice."
-                      : voucher.status === "invoice_rejected"
-                      ? "Invoice rejected — waiting for the supplier to re-submit."
-                      : "Invoice is under review."}
+                        ? "Invoice approved — release payment from the invoice."
+                        : voucher.status === "invoice_rejected"
+                          ? "Invoice rejected — waiting for the supplier to re-submit."
+                          : "Invoice is under review."}
                   </p>
                   <Link
                     to={`/p2p/invoices/${encodeURIComponent(voucher.id)}`}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-600"
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-primary-700"
                   >
                     {canAct ? "Review Invoice" : "View Invoice"}
                     <ArrowRight className="h-3.5 w-3.5" />
@@ -383,7 +411,7 @@ export default function VoucherDetailPage() {
             )}
 
             {voucher.status === "payment_received" && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-success-100 px-3 py-1 text-sm font-semibold text-success-700 ring-1 ring-inset ring-success-200">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-success-100 px-3 py-1.5 text-sm font-semibold text-success-700 ring-1 ring-inset ring-success-200">
                 <CheckCircle2 className="h-4 w-4" />
                 Completed — fully settled
               </span>
@@ -392,18 +420,29 @@ export default function VoucherDetailPage() {
             {!canAct && voucher.status === "draft" && (
               <WaitingMsg text="This voucher is awaiting action by the Finance team." />
             )}
-          </div>
+          </section>
         </div>
 
-        {/* Timeline */}
-        <div>
-          <div className="card p-5">
-            <h3 className="mb-4 text-sm font-semibold text-neutral-900">
-              Activity
-            </h3>
-            <VoucherHistory history={voucher.history} />
-          </div>
-        </div>
+        {/* Timeline — sticky on desktop */}
+        <aside className="lg:sticky lg:top-4 lg:self-start">
+          <section className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
+            <div className="mb-3 flex items-center gap-2">
+              <Clock className="h-4 w-4 text-primary-600" />
+              <h3 className="text-sm font-semibold tracking-tight text-neutral-900">
+                Activity
+              </h3>
+            </div>
+            {(voucher.history ?? []).length === 0 ? (
+              <EmptyPanel
+                title="No activity yet"
+                description="Lifecycle events will appear here as the voucher progresses."
+                flush
+              />
+            ) : (
+              <VoucherHistory history={voucher.history} />
+            )}
+          </section>
+        </aside>
       </div>
     </div>
   );
@@ -411,18 +450,61 @@ export default function VoucherDetailPage() {
 
 function WaitingMsg({ text }: { text: string }) {
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3 text-sm text-neutral-600">
-      <Clock className="h-4 w-4 flex-shrink-0 text-neutral-400" />
+    <div className="flex items-center gap-2 rounded-xl border border-neutral-200 bg-neutral-50 px-3.5 py-2.5 text-sm text-neutral-600">
+      <Clock className="h-4 w-4 shrink-0 text-neutral-400" />
       {text}
     </div>
   );
 }
 
-function SummaryTile({ label, value }: { label: string; value: string }) {
+function SummaryTile({
+  label,
+  value,
+  icon,
+}: {
+  label: string;
+  value: string;
+  icon?: ReactNode;
+}) {
   return (
-    <div className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
-      <p className="mb-0.5 text-xs font-medium text-neutral-500">{label}</p>
-      <p className="truncate text-sm font-medium text-neutral-900">{value}</p>
+    <div className="rounded-2xl border border-neutral-200 bg-white p-3.5 shadow-sm transition hover:-translate-y-0.5 hover:border-primary-200 hover:shadow-md">
+      <div className="mb-1.5 flex items-center gap-2">
+        {icon}
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
+          {label}
+        </p>
+      </div>
+      <p className="truncate text-sm font-semibold tracking-tight text-neutral-900">
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function EmptyPanel({
+  title,
+  description,
+  flush,
+}: {
+  title: string;
+  description: string;
+  flush?: boolean;
+}) {
+  return (
+    <div
+      className={`flex flex-col items-center px-4 py-8 text-center ${
+        flush
+          ? ""
+          : "rounded-2xl border border-dashed border-neutral-200 bg-neutral-50/80"
+      }`}
+    >
+      <span className="mb-2 grid h-10 w-10 place-items-center rounded-xl bg-white text-neutral-400 shadow-sm ring-1 ring-neutral-200">
+        <FileText className="h-5 w-5" />
+      </span>
+      <p className="text-sm font-semibold text-neutral-800">{title}</p>
+      <p className="mt-1 max-w-md text-xs leading-relaxed text-neutral-500">
+        {description}
+      </p>
     </div>
   );
 }
@@ -431,10 +513,38 @@ function BackLink() {
   return (
     <Link
       to="/p2p/vouchers"
-      className="mb-3 inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-primary-600"
+      className="inline-flex items-center gap-1 text-sm font-medium text-neutral-500 transition hover:text-primary-600"
     >
       <ArrowLeft className="h-4 w-4" />
       Back to vouchers
     </Link>
+  );
+}
+
+function VoucherDetailSkeleton() {
+  return (
+    <div className="animate-pulse space-y-5">
+      <div className="h-4 w-32 rounded bg-neutral-200" />
+      <div className="space-y-2">
+        <div className="h-7 w-40 rounded bg-neutral-200" />
+        <div className="h-4 w-64 rounded bg-neutral-100" />
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div
+            key={i}
+            className="h-20 rounded-2xl border border-neutral-200 bg-white"
+          />
+        ))}
+      </div>
+      <div className="h-28 rounded-2xl border border-neutral-200 bg-white" />
+      <div className="grid gap-5 lg:grid-cols-3">
+        <div className="space-y-5 lg:col-span-2">
+          <div className="h-56 rounded-2xl border border-neutral-200 bg-white" />
+          <div className="h-32 rounded-2xl border border-neutral-200 bg-white" />
+        </div>
+        <div className="h-64 rounded-2xl border border-neutral-200 bg-white" />
+      </div>
+    </div>
   );
 }

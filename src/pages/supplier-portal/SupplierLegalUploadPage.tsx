@@ -13,10 +13,6 @@ import { isSelectedAsWinner } from "../../utils/supplierLegalDocs";
 export default function SupplierLegalUploadPage() {
   const { sqName = "" } = useParams<{ sqName: string }>();
   const navigate = useNavigate();
-  const supplierSession = JSON.parse(
-    sessionStorage.getItem("supplier_session") || "{}"
-  );
-  const supplierName: string = supplierSession.supplierName || "";
 
   const sqQuery = useQuery({
     queryKey: ["supplier-quotation-detail", sqName],
@@ -40,18 +36,18 @@ export default function SupplierLegalUploadPage() {
 
   if (sqQuery.isLoading) {
     return (
-      
+      <>
         <div className="space-y-4">
           <Skeleton className="h-6 w-48" />
           <Skeleton className="h-64 w-full" />
         </div>
-      
+      </>
     );
   }
 
   if (sqQuery.isError || !sq) {
     return (
-      
+      <>
         <Link
           to="/supplier/quotations"
           className="mb-4 inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-accent-700"
@@ -63,14 +59,14 @@ export default function SupplierLegalUploadPage() {
           title="Quotation not found"
           description={`Supplier Quotation "${sqName}" could not be loaded.`}
         />
-      
+      </>
     );
   }
 
   const winnerLocked = isSelectedAsWinner(review);
 
   return (
-    
+    <>
       <div className="mb-4">
         <Link
           to="/supplier/quotations"
@@ -116,6 +112,6 @@ export default function SupplierLegalUploadPage() {
           </button>
         </div>
       </div>
-    
+    </>
   );
 }

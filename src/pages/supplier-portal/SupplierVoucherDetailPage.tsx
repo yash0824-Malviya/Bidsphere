@@ -200,18 +200,18 @@ export default function SupplierVoucherDetailPage() {
 
   if (!isReady || loading) {
     return (
-      
-        <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
+      <>
+        <div className="py-8 text-center text-sm text-neutral-500">
           Loading…
         </div>
-      
+      </>
     );
   }
 
   if (!voucher || loadError) {
     const forbidden = loadError?.status === 403;
     return (
-      
+      <>
         <BackLink />
         <EmptyState
           icon={FileText}
@@ -223,7 +223,7 @@ export default function SupplierVoucherDetailPage() {
               : "This voucher may not exist or is not addressed to your company.")
           }
         />
-      
+      </>
     );
   }
 
@@ -332,7 +332,7 @@ export default function SupplierVoucherDetailPage() {
   }
 
   return (
-    
+    <>
       <BackLink />
       <PageHeader
         title="Voucher"
@@ -433,10 +433,10 @@ export default function SupplierVoucherDetailPage() {
         </div>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="grid items-start gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           {/* Items */}
-          <section className="card overflow-hidden">
+          <section className="overflow-hidden rounded-[12px] border border-neutral-200 bg-white shadow-sm">
             <div className="border-b border-neutral-200 px-5 py-3">
               <h2 className="text-sm font-semibold text-neutral-900">
                 Voucher Items
@@ -477,7 +477,7 @@ export default function SupplierVoucherDetailPage() {
           {/* Payment Summary — visible once an invoice exists (read-only) */}
           {voucher.invoice && (
             <section
-              className={`card border-l-4 ${
+              className={`rounded-[12px] border border-neutral-200 border-l-4 bg-white shadow-sm ${
                 voucher.payment ? "border-l-success-500" : "border-l-neutral-300"
               }`}
             >
@@ -537,7 +537,7 @@ export default function SupplierVoucherDetailPage() {
           {/* Rejection notice — supplier may re-create the invoice */}
           {voucher.status === "invoice_rejected" &&
             voucher.invoice?.rejection_reason && (
-              <section className="card border-l-4 border-l-red-400">
+              <section className="rounded-[12px] border border-neutral-200 border-l-4 border-l-red-400 bg-white shadow-sm">
                 <div className="px-5 py-4">
                   <p className="text-sm font-semibold text-red-700">
                     Invoice {voucher.invoice.invoice_number} was rejected by
@@ -556,7 +556,7 @@ export default function SupplierVoucherDetailPage() {
 
           {/* Create invoice */}
           {canRaiseInvoice && (
-            <section className="card">
+            <section className="rounded-[12px] border border-neutral-200 bg-white shadow-sm">
               <div className="flex items-center gap-2 border-b border-neutral-200 px-5 py-3">
                 <Receipt className="h-4 w-4 text-orange-500" />
                 <h2 className="text-sm font-semibold text-neutral-900">
@@ -680,7 +680,7 @@ export default function SupplierVoucherDetailPage() {
           )}
 
           {voucher.status === "invoice_raised" && voucher.invoice && (
-            <section className="card border-l-4 border-l-orange-400">
+            <section className="rounded-[12px] border border-neutral-200 border-l-4 border-l-orange-400 bg-white shadow-sm">
               <div className="px-5 py-4">
                 <p className="text-sm font-semibold text-neutral-900">
                   Invoice {voucher.invoice.invoice_number} submitted —{" "}
@@ -694,7 +694,7 @@ export default function SupplierVoucherDetailPage() {
           )}
 
           {voucher.status === "invoice_approved" && voucher.invoice && (
-            <section className="card border-l-4 border-l-teal-400">
+            <section className="rounded-[12px] border border-neutral-200 border-l-4 border-l-teal-400 bg-white shadow-sm">
               <div className="px-5 py-4">
                 <p className="text-sm font-semibold text-neutral-900">
                   Invoice {voucher.invoice.invoice_number} approved —{" "}
@@ -709,7 +709,7 @@ export default function SupplierVoucherDetailPage() {
           )}
 
           {voucher.status === "payment_received" && (
-            <section className="card border-l-4 border-l-success-500">
+            <section className="rounded-[12px] border border-neutral-200 border-l-4 border-l-success-500 bg-white shadow-sm">
               <div className="flex items-center gap-2 px-5 py-4 text-sm font-semibold text-success-700">
                 <CheckCircle2 className="h-5 w-5" />
                 Payment received and confirmed. This voucher is fully settled.
@@ -718,17 +718,17 @@ export default function SupplierVoucherDetailPage() {
           )}
         </div>
 
-        {/* Timeline */}
-        <div>
-          <div className="card p-5">
+        {/* Timeline — content height only; top-aligned with items */}
+        <aside className="self-start">
+          <div className="rounded-[12px] border border-neutral-200 bg-white p-5 shadow-sm">
             <h2 className="mb-4 text-sm font-semibold text-neutral-900">
               Activity
             </h2>
             <VoucherHistory history={voucher.history} />
           </div>
-        </div>
+        </aside>
       </div>
-    
+    </>
   );
 }
 

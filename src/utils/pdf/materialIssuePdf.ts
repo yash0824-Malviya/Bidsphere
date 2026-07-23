@@ -107,7 +107,6 @@ export async function buildMaterialIssuePdf(
     },
   });
 
-  // @ts-expect-error lastAutoTable injected by jspdf-autotable
   y = (doc as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y;
   y += 8;
 

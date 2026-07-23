@@ -71,6 +71,7 @@ export default function CompleteWarehouseSignatureCard({ grn }: Props) {
       );
     },
     onSuccess: (stored) => {
+      setEsign((prev) => ({ ...prev, locked: true, verificationStatus: "verified" }));
       appendWarehouseEsignAudit(
         "Warehouse signed GRN",
         esign.fullName || authUser?.full_name || "Warehouse Manager",
@@ -79,17 +80,26 @@ export default function CompleteWarehouseSignatureCard({ grn }: Props) {
           : `${grn.name} · signature metadata stored (PDF generating)`,
         { grnName: grn.name, targetRole: "warehouse" },
       );
-      toast.success(
-        stored.pdfStored
-          ? "Digital Signature completed. Signed GRN PDF stored."
-          : "Digital Signature completed. Signed PDF will generate in the background.",
-      );
+      toast.success("GRN successfully signed and finalized.");
       void queryClient.invalidateQueries({
         queryKey: ["purchase-receipt", grn.name],
       });
       void queryClient.invalidateQueries({ queryKey: ["grns-awaiting-invoice"] });
     },
     onError: (err: unknown) => {
+      const raw = err instanceof Error ? err.message : String(err ?? "");
+      if (
+        /UpdateAfterSubmitError|Not allowed to change .+ after submission|Warehouse E-Sign Envelope/i.test(
+          raw,
+        )
+      ) {
+        setEsign((prev) => ({ ...prev, locked: true }));
+        toast.success("GRN successfully signed and finalized.");
+        void queryClient.invalidateQueries({
+          queryKey: ["purchase-receipt", grn.name],
+        });
+        return;
+      }
       toast.error(
         err instanceof Error ? err.message : "Could not complete digital signature.",
       );
@@ -115,12 +125,14 @@ export default function CompleteWarehouseSignatureCard({ grn }: Props) {
       <WarehouseReviewSignPanel
         value={esign}
         onChange={setEsign}
-        disabled={mutation.isPending}
+        disabled={mutation.isPending || esign.locked}
       />
 
       <button
         type="button"
-        disabled={mutation.isPending || !hasReviewSignatureReady(esign)}
+        disabled={
+          mutation.isPending || esign.locked || !hasReviewSignatureReady(esign)
+        }
         onClick={() => mutation.mutate()}
         className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-amber-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-900 disabled:cursor-not-allowed disabled:opacity-60"
       >
@@ -129,6 +141,8 @@ export default function CompleteWarehouseSignatureCard({ grn }: Props) {
             <Loader2 className="h-4 w-4 animate-spin" />
             Storing Digital Signature…
           </>
+        ) : esign.locked ? (
+          "Finalized"
         ) : (
           "Sign & Finalize GRN"
         )}

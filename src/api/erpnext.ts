@@ -425,14 +425,12 @@ erpnext.interceptors.response.use(
         parsedValidation ??
         "Please fill in all required fields.";
     } else if (data?.exc_type === "UpdateAfterSubmitError") {
-      const serverMsg = parsedValidation || data.message || error.message;
-      const match = String(serverMsg).match(
-        /(?:UpdateAfterSubmitError|Not allowed to change|Cannot change)\s+(?:['"`]?([^'"`\n]+)['"`]?|([^\n]+?))\s+after submission/i
-      );
-      const fieldName = match ? (match[1] || match[2] || "").trim() : "";
-      message = fieldName
-        ? `UpdateAfterSubmitError: Not allowed to change ${fieldName} after submission`
-        : String(serverMsg);
+      const serverMsg = String(parsedValidation || data.message || error.message || "");
+      // Never surface raw ERPNext UpdateAfterSubmitError text in the UI.
+      message =
+        /warehouse\s*e-?sign|warehouse_/i.test(serverMsg)
+          ? "The GRN has already been finalized."
+          : "This document has already been submitted and cannot be changed.";
     } else if (parsedValidation) {
       // ValidationError (often HTTP 417) and any other Frappe business error.
       message = parsedValidation;
@@ -511,15 +509,18 @@ let lastToastAt = 0;
  * If an UpdateAfterSubmitError occurs, returns the exact field causing the error.
  */
 function sanitizeUserMessage(message: string): string {
-  // If this is an UpdateAfterSubmitError or field-change error, extract the exact field
-  const updateAfterSubmitMatch = message.match(
-    /(?:UpdateAfterSubmitError|Not allowed to change|Cannot change)\s+(?:['"`]?([^'"`\n]+)['"`]?|([^\n]+?))\s+after submission/i
-  );
-  if (updateAfterSubmitMatch) {
-    const fieldName = (updateAfterSubmitMatch[1] || updateAfterSubmitMatch[2] || "").trim();
-    return fieldName
-      ? `UpdateAfterSubmitError: Not allowed to change ${fieldName} after submission`
-      : message;
+  if (
+    /Warehouse E-Sign Envelope/i.test(message) ||
+    (/Not allowed to change .+ after submission/i.test(message) &&
+      /warehouse/i.test(message))
+  ) {
+    return "The GRN has already been finalized.";
+  }
+  if (
+    /\bUpdateAfterSubmitError\b/i.test(message) ||
+    /Not allowed to change .+ after submission/i.test(message)
+  ) {
+    return "This document has already been submitted and cannot be changed.";
   }
 
   return message;
@@ -873,14 +874,15 @@ function friendlyLinkValidationMessage(
   const raw = parts.join(" | ");
   if (!raw) return null;
 
+  // Capture multi-word Link values (e.g. "Cost Head", "Raw Material").
   const couldNotFind = raw.match(
-    /Could not find\s+([^:]+):\s*([^\s|]+)/i
+    /Could not find\s+([^:]+):\s*(.+?)(?:\s*\||\s*$)/i,
   );
   if (couldNotFind) {
     const label = couldNotFind[1].trim();
     const value = couldNotFind[2]
       .trim()
-      .replace(/['"]/g, "")
+      .replace(/^['"]|['"]$/g, "")
       .replace(/[,;:]+$/g, "");
     if (/hsn|sac/i.test(label)) {
       return `HSN Code ${value} does not exist in ERPNext. Please create it first.`;

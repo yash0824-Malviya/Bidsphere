@@ -49,17 +49,15 @@ export default function SupplierAuctionsListPage() {
 
   if (isReady && !isAuthenticated) {
     return (
-      
         <SupplierAccessDenied
           title={t("reverseBidding.signInRequired")}
           description={t("reverseBidding.signInToViewInvitations")}
         />
-      
     );
   }
 
   return (
-    
+    <>
       <div>
         <h1 className="text-lg font-bold text-neutral-900">{t("reverseBidding.liveAuctionsTitle")}</h1>
         <p className="text-sm text-neutral-500">
@@ -168,6 +166,6 @@ export default function SupplierAuctionsListPage() {
         />
         </>
       )}
-    
+    </>
   );
 }

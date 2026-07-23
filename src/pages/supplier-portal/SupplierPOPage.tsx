@@ -446,23 +446,17 @@ export default function SupplierPOPage() {
 
   /* ── Loading skeleton ─────────────────────────────────────────────────── */
   if (!sessionReady || !supplierName || isLoading) {
-    return (
-      
-        <AppLoading variant="document" />
-      
-    );
+    return <AppLoading variant="document" />;
   }
 
   /* ── Error / not found ────────────────────────────────────────────────── */
   if (isError || !po) {
     return (
-      
-        <EnterpriseError
-          error={error ?? new Error("not found")}
-          onRetry={() => void refetch()}
-          onBack={() => window.history.back()}
-        />
-      
+      <EnterpriseError
+        error={error ?? new Error("not found")}
+        onRetry={() => void refetch()}
+        onBack={() => window.history.back()}
+      />
     );
   }
 
@@ -478,14 +472,14 @@ export default function SupplierPOPage() {
 
   if (!isOwner) {
     return (
-      
+      <>
         <BackLink />
         <EmptyState
           icon={ShoppingCart}
           title="Access denied"
           description="This purchase order does not belong to your supplier account."
         />
-      
+      </>
     );
   }
 
@@ -541,7 +535,7 @@ export default function SupplierPOPage() {
 
   /* ── Render ───────────────────────────────────────────────────────────── */
   return (
-    
+    <>
       <BackLink />
 
       {/* PO header */}
@@ -1386,7 +1380,7 @@ export default function SupplierPOPage() {
           </div>
         </div>
       )}
-    
+    </>
   );
 }
 

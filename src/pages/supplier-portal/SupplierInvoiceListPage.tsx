@@ -73,16 +73,16 @@ export default function SupplierInvoiceListPage() {
 
   if (!isReady) {
     return (
-      
+      <>
         <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
           Loading…
         </div>
-      
+      </>
     );
   }
 
   return (
-    
+    <>
       <PageHeader
         title="Invoices"
         description="Invoices you've created against vouchers — track review and payment status."
@@ -209,6 +209,6 @@ export default function SupplierInvoiceListPage() {
           </>
         )}
       </section>
-    
+    </>
   );
 }

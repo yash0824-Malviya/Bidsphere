@@ -42,7 +42,20 @@ export default async function handler(
 
     if (action === "login") {
       const body = parseBody(req.body);
+      console.info("[auth-login] login attempt", {
+        username: body.usr ?? null,
+        requestedPortal: body.requested_portal ?? "staff",
+        previousPortal: body.previous_portal ?? null,
+      });
       const result = await authenticateWithPassword(body);
+      console.info("[auth-login] login success", {
+        username: result.name,
+        requestedPortal: body.requested_portal ?? "staff",
+        previousPortal: body.previous_portal ?? null,
+        erpRoles: result.erpnext_roles,
+        newPortal: result.role,
+        redirectTarget: result.home_page ?? null,
+      });
       res.status(200).json(result);
       return;
     }
@@ -83,20 +96,35 @@ function normalizeAction(raw: string | string[] | undefined): string {
   return "";
 }
 
-function parseBody(raw: unknown): { usr?: string; pwd?: string } {
+function parseBody(raw: unknown): {
+  usr?: string;
+  pwd?: string;
+  requested_portal?: string;
+  previous_portal?: string;
+} {
   if (raw == null) return {};
   if (typeof raw === "string") {
     try {
       const parsed = JSON.parse(raw) as unknown;
       return parsed && typeof parsed === "object"
-        ? (parsed as { usr?: string; pwd?: string })
+        ? (parsed as {
+            usr?: string;
+            pwd?: string;
+            requested_portal?: string;
+            previous_portal?: string;
+          })
         : {};
     } catch {
       return {};
     }
   }
   if (typeof raw === "object") {
-    return raw as { usr?: string; pwd?: string };
+    return raw as {
+      usr?: string;
+      pwd?: string;
+      requested_portal?: string;
+      previous_portal?: string;
+    };
   }
   return {};
 }

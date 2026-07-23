@@ -42,35 +42,35 @@ export default function SupplierPaymentDetailPage() {
 
   if (!isReady || isLoading) {
     return (
-      
+      <>
         <div className="space-y-4">
           <Skeleton className="h-6 w-48" />
           <Skeleton className="h-32 w-full" />
           <Skeleton className="h-64 w-full" />
         </div>
-      
+      </>
     );
   }
 
   if (isError || !payment) {
     return (
-      
+      <>
         <BackLink />
         <EmptyState
           icon={CreditCard}
           title="Payment not found"
           description={`"${name}" may have been deleted or you may not have access.`}
         />
-      
+      </>
     );
   }
 
   if (!supplierOwnsRecord(supplierName, payment)) {
     return (
-      
+      <>
         <BackLink />
         <SupplierAccessDenied description="This payment does not belong to your supplier account." />
-      
+      </>
     );
   }
 
@@ -78,7 +78,7 @@ export default function SupplierPaymentDetailPage() {
   const references = payment.references ?? [];
 
   return (
-    
+    <>
       <BackLink />
 
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -218,7 +218,7 @@ export default function SupplierPaymentDetailPage() {
         This is a read-only view. Contact Netlink accounts payable for payment
         queries.
       </p>
-    
+    </>
   );
 }
 

@@ -90,6 +90,13 @@ function friendlyGrnError(err: unknown): string {
   console.error("[GRN submit] failed:", err);
   const raw =
     err instanceof Error ? (err.message ?? "").trim() : String(err ?? "").trim();
+  if (
+    /UpdateAfterSubmitError/i.test(raw) ||
+    /Not allowed to change .+ after submission/i.test(raw) ||
+    /Warehouse E-Sign Envelope/i.test(raw)
+  ) {
+    return "The GRN has already been finalized.";
+  }
   const isOpaque =
     !raw ||
     /^request failed$/i.test(raw) ||
@@ -884,7 +891,8 @@ export default function WarehouseCreateGRNPage() {
         }
       }
 
-      // Permanent storage: signature image + signed PDF + hashes (once only).
+      // Sequence (draft only): capture → hash → save signature+envelope → save doc
+      // → submit → generate PDF (PDF URL fields only; never envelope after submit).
       const signedSource: PurchaseReceipt = {
         ...draft,
         ...buildWarehouseEsignErpFields({
@@ -912,6 +920,7 @@ export default function WarehouseCreateGRNPage() {
         signatureHash = stored.signatureHash;
         setEsign((prev) => ({
           ...prev,
+          ...signedEsign,
           signedPdfUrl: stored.fileUrl || prev.signedPdfUrl,
           signatureHash: stored.signatureHash,
           verificationStatus: "verified",
@@ -920,16 +929,27 @@ export default function WarehouseCreateGRNPage() {
       } catch (err) {
         // eslint-disable-next-line no-console
         console.error("[GRN Submit] Digital Signature storage failed:", err);
-        throw new Error(
-          err instanceof Error
-            ? `Warehouse Digital Signature could not be stored: ${err.message}`
-            : "Warehouse Digital Signature could not be stored.",
-        );
+        const msg = err instanceof Error ? err.message : String(err);
+        if (
+          /UpdateAfterSubmitError/i.test(msg) ||
+          /Not allowed to change .+ after submission/i.test(msg)
+        ) {
+          // Signature was already saved; continue to submit / treat as finalized.
+          // eslint-disable-next-line no-console
+          console.warn(
+            "[GRN Submit] Ignoring post-submit field error during signature persist:",
+            msg,
+          );
+        } else {
+          throw new Error(
+            `Warehouse Digital Signature could not be stored: ${msg}`,
+          );
+        }
       }
 
       const submitted = await submitPurchaseReceipt(draft.name);
 
-      // Re-stamp signature metadata after submit (PDF may still be generating).
+      // Post-submit: only allowlisted PDF/signature URL fields (no envelope).
       try {
         await restampSignedGrnPdfUrl(
           submitted.name || draft.name,
@@ -947,7 +967,7 @@ export default function WarehouseCreateGRNPage() {
         );
       } catch (err) {
         // eslint-disable-next-line no-console
-        console.warn("[GRN Submit] Re-stamp signature fields failed:", err);
+        console.warn("[GRN Submit] Post-submit PDF field stamp skipped:", err);
       }
 
       try {
@@ -967,13 +987,16 @@ export default function WarehouseCreateGRNPage() {
         grn.name,
         { grnName: grn.name, targetRole: "warehouse" },
       );
-      toast.success("Goods Receipt created and digitally signed successfully.");
+      toast.success("GRN successfully signed and finalized.");
       // Refresh every live-stock, inventory, GRN and procurement view so the
       // received quantities (and any MR moved to Ready to Issue) show instantly
       // — all read live from ERPNext Bin, no page reload needed.
       invalidateWarehouseStock(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["purchase-order", poName] });
       void queryClient.invalidateQueries({ queryKey: ["incoming-purchase-orders"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["purchase-receipt", grn.name],
+      });
     },
     onError: (err: unknown) => {
       // eslint-disable-next-line no-console
@@ -988,7 +1011,10 @@ export default function WarehouseCreateGRNPage() {
       }
       const message = friendlyGrnError(err);
       setFieldErrors((prev) => ({ ...prev, submit: message }));
-      toast.error(message);
+      // Avoid duplicate toast: interceptor may already have shown the friendly message.
+      if (message !== "The GRN has already been finalized.") {
+        toast.error(message);
+      }
     },
   });
 
@@ -1071,11 +1097,14 @@ export default function WarehouseCreateGRNPage() {
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
             <CheckCircle2 className="h-8 w-8" />
           </div>
+          <div className="mb-4 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-900">
+            GRN successfully signed and finalized.
+          </div>
           <h1 className="text-2xl font-bold text-slate-900">GRN Created Successfully</h1>
           <p className="mt-2 text-sm text-slate-500">
             Goods receipt <span className="font-semibold text-slate-800">{submittedGrnName}</span>{" "}
-            was submitted. Accepted quantities have been posted to inventory and the linked PO
-            receipt status has been updated.
+            was submitted. Digital Signature is locked. Accepted quantities have been posted to
+            inventory and the linked PO receipt status has been updated.
           </p>
           <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
             <button
@@ -1533,8 +1562,14 @@ export default function WarehouseCreateGRNPage() {
             <WarehouseReviewSignPanel
               value={esign}
               onChange={setEsign}
-              disabled={submitMutation.isPending}
+              disabled={submitMutation.isPending || esign.locked}
             />
+
+            {esign.locked && (
+              <div className="rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-900">
+                GRN successfully signed and finalized.
+              </div>
+            )}
 
             {fieldErrors.submit && (
               <p className="text-sm text-rose-600">{fieldErrors.submit}</p>
@@ -1546,7 +1581,7 @@ export default function WarehouseCreateGRNPage() {
           <button
             type="button"
             onClick={goBack}
-            disabled={step === 0 || submitMutation.isPending}
+            disabled={step === 0 || submitMutation.isPending || esign.locked}
             className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 disabled:opacity-40"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -1574,13 +1609,16 @@ export default function WarehouseCreateGRNPage() {
               onClick={handleSubmit}
               disabled={
                 submitMutation.isPending ||
+                esign.locked ||
                 isFullyReceivedFromErp ||
                 !hasReviewSignatureReady(esign)
               }
               title={
-                !hasReviewSignatureReady(esign)
-                  ? "Capture your signature and certify received goods before Sign & Finalize."
-                  : undefined
+                esign.locked
+                  ? "GRN already signed and finalized."
+                  : !hasReviewSignatureReady(esign)
+                    ? "Capture your signature and certify received goods before Sign & Finalize."
+                    : undefined
               }
               className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
@@ -1588,6 +1626,11 @@ export default function WarehouseCreateGRNPage() {
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Signing & Finalizing…
+                </>
+              ) : esign.locked ? (
+                <>
+                  <CheckCircle2 className="h-4 w-4" />
+                  Finalized
                 </>
               ) : (
                 <>

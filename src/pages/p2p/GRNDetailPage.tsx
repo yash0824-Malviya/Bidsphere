@@ -831,13 +831,6 @@ export default function GRNDetailPage() {
                   onClick={handlePrint}
                   disabled={!signedPdfReady}
                 />
-                <DocActionBtn
-                  icon={ShieldCheck}
-                  label="Verify Signature"
-                  onClick={() => void handleVerifySignature()}
-                  primary
-                  disabled={!signatureComplete}
-                />
               </div>
             </div>
 
@@ -952,6 +945,12 @@ export default function GRNDetailPage() {
                       </dl>
                       <div className="mt-3 flex flex-wrap gap-1.5 border-t border-emerald-100 pt-3">
                         <DocActionBtn
+                          icon={ShieldCheck}
+                          label="Verify Signature"
+                          onClick={() => void handleVerifySignature()}
+                          primary
+                        />
+                        <DocActionBtn
                           icon={Eye}
                           label="View Signed GRN"
                           onClick={openSignedGrnFullscreen}
@@ -962,12 +961,6 @@ export default function GRNDetailPage() {
                           label="Download Signed PDF"
                           onClick={handleDownload}
                           disabled={!signedPdfReady}
-                        />
-                        <DocActionBtn
-                          icon={ShieldCheck}
-                          label="Verify Signature"
-                          onClick={() => void handleVerifySignature()}
-                          primary
                         />
                       </div>
                     </div>
@@ -1211,11 +1204,9 @@ export default function GRNDetailPage() {
             hasVoucher={hasVoucher}
             voucherId={voucher?.id}
             signedPdfReady={signedPdfReady}
-            signatureComplete={signatureComplete}
             onViewSigned={scrollToSignedGrn}
             onDownload={handleDownload}
             onPrint={handlePrint}
-            onVerify={() => void handleVerifySignature()}
           />
         </aside>
       </div>
@@ -1597,25 +1588,19 @@ function QuickActionsCard({
   hasVoucher,
   voucherId,
   signedPdfReady,
-  signatureComplete,
   onViewSigned,
   onDownload,
   onPrint,
-  onVerify,
 }: {
   hasVoucher: boolean;
   voucherId?: string;
   signedPdfReady: boolean;
-  signatureComplete: boolean;
   onViewSigned: () => void;
   onDownload: () => void;
   onPrint: () => void;
-  onVerify: () => void;
 }) {
   const pdfHint =
-    "Available after the Signed GRN PDF is stored. Digital Signature may already be verified.";
-  const sigHint =
-    "Available after Warehouse Digital Signature is completed.";
+    "Available after the Signed GRN PDF is stored. Use Verify Signature in Digital Signature Information.";
   return (
     <div className="rounded-xl border border-neutral-200 bg-white p-3 shadow-sm">
       <h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-neutral-500">
@@ -1634,11 +1619,6 @@ function QuickActionsCard({
             <QuickActionDisabled icon={Download} label="Download Signed GRN" hint={pdfHint} />
             <QuickActionDisabled icon={Printer} label="Print Signed GRN" hint={pdfHint} />
           </>
-        )}
-        {signatureComplete ? (
-          <QuickActionButton icon={ShieldCheck} label="Verify Signature" onClick={onVerify} />
-        ) : (
-          <QuickActionDisabled icon={ShieldCheck} label="Verify Signature" hint={sigHint} />
         )}
         {hasVoucher && voucherId ? (
           <QuickActionLink

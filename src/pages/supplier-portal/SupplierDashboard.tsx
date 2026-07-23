@@ -328,7 +328,7 @@ export default function SupplierDashboard() {
 
   if (!unlocked) {
     return (
-      
+      <>
         <div className="flex w-full flex-col gap-6">
           <div
             className="overflow-hidden rounded-2xl border border-slate-200 p-6 text-white shadow-sm sm:p-7"
@@ -424,7 +424,7 @@ export default function SupplierDashboard() {
             </div>
           )}
         </div>
-      
+      </>
     );
   }
 
@@ -648,7 +648,7 @@ function UnlockedDashboard({
   ];
 
   return (
-    
+    <>
       <div className="flex w-full flex-col gap-6">
         {/* Welcome */}
         <section
@@ -1137,7 +1137,7 @@ function UnlockedDashboard({
           </div>
         </section>
       </div>
-    
+    </>
   );
 }
 

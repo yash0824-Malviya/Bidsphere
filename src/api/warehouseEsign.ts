@@ -430,34 +430,77 @@ export async function buildWarehouseSignatureImageFile(
   return dataUrlToPngFile(dataUrl, fileName);
 }
 
+/** Fields that must never be written once Purchase Receipt.docstatus = 1. */
+const POST_SUBMIT_FORBIDDEN_FIELDS = new Set([
+  "warehouse_esign_envelope",
+]);
+
+async function getPurchaseReceiptDocstatus(name: string): Promise<number> {
+  try {
+    const { getPurchaseReceipt } = await import("./purchasing");
+    const doc = await getPurchaseReceipt(name);
+    return Number(doc?.docstatus) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Persist Purchase Receipt field values.
+ * - Never writes `warehouse_esign_envelope` after submit (docstatus = 1).
+ * - Uses silent ERP calls so UpdateAfterSubmitError cannot toast mid-finalize.
+ */
 async function setPurchaseReceiptValues(
   name: string,
   values: Record<string, unknown>,
 ): Promise<void> {
-  const { apiPost } = await import("./erpnext");
+  const { apiPost, withSilent } = await import("./erpnext");
   const { updatePurchaseReceipt } = await import("./purchasing");
 
-  // Prefer set_value per field — most reliable for custom fields on PR.
+  const docstatus = await getPurchaseReceiptDocstatus(name);
+  const submitted = docstatus === 1;
+
+  const safeValues: Record<string, unknown> = {};
   for (const [fieldname, value] of Object.entries(values)) {
     if (value === undefined) continue;
+    if (submitted && POST_SUBMIT_FORBIDDEN_FIELDS.has(fieldname)) {
+      // eslint-disable-next-line no-console
+      console.info(
+        `[warehouse-esign] Skipping ${fieldname} on submitted GRN ${name}`,
+      );
+      continue;
+    }
+    safeValues[fieldname] = value;
+  }
+
+  if (Object.keys(safeValues).length === 0) return;
+
+  // Prefer set_value per field — most reliable for custom fields on PR.
+  for (const [fieldname, value] of Object.entries(safeValues)) {
     try {
-      await apiPost("/api/method/frappe.client.set_value", {
-        doctype: "Purchase Receipt",
-        name,
-        fieldname,
-        value,
-      });
+      await apiPost(
+        "/api/method/frappe.client.set_value",
+        {
+          doctype: "Purchase Receipt",
+          name,
+          fieldname,
+          value,
+        },
+        withSilent(),
+      );
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn(`[warehouse-esign] set_value ${fieldname} failed:`, err);
     }
   }
 
-  // Fallback: resource PUT with the full map (some sites block set_value).
+  // Fallback: resource PUT with the safe map (some sites block set_value).
   // Signature-field writes are explicitly allowlisted on signed GRNs.
+  // Silent — never toast UpdateAfterSubmitError during finalize cleanup.
   try {
-    await updatePurchaseReceipt(name, values as Partial<PurchaseReceipt>, {
+    await updatePurchaseReceipt(name, safeValues as Partial<PurchaseReceipt>, {
       allowSignedEsignFields: true,
+      silent: true,
     });
   } catch (err) {
     // eslint-disable-next-line no-console
@@ -633,7 +676,8 @@ export async function persistWarehouseGrnDigitalSignature(
   };
 
   // 2) SOURCE OF TRUTH — persist signature metadata + image before any PDF work.
-  await setPurchaseReceiptValues(grn.name, {
+  // Envelope is written only while the GRN is still a draft (docstatus = 0).
+  const metaValues: Record<string, unknown> = {
     signed: 1,
     warehouse_signed: 1,
     warehouse_signed_by: signer,
@@ -676,8 +720,11 @@ export async function persistWarehouseGrnDigitalSignature(
       signatureType === "typed"
         ? typedText
         : signatureImageUrl || esignState.signatureDataUrl || undefined,
-    warehouse_esign_envelope: JSON.stringify(nextEnvelope),
-  });
+  };
+  if (Number(grn.docstatus) !== 1) {
+    metaValues.warehouse_esign_envelope = JSON.stringify(nextEnvelope);
+  }
+  await setPurchaseReceiptValues(grn.name, metaValues);
 
   appendWarehouseEsignAudit(
     "Warehouse signed GRN",
@@ -766,13 +813,8 @@ async function generateAndStoreSignedGrnPdfInBackground(
   if (!fileUrl) throw new Error("Signed GRN PDF upload returned an empty file URL.");
 
   const canonicalPdfUrl = fileUrl.includes("/files/") ? fileUrl : pdfPath;
-  const env = parseWarehouseEsignEnvelope(grn.warehouse_esign_envelope) ?? {};
-  const nextEnvelope: WarehouseEsignEnvelopeV1 = {
-    ...env,
-    signedPdfUrl: canonicalPdfUrl,
-    signedPdfHash: pdfHash,
-  };
 
+  // PDF URL/hash only — never touch warehouse_esign_envelope after submit.
   await setPurchaseReceiptValues(grn.name, {
     warehouse_signed_pdf_url: canonicalPdfUrl,
     warehouse_signed_pdf_hash: pdfHash,
@@ -780,7 +822,6 @@ async function generateAndStoreSignedGrnPdfInBackground(
     signed_pdf_file: canonicalPdfUrl,
     signed_pdf_path: canonicalPdfUrl,
     signed_grn_pdf: canonicalPdfUrl,
-    warehouse_esign_envelope: JSON.stringify(nextEnvelope),
   });
 
   appendWarehouseEsignAudit(
@@ -1837,7 +1878,10 @@ export async function ensureWarehouseSignatureIntegrity(
   const storedDocumentHash = String(env?.documentHash || "").trim();
 
   if (!storedDocumentHash) {
-    // Soft-migrate: bind current snapshot without clearing a valid legacy signature.
+    // Soft-migrate only while draft — envelope cannot change after submit.
+    if (Number(grn.docstatus) === 1) {
+      return { grn, invalidated: false, migrated: false };
+    }
     const nextEnvelope: WarehouseEsignEnvelopeV1 = {
       ...(env ?? { schemaVersion: 1 }),
       schemaVersion: 1,

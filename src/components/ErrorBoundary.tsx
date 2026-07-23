@@ -77,8 +77,9 @@ export default class ErrorBoundary extends Component<Props, State> {
                 Unable to load this document
               </h1>
               <p className="mt-1.5 text-sm leading-relaxed text-neutral-600">
-                The requested information is temporarily unavailable. Please
-                try again or return to your dashboard.
+                {this.state.error?.message?.trim()
+                  ? this.state.error.message
+                  : "The requested information is temporarily unavailable. Please try again or return to your dashboard."}
               </p>
               <p className="mt-3 text-xs text-neutral-400">
                 Reference{" "}

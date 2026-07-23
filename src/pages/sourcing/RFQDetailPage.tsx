@@ -361,7 +361,7 @@ function resolveSupplierStatus(
 }
 
 function supplierStatusTone(
-  status: SupplierQuoteStatus
+  status: string
 ): "warning" | "success" | "danger" | "neutral" {
   switch (status) {
     case "Quotation Received":
@@ -1711,7 +1711,6 @@ export default function RFQDetailPage() {
     ? Math.round((respondedCount / supplierCount) * 100)
     : 0;
   const totalQty = (rfq.items ?? []).reduce((sum, it) => sum + (it.qty ?? 0), 0);
-  const uomCount = new Set((rfq.items ?? []).map((it) => it.uom ?? "Nos")).size;
   const aiReady = submittedQuoteCount >= 2;
 
   const validTillDisplay = rfq.valid_till
@@ -1823,7 +1822,6 @@ export default function RFQDetailPage() {
   });
 
   const timeline = workflow.stages;
-  const currentStage = workflow.currentStage;
   const legalApproved = workflow.legalApproved;
   const financeApproved = workflow.financeApproved;
   const fullyApproved = legalApproved && financeApproved;

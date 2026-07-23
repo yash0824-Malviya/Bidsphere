@@ -14,16 +14,16 @@ export default function SupplierContactSupportPage() {
 
   if (!isReady) {
     return (
-      
+      <>
         <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
           Loading…
         </div>
-      
+      </>
     );
   }
 
   return (
-    
+    <>
       <PageHeader
         title="Contact Support"
         description={`Reach the ${APP_NAME} team for portal issues, access problems, or workflow questions.`}
@@ -97,6 +97,6 @@ export default function SupplierContactSupportPage() {
           </div>
         </div>
       </div>
-    
+    </>
   );
 }

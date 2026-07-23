@@ -140,6 +140,8 @@ async function ensureCostHeadMaster() {
         { role: "System Manager", read: 1, write: 1, create: 1, delete: 1 },
         { role: "Purchase Manager", read: 1, write: 1, create: 1, delete: 0 },
         { role: "Purchase User", read: 1, write: 0, create: 0, delete: 0 },
+        // Supplier portal must read masters to map Link values correctly.
+        { role: "Supplier", read: 1, write: 0, create: 0, delete: 0 },
       ],
     });
     console.log("  ✓ Created");
@@ -205,6 +207,7 @@ async function ensureDetail() {
       { role: "System Manager", read: 1, write: 1, create: 1, delete: 1 },
       { role: "Purchase Manager", read: 1, write: 1, create: 1, delete: 1 },
       { role: "Purchase User", read: 1, write: 1, create: 1, delete: 0 },
+      { role: "Supplier", read: 1, write: 1, create: 1, delete: 0 },
     ],
   });
   console.log("  ✓ Created");
@@ -344,9 +347,63 @@ async function ensureParent() {
         delete: 0,
         export: 1,
       },
+      {
+        role: "Supplier",
+        read: 1,
+        write: 1,
+        create: 1,
+        delete: 0,
+        export: 0,
+      },
     ],
   });
   console.log("  ✓ Created");
+}
+
+/** Patch Supplier role onto existing DocTypes (safe to re-run). */
+async function ensureSupplierPermissions() {
+  console.log(`\n[4b/5] Ensure Supplier permissions …`);
+  const patches = [
+    {
+      doctype: "Cost Head Master",
+      role: "Supplier",
+      perm: { read: 1, write: 0, create: 0, delete: 0 },
+    },
+    {
+      doctype: "Cost Breakdown Detail",
+      role: "Supplier",
+      perm: { read: 1, write: 1, create: 1, delete: 0 },
+    },
+    {
+      doctype: "Cost Breakdown",
+      role: "Supplier",
+      perm: { read: 1, write: 1, create: 1, delete: 0 },
+    },
+  ];
+
+  for (const { doctype, role, perm } of patches) {
+    let doc;
+    try {
+      doc = await api(
+        "GET",
+        `/api/resource/DocType/${encodeURIComponent(doctype)}`,
+      );
+    } catch {
+      console.log(`  · ${doctype}: skip (missing)`);
+      continue;
+    }
+    const permissions = Array.isArray(doc.permissions) ? [...doc.permissions] : [];
+    const idx = permissions.findIndex((p) => p.role === role);
+    if (idx >= 0) {
+      permissions[idx] = { ...permissions[idx], role, ...perm };
+    } else {
+      permissions.push({ role, ...perm });
+    }
+    await api("PUT", `/api/resource/DocType/${encodeURIComponent(doctype)}`, {
+      permissions,
+    });
+    console.log(`  ✓ ${doctype} → ${role}`);
+  }
 }
 
 async function ensureRfqField() {
@@ -395,6 +452,7 @@ async function main() {
   await ensureDetail();
   await ensureParent();
   await ensureRfqField();
+  await ensureSupplierPermissions();
   await seedHeads();
   console.log("\nDone.");
 }

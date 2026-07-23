@@ -38,6 +38,17 @@ import {
   isOpenPoStatus,
   type ReportPo,
 } from "../../utils/reports/operationalReportData";
+import { deriveScheduleDisplayStatus } from "../../utils/deliveryScheduleStatus";
+
+function deliveryShipmentLabel(po: ReportPo): string {
+  // Report rows have PO/GRN receipt signals only — never invent "In Transit".
+  return deriveScheduleDisplayStatus({
+    perReceived: Number(po.per_received) || 0,
+    poStatus: po.status,
+    poScheduleDate: po.schedule_date,
+    grnCompleted: isCompletedPoStatus(po.status),
+  });
+}
 
 function isDelayed(po: ReportPo): boolean {
   if (!po.schedule_date || isCompletedPoStatus(po.status)) return false;
@@ -389,7 +400,7 @@ export default function DeliveryReportPage() {
                         {po.supplier_name || po.supplier || "—"}
                       </td>
                       <td className="px-3 py-3 text-neutral-600">
-                        {isOpenPoStatus(po.status) ? "In Transit" : po.status || "—"}
+                        {deliveryShipmentLabel(po)}
                       </td>
                       <td className="whitespace-nowrap px-3 py-3 text-neutral-500">
                         {po.schedule_date

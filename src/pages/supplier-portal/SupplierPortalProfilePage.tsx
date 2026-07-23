@@ -525,17 +525,17 @@ export default function SupplierPortalProfilePage() {
   // TEMPORARY LEGACY MODE — hide account-only restriction when flag is on for PIN users
   if (!sessionToken && !legacyPinMode) {
     return (
-      
+      <>
         <div className="p-8 text-sm text-slate-600">
           Profile onboarding is available for account-based portal users. Your company PIN
           session does not include an onboarding draft.
         </div>
-      
+      </>
     );
   }
 
   return (
-    
+    <>
       <div
         className="min-h-[calc(100vh-4rem)]"
         style={{ backgroundColor: ONB.bg }}
@@ -816,7 +816,7 @@ export default function SupplierPortalProfilePage() {
           </div>
         )}
       </div>
-    
+    </>
   );
 }
 
@@ -1243,9 +1243,9 @@ function FieldInput({
 }
 
 export function SupplierModuleLockedPage({ title }: { title: string }) {
-  const { supplierName, displayStatus, unlocked } = useSupplierSession();
+  useSupplierSession();
   return (
-    
+    <>
       <div
         className="mx-auto flex max-w-lg flex-col items-center px-4 py-20 text-center"
         style={{ backgroundColor: ONB.bg }}
@@ -1258,6 +1258,6 @@ export function SupplierModuleLockedPage({ title }: { title: string }) {
           This module unlocks after Procurement approves your onboarding profile.
         </p>
       </div>
-    
+    </>
   );
 }

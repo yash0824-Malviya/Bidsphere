@@ -37,13 +37,11 @@ import { formatDateTime } from "../../utils/format";
 export default function SupplierSecurityPage() {
   const queryClient = useQueryClient();
   const {
-    supplierName,
     erpSupplierName,
     sessionToken,
     authMode,
     isReady,
     isAuthenticated,
-    displayStatus,
   } = useSupplierSession({ requirePasswordChange: false });
 
   const securityQuery = useQuery({
@@ -150,7 +148,7 @@ export default function SupplierSecurityPage() {
   if (!isReady || !isAuthenticated) return null;
 
   return (
-    
+    <>
       <div className="flex w-full flex-col gap-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -439,7 +437,7 @@ export default function SupplierSecurityPage() {
           )}
         </section>
       </div>
-    
+    </>
   );
 }
 

@@ -25,6 +25,8 @@ export interface AuthUserProfile {
   full_name: string;
   role: AppRole;
   department?: string;
+  /** Raw ERPNext User.roles names from the last login fetch. */
+  erpnext_roles?: string[];
 }
 
 interface ErpNextUserProfile {
@@ -52,13 +54,20 @@ interface ErpNextUserProfile {
 export async function loginWithPassword(
   username: string,
   password: string,
+  options?: {
+    requestedPortal?: string;
+    previousPortal?: string | null;
+  },
 ): Promise<AuthUserProfile> {
   const usr = username.trim();
   const pwd = password;
 
   if (import.meta.env.DEV) {
     // eslint-disable-next-line no-console
-    console.log("[Auth] Login attempt for:", usr);
+    console.log("[Auth] Login attempt for:", usr, {
+      requestedPortal: options?.requestedPortal ?? "staff",
+      previousPortal: options?.previousPortal ?? null,
+    });
   }
 
   if (!usr || !pwd) {
@@ -71,7 +80,12 @@ export async function loginWithPassword(
     // browser never receives ERPNext session cookies.
     response = (await erpnext.post(
       "/api/auth/login",
-      { usr, pwd },
+      {
+        usr,
+        pwd,
+        requested_portal: options?.requestedPortal ?? "staff",
+        previous_portal: options?.previousPortal ?? undefined,
+      },
       {
         _preserveResponse: true,
         withCredentials: false,
@@ -245,6 +259,7 @@ export async function loginWithPassword(
     email,
     full_name: fullName,
     role,
+    erpnext_roles: erpnextRoles,
   };
 }
 

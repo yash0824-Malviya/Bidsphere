@@ -68,11 +68,6 @@ export function readErpAuthConfig(): ErpAuthConfig {
   return { baseUrl, key, secret };
 }
 
-interface LoginBody {
-  usr?: string;
-  pwd?: string;
-}
-
 function extractSid(setCookie: string[] | null): string | null {
   if (!setCookie?.length) return null;
   for (const raw of setCookie) {
@@ -123,6 +118,14 @@ async function discardServerSession(
   }
 }
 
+export interface LoginBody {
+  usr?: string;
+  pwd?: string;
+  /** Requested BidSphere portal (for server-side auth decision logs). */
+  requested_portal?: string;
+  previous_portal?: string;
+}
+
 /**
  * Validate ERPNext username/password on the server. Returns the same
  * shape the SPA historically expected from `/api/method/login`, without
@@ -138,9 +141,18 @@ export async function authenticateWithPassword(
   email: string;
   name: string;
   access_token: string;
+  erpnext_roles: string[];
 }> {
   const usr = typeof body.usr === "string" ? body.usr.trim() : "";
   const pwd = typeof body.pwd === "string" ? body.pwd : "";
+  const requestedPortal =
+    typeof body.requested_portal === "string"
+      ? body.requested_portal.trim()
+      : "";
+  const previousPortal =
+    typeof body.previous_portal === "string"
+      ? body.previous_portal.trim()
+      : "";
 
   if (!usr || !pwd) {
     throw new AuthSessionError("Please enter your username and password.", 400);
@@ -277,6 +289,18 @@ export async function authenticateWithPassword(
     role,
   });
 
+  const newPortal = portalNameForRole(role);
+  const redirectTarget = homePathForRole(role);
+
+  console.info("[PortalAuth]", {
+    username: usr,
+    requestedPortal: requestedPortal || "staff",
+    erpRoles: erpnextRoles,
+    previousPortal: previousPortal || null,
+    newPortal,
+    redirectTarget,
+  });
+
   return {
     message: typeof msg === "string" ? msg : "Logged In",
     full_name: fullName,
@@ -286,7 +310,42 @@ export async function authenticateWithPassword(
     email,
     name: usr,
     access_token,
+    erpnext_roles: erpnextRoles,
   };
+}
+
+function portalNameForRole(role: AppRole): string {
+  switch (role) {
+    case "warehouse":
+      return "warehouse";
+    case "procurement":
+    case "procurement_team":
+      return "procurement";
+    case "department":
+      return "department";
+    case "finance":
+    case "finance_executive":
+      return "finance";
+    case "admin":
+      return "admin";
+    default:
+      return "staff";
+  }
+}
+
+function homePathForRole(role: AppRole): string {
+  switch (role) {
+    case "admin":
+      return "/admin";
+    case "warehouse":
+      return "/warehouse/dashboard";
+    case "finance_executive":
+      return "/budget";
+    case "manufacturing":
+      return "/manufacturing/boms";
+    default:
+      return "/dashboard";
+  }
 }
 
 /** No-op logout for the SPA — never calls ERPNext logout (would risk Desk). */

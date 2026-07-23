@@ -119,11 +119,11 @@ export default function SupplierPaymentListPage() {
 
   if (!isReady) {
     return (
-      
+      <>
         <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
           Loading…
         </div>
-      
+      </>
     );
   }
 
@@ -132,7 +132,7 @@ export default function SupplierPaymentListPage() {
   const isEmpty = !loading && rows.length === 0;
 
   return (
-    
+    <>
       <PageHeader
         title="Payments"
         description="Payment entries released against your invoices."
@@ -253,6 +253,6 @@ export default function SupplierPaymentListPage() {
           </>
         )}
       </section>
-    
+    </>
   );
 }

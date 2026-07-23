@@ -189,7 +189,7 @@ export default function SupplierDistributionChart({ data }: Props) {
           <LabelList
             dataKey="count"
             position="right"
-            formatter={(v: number) => String(Math.round(Number(v) || 0))}
+            formatter={(v) => String(Math.round(Number(v) || 0))}
             style={{
               fill: "#334155",
               fontSize: 11,

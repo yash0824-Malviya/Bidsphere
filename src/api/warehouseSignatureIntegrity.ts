@@ -43,6 +43,8 @@ export const WAREHOUSE_ESIGN_FIELD_ALLOWLIST = new Set([
   "warehouse_signature",
   "warehouse_signed_pdf_url",
   "warehouse_signed_pdf_hash",
+  // Allowed in the client mutation guard so draft re-saves can include the
+  // envelope. ERP writes still strip this field when docstatus = 1.
   "warehouse_esign_envelope",
   "warehouse_ip",
   "warehouse_browser",

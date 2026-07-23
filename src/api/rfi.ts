@@ -239,7 +239,7 @@ async function listErpRfiResponses(rfiName: string): Promise<RfiResponse[]> {
  * (id = ERP document name).
  */
 async function upsertErpRfiResponse(response: RfiResponse): Promise<RfiResponse> {
-  const payload = {
+  const payload: Record<string, unknown> = {
     ...responseToErpPayload(response),
     submitted_at: toErpDatetime(response.submitted_at),
   };

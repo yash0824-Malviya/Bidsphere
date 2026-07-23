@@ -22,7 +22,7 @@ import {
   MFA_MAX_ATTEMPTS,
   MFA_OTP_LENGTH,
 } from "../../config/mfaConfig";
-import { getRoleHome, canAccessPath } from "../../config/roles";
+import { getRoleHome, canAccessPath, type AppRole } from "../../config/roles";
 import { prefetchDashboardForRole } from "../../api/prefetchDashboard";
 import { sendOTP, verifyOTP } from "../../services/mfa/otpService";
 import {
@@ -30,6 +30,37 @@ import {
   getMfaRedirectPath,
   useAuthStore,
 } from "../../store/authStore";
+import {
+  detectAuthSource,
+  getActivePortal,
+  getLoginPortalAffinity,
+  logPortalAuthDecision,
+  portalForRole,
+  portalPermissionDeniedMessage,
+  PORTAL_LOGIN_PATH,
+  replacePreviousStaffSession,
+  roleMatchesStaffPortal,
+  setActivePortal,
+  type StaffLoginPortal,
+} from "../../utils/portalAuth";
+
+function portalLoginFromAffinity(): string {
+  const affinity = getLoginPortalAffinity();
+  if (!affinity) return PORTAL_LOGIN_PATH.staff;
+  return PORTAL_LOGIN_PATH[affinity];
+}
+
+function requestedStaffPortal(): StaffLoginPortal | "staff" {
+  const affinity = getLoginPortalAffinity();
+  if (!affinity || affinity === "supplier" || affinity === "staff") {
+    return "staff";
+  }
+  return affinity;
+}
+
+function roleAllowedForLoginPortal(role: AppRole | null | undefined): boolean {
+  return roleMatchesStaffPortal(role, requestedStaffPortal());
+}
 
 /** mm:ss with zero-padded minutes (e.g. 04:59). */
 function formatCountdown(ms: number): string {
@@ -150,7 +181,43 @@ export default function OtpVerificationPage() {
   useEffect(() => {
     if (!isVerifying && isAuthenticated && !success) {
       const user = useAuthStore.getState().user;
-      const target = user?.role ? getRoleHome(user.role) : getMfaRedirectPath();
+      const role = (user?.role ?? null) as AppRole | null;
+      const requested = requestedStaffPortal();
+      if (!roleAllowedForLoginPortal(role)) {
+        const loginPath = portalLoginFromAffinity();
+        const denied = portalPermissionDeniedMessage(requested);
+        replacePreviousStaffSession("mfa-already-auth-role-mismatch-portal");
+        toast.error(denied);
+        logPortalAuthDecision({
+          username: user?.name ?? user?.email ?? null,
+          requestedPortal: requested,
+          erpRoles: user?.erpnext_roles ?? null,
+          previousPortal: getActivePortal(),
+          newPortal: null,
+          redirectTarget: loginPath,
+          currentUrl: "/verify-otp",
+          currentRole: role,
+          reason: "mfa-already-auth-role-mismatch-portal",
+        });
+        navigate(loginPath, { replace: true });
+        return;
+      }
+      const target = role ? getRoleHome(role) : getMfaRedirectPath();
+      const previousPortal = getActivePortal();
+      const newPortal = portalForRole(role) ?? requested;
+      setActivePortal(newPortal);
+      logPortalAuthDecision({
+        username: user?.name ?? user?.email ?? null,
+        requestedPortal: requested,
+        erpRoles: user?.erpnext_roles ?? null,
+        previousPortal,
+        newPortal,
+        redirectTarget: target,
+        currentUrl: "/verify-otp",
+        currentRole: role,
+        authSource: detectAuthSource(),
+        reason: "mfa-already-authenticated-redirect",
+      });
       // eslint-disable-next-line no-console
       console.log("[MFA] Already authenticated — navigating to", target);
       navigate(target, { replace: true });
@@ -160,7 +227,7 @@ export default function OtpVerificationPage() {
   useEffect(() => {
     if (isVerifying) return;
     if (!pending) {
-      navigate("/login", { replace: true });
+      navigate(portalLoginFromAffinity(), { replace: true });
       return;
     }
     if (sendInitRef.current) return;
@@ -260,7 +327,7 @@ export default function OtpVerificationPage() {
       const msg = "Session expired. Please sign in again.";
       setFormError(msg);
       toast.error(msg);
-      navigate("/login", { replace: true });
+      navigate(portalLoginFromAffinity(), { replace: true });
       return;
     }
 
@@ -337,7 +404,30 @@ export default function OtpVerificationPage() {
         useAuthStore.getState().mfaPending?.user ??
         getActiveMfaPending()?.user ??
         null;
-      const role = pendingUser?.role;
+      const role = pendingUser?.role as AppRole | undefined;
+      const loginPath = portalLoginFromAffinity();
+
+      const requested = requestedStaffPortal();
+      if (!roleAllowedForLoginPortal(role)) {
+        const denied = portalPermissionDeniedMessage(requested);
+        replacePreviousStaffSession("mfa-verify-role-mismatch-portal");
+        toast.error(denied);
+        setSuccess(false);
+        logPortalAuthDecision({
+          username: pendingUser?.name ?? pendingUser?.email ?? null,
+          requestedPortal: requested,
+          erpRoles: pendingUser?.erpnext_roles ?? null,
+          previousPortal: getActivePortal(),
+          newPortal: null,
+          redirectTarget: loginPath,
+          currentUrl: "/verify-otp",
+          currentRole: role ?? null,
+          reason: "mfa-verify-role-mismatch-portal",
+        });
+        navigate(loginPath, { replace: true });
+        return;
+      }
+
       const saved = getMfaRedirectPath();
       const target =
         role && canAccessPath(role, saved)
@@ -347,6 +437,23 @@ export default function OtpVerificationPage() {
             : "/dashboard";
 
       if (role) prefetchDashboardForRole(role);
+
+      const newPortal = portalForRole(role) ?? requested;
+      const previousPortal = getActivePortal();
+      setActivePortal(newPortal);
+
+      logPortalAuthDecision({
+        username: pendingUser?.name ?? pendingUser?.email ?? null,
+        requestedPortal: requested,
+        erpRoles: pendingUser?.erpnext_roles ?? null,
+        previousPortal,
+        newPortal,
+        redirectTarget: target,
+        currentUrl: "/verify-otp",
+        currentRole: role ?? null,
+        authSource: detectAuthSource(),
+        reason: "mfa-verify-success-redirect",
+      });
 
       window.setTimeout(() => {
         completeMfaLogin();
@@ -372,11 +479,12 @@ export default function OtpVerificationPage() {
   };
 
   const handleChangeEmail = async () => {
+    const loginPath = portalLoginFromAffinity();
     try {
       await cancelMfaLogin();
-      navigate("/login", { replace: true });
+      navigate(loginPath, { replace: true });
     } catch {
-      navigate("/login", { replace: true });
+      navigate(loginPath, { replace: true });
     }
   };
 

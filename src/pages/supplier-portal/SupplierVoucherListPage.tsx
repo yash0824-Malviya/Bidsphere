@@ -50,16 +50,16 @@ export default function SupplierVoucherListPage() {
 
   if (!isReady) {
     return (
-      
+      <>
         <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
           Loading…
         </div>
-      
+      </>
     );
   }
 
   return (
-    
+    <>
       <PageHeader
         title="Vouchers"
         description="Vouchers issued to your company by Netlink. Review and raise an invoice."
@@ -145,6 +145,6 @@ export default function SupplierVoucherListPage() {
           </>
         )}
       </section>
-    
+    </>
   );
 }

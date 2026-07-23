@@ -21,6 +21,23 @@ import { safeInternalDestination } from "../../utils/rbacNavigate";
 import { logMfaEnvDiagnostics } from "../../config/mfaConfig";
 import { prefetchDashboardForRole } from "../../api/prefetchDashboard";
 import { useAuthStore, setMfaRedirectPath } from "../../store/authStore";
+import type { AppRole } from "../../config/roles";
+import {
+  detectAuthSource,
+  getActivePortal,
+  hasActiveSupplierSession,
+  logPortalAuthDecision,
+  portalForRole,
+  portalPermissionDeniedMessage,
+  PORTAL_LOGIN_PATH,
+  replacePreviousStaffSession,
+  replacePreviousSupplierSession,
+  roleMatchesStaffPortal,
+  setActivePortal,
+  setLoginPortalAffinity,
+  staffPortalLabel,
+  type StaffLoginPortal,
+} from "../../utils/portalAuth";
 
 /*
  * Presentation lives in the shared `AuthShell` (background + branding). All
@@ -35,19 +52,29 @@ interface LocationState {
   from?: { pathname?: string };
 }
 
-export default function LoginPage() {
+interface LoginPageProps {
+  /** When set, only matching roles may complete sign-in on this page. */
+  portal?: StaffLoginPortal;
+}
+
+export default function LoginPage({ portal }: LoginPageProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
+  const portalAffinity = portal ?? "staff";
+  const loginPath = portal
+    ? PORTAL_LOGIN_PATH[portal]
+    : PORTAL_LOGIN_PATH.staff;
 
   useEffect(() => {
+    setLoginPortalAffinity(portalAffinity);
     // Temporary diagnostics — confirms whether Demo MFA was baked into this bundle.
     // eslint-disable-next-line no-console
     console.log("VITE_DEMO_MFA =", import.meta.env.VITE_DEMO_MFA);
     // eslint-disable-next-line no-console
     console.log("DEMO_MFA =", (import.meta.env as { DEMO_MFA?: string }).DEMO_MFA);
     logMfaEnvDiagnostics("LoginPage");
-  }, []);
+  }, [portalAffinity]);
 
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const isVerifying = useAuthStore((s) => s.isVerifying);
@@ -65,8 +92,8 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const savedFromPath =
-    (location.state as LocationState | null)?.from?.pathname ?? null;
+  const locationState = location.state as LocationState | null;
+  const savedFromPath = locationState?.from?.pathname ?? null;
 
   useEffect(() => {
     if (sessionRestoreError) {
@@ -78,12 +105,46 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!hasHydrated || isVerifying) return;
+
+    // Previous supplier session must not block staff credential entry — replace it.
+    if (hasActiveSupplierSession()) {
+      replacePreviousSupplierSession("replace-supplier-on-staff-login-page");
+    }
+
     if (isAuthenticated && user) {
-      const target = safeInternalDestination(user.role, savedFromPath);
+      const role = user.role as AppRole;
+      // Matching role → continue into the portal. Mismatch → replace session
+      // silently so the user can sign in with the correct account.
+      if (!roleMatchesStaffPortal(role, portalAffinity)) {
+        replacePreviousStaffSession("replace-staff-session-for-portal-login");
+        return;
+      }
+      const target = safeInternalDestination(role, savedFromPath);
+      const previousPortal = getActivePortal() ?? portalForRole(role);
+      const newPortal = portalForRole(role) ?? portalAffinity;
+      setActivePortal(newPortal);
+      logPortalAuthDecision({
+        username: user.name || user.email,
+        requestedPortal: portalAffinity,
+        erpRoles: user.erpnext_roles ?? null,
+        previousPortal,
+        newPortal,
+        redirectTarget: target,
+        currentUrl: location.pathname,
+        currentRole: role,
+        authSource: detectAuthSource(),
+        reason: "authenticated-role-matched-portal-login",
+      });
       navigate(target, { replace: true });
       return;
     }
+
     if (mfaPending && !isAuthenticated) {
+      const pendingRole = mfaPending.user.role as AppRole;
+      if (!roleMatchesStaffPortal(pendingRole, portalAffinity)) {
+        replacePreviousStaffSession("replace-mfa-pending-for-portal-login");
+        return;
+      }
       navigate("/verify-otp", { replace: true });
     }
   }, [
@@ -94,11 +155,14 @@ export default function LoginPage() {
     savedFromPath,
     navigate,
     user,
+    portalAffinity,
+    location.pathname,
   ]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setFormError(null);
+    setLoginPortalAffinity(portalAffinity);
 
     if (!username.trim() || !password) {
       const msg = t("login.enterCredentials");
@@ -107,31 +171,67 @@ export default function LoginPage() {
       return;
     }
 
+    const previousPortal =
+      getActivePortal() ??
+      portalForRole(useAuthStore.getState().user?.role as AppRole | undefined);
+
     try {
-      const outcome = await login(username.trim(), password, rememberMe);
+      // Always replace any prior portal session before minting a new one.
+      replacePreviousSupplierSession("replace-supplier-before-staff-login");
+      replacePreviousStaffSession("replace-staff-before-new-login");
+
+      const outcome = await login(username.trim(), password, rememberMe, {
+        requestedPortal: portalAffinity,
+        previousPortal,
+      });
       const requiresMFA = outcome === "mfa";
-      const role =
-        useAuthStore.getState().user?.role ??
-        useAuthStore.getState().mfaPending?.user.role ??
-        "procurement";
+      const signedIn =
+        useAuthStore.getState().user ??
+        useAuthStore.getState().mfaPending?.user ??
+        null;
+      const role = (signedIn?.role ?? "procurement") as AppRole;
+      const erpRoles = signedIn?.erpnext_roles ?? [];
+
+      // Portal-scoped pages: deny when ERP roles do not grant access.
+      if (!roleMatchesStaffPortal(role, portalAffinity)) {
+        const denied = portalPermissionDeniedMessage(portalAffinity);
+        replacePreviousStaffSession("login-denied-missing-portal-role");
+        logPortalAuthDecision({
+          username: username.trim(),
+          requestedPortal: portalAffinity,
+          erpRoles,
+          previousPortal,
+          newPortal: null,
+          redirectTarget: loginPath,
+          currentUrl: location.pathname,
+          currentRole: role,
+          reason: "login-denied-missing-portal-role",
+        });
+        setFormError(denied);
+        toast.error(denied);
+        return;
+      }
+
+      const newPortal = portalForRole(role) ?? portalAffinity;
+      setActivePortal(newPortal);
+      setLoginPortalAffinity(portalAffinity);
+
       const destination = requiresMFA
         ? "/verify-otp"
         : safeInternalDestination(role, savedFromPath);
 
-      // Temporary diagnostics — compare localhost vs VM redirect decisions.
-      // eslint-disable-next-line no-console
-      console.log("Login Success");
-      // eslint-disable-next-line no-console
-      console.log("VITE_DEMO_MFA =", import.meta.env.VITE_DEMO_MFA);
-      // eslint-disable-next-line no-console
-      console.log(
-        "DEMO_MFA =",
-        (import.meta.env as { DEMO_MFA?: string }).DEMO_MFA,
-      );
-      // eslint-disable-next-line no-console
-      console.log("requiresMFA =", requiresMFA);
-      // eslint-disable-next-line no-console
-      console.log("Redirecting to =", destination);
+      logPortalAuthDecision({
+        username: username.trim(),
+        requestedPortal: portalAffinity,
+        erpRoles,
+        previousPortal,
+        newPortal,
+        redirectTarget: destination,
+        currentUrl: location.pathname,
+        currentRole: role,
+        authSource: detectAuthSource(),
+        reason: requiresMFA ? "login-mfa-required" : "login-success-redirect",
+      });
 
       if (outcome === "mfa") {
         setMfaRedirectPath(
@@ -146,8 +246,6 @@ export default function LoginPage() {
         toast.success(t("login.signedInSuccess"));
         const signedInUser = useAuthStore.getState().user;
         if (signedInUser) {
-          // Warm the dashboard cache during the login→redirect transition so
-          // it paints from cache instead of hitting the network on mount.
           prefetchDashboardForRole(signedInUser.role);
           navigate(destination, { replace: true });
         }
@@ -202,7 +300,9 @@ export default function LoginPage() {
                   {t("login.welcomeBack")}
                 </h2>
                 <p className="mt-1.5 text-sm text-neutral-500">
-                  {t("login.subtitle")}
+                  {portal
+                    ? `Sign in to the ${staffPortalLabel(portal)} portal`
+                    : t("login.subtitle")}
                 </p>
               </div>
 

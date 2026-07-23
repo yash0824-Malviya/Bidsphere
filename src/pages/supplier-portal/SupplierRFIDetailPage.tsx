@@ -49,6 +49,12 @@ function draftKey(rfiName: string, supplier: string) {
   return `bidsphere:rfi-draft:${rfiName}:${supplier}`;
 }
 
+type RfiDraft = {
+  answers?: RfiAnswer[];
+  documents?: RfiDocumentUpload[];
+  comments?: string;
+};
+
 function metaKey(rfiName: string, supplier: string) {
   return `bidsphere:rfi-response-meta:${rfiName}:${supplier}`;
 }
@@ -219,14 +225,10 @@ export default function SupplierRFIDetailPage() {
   useEffect(() => {
     if (!response || !rfiName || !resolvedSupplier || hydrated) return;
 
-    let draft: {
-      answers?: RfiAnswer[];
-      documents?: RfiDocumentUpload[];
-      comments?: string;
-    } | null = null;
+    let draft: RfiDraft | null = null;
     try {
       const raw = localStorage.getItem(draftKey(rfiName, resolvedSupplier));
-      if (raw) draft = JSON.parse(raw) as typeof draft;
+      if (raw) draft = JSON.parse(raw) as RfiDraft;
     } catch {
       draft = null;
     }

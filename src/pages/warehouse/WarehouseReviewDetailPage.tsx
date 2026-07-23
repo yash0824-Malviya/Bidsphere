@@ -50,7 +50,6 @@ import {
   resolveNetlinkWarehouses,
   resolvePurchaseWarehouseForCompany,
   resolveWarehouseStockCompany,
-  WAREHOUSE_MODULE_COMPANY,
 } from "../../api/warehouseCompany";
 import {
   applyCostCentersToStockEntryDoc,
@@ -250,53 +249,6 @@ async function createAndSubmitStockEntry(
   }
 
   return seName;
-}
-
-/** Cancel a submitted Stock Entry (best-effort rollback). Never throws. */
-async function cancelStockEntry(
-  seName: string,
-): Promise<"cancelled" | "failed"> {
-  try {
-    await apiPost("/api/method/frappe.client.cancel", {
-      doctype: "Stock Entry",
-      name: seName,
-    });
-    return "cancelled";
-  } catch {
-    return "failed";
-  }
-}
-
-/** Delete a Draft Material Request created during processing (best-effort). */
-async function deleteDraftMaterialRequest(name: string): Promise<void> {
-  try {
-    await apiPost("/api/method/frappe.client.delete", {
-      doctype: "Material Request",
-      name,
-    });
-  } catch {
-    /* best-effort */
-  }
-}
-
-async function rollbackWarehouseProcess(opts: {
-  stockEntries: string[];
-  purchaseMr?: string;
-}): Promise<string> {
-  const notes: string[] = [];
-  for (const se of [...opts.stockEntries].reverse()) {
-    const result = await cancelStockEntry(se);
-    notes.push(
-      result === "cancelled"
-        ? `Stock Entry ${se} reversed`
-        : `Stock Entry ${se} could not be reversed — cancel manually in ERPNext`,
-    );
-  }
-  if (opts.purchaseMr) {
-    await deleteDraftMaterialRequest(opts.purchaseMr);
-    notes.push(`Draft Purchase MR ${opts.purchaseMr} removed`);
-  }
-  return notes.join(". ");
 }
 
 // ─── Sub-components ────────────────────────────────────────────────────────────

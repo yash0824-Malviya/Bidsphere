@@ -148,20 +148,20 @@ const FAQ_ITEMS = [
 ];
 
 export default function SupplierHelpDeskPage() {
-  const { supplierName, isReady } = useSupplierSession();
+  const { isReady } = useSupplierSession();
 
   if (!isReady) {
     return (
-      
+      <>
         <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
           Loading…
         </div>
-      
+      </>
     );
   }
 
   return (
-    
+    <>
       <PageHeader
         title="Help"
         description={`Workflow guides and answers for using the ${APP_SUPPLIER_PORTAL}.`}
@@ -253,6 +253,6 @@ export default function SupplierHelpDeskPage() {
           </div>
         </div>
       </div>
-    
+    </>
   );
 }

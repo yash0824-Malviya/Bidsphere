@@ -1,6 +1,6 @@
 /**
  * Signature Preview — shows the actual warehouse signature (image or typed)
- * plus metadata and View / Download / Print actions.
+ * plus View / Download signature actions (verification lives elsewhere).
  */
 import { useState } from "react";
 import toast from "react-hot-toast";
@@ -8,14 +8,12 @@ import {
   Download,
   Eye,
   PenLine,
-  Printer,
   ShieldCheck,
   X,
 } from "lucide-react";
 
 import {
   downloadWarehouseSignature,
-  printWarehouseSignature,
   type WarehouseSignatureSummary,
 } from "../../api/warehouseEsign";
 import type { PurchaseReceipt } from "../../types/erpnext";
@@ -55,14 +53,6 @@ export default function SignaturePreviewCard({
       );
     } finally {
       setDownloading(false);
-    }
-  }
-
-  function handlePrint() {
-    try {
-      printWarehouseSignature(grn);
-    } catch {
-      toast.error("Unable to open print preview.");
     }
   }
 
@@ -144,11 +134,6 @@ export default function SignaturePreviewCard({
             onClick={() => void handleDownload()}
             disabled={downloading}
           />
-          <ActionChip
-            icon={Printer}
-            label="Print Signature"
-            onClick={handlePrint}
-          />
         </div>
       </div>
 
@@ -222,10 +207,9 @@ export default function SignaturePreviewCard({
             <div className="mt-4 flex flex-wrap justify-end gap-2">
               <ActionChip
                 icon={Download}
-                label="Download"
+                label="Download Signature"
                 onClick={() => void handleDownload()}
               />
-              <ActionChip icon={Printer} label="Print" onClick={handlePrint} />
               <button
                 type="button"
                 onClick={() => setViewOpen(false)}
