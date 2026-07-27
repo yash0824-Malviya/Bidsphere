@@ -10,10 +10,27 @@ import { translateNavLabel } from "../../i18n/navLabels";
 import BrandLogo from "../BrandLogo";
 
 function isItemActive(pathname: string, to: string): boolean {
-  return pathname === to || pathname.startsWith(`${to}/`);
+  if (!to) return false;
+  if (pathname === to) return true;
+  // Require a path boundary so `/sourcing/rfq` does not match
+  // `/sourcing/rfq-templates` (and similar sibling prefixes).
+  return pathname.startsWith(`${to}/`);
 }
 
-export type SidebarVariant = "full" | "collapsed" | "drawer";
+function isParentNavActive(
+  pathname: string,
+  search: string,
+  item: NavItem,
+): boolean {
+  if (item.children?.length) {
+    return item.children.some((child) =>
+      isChildNavActive(pathname, search, child.to),
+    );
+  }
+  return isItemActive(pathname, item.to);
+}
+
+export type SidebarVariant = "full" | "compact" | "collapsed" | "drawer";
 
 interface Props {
   variant?: SidebarVariant;
@@ -35,7 +52,11 @@ export default function Sidebar({
   const navGroups = getNavGroupsForRole(user?.role ?? "procurement");
   const collapsed = variant === "collapsed";
 
-  const widthClass = collapsed ? "w-[64px]" : "w-[240px]";
+  const widthClass = collapsed
+    ? "w-16"
+    : variant === "compact"
+      ? "w-[252px]"
+      : "w-[272px]";
 
   const mainGroups = navGroups.filter(
     (g) => g.label !== "Support" && g.label !== "Help",
@@ -52,7 +73,7 @@ export default function Sidebar({
     >
       {/* Brand */}
       <div
-        className={`flex h-14 flex-shrink-0 items-center border-b border-white/5 ${
+        className={`flex h-[52px] flex-shrink-0 items-center border-b border-white/5 ${
           collapsed ? "justify-center px-2" : "gap-2.5 px-3"
         }`}
       >
@@ -70,7 +91,7 @@ export default function Sidebar({
       </div>
 
       {/* Main nav */}
-      <nav className="scrollbar-hidden min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-2 py-2">
+      <nav className="scrollbar-hidden min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain px-2 py-1.5">
         {mainGroups.map((group) => (
           <div key={group.label || "main"}>
             {group.label && !collapsed ? (
@@ -165,8 +186,8 @@ function SidebarItem({
 }: SidebarItemProps) {
   const { t } = useTranslation();
   const label = translateNavLabel(t, item.label);
-  const active = isItemActive(pathname, item.to);
   const hasChildren = (item.children?.length ?? 0) > 0;
+  const active = isParentNavActive(pathname, search, item);
   const [open, setOpen] = useState(active && hasChildren);
   const itemRef = useRef<HTMLDivElement>(null);
 
@@ -201,7 +222,7 @@ function SidebarItem({
     }`;
 
   const iconClass = (isActive: boolean) =>
-    `h-3.5 w-3.5 flex-shrink-0 transition-colors ${
+    `h-5 w-5 flex-shrink-0 transition-colors ${
       isActive ? "text-white" : "text-sidebar-text group-hover:text-white"
     }`;
 
@@ -255,8 +276,8 @@ function SidebarItem({
       >
         <div className="overflow-hidden">
           {item.children ? (
-            <div className="mt-1.5 mr-2 ml-5 border-l border-white/15 pl-3">
-              <div className="space-y-1">
+            <div className="mt-1 mr-2 ml-5 border-l border-white/15 pl-2.5">
+              <div className="space-y-0.5">
                 {item.children.map((child) => {
                   const childActive = isChildNavActive(
                     pathname,
@@ -266,14 +287,14 @@ function SidebarItem({
                   return (
                     <div key={child.to}>
                       {child.group && (
-                        <p className="mb-1 mt-1.5 px-2 text-[9px] font-semibold uppercase tracking-[0.1em] text-neutral-500 first:mt-0">
+                        <p className="mb-0.5 mt-1 px-2 text-[9px] font-semibold uppercase tracking-[0.1em] text-neutral-500 first:mt-0">
                           {translateNavLabel(t, child.group)}
                         </p>
                       )}
                       <Link
                         to={child.to}
                         onClick={onNavigate}
-                        className={`mx-2 flex h-8 items-center px-2.5 text-[12px] font-medium transition-[background-color] duration-150 ease-in-out ${
+                        className={`mx-1 flex h-8 items-center px-2 text-[12px] font-medium transition-[background-color] duration-150 ease-in-out ${
                           childActive
                             ? "rounded-[10px] bg-white/[0.10] text-white"
                             : "rounded-lg text-sidebar-text hover:bg-white/[0.06] hover:text-white"

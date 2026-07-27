@@ -80,7 +80,7 @@ export default function ReportPageShell<T>({
             type="button"
             onClick={onRefresh}
             disabled={loading}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-[#E8EDF5] bg-white px-3 py-2 text-[12px] font-semibold text-neutral-700 shadow-sm transition hover:bg-neutral-50 disabled:opacity-50"
+            className="btn-secondary"
           >
             <RefreshCw
               className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`}
@@ -97,7 +97,7 @@ export default function ReportPageShell<T>({
           <button
             type="button"
             onClick={() => window.print()}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-[#E8EDF5] bg-white px-3 py-2 text-[12px] font-semibold text-neutral-700 shadow-sm transition hover:bg-neutral-50"
+            className="btn-secondary"
           >
             <Printer className="h-3.5 w-3.5" />
             Print

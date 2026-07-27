@@ -19,9 +19,9 @@ function ActionCenter({
         <Link
           key={id}
           to={to}
-          className="group flex items-center gap-2.5 rounded-xl border border-neutral-200/80 bg-white px-3 py-2.5 shadow-sm transition-all hover:border-[#0098EA]/40 hover:shadow-md"
+          className="group flex items-center gap-2.5 rounded-xl border border-neutral-200/80 bg-white px-3 py-2.5 shadow-sm transition-all hover:border-primary/40 hover:shadow-md"
         >
-          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-[#0098EA]/10 text-[#0098EA] transition-colors group-hover:bg-[#0098EA] group-hover:text-white">
+          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-primary-50 text-primary transition-colors group-hover:bg-primary group-hover:text-white">
             <Icon className="h-4 w-4" />
           </span>
           <span className="truncate text-sm font-semibold text-neutral-700 transition-colors group-hover:text-neutral-900">

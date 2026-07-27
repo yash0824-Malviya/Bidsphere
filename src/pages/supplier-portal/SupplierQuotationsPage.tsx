@@ -16,6 +16,7 @@ import { getSupplierQuotation } from "../../api/sourcing";
 import type { SupplierQuotation } from "../../types/erpnext";
 import EmptyState from "../../components/EmptyState";
 import PaginationBar from "../../components/PaginationBar";
+import StatusBadge from "../../components/StatusBadge";
 import { TableSkeleton } from "../../components/Skeleton";
 import { SortableTableHeader } from "../../components/ui";
 import { useListSort } from "../../hooks/useListSort";
@@ -51,15 +52,6 @@ const SQ_COMPARATORS = supplierQuotationComparators<{
   grand_total?: number;
   status?: string;
 }>();
-
-const STATUS_BADGE: Record<DisplayStatus, string> = {
-  Submitted: "bg-primary-50 text-primary-700 ring-1 ring-inset ring-primary-200",
-  "Under Review": "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
-  Awarded: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
-  Rejected: "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200",
-  Closed: "bg-neutral-100 text-neutral-600 ring-1 ring-inset ring-neutral-200",
-  Draft: "bg-neutral-50 text-neutral-500 ring-1 ring-inset ring-neutral-200",
-};
 
 const SUMMARY_CARDS: Array<{
   key: Exclude<DisplayStatus, "Draft" | "Closed">;
@@ -123,13 +115,7 @@ function isLegalReviewPending(
 }
 
 function StatusPill({ status }: { status: DisplayStatus }) {
-  return (
-    <span
-      className={`inline-flex h-6 items-center whitespace-nowrap rounded-md px-2 text-[12px] font-medium ${STATUS_BADGE[status]}`}
-    >
-      {status}
-    </span>
-  );
+  return <StatusBadge status={status} />;
 }
 
 function MoreMenu({
@@ -497,7 +483,7 @@ export default function SupplierQuotationsPage() {
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-              className="select-field h-10 w-full sm:w-[170px]"
+              className="select-field w-full sm:w-[170px]"
               aria-label="Status filter"
             >
               <option value="all">All statuses</option>
@@ -510,7 +496,7 @@ export default function SupplierQuotationsPage() {
             <select
               value={dateFilter}
               onChange={(e) => setDateFilter(e.target.value as DateFilter)}
-              className="select-field h-10 w-full sm:w-[160px]"
+              className="select-field w-full sm:w-[160px]"
               aria-label="Date filter"
             >
               <option value="all">All dates</option>
@@ -532,7 +518,7 @@ export default function SupplierQuotationsPage() {
                 )
               }
               disabled={filteredRows.length === 0}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#E8EDF5] bg-white px-3.5 text-[13px] font-medium text-[#111827] transition hover:bg-neutral-50 disabled:opacity-50"
+              className="btn-secondary"
             >
               <Download className="h-4 w-4" />
               Export
@@ -682,7 +668,7 @@ export default function SupplierQuotationsPage() {
                             <div className="flex items-center justify-end gap-2">
                               <Link
                                 to={detailUrl}
-                                className="inline-flex h-8 items-center rounded-xl border border-[#E8EDF5] bg-white px-3 text-[13px] font-medium text-[#111827] no-underline transition hover:border-primary-200 hover:bg-primary-50 hover:text-primary-700"
+                                className="btn-secondary no-underline"
                               >
                                 View Details
                               </Link>

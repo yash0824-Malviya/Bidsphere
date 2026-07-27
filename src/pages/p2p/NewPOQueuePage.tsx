@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
-  CheckCircle2,
   Package,
   ShieldCheck,
   Wallet,
@@ -17,6 +16,10 @@ import {
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
 import { Skeleton } from "../../components/Skeleton";
+import StatusBadge from "../../components/StatusBadge";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+} from "../../components/dashboard/DashboardKpiCard";
 import { SortableTableHeader } from "../../components/ui";
 import { useListSort } from "../../hooks/useListSort";
 import type { SortState } from "../../components/ui";
@@ -83,11 +86,26 @@ export default function NewPOQueuePage() {
       />
 
       {/* KPI strip */}
-      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
-        <KpiCard icon={Package} label="Ready for PO" value={rows.length} tone="success" />
-        <KpiCard icon={Wallet} label="Total Value" value={formatCurrency(totalValue)} tone="primary" />
-        <KpiCard icon={ShieldCheck} label="Fully Approved" value={rows.length} tone="neutral" />
-      </div>
+      <DashboardKpiGrid columns={3} className="mb-5">
+        <DashboardKpiCard
+          icon={Package}
+          label="Ready for PO"
+          value={rows.length}
+          iconClassName="bg-success-50 text-success-600"
+        />
+        <DashboardKpiCard
+          icon={Wallet}
+          label="Total Value"
+          value={formatCurrency(totalValue)}
+          iconClassName="bg-primary-50 text-primary-600"
+        />
+        <DashboardKpiCard
+          icon={ShieldCheck}
+          label="Fully Approved"
+          value={rows.length}
+          iconClassName="bg-neutral-100 text-neutral-500"
+        />
+      </DashboardKpiGrid>
 
       {/* Table */}
       <div className="table-shell">
@@ -141,7 +159,7 @@ export default function NewPOQueuePage() {
                       onClick={() =>
                         navigate(`/p2p/purchase-orders/convert/${encodeURIComponent(row.rfq)}`)
                       }
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-success-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-success-700 cursor-pointer border-none"
+                      className="btn-primary"
                     >
                       Create PO
                       <ArrowRight className="h-3.5 w-3.5" />
@@ -160,12 +178,8 @@ export default function NewPOQueuePage() {
                     <SortableTableHeader label="Supplier" sortKey="supplier" sort={sort} onSort={setSort} />
                     <SortableTableHeader label="Approved Value" sortKey="approved_value" sort={sort} onSort={setSort} className="text-right" />
                     <SortableTableHeader label="Approval Date" sortKey="approval_date" sort={sort} onSort={setSort} />
-                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-neutral-500">
-                      Status
-                    </th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-neutral-500">
-                      Action
-                    </th>
+                    <th>Status</th>
+                    <th className="text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -188,10 +202,7 @@ export default function NewPOQueuePage() {
                         {row.approval_date ? formatDate(row.approval_date) : "—"}
                       </td>
                       <td>
-                        <span className="inline-flex items-center gap-1.5 rounded-full bg-success-100 px-2.5 py-1 text-xs font-semibold text-success-700">
-                          <CheckCircle2 className="h-3 w-3" />
-                          Approved
-                        </span>
+                        <StatusBadge status="Approved" />
                       </td>
                       <td className="text-right">
                         <button
@@ -199,7 +210,7 @@ export default function NewPOQueuePage() {
                           onClick={() =>
                             navigate(`/p2p/purchase-orders/convert/${encodeURIComponent(row.rfq)}`)
                           }
-                          className="inline-flex items-center gap-1.5 rounded-lg bg-success-600 px-3.5 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-success-700 cursor-pointer border-none"
+                          className="btn-primary"
                         >
                           Create PO
                           <ArrowRight className="h-3.5 w-3.5" />
@@ -217,30 +228,3 @@ export default function NewPOQueuePage() {
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/*  Sub-components                                                             */
-/* -------------------------------------------------------------------------- */
-
-function KpiCard({
-  icon: Icon, label, value, tone,
-}: {
-  icon: typeof Package; label: string; value: number | string;
-  tone: "neutral" | "success" | "primary";
-}) {
-  const iconTones = {
-    neutral: "bg-neutral-100 text-neutral-500",
-    success: "bg-success-50 text-success-600",
-    primary: "bg-primary-50 text-primary-600",
-  };
-  return (
-    <div className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-4 py-3.5 shadow-sm">
-      <div className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg ${iconTones[tone]}`}>
-        <Icon className="h-5 w-5" />
-      </div>
-      <div>
-        <p className="text-2xl font-bold tabular-nums text-neutral-900">{value}</p>
-        <p className="text-[11px] font-medium uppercase tracking-wider text-neutral-500">{label}</p>
-      </div>
-    </div>
-  );
-}

@@ -9,10 +9,10 @@ import {
   Users,
 } from "lucide-react";
 
-import { Skeleton } from "../Skeleton";
 import { StatCard } from "../ui";
 import type { ExecutiveKpis } from "../../utils/dashboardUtils";
 import { formatCurrencyCompact } from "../../utils/paymentUtils";
+import { DashboardKpiGrid, DashboardKpiSkeleton } from "./DashboardKpiCard";
 
 interface Props {
   kpis: ExecutiveKpis;
@@ -36,13 +36,7 @@ export default function ExecutiveKpiRow({
   if (loading || !kpis || !counts) {
     const skeletonCount =
       visibleLabels && visibleLabels.length > 0 ? visibleLabels.length : 6;
-    return (
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-        {Array.from({ length: skeletonCount }).map((_, i) => (
-          <Skeleton key={i} className="h-[108px] rounded-card" />
-        ))}
-      </div>
-    );
+    return <DashboardKpiSkeleton count={skeletonCount} />;
   }
 
   const cards: Array<{
@@ -118,13 +112,7 @@ export default function ExecutiveKpiRow({
       : cards;
 
   return (
-    <div
-      className={`grid gap-4 sm:grid-cols-2 ${
-        visibleCards.length <= 3
-          ? "xl:grid-cols-3"
-          : "xl:grid-cols-3 2xl:grid-cols-6"
-      }`}
-    >
+    <DashboardKpiGrid columns={visibleCards.length <= 3 ? 3 : 5}>
       {visibleCards.map((c) => (
         <StatCard
           key={c.label}
@@ -137,7 +125,7 @@ export default function ExecutiveKpiRow({
           to={c.to}
         />
       ))}
-    </div>
+    </DashboardKpiGrid>
   );
 }
 

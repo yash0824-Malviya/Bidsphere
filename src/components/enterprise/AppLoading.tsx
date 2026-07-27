@@ -33,10 +33,10 @@ export default function AppLoading({
     >
       {!compact && (
         <div className="mb-8 flex flex-col items-center text-center">
-          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-[#146CE8]/15 bg-white shadow-sm ring-1 ring-[#146CE8]/10">
+          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-[#1F3A6D]/15 bg-white shadow-sm ring-1 ring-[#1F3A6D]/10">
             <BrandLogo size="xs" className="max-h-9 max-w-[2.5rem]" />
           </div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#146CE8]">
+          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#1F3A6D]">
             {APP_NAME}
           </p>
           <h2 className="mt-2 text-lg font-semibold tracking-tight text-neutral-900">
@@ -44,7 +44,7 @@ export default function AppLoading({
           </h2>
           <p className="mt-1.5 max-w-md text-sm text-neutral-500">{subtitle}</p>
           <div
-            className="enterprise-progress-bar mt-5 h-1 w-40 overflow-hidden rounded-full bg-[#146CE8]/10"
+            className="enterprise-progress-bar mt-5 h-1 w-40 overflow-hidden rounded-full bg-[#1F3A6D]/10"
             aria-hidden
           />
         </div>

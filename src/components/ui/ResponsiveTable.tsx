@@ -58,7 +58,7 @@ export default function ResponsiveTable<T>({
           );
         })}
       </div>
-      <div className="hidden overflow-x-auto md:block">{children}</div>
+      <div className="table-shell-scroll hidden md:block">{children}</div>
     </>
   );
 }

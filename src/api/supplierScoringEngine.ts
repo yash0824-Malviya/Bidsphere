@@ -133,7 +133,9 @@ export function scoreSuppliers(
   quotations: AIQuotation[],
   requestedItemCount: number,
   weights: ScoringWeights = DEFAULT_SCORING_WEIGHTS,
-  historicalData?: HistoricalPerformanceMap
+  historicalData?: HistoricalPerformanceMap,
+  /** Optional RFQ Target Prices by item_code for variance / savings scoring. */
+  targetPrices?: Map<string, number>,
 ): ScoringEngineResult {
   if (quotations.length === 0) {
     return {
@@ -148,7 +150,33 @@ export function scoreSuppliers(
   const coverage = extractItemCoverage(quotations, requestedItemCount);
 
   // Price: lower is better → inverse scale (always from quotation data)
-  const priceScores = inverseLinearScale(totals);
+  let priceScores = inverseLinearScale(totals);
+
+  // Blend competitive ranking with distance-to-target when targets exist.
+  if (targetPrices && targetPrices.size > 0) {
+    const vsTarget = quotations.map((q) => {
+      let targetValue = 0;
+      let quotedValue = 0;
+      for (const line of q.items) {
+        const t = targetPrices.get(line.item);
+        if (t == null || !(t > 0) || !(line.unit_price > 0)) continue;
+        const qty = line.requested_qty && line.requested_qty > 0
+          ? line.requested_qty
+          : line.total > 0 && line.unit_price > 0
+            ? line.total / line.unit_price
+            : 1;
+        targetValue += t * qty;
+        quotedValue += line.unit_price * qty;
+      }
+      if (targetValue <= 0) return 50;
+      /* Below target → high score; above target → lower. Cap 0–100. */
+      const ratio = quotedValue / targetValue;
+      return clamp(Math.round(100 * (1.2 - ratio)));
+    });
+    priceScores = priceScores.map((competitive, i) =>
+      clamp(Math.round(competitive * 0.7 + vsTarget[i] * 0.3)),
+    );
+  }
 
   // Delivery: blend quotation delivery days with historical on-time rate
   const deliveryDayScores = inverseLinearScale(deliveryDays);
@@ -172,12 +200,32 @@ export function scoreSuppliers(
 
     const scoreSources: ScoreSource[] = [];
 
-    // ── Price Score (always from current quotation) ─────────────────
+    // ── Price Score (quotation ranking + optional Target Price variance) ─
     const priceScore = priceScores[i];
+    let priceSource = `Current quotation: ${q.total_value > 0 ? `$${q.total_value.toLocaleString()}` : "N/A"}`;
+    if (targetPrices && targetPrices.size > 0) {
+      let savings = 0;
+      for (const line of q.items) {
+        const t = targetPrices.get(line.item);
+        if (t == null || !(t > 0) || !(line.unit_price > 0) || line.unit_price >= t)
+          continue;
+        const qty =
+          line.requested_qty && line.requested_qty > 0
+            ? line.requested_qty
+            : line.total > 0
+              ? line.total / line.unit_price
+              : 1;
+        savings += (t - line.unit_price) * qty;
+      }
+      priceSource +=
+        savings > 0
+          ? ` · vs Target potential savings $${Math.round(savings).toLocaleString()}`
+          : " · scored vs Target Price";
+    }
     scoreSources.push({
       dimension: "Price",
       value: priceScore,
-      source: `Current quotation: ${q.total_value > 0 ? `$${q.total_value.toLocaleString()}` : "N/A"}`,
+      source: priceSource,
       has_data: true,
     });
 

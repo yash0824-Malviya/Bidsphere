@@ -30,6 +30,10 @@ import type { FinanceReviewItem, FinanceReviewStatus } from "../../types/erpnext
 
 import EmptyState from "../../components/EmptyState";
 
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+} from "../../components/dashboard/DashboardKpiCard";
+
 import PageHeader from "../../components/PageHeader";
 
 import RejectedReviewActions from "../../components/sourcing/RejectedReviewActions";
@@ -40,7 +44,11 @@ import { formatCurrency, formatDate } from "../../utils/format";
 
 import { SortableTableHeader } from "../../components/ui";
 
+import Pagination from "../../components/ui/Pagination";
+
 import { useListSort } from "../../hooks/useListSort";
+
+import { useClientPagination } from "../../hooks/usePagination";
 
 import type { SortState } from "../../components/ui";
 
@@ -238,6 +246,18 @@ export default function FinanceReviewsPage() {
 
   );
 
+  const {
+    pageRows,
+    totalRecords,
+    totalPages,
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+  } = useClientPagination(sortedRows, {
+    resetKey: `${statusFilter}|${sort.key}|${sort.direction}`,
+  });
+
 
 
   const kpis = useMemo(() => {
@@ -281,17 +301,35 @@ export default function FinanceReviewsPage() {
 
 
       {isLoading ? (
-        <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <DashboardKpiGrid columns={3} className="mb-5">
           {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-20 rounded-xl" />
+            <div key={i} className="kpi-card">
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="mt-2 h-12 w-16" />
+            </div>
           ))}
-        </div>
+        </DashboardKpiGrid>
       ) : (
-        <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <KpiCard icon={Clock} label="Pending" value={kpis.pending} tone="warning" />
-          <KpiCard icon={CheckCircle2} label="Approved" value={kpis.approved} tone="success" />
-          <KpiCard icon={XCircle} label="Rejected" value={kpis.rejected} tone="danger" />
-        </div>
+        <DashboardKpiGrid columns={3} className="mb-5">
+          <DashboardKpiCard
+            icon={Clock}
+            label="Pending"
+            value={kpis.pending}
+            iconClassName="bg-warning-50 text-warning-600"
+          />
+          <DashboardKpiCard
+            icon={CheckCircle2}
+            label="Approved"
+            value={kpis.approved}
+            iconClassName="bg-success-50 text-success-600"
+          />
+          <DashboardKpiCard
+            icon={XCircle}
+            label="Rejected"
+            value={kpis.rejected}
+            iconClassName="bg-danger-50 text-danger-600"
+          />
+        </DashboardKpiGrid>
       )}
 
 
@@ -392,7 +430,7 @@ export default function FinanceReviewsPage() {
 
             <div className="data-card-list">
 
-              {sortedRows.map((review) => (
+              {pageRows.map((review) => (
 
                 <ReviewMobileCard key={review.rfq_name} review={review} onOpen={openReview} />
 
@@ -440,7 +478,7 @@ export default function FinanceReviewsPage() {
 
                 <tbody>
 
-                  {sortedRows.map((review) => (
+                  {pageRows.map((review) => (
 
                     <tr key={review.rfq_name} className="group">
 
@@ -523,6 +561,16 @@ export default function FinanceReviewsPage() {
 
             </div>
 
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalRecords={totalRecords}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+              recordLabel="reviews"
+            />
+
           </>
 
         )}
@@ -587,58 +635,6 @@ function LegalStatusPill({ status }: { status: string }) {
       {status}
 
     </span>
-
-  );
-
-}
-
-
-
-function KpiCard({
-
-  icon: Icon, label, value, tone,
-
-}: {
-
-  icon: typeof Clock; label: string; value: number | string;
-
-  tone: "neutral" | "warning" | "success" | "danger" | "primary";
-
-}) {
-
-  const iconTones = {
-
-    neutral: "bg-neutral-100 text-neutral-500",
-
-    warning: "bg-warning-50 text-warning-600",
-
-    success: "bg-success-50 text-success-600",
-
-    danger: "bg-danger-50 text-danger-600",
-
-    primary: "bg-primary-50 text-primary-600",
-
-  };
-
-  return (
-
-    <div className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white px-4 py-3.5 shadow-sm">
-
-      <div className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg ${iconTones[tone]}`}>
-
-        <Icon className="h-5 w-5" />
-
-      </div>
-
-      <div>
-
-        <p className="text-2xl font-bold tabular-nums text-neutral-900">{value}</p>
-
-        <p className="text-[11px] font-medium uppercase tracking-wider text-neutral-500">{label}</p>
-
-      </div>
-
-    </div>
 
   );
 

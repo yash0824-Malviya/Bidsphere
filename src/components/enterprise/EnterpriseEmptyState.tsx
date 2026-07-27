@@ -25,7 +25,7 @@ export default function EnterpriseEmptyState({
     <div
       className={`enterprise-fade-in flex flex-col items-center justify-center px-6 py-16 text-center ${className}`.trim()}
     >
-      <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-3xl bg-[#146CE8]/8 text-[#146CE8] ring-1 ring-inset ring-[#146CE8]/15">
+      <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-3xl bg-[#1F3A6D]/8 text-[#1F3A6D] ring-1 ring-inset ring-[#1F3A6D]/15">
         <Icon className="h-10 w-10" strokeWidth={1.5} />
       </div>
       <h2 className="text-lg font-semibold tracking-tight text-neutral-900">

@@ -89,12 +89,12 @@ export default function SupplierForgotPasswordPage() {
           <div className="rounded-2xl border border-neutral-200 bg-white p-7 shadow-sm sm:p-8">
             <Link
               to="/supplier/login"
-              className="mb-5 inline-flex items-center gap-1 text-xs font-semibold text-[#146CE8] no-underline hover:underline"
+              className="mb-5 inline-flex items-center gap-1 text-xs font-semibold text-[#1F3A6D] no-underline hover:underline"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               Back to sign in
             </Link>
-            <div className="mb-6 flex h-11 w-11 items-center justify-center rounded-xl bg-[#0098EA] text-white shadow-md shadow-[#0098EA]/25">
+            <div className="mb-6 flex h-11 w-11 items-center justify-center rounded-xl bg-[#1F3A6D] text-white shadow-md shadow-[#1F3A6D]/25">
               {step === "request" ? (
                 <Mail className="h-5 w-5" />
               ) : (
@@ -119,7 +119,7 @@ export default function SupplierForgotPasswordPage() {
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full rounded-lg border border-neutral-300 px-3 py-2.5 text-sm"
+                    className="input-field"
                     autoComplete="email"
                     placeholder="you@company.com"
                   />
@@ -127,7 +127,7 @@ export default function SupplierForgotPasswordPage() {
                 <button
                   type="submit"
                   disabled={busy}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#0B3D91] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+                  className="btn-primary w-full"
                 >
                   {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                   Send OTP
@@ -149,7 +149,7 @@ export default function SupplierForgotPasswordPage() {
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full rounded-lg border border-neutral-300 px-3 py-2.5 text-sm"
+                    className="input-field"
                     autoComplete="email"
                   />
                 </label>
@@ -164,7 +164,7 @@ export default function SupplierForgotPasswordPage() {
                     maxLength={6}
                     value={otp}
                     onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                    className="w-full rounded-lg border border-neutral-300 px-3 py-2.5 font-mono text-sm tracking-[0.3em]"
+                    className="input-field font-mono tracking-[0.3em]"
                     autoComplete="one-time-code"
                   />
                 </label>
@@ -175,7 +175,7 @@ export default function SupplierForgotPasswordPage() {
                     required
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    className="w-full rounded-lg border border-neutral-300 px-3 py-2.5 text-sm"
+                    className="input-field"
                     autoComplete="new-password"
                     minLength={PORTAL_PASSWORD_MIN_LEN}
                     maxLength={PORTAL_PASSWORD_MAX_LEN}
@@ -193,21 +193,21 @@ export default function SupplierForgotPasswordPage() {
                     required
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    className="w-full rounded-lg border border-neutral-300 px-3 py-2.5 text-sm"
+                    className="input-field"
                     autoComplete="new-password"
                   />
                 </label>
                 <button
                   type="submit"
                   disabled={busy}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#0B3D91] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
+                  className="btn-primary w-full"
                 >
                   {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                   Reset password
                 </button>
                 <button
                   type="button"
-                  className="w-full text-center text-xs font-semibold text-[#146CE8]"
+                  className="w-full text-center text-xs font-semibold text-[#1F3A6D]"
                   onClick={() => setStep("request")}
                 >
                   Request a new OTP

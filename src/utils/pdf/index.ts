@@ -13,6 +13,17 @@ export {
 } from "./poPdf";
 
 export {
+  downloadRfqPdf,
+  printRfqPdf,
+  rfqPdfFilename,
+  buildRfqPdf,
+  type RfqPdfData,
+  type RfqPdfItem,
+  type RfqPdfApprovalRow,
+  type RfqPdfAiRecommendation,
+} from "./rfqPdf";
+
+export {
   downloadGrnPdf,
   printGrnPdf,
   grnPdfFilename,

@@ -604,7 +604,12 @@ function App() {
             />
             <Route
               path="/department/issued-items/accepted-items"
-              element={<DepartmentIssuedItemsPage mode="accepted" />}
+              element={
+                <Navigate
+                  to="/department/issued-items/issue-receipts"
+                  replace
+                />
+              }
             />
             <Route
               path="/department/issued-items/issue-receipts"
@@ -641,7 +646,7 @@ function App() {
               path="/material-requests/issued-items/accepted"
               element={
                 <Navigate
-                  to="/department/issued-items/accepted-items"
+                  to="/department/issued-items/issue-receipts"
                   replace
                 />
               }

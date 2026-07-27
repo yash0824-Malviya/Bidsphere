@@ -50,6 +50,7 @@ import { getFullFileUrl } from "../../api/legalDocsStorage";
 import { resolveEsignBundle } from "../../api/legalEsign";
 import { getLatestAnalysisSnapshot } from "../../api/supplierScoringResults";
 import { useAuthStore } from "../../store/authStore";
+import { formatRfqOwnerFromDoc } from "../../config/roles";
 import { formatCurrency, formatDate } from "../../utils/format";
 import { AppLoading, EnterpriseError, FadeIn } from "../../components/enterprise";
 import SlaStageBadge from "../../components/sla/SlaStageBadge";
@@ -528,7 +529,7 @@ export default function LegalReviewDetailPage() {
         >
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <InfoField label="RFQ Number" value={rfq.name} />
-            <InfoField label="Created By" value={rfq.owner} />
+            <InfoField label="Created By" value={formatRfqOwnerFromDoc(rfq)} />
             <InfoField label="Transaction Date" value={formatDate(rfq.transaction_date)} />
             <InfoField label="Valid Till" value={parsed.validTill ?? "—"} />
             <InfoField label="Status" value={rfq.status ?? "Draft"} />

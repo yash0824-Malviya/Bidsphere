@@ -19,6 +19,9 @@ import {
 } from "lucide-react";
 import type { AIRecommendation, SupplierAnalysisRow } from "../types/erpnext";
 import { formatCurrency } from "../utils/format";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+} from "./dashboard/DashboardKpiCard";
 
 type RiskLevel = "Low" | "Medium" | "High";
 
@@ -361,20 +364,42 @@ export default function SupplierSelectionSummary({
             {/* ═══ SECTION 3 — Decision Summary KPIs ═══ */}
             <div>
               <SectionTitle icon={BarChart3} title="Decision Summary" />
-              <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
-                <KpiCard label="Selected Supplier" value={selectedSupplier} small />
+              <DashboardKpiGrid columns={3} className="mt-3">
+                <DashboardKpiCard
+                  label="Selected Supplier"
+                  value={selectedSupplier}
+                  icon={Truck}
+                  iconClassName="bg-primary-50 text-primary-600"
+                />
                 {rank !== null && (
-                  <KpiCard label="Supplier Rank" value={`#${rank}`} />
+                  <DashboardKpiCard
+                    label="Supplier Rank"
+                    value={`#${rank}`}
+                    icon={Award}
+                    iconClassName="bg-amber-50 text-amber-600"
+                  />
                 )}
                 {confidence !== null && (
-                  <KpiCard label="Confidence Score" value={`${confidence}%`} />
+                  <DashboardKpiCard
+                    label="Confidence Score"
+                    value={`${confidence}%`}
+                    icon={Target}
+                    iconClassName="bg-violet-50 text-violet-600"
+                  />
                 )}
-                <KpiCard label="Quoted Value" value={formatCurrency(displayAmount)} />
+                <DashboardKpiCard
+                  label="Quoted Value"
+                  value={formatCurrency(displayAmount)}
+                  icon={DollarSign}
+                  iconClassName="bg-blue-50 text-blue-600"
+                />
                 {estimatedSavings > 0 && (
-                  <KpiCard
+                  <DashboardKpiCard
                     label="Savings vs Highest"
                     value={formatCurrency(estimatedSavings)}
-                    accent="success"
+                    icon={TrendingDown}
+                    iconClassName="bg-success-50 text-success-600"
+                    className="border-success-200"
                   />
                 )}
                 {risk && (
@@ -387,7 +412,7 @@ export default function SupplierSelectionSummary({
                     <p className="mt-1 text-lg font-bold">{risk}</p>
                   </div>
                 )}
-              </div>
+              </DashboardKpiGrid>
             </div>
 
             {/* ═══ SECTION 1 — Why This Supplier Was Selected ═══ */}
@@ -583,39 +608,6 @@ function SectionTitle({
       <h3 className="text-xs font-bold uppercase tracking-widest text-neutral-500">
         {title}
       </h3>
-    </div>
-  );
-}
-
-function KpiCard({
-  label,
-  value,
-  accent,
-  small,
-}: {
-  label: string;
-  value: string;
-  accent?: "success";
-  small?: boolean;
-}) {
-  return (
-    <div
-      className={`rounded-xl border bg-white p-4 shadow-sm ${
-        accent === "success"
-          ? "border-success-200"
-          : "border-neutral-200"
-      }`}
-    >
-      <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
-        {label}
-      </p>
-      <p
-        className={`mt-1 font-bold text-neutral-900 ${
-          small ? "truncate text-sm" : "text-lg"
-        } ${accent === "success" ? "text-success-700" : ""}`}
-      >
-        {value}
-      </p>
     </div>
   );
 }

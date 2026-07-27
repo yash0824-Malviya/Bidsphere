@@ -14,6 +14,8 @@ import type {
   DashboardPoLite,
   DashboardRfqLite,
 } from "../api/dashboard";
+import { formatRfqOwnerLabel } from "../config/roles";
+import { PRIMARY_CHART_SCALE } from "../theme/brandColors";
 import { formatCurrencyCompact } from "./paymentUtils";
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
@@ -102,18 +104,8 @@ export interface FinancialSummaryItem {
   tone?: "default" | "warning" | "danger" | "success";
 }
 
-// Tonal shades of the single Netlink brand blue (#0098EA) so category charts
-// stay on-brand instead of mixing several different blues.
-const CATEGORY_COLORS = [
-  "#0098EA",
-  "#007FC4",
-  "#38bdf8",
-  "#0369a1",
-  "#7dd3fc",
-  "#075985",
-  "#bae6fd",
-  "#0c4a6e",
-];
+// Tonal shades of the Netlink brand primary so category charts stay on-brand.
+const CATEGORY_COLORS = [...PRIMARY_CHART_SCALE];
 
 /** Standard procurement categories for executive reporting. */
 export const DEFAULT_PROCUREMENT_CATEGORIES = [
@@ -468,7 +460,7 @@ export function buildActivityFeed(
       id: `rfq-${rfq.name}`,
       type: "rfq",
       title: rfq.name,
-      subtitle: rfq.owner ? `RFQ · ${rfq.owner}` : "Request for Quotation",
+      subtitle: `RFQ · ${formatRfqOwnerLabel(rfq.owner)}`,
       date,
       status: rfq.status,
       to: `/sourcing/rfq/${encodeURIComponent(rfq.name)}`,

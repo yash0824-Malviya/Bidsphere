@@ -46,6 +46,7 @@ import type {
   AssignableBudgetOption,
 } from "../../api/budget";
 import { useAuthStore } from "../../store/authStore";
+import { formatRfqOwnerFromDoc } from "../../config/roles";
 import { formatCurrency, formatDate } from "../../utils/format";
 import { Skeleton } from "../../components/Skeleton";
 import SlaStageBadge from "../../components/sla/SlaStageBadge";
@@ -533,7 +534,7 @@ export default function FinanceReviewDetailPage() {
         >
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <InfoField label="RFQ Number" value={rfq.name} />
-            <InfoField label="Requested By" value={rfq.owner} />
+            <InfoField label="Requested By" value={formatRfqOwnerFromDoc(rfq)} />
             <InfoField label="Transaction Date" value={formatDate(rfq.transaction_date)} />
             <InfoField label="Status" value={rfq.status ?? "Draft"} />
             <InfoField label="Company" value={rfq.company ?? "—"} />

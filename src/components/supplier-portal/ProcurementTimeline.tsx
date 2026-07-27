@@ -19,7 +19,7 @@ interface Props {
  */
 export default function ProcurementTimeline({
   steps,
-  title = "Procurement Workflow",
+  title = "Procurement Status",
 }: Props) {
   const rejectedIndex = steps.findIndex((s) => s.rejected);
   const firstPendingIndex = steps.findIndex((s) => !s.done && !s.rejected);

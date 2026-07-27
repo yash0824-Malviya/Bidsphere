@@ -208,6 +208,16 @@ export interface RFQItem extends ErpDoc {
   custom_2d_drawing?: string;
   custom_engineering_attachments?: string;
   /**
+   * Internal target unit price for variance / savings analysis.
+   * Set during RFQ creation. Provisioned by scripts/setup-rfq-target-price.mjs.
+   */
+  custom_target_price?: number | null;
+  /**
+   * Per-line: when enabled, this line's Target Price is visible to suppliers.
+   * Falls back to RFQ.custom_show_target_price_to_supplier for older RFQs.
+   */
+  custom_show_target_price_to_supplier?: 0 | 1 | boolean;
+  /**
    * Convenience aliases for the primary attachment URL ref
    * (same File as custom_2d_drawing / first JSON entry — not a new File).
    */
@@ -236,6 +246,12 @@ export interface RequestForQuotation extends ErpDoc {
    * scripts/setup-cost-breakdown-doctype.mjs.
    */
   custom_require_cost_breakdown?: 0 | 1 | boolean;
+  /**
+   * When enabled, Target Price on RFQ items is visible to invited suppliers
+   * and included in supplier-facing RFQ PDFs. Provisioned by
+   * scripts/setup-rfq-target-price.mjs.
+   */
+  custom_show_target_price_to_supplier?: 0 | 1 | boolean;
   suppliers: RFQSupplierRow[];
   items: RFQItem[];
 }

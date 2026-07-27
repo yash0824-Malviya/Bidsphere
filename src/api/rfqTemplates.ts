@@ -447,7 +447,10 @@ export async function createRFQFromTemplate(
       conversion_factor: 1,
       warehouse,
       schedule_date: today,
-      rate: item.target_price ?? 0,
+      custom_target_price:
+        item.target_price != null && Number(item.target_price) >= 0
+          ? Number(item.target_price)
+          : undefined,
     })),
     suppliers: template.suppliers.map((s) => ({
       doctype: RFQ_SUPPLIER_DOCTYPE,

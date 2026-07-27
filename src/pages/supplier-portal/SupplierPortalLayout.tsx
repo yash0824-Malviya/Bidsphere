@@ -1,14 +1,15 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
-import { Bell, LogOut, User } from "lucide-react";
+import { Bell, LogOut, Menu, User, X } from "lucide-react";
 
 import { getNotificationsForViewer } from "../../api/notifications";
 import { APP_SUPPLIER_PORTAL } from "../../config/branding";
 import { useDocumentTitle } from "../../hooks/useDocumentTitle";
 import BrandLogo from "../../components/BrandLogo";
 import LanguageSwitcher from "../../components/LanguageSwitcher";
+import PageContainer from "../../components/layout/PageContainer";
 import {
   clearSupplierSession,
   readSupplierSession,
@@ -70,12 +71,23 @@ export default function SupplierPortalLayout({
   const { pathname } = useLocation();
   const { t } = useTranslation();
   const mainRef = useRef<HTMLElement>(null);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   useDocumentTitle();
 
   // Sidebar/header stay mounted; reset only the content pane on route change.
   useEffect(() => {
     mainRef.current?.scrollTo({ top: 0 });
+    setMobileNavOpen(false);
   }, [pathname]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [mobileNavOpen]);
 
   const session = readSupplierSession();
   const supplierName =
@@ -124,7 +136,7 @@ export default function SupplierPortalLayout({
   const content = lockedRedirect ?? children ?? <Outlet />;
 
   return (
-    <div className="supplier-portal-layout flex min-h-screen w-full flex-col bg-[#f8fafb] lg:h-screen lg:flex-row lg:overflow-hidden">
+    <div className="supplier-portal-layout flex min-h-screen w-full min-w-0 flex-col overflow-x-clip bg-[#f8fafb] lg:h-[100dvh] lg:flex-row lg:overflow-hidden">
       {supplierName ? (
         <div className="hidden h-full shrink-0 lg:block">
           <SupplierPortalSidebar
@@ -135,21 +147,61 @@ export default function SupplierPortalLayout({
         </div>
       ) : null}
 
+      {supplierName && mobileNavOpen ? (
+        <>
+          <button
+            type="button"
+            aria-label="Close navigation menu"
+            className="fixed inset-0 z-40 bg-neutral-900/40 lg:hidden"
+            onClick={() => setMobileNavOpen(false)}
+          />
+          <div
+            className={`fixed inset-y-0 left-0 z-50 max-w-[100vw] transform transition-transform duration-300 ease-in-out lg:hidden ${
+              mobileNavOpen ? "translate-x-0" : "-translate-x-full"
+            }`}
+          >
+            <SupplierPortalSidebar
+              supplierName={supplierName}
+              unlocked={unlocked}
+              statusBadge={statusBadge}
+              className="app-drawer-panel shadow-2xl"
+              onNavigate={() => setMobileNavOpen(false)}
+            />
+          </div>
+        </>
+      ) : null}
+
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="z-30 shrink-0 bg-white shadow-sm">
-          <div className="flex items-center justify-between gap-4 px-4 py-3 sm:px-5 lg:px-8">
-            <Link
-              to={supplierName ? "/supplier/dashboard" : "/supplier/login"}
-              className="flex min-w-0 items-center gap-2 lg:hidden"
-            >
-              <BrandLogo markOnly />
-              <span className="truncate text-sm font-semibold text-neutral-900">
-                {APP_SUPPLIER_PORTAL}
-              </span>
-            </Link>
+          <div className="flex min-w-0 items-center justify-between gap-2 px-4 py-3 sm:gap-4 sm:px-5 lg:px-8">
+            <div className="flex min-w-0 items-center gap-2">
+              {supplierName ? (
+                <button
+                  type="button"
+                  onClick={() => setMobileNavOpen((v) => !v)}
+                  className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50 lg:hidden"
+                  aria-label={mobileNavOpen ? "Close navigation" : "Open navigation"}
+                >
+                  {mobileNavOpen ? (
+                    <X className="h-4 w-4" />
+                  ) : (
+                    <Menu className="h-4 w-4" />
+                  )}
+                </button>
+              ) : null}
+              <Link
+                to={supplierName ? "/supplier/dashboard" : "/supplier/login"}
+                className="flex min-w-0 items-center gap-2 lg:hidden"
+              >
+                <BrandLogo markOnly />
+                <span className="truncate text-sm font-semibold text-neutral-900">
+                  {APP_SUPPLIER_PORTAL}
+                </span>
+              </Link>
+            </div>
 
             {supplierName ? (
-              <div className="ml-auto flex items-center gap-2 sm:gap-3">
+              <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-3">
                 <LanguageSwitcher />
                 <Link
                   to="/supplier/dashboard"
@@ -175,8 +227,10 @@ export default function SupplierPortalLayout({
                   </span>
                 )}
                 <span className="hidden items-center gap-1.5 rounded-full bg-accent-50 px-3 py-1 text-xs font-medium text-accent-700 ring-1 ring-inset ring-accent-200 sm:inline-flex">
-                  <User className="h-3 w-3" />
-                  <span className="max-w-[140px] truncate">{supplierName}</span>
+                  <User className="h-3 w-3 shrink-0" />
+                  <span className="max-w-[100px] truncate md:max-w-[140px]">
+                    {supplierName}
+                  </span>
                 </span>
                 <button
                   type="button"
@@ -199,9 +253,10 @@ export default function SupplierPortalLayout({
           {supplierName ? <SupplierPortalMobileNav unlocked={unlocked} /> : null}
         </header>
 
-        {/* Content: 24px gap from sidebar (lg:pl-6) · 32px page padding */}
-        <main ref={mainRef} className="min-h-0 flex-1 overflow-y-auto lg:pl-6">
-          <div className="box-border w-full p-8">{content}</div>
+        <main ref={mainRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+          <PageContainer bare={pathname === "/supplier/dashboard"}>
+            {content}
+          </PageContainer>
         </main>
       </div>
     </div>

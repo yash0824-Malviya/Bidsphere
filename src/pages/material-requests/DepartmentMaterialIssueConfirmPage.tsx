@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { ArrowLeft, Download, Loader2, Printer } from "lucide-react";
@@ -34,6 +34,7 @@ export function DepartmentMaterialReceiptsListPage() {
 export default function DepartmentMaterialIssueConfirmPage() {
   const { name } = useParams<{ name: string }>();
   const issueNumber = name ? decodeURIComponent(name) : "";
+  const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
   const qc = useQueryClient();
 
@@ -72,7 +73,7 @@ export default function DepartmentMaterialIssueConfirmPage() {
       }),
     onSuccess: () => {
       toast.success(
-        "Material accepted. Moved to Accepted Items · Material Request Completed.",
+        "Material accepted. Issue Receipt recorded · Material Request Completed.",
       );
       setShowSign(false);
       void qc.invalidateQueries({
@@ -86,6 +87,7 @@ export default function DepartmentMaterialIssueConfirmPage() {
       });
       void qc.invalidateQueries({ queryKey: ["material-request"] });
       void qc.invalidateQueries({ queryKey: ["mr-dashboard-rows"] });
+      navigate("/department/issued-items/issue-receipts");
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -249,7 +251,7 @@ export default function DepartmentMaterialIssueConfirmPage() {
             {showSign ? (
               <MaterialIssueReceiptSignPanel
                 title="Department Digital Signature"
-                subtitle="Sign to accept material. Receipt moves to Accepted Items."
+                subtitle="Sign to accept material. Receipt is saved under Issue Receipts."
                 defaultName={
                   ownerTitleFromEmail(user?.email || user?.name) ||
                   user?.full_name ||

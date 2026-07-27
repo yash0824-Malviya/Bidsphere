@@ -4,8 +4,6 @@ import { Link } from "react-router-dom";
 import {
   Activity,
   AlertTriangle,
-  ArrowDownRight,
-  ArrowUpRight,
   Award,
   Bell,
   BarChart3,
@@ -79,6 +77,9 @@ import { getAllNotifications } from "../../api/notifications";
 import { getCount } from "../../api/erpnext";
 import { buildTopSuppliersWithTrend, computeMonthlySpendTrend } from "../../utils/dashboardUtils";
 import { Skeleton } from "../../components/Skeleton";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+} from "../../components/dashboard/DashboardKpiCard";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
 import { formatCurrencyCompact, formatDateTime } from "../../utils/format";
 
@@ -110,6 +111,11 @@ const TONE: Record<Tone, { iconBg: string; icon: string }> = {
   teal: { iconBg: "bg-teal-100", icon: "text-teal-600" },
   slate: { iconBg: "bg-neutral-100", icon: "text-neutral-500" },
 };
+
+function toneIconClass(tone: Tone): string {
+  const c = TONE[tone];
+  return `${c.iconBg} ${c.icon}`;
+}
 
 type StatusKind = "healthy" | "warning" | "offline" | "neutral";
 
@@ -342,37 +348,37 @@ export default function AdminDashboardPage() {
       <section>
         <SectionHeader icon={Gauge} title={t("adminDashboard.sections.executiveOverview")} />
         {coreLoading ? (
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+          <DashboardKpiGrid columns={5}>
             {Array.from({ length: 10 }).map((_, i) => (
               <Skeleton key={i} className="h-[86px] rounded-xl" />
             ))}
-          </div>
+          </DashboardKpiGrid>
         ) : (
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-            <KpiCard icon={Users} tone="blue" label={t("adminDashboard.kpi.totalUsers")} value={kpisQ.data?.totalUsers ?? 0} to="/admin/users" />
-            <KpiCard icon={Truck} tone="violet" label={t("adminDashboard.kpi.activeSuppliers")} value={counts?.activeSuppliers ?? kpisQ.data?.totalSuppliers ?? 0} to="/admin/suppliers" />
-            <KpiCard icon={FileText} tone="cyan" label={t("adminDashboard.kpi.openRfqs")} value={counts?.openRfqs ?? kpisQ.data?.totalRFQs ?? 0} to="/admin/procurement" />
-            <KpiCard icon={Gavel} tone="indigo" label={t("adminDashboard.kpi.liveAuctions")} value={liveAuctions} to="/sourcing/reverse-bidding" />
-            <KpiCard icon={Clock} tone="rose" label={t("adminDashboard.kpi.pendingApprovals")} value={pendingApprQ.data?.length ?? kpisQ.data?.pendingApprovals ?? 0} to="/admin/approvals/pending" />
-            <KpiCard icon={ShoppingCart} tone="amber" label={t("adminDashboard.kpi.openPos")} value={counts?.activePos ?? kpisQ.data?.totalPOs ?? 0} to="/p2p/purchase-orders" />
-            <KpiCard icon={Warehouse} tone="teal" label={t("adminDashboard.kpi.warehouseRequests")} value={mrCounts?.pendingWarehouseReview ?? 0} to="/warehouse/material-requests/pending" />
-            <KpiCard
+          <DashboardKpiGrid columns={5}>
+            <DashboardKpiCard icon={Users} iconClassName={toneIconClass("blue")} label={t("adminDashboard.kpi.totalUsers")} value={kpisQ.data?.totalUsers ?? 0} to="/admin/users" />
+            <DashboardKpiCard icon={Truck} iconClassName={toneIconClass("violet")} label={t("adminDashboard.kpi.activeSuppliers")} value={counts?.activeSuppliers ?? kpisQ.data?.totalSuppliers ?? 0} to="/admin/suppliers" />
+            <DashboardKpiCard icon={FileText} iconClassName={toneIconClass("cyan")} label={t("adminDashboard.kpi.openRfqs")} value={counts?.openRfqs ?? kpisQ.data?.totalRFQs ?? 0} to="/admin/procurement" />
+            <DashboardKpiCard icon={Gavel} iconClassName={toneIconClass("indigo")} label={t("adminDashboard.kpi.liveAuctions")} value={liveAuctions} to="/sourcing/reverse-bidding" />
+            <DashboardKpiCard icon={Clock} iconClassName={toneIconClass("rose")} label={t("adminDashboard.kpi.pendingApprovals")} value={pendingApprQ.data?.length ?? kpisQ.data?.pendingApprovals ?? 0} to="/admin/approvals/pending" />
+            <DashboardKpiCard icon={ShoppingCart} iconClassName={toneIconClass("amber")} label={t("adminDashboard.kpi.openPos")} value={counts?.activePos ?? kpisQ.data?.totalPOs ?? 0} to="/p2p/purchase-orders" />
+            <DashboardKpiCard icon={Warehouse} iconClassName={toneIconClass("teal")} label={t("adminDashboard.kpi.warehouseRequests")} value={mrCounts?.pendingWarehouseReview ?? 0} to="/warehouse/material-requests/pending" />
+            <DashboardKpiCard
               icon={DollarSign}
-              tone="emerald"
+              iconClassName={toneIconClass("emerald")}
               label={t("adminDashboard.kpi.monthlySpend")}
               value={formatCurrencyCompact(mtdSpend)}
               to="/admin/reports"
-              trend={monthTrend != null ? { value: monthTrend } : undefined}
+              subtitle={monthTrend != null ? `${monthTrend >= 0 ? "+" : ""}${monthTrend.toFixed(1)}%` : undefined}
             />
-            <KpiCard
+            <DashboardKpiCard
               icon={Wallet}
-              tone={typeof budgetUtil === "number" && budgetUtil >= 90 ? "rose" : typeof budgetUtil === "number" && budgetUtil >= 75 ? "amber" : "emerald"}
+              iconClassName={toneIconClass(typeof budgetUtil === "number" && budgetUtil >= 90 ? "rose" : typeof budgetUtil === "number" && budgetUtil >= 75 ? "amber" : "emerald")}
               label={t("adminDashboard.kpi.budgetUtilization")}
               value={typeof budgetUtil === "number" ? `${Math.round(budgetUtil)}%` : "—"}
               to="/admin/budget"
             />
-            <KpiCard icon={AlertTriangle} tone={slaBreaches > 0 ? "rose" : "emerald"} label={t("adminDashboard.kpi.slaBreaches")} value={slaBreaches} to="/admin/sla-reports" />
-          </div>
+            <DashboardKpiCard icon={AlertTriangle} iconClassName={toneIconClass(slaBreaches > 0 ? "rose" : "emerald")} label={t("adminDashboard.kpi.slaBreaches")} value={slaBreaches} to="/admin/sla-reports" />
+          </DashboardKpiGrid>
         )}
       </section>
 
@@ -550,29 +556,29 @@ export default function AdminDashboardPage() {
           {/* Section 7: Supplier Analytics */}
           <section>
             <SectionHeader icon={Truck} title={t("adminDashboard.sections.supplierAnalytics")} />
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-              <KpiCard icon={Star} tone="amber" label={t("adminDashboard.supplier.topSupplier")} value={topSuppliers[0]?.supplier ?? "—"} sub={topSuppliers[0] ? formatCurrencyCompact(topSuppliers[0].spend) : undefined} small />
-              <KpiCard icon={Award} tone="emerald" label={t("adminDashboard.supplier.highestRated")} value={bestSupplier(topSuppliers, "high")?.supplier ?? "—"} sub={bestSupplier(topSuppliers, "high") ? `${Math.round(bestSupplier(topSuppliers, "high")!.performanceScore)}%` : undefined} small />
-              <KpiCard icon={AlertTriangle} tone="rose" label={t("adminDashboard.supplier.lowestRated")} value={bestSupplier(topSuppliers, "low")?.supplier ?? "—"} sub={bestSupplier(topSuppliers, "low") ? `${Math.round(bestSupplier(topSuppliers, "low")!.performanceScore)}%` : undefined} small />
-              <KpiCard icon={ShieldCheck} tone="violet" label={t("adminDashboard.supplier.performanceScore")} value={topSuppliers.length ? `${Math.round(topSuppliers.reduce((s, x) => s + x.performanceScore, 0) / topSuppliers.length)}%` : "—"} small />
-              <KpiCard icon={Truck} tone="blue" label={t("adminDashboard.supplier.activeSuppliers")} value={counts?.activeSuppliers ?? 0} small />
-              <KpiCard icon={XCircle} tone="slate" label={t("adminDashboard.supplier.blocked")} value={blockedQ.data ?? 0} small />
-              <KpiCard icon={CheckCircle2} tone="teal" label={t("adminDashboard.supplier.onTime")} value={perfAgg?.onTimePct != null ? `${Math.round(perfAgg.onTimePct)}%` : "—"} small />
-              <KpiCard icon={Clock} tone="orange" label={t("adminDashboard.supplier.avgDelivery")} value={perfAgg?.avgDelay != null ? t("adminDashboard.supplier.days", { count: Math.round(perfAgg.avgDelay) }) : "—"} small />
-            </div>
+            <DashboardKpiGrid columns={4}>
+              <DashboardKpiCard icon={Star} iconClassName={toneIconClass("amber")} label={t("adminDashboard.supplier.topSupplier")} value={topSuppliers[0]?.supplier ?? "—"} subtitle={topSuppliers[0] ? formatCurrencyCompact(topSuppliers[0].spend) : undefined} />
+              <DashboardKpiCard icon={Award} iconClassName={toneIconClass("emerald")} label={t("adminDashboard.supplier.highestRated")} value={bestSupplier(topSuppliers, "high")?.supplier ?? "—"} subtitle={bestSupplier(topSuppliers, "high") ? `${Math.round(bestSupplier(topSuppliers, "high")!.performanceScore)}%` : undefined} />
+              <DashboardKpiCard icon={AlertTriangle} iconClassName={toneIconClass("rose")} label={t("adminDashboard.supplier.lowestRated")} value={bestSupplier(topSuppliers, "low")?.supplier ?? "—"} subtitle={bestSupplier(topSuppliers, "low") ? `${Math.round(bestSupplier(topSuppliers, "low")!.performanceScore)}%` : undefined} />
+              <DashboardKpiCard icon={ShieldCheck} iconClassName={toneIconClass("violet")} label={t("adminDashboard.supplier.performanceScore")} value={topSuppliers.length ? `${Math.round(topSuppliers.reduce((s, x) => s + x.performanceScore, 0) / topSuppliers.length)}%` : "—"} />
+              <DashboardKpiCard icon={Truck} iconClassName={toneIconClass("blue")} label={t("adminDashboard.supplier.activeSuppliers")} value={counts?.activeSuppliers ?? 0} />
+              <DashboardKpiCard icon={XCircle} iconClassName={toneIconClass("slate")} label={t("adminDashboard.supplier.blocked")} value={blockedQ.data ?? 0} />
+              <DashboardKpiCard icon={CheckCircle2} iconClassName={toneIconClass("teal")} label={t("adminDashboard.supplier.onTime")} value={perfAgg?.onTimePct != null ? `${Math.round(perfAgg.onTimePct)}%` : "—"} />
+              <DashboardKpiCard icon={Clock} iconClassName={toneIconClass("orange")} label={t("adminDashboard.supplier.avgDelivery")} value={perfAgg?.avgDelay != null ? t("adminDashboard.supplier.days", { count: Math.round(perfAgg.avgDelay) }) : "—"} />
+            </DashboardKpiGrid>
           </section>
 
           {/* Section 8: Inventory Snapshot */}
           <section>
             <SectionHeader icon={Boxes} title={t("adminDashboard.sections.inventorySnapshot")} />
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
-              <KpiCard icon={AlertTriangle} tone="amber" label={t("adminDashboard.inventory.lowStock")} value={warehouseQ.data?.kpis.lowStockCount ?? 0} to="/warehouse/inventory/stock" small />
-              <KpiCard icon={XCircle} tone="rose" label={t("adminDashboard.inventory.outOfStock")} value={warehouseQ.data?.kpis.outOfStockCount ?? 0} to="/warehouse/inventory/stock" small />
-              <KpiCard icon={PackageCheck} tone="emerald" label={t("adminDashboard.inventory.readyToIssue")} value={readyToIssue} to="/warehouse/material-requests/pending" small loading={readyIssueQ.isLoading} />
-              <KpiCard icon={ShoppingCart} tone="cyan" label={t("adminDashboard.inventory.procurementRequired")} value={mrCounts?.pendingProcurement ?? 0} to="/material-requests/procurement" small />
-              <KpiCard icon={Package} tone="violet" label={t("adminDashboard.inventory.grnPending")} value={counts?.pendingGrns ?? 0} to="/p2p/grn" small />
-              <KpiCard icon={ClipboardCheck} tone="slate" label={t("adminDashboard.inventory.awaitingInspection")} value="—" small />
-            </div>
+            <DashboardKpiGrid columns={6}>
+              <DashboardKpiCard icon={AlertTriangle} iconClassName={toneIconClass("amber")} label={t("adminDashboard.inventory.lowStock")} value={warehouseQ.data?.kpis.lowStockCount ?? 0} to="/warehouse/inventory/stock" />
+              <DashboardKpiCard icon={XCircle} iconClassName={toneIconClass("rose")} label={t("adminDashboard.inventory.outOfStock")} value={warehouseQ.data?.kpis.outOfStockCount ?? 0} to="/warehouse/inventory/stock" />
+              <DashboardKpiCard icon={PackageCheck} iconClassName={toneIconClass("emerald")} label={t("adminDashboard.inventory.readyToIssue")} value={readyToIssue} to="/warehouse/material-requests/pending" loading={readyIssueQ.isLoading} />
+              <DashboardKpiCard icon={ShoppingCart} iconClassName={toneIconClass("cyan")} label={t("adminDashboard.inventory.procurementRequired")} value={mrCounts?.pendingProcurement ?? 0} to="/material-requests/procurement" />
+              <DashboardKpiCard icon={Package} iconClassName={toneIconClass("violet")} label={t("adminDashboard.inventory.grnPending")} value={counts?.pendingGrns ?? 0} to="/p2p/grn" />
+              <DashboardKpiCard icon={ClipboardCheck} iconClassName={toneIconClass("slate")} label={t("adminDashboard.inventory.awaitingInspection")} value="—" />
+            </DashboardKpiGrid>
           </section>
         </div>
 
@@ -699,65 +705,6 @@ function Panel({ icon: Icon, title, action, children }: { icon: LucideIcon; titl
       </div>
       <div className="p-3">{children}</div>
     </div>
-  );
-}
-
-function KpiCard({
-  icon: Icon,
-  tone,
-  label,
-  value,
-  sub,
-  to,
-  trend,
-  small,
-  loading,
-}: {
-  icon: LucideIcon;
-  tone: Tone;
-  label: string;
-  value: string | number;
-  sub?: string;
-  to?: string;
-  trend?: { value: number };
-  small?: boolean;
-  loading?: boolean;
-}) {
-  const c = TONE[tone];
-  if (loading) return <Skeleton className={`${small ? "h-[70px]" : "h-[86px]"} rounded-xl`} />;
-  const content = (
-    <div className="group h-full rounded-xl border border-neutral-200 bg-white px-3 py-2.5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-      <div className="flex items-center justify-between">
-        <div className={`flex h-7 w-7 items-center justify-center rounded-lg ${c.iconBg}`}>
-          <Icon className={`h-3.5 w-3.5 ${c.icon}`} />
-        </div>
-        {trend && <TrendPill value={trend.value} />}
-      </div>
-      <p className={`mt-2 truncate font-bold leading-tight text-neutral-900 ${small ? "text-sm" : "text-lg"} ${typeof value === "number" ? "tabular-nums" : ""}`} title={typeof value === "string" ? value : undefined}>
-        {value}
-      </p>
-      <p className="mt-0.5 truncate text-[10px] font-medium text-neutral-500">{label}</p>
-      {sub && <p className="mt-0.5 truncate text-[9px] text-neutral-400">{sub}</p>}
-    </div>
-  );
-  return to ? (
-    <Link to={to} className="no-underline">
-      {content}
-    </Link>
-  ) : (
-    content
-  );
-}
-
-function TrendPill({ value }: { value: number }) {
-  const up = value >= 0;
-  const Icon = up ? ArrowUpRight : ArrowDownRight;
-  const cls = up ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600";
-  return (
-    <span className={`inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${cls}`}>
-      <Icon className="h-2.5 w-2.5" />
-      {Math.abs(value).toFixed(1)}%
-    </span>
   );
 }
 
@@ -909,7 +856,7 @@ function DepartmentSpendChart({
           <XAxis dataKey="label" tick={{ fontSize: 9, fill: "#94a3b8" }} tickLine={false} axisLine={false} interval={0} angle={-20} textAnchor="end" height={40} />
           <YAxis tick={{ fontSize: 9, fill: "#94a3b8" }} tickLine={false} axisLine={false} tickFormatter={(v) => formatCurrencyCompact(Number(v))} width={48} />
           <Tooltip formatter={(v) => formatCurrencyCompact(Number(v))} contentStyle={{ fontSize: 11, borderRadius: 8 }} />
-          <Bar dataKey="allocated" name={allocatedLabel} fill="#0098EA" radius={[3, 3, 0, 0]} />
+          <Bar dataKey="allocated" name={allocatedLabel} fill="#1F3A6D" radius={[3, 3, 0, 0]} />
           <Bar dataKey="consumed" name={consumedLabel} fill="#f59e0b" radius={[3, 3, 0, 0]} />
         </BarChart>
       </ResponsiveContainer>

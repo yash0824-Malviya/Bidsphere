@@ -184,6 +184,12 @@ async function getList<T>(
  */
 const SAFE_RFQ_FIELDS = ["name", "status", "modified", "owner"] as const;
 
+/**
+ * Cap when child-table filters force a JOIN fan-out. We fetch once, group by
+ * RFQ `name`, then paginate in memory so each RFQ appears only once.
+ */
+const RFQ_CHILD_FILTER_FETCH_CAP = 1000;
+
 export interface RFQListRow {
   name: string;
   status?: string | null;
@@ -192,20 +198,55 @@ export interface RFQListRow {
 }
 
 /**
+ * Keep the first row for each ERPNext document `name` (primary key).
+ * Child-table filters on `get_list` can return the same parent RFQ once per
+ * matching Item / Supplier / Invitation row.
+ */
+export function uniqueByDocName<T extends { name?: string | null }>(
+  rows: T[],
+): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const row of rows) {
+    const id = typeof row?.name === "string" ? row.name.trim() : "";
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(row);
+  }
+  return out;
+}
+
+/** True when filters reference RFQ child doctypes (causes SQL JOIN fan-out). */
+function hasRfqChildTableFilter(filters?: Filter[]): boolean {
+  if (!filters?.length) return false;
+  return filters.some(
+    (f) =>
+      Array.isArray(f) &&
+      typeof f[0] === "string" &&
+      (f[0] === RFQ_ITEM_DOCTYPE || f[0] === RFQ_SUPPLIER_DOCTYPE),
+  );
+}
+
+/**
  * List Requests for Quotation using a deliberately small, always-permitted
  * field set. The detail page fills in everything else via `getRFQ()`.
  */
 export async function getRFQs(opts?: { limit?: number }): Promise<RFQListRow[]> {
-  return getList<RFQListRow>(RFQ_DOCTYPE, {
+  const rows = await getList<RFQListRow>(RFQ_DOCTYPE, {
     fields: [...SAFE_RFQ_FIELDS],
     order_by: "modified desc, name desc",
     limit_page_length: opts?.limit ?? 50,
   });
+  return uniqueByDocName(rows);
 }
 
 /**
  * Server-side paginated RFQ list (`limit_start`/`limit_page_length`) plus the
  * exact total record count, for the "All RFQs" page's pagination bar.
+ *
+ * When search uses child-table `or_filters` (Items / Suppliers), Frappe JOINs
+ * those tables and can return duplicate parent RFQs. In that case we fetch a
+ * capped result set, group by RFQ `name`, then paginate the unique rows.
  */
 export async function getRFQsPaged(options: {
   page: number;
@@ -224,8 +265,34 @@ export async function getRFQsPaged(options: {
   } = options;
   const safePage = Math.max(1, Math.floor(page) || 1);
   const safePageSize = Math.max(1, Math.floor(pageSize) || 10);
-  const limit_start = (safePage - 1) * safePageSize;
 
+  const usesChildJoin =
+    hasRfqChildTableFilter(filters) || hasRfqChildTableFilter(or_filters);
+
+  if (usesChildJoin) {
+    const raw = await getList<RFQListRow>(RFQ_DOCTYPE, {
+      fields: [...SAFE_RFQ_FIELDS],
+      filters,
+      or_filters,
+      order_by,
+      limit_start: 0,
+      limit_page_length: RFQ_CHILD_FILTER_FETCH_CAP,
+    });
+    const unique = uniqueByDocName(raw);
+    const total_records = unique.length;
+    const total_pages = Math.max(1, Math.ceil(total_records / safePageSize));
+    const current_page = Math.min(safePage, total_pages);
+    const start = (current_page - 1) * safePageSize;
+    return {
+      data: unique.slice(start, start + safePageSize),
+      total_records,
+      total_pages,
+      current_page,
+      page_size: safePageSize,
+    };
+  }
+
+  const limit_start = (safePage - 1) * safePageSize;
   const [data, total_records] = await Promise.all([
     getList<RFQListRow>(RFQ_DOCTYPE, {
       fields: [...SAFE_RFQ_FIELDS],
@@ -238,9 +305,10 @@ export async function getRFQsPaged(options: {
     getExactCount(RFQ_DOCTYPE, filters, or_filters),
   ]);
 
+  const unique = uniqueByDocName(data);
   const total_pages = Math.max(1, Math.ceil(total_records / safePageSize));
   return {
-    data,
+    data: unique,
     total_records,
     total_pages,
     current_page: Math.min(safePage, total_pages),
@@ -385,6 +453,10 @@ export interface CreateRFQItemInput {
   custom_part_name?: string;
   custom_2d_drawing?: string;
   custom_engineering_attachments?: string;
+  /** Internal target unit price (Currency custom field). */
+  custom_target_price?: number | null;
+  /** Per-line: show Target Price to invited suppliers. */
+  custom_show_target_price_to_supplier?: 0 | 1 | boolean;
 }
 
 export interface CreateRFQSupplierInput {
@@ -400,6 +472,8 @@ export interface CreateRFQInput {
   company?: string;
   items: CreateRFQItemInput[];
   suppliers: CreateRFQSupplierInput[];
+  /** When true, Target Price is visible to invited suppliers. */
+  custom_show_target_price_to_supplier?: 0 | 1 | boolean;
 }
 
 /**
@@ -450,7 +524,7 @@ export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
   // eslint-disable-next-line no-console
   console.log("[RFQ] Using warehouse:", warehouse);
 
-  const doc = {
+  const doc: Record<string, unknown> = {
     doctype: RFQ_DOCTYPE,
     transaction_date: transactionDate,
     status: data.status || "Draft",
@@ -483,6 +557,25 @@ export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
         row.custom_engineering_attachments =
           item.custom_engineering_attachments.trim();
       }
+      /* Only write when explicitly provided — Number(null) === 0 would
+         incorrectly persist a zero Target Price for empty inputs.
+         ERPNext Currency empty also serializes as 0, so require > 0. */
+      if (
+        item.custom_target_price != null &&
+        item.custom_target_price !== ("" as unknown)
+      ) {
+        const target = Number(item.custom_target_price);
+        if (Number.isFinite(target) && target > 0) {
+          row.custom_target_price = target;
+        }
+      }
+      if (item.custom_show_target_price_to_supplier != null) {
+        row.custom_show_target_price_to_supplier =
+          item.custom_show_target_price_to_supplier === true ||
+          item.custom_show_target_price_to_supplier === 1
+            ? 1
+            : 0;
+      }
       return row;
     }),
     suppliers: data.suppliers.map((s) => ({
@@ -491,6 +584,14 @@ export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
       supplier_name: s.supplier_name || s.supplier,
     })),
   };
+
+  if (data.custom_show_target_price_to_supplier != null) {
+    doc.custom_show_target_price_to_supplier =
+      data.custom_show_target_price_to_supplier === true ||
+      data.custom_show_target_price_to_supplier === 1
+        ? 1
+        : 0;
+  }
 
   // eslint-disable-next-line no-console
   console.log("[RFQ Create] Final API Payload", doc);
@@ -1239,6 +1340,36 @@ export async function getQuoteCountsForRFQs(
       }
     })
   );
+
+  return counts;
+}
+
+/**
+ * Count invited suppliers per RFQ via the Request for Quotation Supplier
+ * child table. Falls back to empty counts when the child doctype is not
+ * listable.
+ */
+export async function getSupplierCountsForRFQs(
+  rfqNames: string[],
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  rfqNames.forEach((name) => counts.set(name, 0));
+  if (rfqNames.length === 0) return counts;
+
+  try {
+    const rows = await getList<{ parent?: string }>(RFQ_SUPPLIER_DOCTYPE, {
+      fields: ["parent"],
+      filters: [["parent", "in", rfqNames]],
+      limit_page_length: Math.min(1000, Math.max(50, rfqNames.length * 20)),
+    });
+    for (const row of rows) {
+      const parent = row.parent?.trim();
+      if (!parent || !counts.has(parent)) continue;
+      counts.set(parent, (counts.get(parent) ?? 0) + 1);
+    }
+  } catch {
+    // Child table list may be permission-blocked — leave zeros.
+  }
 
   return counts;
 }

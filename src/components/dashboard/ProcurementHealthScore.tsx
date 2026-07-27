@@ -19,7 +19,7 @@ function ProcurementHealthScore({ data, loading }: Props) {
     return <Skeleton className="h-[188px] w-full rounded-lg" />;
   }
 
-  const radialData = [{ name: "Score", value: data.score, fill: "#0098EA" }];
+  const radialData = [{ name: "Score", value: data.score, fill: "#1F3A6D" }];
 
   return (
     <div className="flex h-[188px] rounded-lg border border-neutral-200/80 bg-white shadow-sm">
@@ -47,7 +47,7 @@ function ProcurementHealthScore({ data, loading }: Props) {
           </RadialBarChart>
         </ResponsiveContainer>
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-2xl font-bold tabular-nums text-primary">
+          <span className="text-2xl font-bold tabular-nums text-[#1E293B]">
             {data.score}
           </span>
           <span className="text-[9px] font-medium uppercase tracking-wider text-neutral-400">

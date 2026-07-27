@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   CheckCircle2,
@@ -11,7 +11,9 @@ import {
 import { getRoles } from "../../api/admin";
 import { APP_NAME } from "../../config/branding";
 import { Skeleton } from "../../components/Skeleton";
+import Pagination from "../../components/ui/Pagination";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
+import { useClientPagination } from "../../hooks/usePagination";
 
 const BIDSPHERE_ROLE_MAP: Record<string, { module: string; level: string }> = {
   Administrator: { module: "All Modules", level: "Full Access" },
@@ -58,12 +60,28 @@ export default function RoleManagementPage() {
     staleTime: 5 * 60_000,
   });
 
-  const filtered = search
-    ? roles.filter((r) => r.name.toLowerCase().includes(search.toLowerCase()))
-    : roles;
+  const filtered = useMemo(
+    () =>
+      search
+        ? roles.filter((r) =>
+            r.name.toLowerCase().includes(search.toLowerCase()),
+          )
+        : roles,
+    [roles, search],
+  );
 
-  const mapped = filtered.filter((r) => BIDSPHERE_ROLE_MAP[r.name]);
-  const others = filtered.filter((r) => !BIDSPHERE_ROLE_MAP[r.name]);
+  const {
+    pageRows,
+    totalRecords,
+    totalPages,
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+  } = useClientPagination(filtered, { resetKey: search });
+
+  const mapped = pageRows.filter((r) => BIDSPHERE_ROLE_MAP[r.name]);
+  const others = pageRows.filter((r) => !BIDSPHERE_ROLE_MAP[r.name]);
 
   return (
     <div>
@@ -96,57 +114,61 @@ export default function RoleManagementPage() {
         </div>
       ) : (
         <>
-          <h2 className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-neutral-400">{APP_NAME} Role Mappings</h2>
-          <div className="mb-4 overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm">
-            <table className="w-full text-xs">
-              <thead className="bg-neutral-50">
-                <tr className="border-b border-neutral-200">
-                  <th className="px-3 py-2 text-left font-semibold text-neutral-500">Role</th>
-                  <th className="px-3 py-2 text-left font-semibold text-neutral-500">Module Access</th>
-                  <th className="px-3 py-2 text-left font-semibold text-neutral-500">Permission Level</th>
-                  <th className="px-3 py-2 text-left font-semibold text-neutral-500">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {mapped.map((role) => {
-                  const info = BIDSPHERE_ROLE_MAP[role.name];
-                  return (
-                    <tr key={role.name} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50/60 transition-colors">
-                      <td className="px-3 py-2">
-                        <div className="flex items-center gap-2">
-                          <Key className="h-3 w-3 text-violet-500" />
-                          <span className="font-medium text-neutral-900">{role.name}</span>
-                        </div>
-                      </td>
-                      <td className="px-3 py-2 text-neutral-600">{info?.module ?? "—"}</td>
-                      <td className="px-3 py-2">
-                        <span className="rounded bg-primary-50 px-1.5 py-px text-[10px] font-semibold text-primary-700">
-                          {info?.level ?? "—"}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2">
-                        {!role.disabled ? (
-                          <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-px text-[10px] font-semibold text-emerald-700">
-                            <CheckCircle2 className="h-2.5 w-2.5" /> Active
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 rounded bg-red-50 px-1.5 py-px text-[10px] font-semibold text-red-700">
-                            <XCircle className="h-2.5 w-2.5" /> Disabled
-                          </span>
-                        )}
-                      </td>
+          {mapped.length > 0 && (
+            <>
+              <h2 className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-neutral-400">{APP_NAME} Role Mappings</h2>
+              <div className="mb-4 overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm">
+                <table className="w-full text-xs">
+                  <thead className="bg-neutral-50">
+                    <tr className="border-b border-neutral-200">
+                      <th className="px-3 py-2 text-left font-semibold text-neutral-500">Role</th>
+                      <th className="px-3 py-2 text-left font-semibold text-neutral-500">Module Access</th>
+                      <th className="px-3 py-2 text-left font-semibold text-neutral-500">Permission Level</th>
+                      <th className="px-3 py-2 text-left font-semibold text-neutral-500">Status</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                  </thead>
+                  <tbody>
+                    {mapped.map((role) => {
+                      const info = BIDSPHERE_ROLE_MAP[role.name];
+                      return (
+                        <tr key={role.name} className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50/60 transition-colors">
+                          <td className="px-3 py-2">
+                            <div className="flex items-center gap-2">
+                              <Key className="h-3 w-3 text-violet-500" />
+                              <span className="font-medium text-neutral-900">{role.name}</span>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-neutral-600">{info?.module ?? "—"}</td>
+                          <td className="px-3 py-2">
+                            <span className="rounded bg-primary-50 px-1.5 py-px text-[10px] font-semibold text-primary-700">
+                              {info?.level ?? "—"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">
+                            {!role.disabled ? (
+                              <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-px text-[10px] font-semibold text-emerald-700">
+                                <CheckCircle2 className="h-2.5 w-2.5" /> Active
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 rounded bg-red-50 px-1.5 py-px text-[10px] font-semibold text-red-700">
+                                <XCircle className="h-2.5 w-2.5" /> Disabled
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
 
           {/* Other ERPNext Roles */}
           {others.length > 0 && (
             <>
               <h2 className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-neutral-400">Other ERPNext Roles ({others.length})</h2>
-              <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm">
+              <div className="mb-4 overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm">
                 <table className="w-full text-xs">
                   <thead className="bg-neutral-50">
                     <tr className="border-b border-neutral-200">
@@ -175,6 +197,20 @@ export default function RoleManagementPage() {
                 </table>
               </div>
             </>
+          )}
+
+          {filtered.length > 0 && (
+            <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm">
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                totalRecords={totalRecords}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                onPageSizeChange={setPageSize}
+                recordLabel="roles"
+              />
+            </div>
           )}
         </>
       )}

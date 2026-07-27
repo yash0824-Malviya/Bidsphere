@@ -742,7 +742,7 @@ export default function SupplierPortalProfilePage() {
                             type="button"
                             disabled={saving}
                             onClick={() => void saveDraft()}
-                            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:border-[#146CE8]/40 hover:bg-slate-50"
+                            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:border-[#1F3A6D]/40 hover:bg-slate-50"
                           >
                             {saving ? (
                               <Loader2 className="h-4 w-4 animate-spin" />
@@ -833,7 +833,7 @@ function WelcomeCard({
         className="relative px-6 py-10 sm:px-10 sm:py-14"
         style={{
           background:
-            "linear-gradient(135deg, #0B3D91 0%, #146CE8 55%, #3B82F6 100%)",
+            "linear-gradient(135deg, #17315D 0%, #1F3A6D 55%, #3B82F6 100%)",
         }}
       >
         <div className="pointer-events-none absolute inset-0 opacity-20">
@@ -1109,10 +1109,10 @@ function DocumentsStep({
 }
 
 const FIELD_CONTROL =
-  "mt-1.5 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 shadow-sm transition placeholder:text-slate-400 focus:border-[#146CE8] focus:outline-none focus:ring-2 focus:ring-[#146CE8]/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500";
+  "mt-1.5 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 shadow-sm transition placeholder:text-slate-400 focus:border-[#1F3A6D] focus:outline-none focus:ring-2 focus:ring-[#1F3A6D]/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500";
 
 const FIELD_TEXTAREA =
-  "mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-sm transition placeholder:text-slate-400 focus:border-[#146CE8] focus:outline-none focus:ring-2 focus:ring-[#146CE8]/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500";
+  "mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800 shadow-sm transition placeholder:text-slate-400 focus:border-[#1F3A6D] focus:outline-none focus:ring-2 focus:ring-[#1F3A6D]/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500";
 
 function FieldInput({
   field,

@@ -15,8 +15,8 @@ export default function SearchInput({
 }: Props) {
   return (
     <div className={`relative ${className}`}>
-      <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-neutral-400">
-        <Search className="h-4 w-4" />
+      <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-[var(--color-text-faint)]">
+        <Search className="h-5 w-5" strokeWidth={1.75} aria-hidden />
       </span>
       <input
         value={value}

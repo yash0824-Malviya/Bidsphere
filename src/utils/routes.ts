@@ -68,11 +68,8 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: FileSearch,
         children: [
           { label: "All RFIs", to: "/sourcing/rfi" },
-          { label: "Create RFI", to: "/sourcing/rfi/new" },
           { label: "All RFPs", to: "/sourcing/rfp" },
-          { label: "Create RFP", to: "/sourcing/rfp/new" },
           { label: "All RFQs", to: "/sourcing/rfq" },
-          { label: "New RFQ", to: "/sourcing/rfq/new" },
           { label: "Upload BOM", to: "/upload-bom" },
           { label: "RFQ Template Library", to: "/sourcing/rfq-templates" },
           { label: "Legal Reviews", to: "/legal/reviews" },
@@ -107,7 +104,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/p2p/requisitions": "Material Requests",
   "/p2p/requisitions/new": "New Material Request",
   "/material-requests": "Material Requests",
-  "/material-requests/list": "My Material Requests",
+  "/material-requests/list": "Request History",
   "/material-requests/new": "New Material Request",
   "/material-requests/warehouse": "Warehouse Review",
   "/material-requests/issued": "Issued Materials",
@@ -115,7 +112,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/material-requests/history": "Forwarded History",
   "/department/issued-items": "Issued Items",
   "/department/issued-items/pending-acceptance": "Pending Acceptance",
-  "/department/issued-items/accepted-items": "Accepted Items",
+  "/department/issued-items/accepted-items": "Issue Receipts",
   "/department/issued-items/issue-receipts": "Issue Receipts",
   "/p2p/purchase-orders": "Purchase Orders",
   "/p2p/purchase-orders/create": "New PO",
@@ -224,19 +221,26 @@ export function getBreadcrumbs(pathname: string): Breadcrumb[] {
   for (const seg of segments) {
     acc += `/${seg}`;
     const decoded = decodePathSegment(seg);
-    crumbs.push({
-      label: ROUTE_TITLES[acc] ?? (decoded.includes("-") && !decoded.includes(" ") ? toTitleCase(decoded) : decoded),
-      to: acc,
-    });
+    let label: string;
+    if (ROUTE_TITLES[acc]) {
+      // Prefer static module titles (e.g. /sourcing → "Sourcing (RFx)").
+      label = ROUTE_TITLES[acc];
+    } else if (looksLikeDocumentId(seg)) {
+      // Keep ERPNext document names intact (PUR-RFQ-2026-00067, MAT-MR-…).
+      label = decoded;
+    } else if (decoded.includes("-") && !decoded.includes(" ")) {
+      label = toTitleCase(decoded);
+    } else {
+      label = decoded;
+    }
+    crumbs.push({ label, to: acc });
   }
   return crumbs;
 }
 
 /**
- * Detect ERPNext-style document identifiers / record ids that must NEVER be
- * shown as the large page title (e.g. MAT-MR-2026-00001, PO-00015,
- * RFQ-2026-0001, SQ-0008, GRN-0002, pure numbers, or long hashes). These
- * belong only inside the page content and the breadcrumb, never the header.
+ * Detect ERPNext-style document identifiers / record ids. Shown as the last
+ * breadcrumb crumb (and page content title) but never as a module page title.
  */
 function looksLikeDocumentId(segment: string): boolean {
   const s = decodePathSegment(segment).trim();

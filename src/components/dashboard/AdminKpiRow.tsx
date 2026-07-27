@@ -1,5 +1,4 @@
 import { memo, useMemo } from "react";
-import { Link } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
 import {
   CheckCircle2,
@@ -15,11 +14,14 @@ import {
   Users,
 } from "lucide-react";
 
-import { Skeleton } from "../Skeleton";
 import type { DashboardCounts } from "../../api/dashboard";
 import type { ExecutiveKpiKey } from "../../config/dashboardRoles";
 import type { ExecutiveKpis } from "../../utils/dashboardUtils";
 import { formatCurrencyCompact } from "../../utils/paymentUtils";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+  DashboardKpiSkeleton,
+} from "./DashboardKpiCard";
 
 interface Metric {
   key: ExecutiveKpiKey;
@@ -116,7 +118,13 @@ const METRIC_DEFS: Record<
   },
 };
 
-function AdminKpiRow({ kpis, counts, kpiKeys, loading, readyForPOCount = 0 }: Props) {
+function AdminKpiRow({
+  kpis,
+  counts,
+  kpiKeys,
+  loading,
+  readyForPOCount = 0,
+}: Props) {
   const skeletonCount = Math.max(kpiKeys.length, 4);
 
   const metrics = useMemo(() => {
@@ -135,69 +143,34 @@ function AdminKpiRow({ kpis, counts, kpiKeys, loading, readyForPOCount = 0 }: Pr
   }, [kpis, counts, kpiKeys]);
 
   if (loading || !kpis || !counts) {
-    return (
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {Array.from({ length: skeletonCount }).map((_, i) => (
-          <Skeleton key={i} className="min-h-[80px] rounded-xl" />
-        ))}
-      </div>
-    );
+    return <DashboardKpiSkeleton count={skeletonCount} />;
   }
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      {metrics.map((m) => {
-        const Icon = m.icon;
-        const inner = (
-          <>
-            <div className="flex items-center justify-between gap-1">
-              <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
-                {m.label}
-              </p>
-              <span
-                className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md ${m.accent}`}
-              >
-                <Icon className="h-3.5 w-3.5" />
-              </span>
-            </div>
-            <p className="mt-1 text-lg font-bold tabular-nums leading-none text-neutral-900">
-              {m.value}
-            </p>
-          </>
-        );
-        const className =
-          "rounded-xl border border-neutral-200/80 bg-white px-4 py-3.5 shadow-sm transition-shadow hover:shadow-md";
-
-        return m.to ? (
-          <Link key={m.key} to={m.to} className={className}>
-            {inner}
-          </Link>
-        ) : (
-          <div key={m.key} className={className}>
-            {inner}
-          </div>
-        );
-      })}
+    <DashboardKpiGrid>
+      {metrics.map((m) => (
+        <DashboardKpiCard
+          key={m.key}
+          label={m.label}
+          value={m.value}
+          icon={m.icon}
+          iconClassName={m.accent}
+          to={m.to}
+        />
+      ))}
 
       {readyForPOCount > 0 && (
-        <Link
+        <DashboardKpiCard
+          label="Ready for PO"
+          value={readyForPOCount}
+          icon={CheckCircle2}
+          iconClassName="bg-success-100 text-success-600"
+          valueClassName="text-success-700"
           to="/p2p/purchase-orders/create"
-          className="rounded-xl border border-success-200 bg-success-50/40 px-4 py-3.5 shadow-sm transition-shadow hover:shadow-md"
-        >
-          <div className="flex items-center justify-between gap-1">
-            <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-success-600">
-              Ready for PO
-            </p>
-            <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md bg-success-100 text-success-600">
-              <CheckCircle2 className="h-3.5 w-3.5" />
-            </span>
-          </div>
-          <p className="mt-1 text-lg font-bold tabular-nums leading-none text-success-700">
-            {readyForPOCount}
-          </p>
-        </Link>
+          className="border-success-200 bg-success-50/40"
+        />
       )}
-    </div>
+    </DashboardKpiGrid>
   );
 }
 

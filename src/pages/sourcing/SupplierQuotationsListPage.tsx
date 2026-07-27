@@ -1,12 +1,16 @@
-import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { Download, Eye, FileText, Link2 } from "lucide-react";
+import toast from "react-hot-toast";
+
 import { fetchPagedList } from "../../api/erpnext";
 import type { Filter } from "../../api/erpnext";
 import PageHeader from "../../components/PageHeader";
 import PaginationBar from "../../components/PaginationBar";
 import StatusBadge from "../../components/StatusBadge";
 import ExportButton from "../../components/export/ExportButton";
+import { TableRowActions } from "../../components/ui";
 import { usePagination } from "../../hooks/usePagination";
 import { formatDate } from "../../utils/format";
 import type { ExportColumn } from "../../utils/export";
@@ -93,37 +97,96 @@ export default function SupplierQuotationsListPage() {
         }
       />
       <div className="card overflow-hidden">
-        <table className="min-w-full text-sm">
-          <thead className="bg-neutral-50 text-xs uppercase text-neutral-500">
+        <table className="data-table min-w-full">
+          <thead>
             <tr>
-              <th className="px-4 py-3 text-left">Quotation</th>
-              <th className="px-4 py-3 text-left">Supplier</th>
-              <th className="px-4 py-3 text-left">Date</th>
-              <th className="px-4 py-3 text-left">Status</th>
+              <th>Quotation</th>
+              <th>Supplier</th>
+              <th>Date</th>
+              <th>Status</th>
+              <th className="col-actions">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-neutral-200">
+          <tbody>
             {isLoading ? (
               <tr>
-                <td colSpan={4} className="px-4 py-8 text-center">Loading…</td>
+                <td colSpan={5} className="px-4 py-8 text-center">
+                  Loading…
+                </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={4} className="px-4 py-8 text-center text-neutral-500">
+                <td colSpan={5} className="px-4 py-8 text-center text-neutral-500">
                   No supplier quotations found.
                 </td>
               </tr>
             ) : (
-              rows.map((sq) => (
-                <tr key={sq.name} className="hover:bg-neutral-50">
-                  <td className="px-4 py-3 font-semibold text-neutral-900">{sq.name}</td>
-                  <td className="px-4 py-3">{sq.supplier_name ?? sq.supplier ?? "—"}</td>
-                  <td className="px-4 py-3">{formatDate(sq.transaction_date)}</td>
-                  <td className="px-4 py-3">
-                    <StatusBadge status={sq.status ?? "Draft"} />
-                  </td>
-                </tr>
-              ))
+              rows.map((sq) => {
+                /* Buyer SQ detail is typically reviewed in RFQ context; keep name for deep-link when available. */
+                const detailPath = `/sourcing/rfq?q=${encodeURIComponent(sq.name)}`;
+                return (
+                  <tr key={sq.name}>
+                    <td className="font-semibold text-neutral-900">{sq.name}</td>
+                    <td>{sq.supplier_name ?? sq.supplier ?? "—"}</td>
+                    <td>{formatDate(sq.transaction_date)}</td>
+                    <td>
+                      <StatusBadge status={sq.status ?? "Draft"} />
+                    </td>
+                    <td className="col-actions">
+                      <TableRowActions
+                        label={sq.name}
+                        onView={() =>
+                          toast(`Open related RFQ to review ${sq.name}`, {
+                            icon: "ℹ️",
+                          })
+                        }
+                        items={[
+                          {
+                            id: "view",
+                            label: "View",
+                            icon: Eye,
+                            onClick: () =>
+                              toast(`Open related RFQ to review ${sq.name}`, {
+                                icon: "ℹ️",
+                              }),
+                          },
+                          {
+                            id: "pdf",
+                            label: "Download PDF",
+                            icon: Download,
+                            onClick: () =>
+                              toast("PDF export is available from the quotation detail", {
+                                icon: "ℹ️",
+                              }),
+                          },
+                          {
+                            id: "export",
+                            label: "Export",
+                            icon: FileText,
+                            onClick: () =>
+                              toast("Use Export on the toolbar", { icon: "ℹ️" }),
+                          },
+                          {
+                            id: "copy",
+                            label: "Copy Link",
+                            icon: Link2,
+                            onClick: () => {
+                              void navigator.clipboard
+                                .writeText(
+                                  `${window.location.origin}${detailPath}`,
+                                )
+                                .then(() => toast.success("Link copied"))
+                                .catch(() =>
+                                  toast.error("Could not copy link"),
+                                );
+                            },
+                          },
+                        ]}
+                      />
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

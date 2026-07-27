@@ -12,9 +12,9 @@ export default function LoginHeroAmbient() {
     >
       <defs>
         <linearGradient id="hero-route" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stopColor="#0098EA" stopOpacity="0" />
+          <stop offset="0%" stopColor="#1F3A6D" stopOpacity="0" />
           <stop offset="50%" stopColor="#38bdf8" stopOpacity="0.16" />
-          <stop offset="100%" stopColor="#007FC4" stopOpacity="0" />
+          <stop offset="100%" stopColor="#17315D" stopOpacity="0" />
         </linearGradient>
       </defs>
 

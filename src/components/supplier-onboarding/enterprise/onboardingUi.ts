@@ -7,12 +7,12 @@ import type { OnboardingRecord } from "../../../api/supplierOnboarding";
 import type { OnboardingStepDef } from "../../../config/supplierOnboardingForm";
 
 export const ONB = {
-  primary: "#146CE8",
-  primaryDark: "#0B3D91",
+  primary: "#1F3A6D",
+  primaryDark: "#17315D",
   success: "#22C55E",
   warning: "#F59E0B",
   error: "#EF4444",
-  bg: "#f8fafb",
+  bg: "#F7F9FC",
 } as const;
 
 /** Presentational field groups for enterprise card layout (no schema change). */

@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
@@ -7,6 +8,8 @@ import {
 } from "../../api/materialRequestWorkflow";
 import PageHeader from "../../components/PageHeader";
 import StatusBadge from "../../components/StatusBadge";
+import Pagination from "../../components/ui/Pagination";
+import { useClientPagination } from "../../hooks/usePagination";
 import { formatDate } from "../../utils/format";
 import { todayERPNextDate } from "../../utils/erpNextDate";
 
@@ -20,16 +23,30 @@ export default function MaterialRequestIssuedPage() {
     queryFn: () => listMaterialRequestsWorkflow({ limit: 200 }),
   });
 
-  const rows = data.filter((mr) => {
-    const st = getMaterialRequestWorkflowStatus(mr);
-    const modifiedToday = (mr.modified ?? "").startsWith(today);
-    if (tab === "forwarded") {
-      return st === "Forwarded to Procurement" && modifiedToday;
-    }
-    return (
-      (st === "Completed" || st === "Material Issued") && modifiedToday
-    );
-  });
+  const rows = useMemo(
+    () =>
+      data.filter((mr) => {
+        const st = getMaterialRequestWorkflowStatus(mr);
+        const modifiedToday = (mr.modified ?? "").startsWith(today);
+        if (tab === "forwarded") {
+          return st === "Forwarded to Procurement" && modifiedToday;
+        }
+        return (
+          (st === "Completed" || st === "Material Issued") && modifiedToday
+        );
+      }),
+    [data, tab, today],
+  );
+
+  const {
+    pageRows,
+    totalRecords,
+    totalPages,
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+  } = useClientPagination(rows, { resetKey: tab });
 
   return (
     <div>
@@ -78,7 +95,7 @@ export default function MaterialRequestIssuedPage() {
                 </td>
               </tr>
             ) : (
-              rows.map((mr) => (
+              pageRows.map((mr) => (
                 <tr key={mr.name} className="hover:bg-neutral-50">
                   <td className="px-4 py-3">
                     <Link
@@ -98,6 +115,17 @@ export default function MaterialRequestIssuedPage() {
             )}
           </tbody>
         </table>
+        {!isLoading && rows.length > 0 && (
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={totalRecords}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            recordLabel="requests"
+          />
+        )}
       </div>
     </div>
   );

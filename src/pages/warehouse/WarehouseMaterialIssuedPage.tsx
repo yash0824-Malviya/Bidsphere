@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { CheckCircle, Download, Eye, Printer, Search } from "lucide-react";
+import { CheckCircle, Download, Eye, Printer } from "lucide-react";
 import {
   getIssuedMaterials,
   getMaterialIssueDetail,
@@ -10,7 +10,9 @@ import {
 import EmptyState from "../../components/EmptyState";
 import ErrorState from "../../components/ErrorState";
 import PageHeader from "../../components/PageHeader";
+import StatusBadge from "../../components/StatusBadge";
 import { TableSkeleton } from "../../components/Skeleton";
+import { SearchInput } from "../../components/ui";
 import { formatDate } from "../../utils/format";
 import {
   downloadMaterialIssuePdf,
@@ -27,21 +29,15 @@ const STATUS_OPTIONS: Array<"" | MaterialIssueStatus> = [
   "Cancelled",
 ];
 
-function StatusPill({ status }: { status: MaterialIssueStatus }) {
+function IssueStatusBadge({ status }: { status: MaterialIssueStatus }) {
   const label = status === "Fully Issued" ? "Completed" : status;
-  const cls =
+  const tone =
     status === "Fully Issued"
-      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+      ? ("success" as const)
       : status === "Partially Issued"
-        ? "bg-amber-50 text-amber-700 border-amber-200"
-        : "bg-red-50 text-red-700 border-red-200";
-  return (
-    <span
-      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold ${cls}`}
-    >
-      {label}
-    </span>
-  );
+        ? ("warning" as const)
+        : ("danger" as const);
+  return <StatusBadge status={label} tone={tone} />;
 }
 
 export default function WarehouseMaterialIssuedPage() {
@@ -216,14 +212,11 @@ export default function WarehouseMaterialIssuedPage() {
 
       {/* Filters */}
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="relative mb-3">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search by issue number, MR, department, warehouse, or issued by…"
+        <div className="mb-3">
+          <SearchInput
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-lg border border-slate-200 py-2 pl-10 pr-4 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            onChange={setSearch}
+            placeholder="Search by issue number, MR, department, warehouse, or issued by…"
           />
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
@@ -262,7 +255,7 @@ export default function WarehouseMaterialIssuedPage() {
               onChange={(e) =>
                 setStatusFilter(e.target.value as "" | MaterialIssueStatus)
               }
-              className="rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              className="select-field"
             >
               {STATUS_OPTIONS.map((opt) => (
                 <option key={opt} value={opt}>
@@ -280,14 +273,14 @@ export default function WarehouseMaterialIssuedPage() {
                 type="date"
                 value={dateFrom}
                 onChange={(e) => setDateFrom(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                className="input-field"
               />
               <span className="text-xs text-slate-400">–</span>
               <input
                 type="date"
                 value={dateTo}
                 onChange={(e) => setDateTo(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                className="input-field"
               />
             </div>
           </div>
@@ -326,21 +319,21 @@ export default function WarehouseMaterialIssuedPage() {
         ) : (
           <>
             <div className="flex-1 overflow-x-auto">
-              <table className="w-full border-collapse text-left">
+              <table className="data-table">
                 <thead>
-                  <tr className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    <th className="px-4 py-3.5">Issue Number</th>
-                    <th className="px-4 py-3.5">Material Request</th>
-                    <th className="px-4 py-3.5">Department</th>
-                    <th className="px-4 py-3.5">Warehouse</th>
-                    <th className="px-4 py-3.5">Issued By</th>
-                    <th className="px-4 py-3.5">Received By</th>
-                    <th className="px-4 py-3.5 text-right">Items</th>
-                    <th className="px-4 py-3.5 text-right">Qty</th>
-                    <th className="px-4 py-3.5">Issue Date</th>
-                    <th className="px-4 py-3.5">Issue Type</th>
-                    <th className="px-4 py-3.5 text-center">Status</th>
-                    <th className="px-4 py-3.5 text-center">Actions</th>
+                  <tr>
+                    <th>Issue Number</th>
+                    <th>Material Request</th>
+                    <th>Department</th>
+                    <th>Warehouse</th>
+                    <th>Issued By</th>
+                    <th>Received By</th>
+                    <th className="text-right">Items</th>
+                    <th className="text-right">Qty</th>
+                    <th>Issue Date</th>
+                    <th>Issue Type</th>
+                    <th className="text-center">Status</th>
+                    <th className="text-center">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-sm">
@@ -399,11 +392,11 @@ export default function WarehouseMaterialIssuedPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3.5 text-center">
-                        <StatusPill
+                        <IssueStatusBadge
                           status={
-                            row.status === "Fully Issued"
+                            (row.status === "Fully Issued"
                               ? "Fully Issued"
-                              : row.status
+                              : row.status) as MaterialIssueStatus
                           }
                         />
                       </td>
@@ -504,7 +497,7 @@ function FilterSelect({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+        className="select-field"
       >
         <option value="">{allLabel}</option>
         {options.map((opt) => (

@@ -14,6 +14,7 @@ import {
 import { openErpFileInBrowser } from "../../api/legalDocsStorage";
 import EmptyState from "../../components/EmptyState";
 import PaginationBar from "../../components/PaginationBar";
+import StatusBadge from "../../components/StatusBadge";
 import { TableSkeleton } from "../../components/Skeleton";
 import ConnectionError from "../../components/ConnectionError";
 import SupplierBreadcrumb from "../../components/supplier-portal/SupplierBreadcrumb";
@@ -23,20 +24,6 @@ import { useSupplierSession } from "../../hooks/useSupplierSession";
 import type { SupplierRfpFacingStatus } from "../../types/rfp";
 
 const LOG = "[SupplierPortal:RFP]";
-
-const STATUS_BADGE: Record<SupplierRfpFacingStatus, string> = {
-  New: "bg-sky-50 text-sky-800 ring-1 ring-inset ring-sky-200",
-  Draft: "bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200",
-  Submitted:
-    "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
-  "Under Review":
-    "bg-blue-50 text-blue-800 ring-1 ring-inset ring-blue-200",
-  "Clarification Requested":
-    "bg-orange-50 text-orange-800 ring-1 ring-inset ring-orange-200",
-  Awarded: "bg-emerald-50 text-emerald-800 ring-1 ring-inset ring-emerald-200",
-  Rejected: "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200",
-  Closed: "bg-neutral-100 text-neutral-600 ring-1 ring-inset ring-neutral-200",
-};
 
 async function downloadSubmittedProposal(
   row: SupplierRfpListRow,
@@ -227,11 +214,7 @@ export default function SupplierRFPsPage() {
                         </td>
                         <td>{formatDate(rfp.submission_deadline, "d MMM yyyy")}</td>
                         <td>
-                          <span
-                            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${STATUS_BADGE[facing]}`}
-                          >
-                            {facing}
-                          </span>
+                          <StatusBadge status={facing} />
                         </td>
                         <td>
                           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -239,7 +222,7 @@ export default function SupplierRFPsPage() {
                               <>
                                 <Link
                                   to={`/supplier/rfps/${encodeURIComponent(rfp.name)}`}
-                                  className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-800 hover:bg-neutral-50"
+                                  className="btn-secondary no-underline"
                                 >
                                   <Eye className="h-3.5 w-3.5" />
                                   View Submission
@@ -252,7 +235,7 @@ export default function SupplierRFPsPage() {
                                       resolvedSupplier,
                                     );
                                   }}
-                                  className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-800 hover:bg-neutral-50"
+                                  className="btn-secondary"
                                 >
                                   <Download className="h-3.5 w-3.5" />
                                   Download
@@ -261,7 +244,7 @@ export default function SupplierRFPsPage() {
                             ) : (
                               <Link
                                 to={`/supplier/rfps/${encodeURIComponent(rfp.name)}`}
-                                className="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-primary-700"
+                                className="btn-primary no-underline"
                               >
                                 Open
                               </Link>

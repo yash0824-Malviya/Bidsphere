@@ -1,8 +1,10 @@
 import { type ReactNode, useMemo } from "react";
 
-const ACCENT = "#007FC4";
-const ACCENT_LIGHT = "#f0f9ff";
-const ACCENT_BORDER = "#bae6fd";
+import { BRAND } from "../../theme/brandColors";
+
+const ACCENT = BRAND.primary;
+const ACCENT_LIGHT = BRAND.primaryLight;
+const ACCENT_BORDER = BRAND.primaryBorder;
 
 function escapeHtml(text: string): string {
   return text
@@ -98,7 +100,7 @@ function parseMarkdownTable(tableLines: string[]): ReactNode | null {
                       : cell.includes("Paid")
                       ? "#16a34a"
                       : cell.includes("Submitted")
-                      ? "#007FC4"
+                      ? BRAND.primaryHover
                       : "#374151",
                     fontWeight: cell.includes("Overdue") ? 600 : 400,
                   }}

@@ -4,11 +4,14 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Building2,
   CircleDot,
+  FileText,
   Globe,
+  Pencil,
   Plus,
   ShoppingCart,
   Users,
 } from "lucide-react";
+import toast from "react-hot-toast";
 
 import { getPurchaseOrders } from "../../api/purchasing";
 import { getSupplierGroups, getSuppliers } from "../../api/supplier";
@@ -20,7 +23,13 @@ import PaginationBar from "../../components/PaginationBar";
 import { Skeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
 import ExportButton from "../../components/export/ExportButton";
-import { FilterBar, FilterField, SearchInput, SortableTableHeader } from "../../components/ui";
+import {
+  FilterBar,
+  FilterField,
+  SearchInput,
+  SortableTableHeader,
+  TableRowActions,
+} from "../../components/ui";
 import type { ExportColumn } from "../../utils/export";
 import { useListSort } from "../../hooks/useListSort";
 import { usePagination } from "../../hooks/usePagination";
@@ -409,8 +418,8 @@ export default function SuppliersPage() {
         ) : (
           <section className="card overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-neutral-200 text-sm">
-                <thead className="bg-neutral-50 text-left text-xs font-medium uppercase tracking-wider text-neutral-500">
+              <table className="data-table min-w-full">
+                <thead>
                   <tr>
                     <SortableTableHeader
                       label="Supplier"
@@ -439,31 +448,74 @@ export default function SuppliersPage() {
                       onSort={setPerformanceSort}
                       className="text-right"
                     />
+                    <th className="col-actions">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-neutral-200">
-                  {sortedPerformanceRows.map((row) => (
-                    <tr
-                      key={row.name}
-                      className="cursor-pointer hover:bg-accent-50/40"
-                      onClick={() =>
-                        navigate(`/suppliers/${encodeURIComponent(row.name)}`)
-                      }
-                    >
-                      <td className="px-4 py-3 font-medium text-neutral-900">
-                        {row.supplier_name ?? row.name}
-                      </td>
-                      <td className="px-4 py-3 text-right tabular-nums text-neutral-700">
-                        {row.poCount}
-                      </td>
-                      <td className="px-4 py-3 text-right font-semibold tabular-nums text-neutral-900">
-                        {formatCurrency(row.totalSpend)}
-                      </td>
-                      <td className="px-4 py-3 text-right tabular-nums font-medium text-primary-700">
-                        {row.performanceScore}
-                      </td>
-                    </tr>
-                  ))}
+                <tbody>
+                  {sortedPerformanceRows.map((row) => {
+                    const detailPath = `/suppliers/${encodeURIComponent(row.name)}`;
+                    return (
+                      <tr
+                        key={row.name}
+                        className="cursor-pointer"
+                        onClick={() => navigate(detailPath)}
+                      >
+                        <td className="font-medium text-neutral-900">
+                          {row.supplier_name ?? row.name}
+                        </td>
+                        <td className="text-right tabular-nums text-neutral-700">
+                          {row.poCount}
+                        </td>
+                        <td className="text-right font-semibold tabular-nums text-neutral-900">
+                          {formatCurrency(row.totalSpend)}
+                        </td>
+                        <td className="text-right tabular-nums font-medium text-primary-700">
+                          {row.performanceScore}
+                        </td>
+                        <td className="col-actions">
+                          <TableRowActions
+                            label={row.supplier_name ?? row.name}
+                            viewTo={detailPath}
+                            items={[
+                              {
+                                id: "edit",
+                                label: "Edit",
+                                icon: Pencil,
+                                onClick: () => navigate(detailPath),
+                              },
+                              {
+                                id: "performance",
+                                label: "Performance",
+                                icon: ShoppingCart,
+                                onClick: () => navigate(detailPath),
+                              },
+                              {
+                                id: "documents",
+                                label: "Documents",
+                                icon: FileText,
+                                onClick: () =>
+                                  toast("Open supplier profile for documents", {
+                                    icon: "ℹ️",
+                                  }),
+                              },
+                              {
+                                id: "disable",
+                                label: "Disable",
+                                icon: CircleDot,
+                                separatorBefore: true,
+                                danger: true,
+                                onClick: () =>
+                                  toast(
+                                    "Disable supplier from the supplier profile",
+                                    { icon: "ℹ️" },
+                                  ),
+                              },
+                            ]}
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

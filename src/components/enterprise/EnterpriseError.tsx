@@ -120,7 +120,7 @@ function EnterprisePanel({
     accent === "warning"
       ? "bg-amber-50 text-amber-600 ring-amber-100"
       : accent === "info"
-        ? "bg-[#146CE8]/10 text-[#146CE8] ring-[#146CE8]/15"
+        ? "bg-[#1F3A6D]/10 text-[#1F3A6D] ring-[#1F3A6D]/15"
         : "bg-neutral-100 text-neutral-500 ring-neutral-200";
 
   return (
@@ -150,7 +150,7 @@ function EnterprisePanel({
           <ul className="mt-2 space-y-1.5 text-sm text-neutral-600">
             {reasons.map((r) => (
               <li key={r} className="flex gap-2">
-                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#146CE8]" />
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#1F3A6D]" />
                 <span>{r}</span>
               </li>
             ))}
@@ -174,7 +174,7 @@ function EnterprisePanel({
             <button
               type="button"
               onClick={onRetry}
-              className="inline-flex items-center gap-2 rounded-xl bg-[#146CE8] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0F5BC7]"
+              className="inline-flex items-center gap-2 rounded-xl bg-[#1F3A6D] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#17315D]"
             >
               <RotateCw className="h-3.5 w-3.5" />
               Retry

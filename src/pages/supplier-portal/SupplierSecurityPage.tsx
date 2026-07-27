@@ -154,13 +154,13 @@ export default function SupplierSecurityPage() {
           <div>
             <Link
               to="/supplier/profile"
-              className="mb-2 inline-flex items-center gap-1 text-xs font-semibold text-[#146CE8] no-underline hover:underline"
+              className="mb-2 inline-flex items-center gap-1 text-xs font-semibold text-[#1F3A6D] no-underline hover:underline"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               Back to Profile
             </Link>
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#0B3D91] to-[#146CE8] text-white shadow-sm">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#17315D] to-[#1F3A6D] text-white shadow-sm">
                 <ShieldCheck className="h-5 w-5" />
               </div>
               <div>
@@ -182,7 +182,7 @@ export default function SupplierSecurityPage() {
           {/* Change password */}
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center gap-2">
-              <KeyRound className="h-4 w-4 text-[#146CE8]" />
+              <KeyRound className="h-4 w-4 text-[#1F3A6D]" />
               <h2 className="text-sm font-semibold text-slate-900">Change Password</h2>
             </div>
             {!sessionToken ? (
@@ -230,7 +230,7 @@ export default function SupplierSecurityPage() {
                 <button
                   type="submit"
                   disabled={passwordMutation.isPending}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#0B3D91] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#146CE8] disabled:opacity-60"
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#17315D] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1F3A6D] disabled:opacity-60"
                 >
                   {passwordMutation.isPending ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -246,7 +246,7 @@ export default function SupplierSecurityPage() {
           {/* Change PIN */}
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center gap-2">
-              <Lock className="h-4 w-4 text-[#146CE8]" />
+              <Lock className="h-4 w-4 text-[#1F3A6D]" />
               <h2 className="text-sm font-semibold text-slate-900">Change Portal PIN</h2>
             </div>
             <p className="mb-3 text-xs text-slate-500">
@@ -297,7 +297,7 @@ export default function SupplierSecurityPage() {
               <button
                 type="submit"
                 disabled={pinMutation.isPending}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-[#0B3D91] bg-white px-4 py-2.5 text-sm font-semibold text-[#0B3D91] shadow-sm transition hover:bg-[#0B3D91]/5 disabled:opacity-60"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-[#17315D] bg-white px-4 py-2.5 text-sm font-semibold text-[#17315D] shadow-sm transition hover:bg-[#17315D]/5 disabled:opacity-60"
               >
                 {pinMutation.isPending ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -312,7 +312,7 @@ export default function SupplierSecurityPage() {
         <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 py-3.5">
             <div className="flex items-center gap-2">
-              <MonitorSmartphone className="h-4 w-4 text-[#146CE8]" />
+              <MonitorSmartphone className="h-4 w-4 text-[#1F3A6D]" />
               <div>
                 <h2 className="text-sm font-semibold text-slate-900">Active Sessions</h2>
                 <p className="text-[11px] text-slate-500">
@@ -380,7 +380,7 @@ export default function SupplierSecurityPage() {
         {/* Login history */}
         <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex items-center gap-2 border-b border-slate-100 px-5 py-3.5">
-            <History className="h-4 w-4 text-[#146CE8]" />
+            <History className="h-4 w-4 text-[#1F3A6D]" />
             <div>
               <h2 className="text-sm font-semibold text-slate-900">Login History</h2>
               <p className="text-[11px] text-slate-500">
@@ -460,7 +460,7 @@ function Field({
         {...rest}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none ring-[#146CE8]/30 focus:border-[#146CE8] focus:ring-2"
+        className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none ring-[#1F3A6D]/30 focus:border-[#1F3A6D] focus:ring-2"
       />
       {hint ? <span className="mt-1 block text-xs text-slate-500">{hint}</span> : null}
     </label>

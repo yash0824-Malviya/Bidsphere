@@ -9,7 +9,9 @@ import {
   type ProcurementStage,
 } from "../../api/forwardedMaterialRequests";
 import ErrorState from "../../components/ErrorState";
+import StatusBadge from "../../components/StatusBadge";
 import { TableSkeleton } from "../../components/Skeleton";
+import Pagination from "../../components/ui/Pagination";
 import {
   Drawing2dCell,
   PartNameCell,
@@ -19,21 +21,25 @@ import ForwardedFilterBar, {
   EMPTY_FORWARDED_FILTERS,
   type ForwardedFilters,
 } from "../../components/material-requests/ForwardedFilterBar";
+import { useClientPagination } from "../../hooks/usePagination";
 import { formatDate } from "../../utils/format";
 
-const STAGE_STYLES: Record<ProcurementStage, string> = {
-  "Department Created": "bg-slate-100 text-slate-700",
-  "Warehouse Review": "bg-slate-100 text-slate-700",
-  "Sent to Procurement": "bg-amber-50 text-amber-700",
-  "RFQ Created": "bg-blue-50 text-blue-700",
-  "Supplier Quotations": "bg-blue-50 text-blue-700",
-  "Reverse Bidding": "bg-indigo-50 text-indigo-700",
-  "AI Recommendation": "bg-indigo-50 text-indigo-700",
-  "Legal Review": "bg-purple-50 text-purple-700",
-  "Finance Review": "bg-purple-50 text-purple-700",
-  "Purchase Order": "bg-cyan-50 text-cyan-700",
-  GRN: "bg-emerald-50 text-emerald-700",
-  Completed: "bg-emerald-100 text-emerald-800",
+const STAGE_TONES: Record<
+  ProcurementStage,
+  "neutral" | "info" | "warning" | "pending" | "success" | "closed"
+> = {
+  "Department Created": "neutral",
+  "Warehouse Review": "neutral",
+  "Sent to Procurement": "warning",
+  "RFQ Created": "info",
+  "Supplier Quotations": "info",
+  "Reverse Bidding": "pending",
+  "AI Recommendation": "pending",
+  "Legal Review": "info",
+  "Finance Review": "info",
+  "Purchase Order": "info",
+  GRN: "success",
+  Completed: "success",
 };
 
 /**
@@ -100,6 +106,18 @@ export default function WarehouseForwardedHistoryPage() {
     });
   }, [data, filters]);
 
+  const {
+    pageRows,
+    totalRecords,
+    totalPages,
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+  } = useClientPagination(rows, {
+    resetKey: `${filters.search}|${filters.department}|${filters.warehouse}|${filters.priority}|${filters.procurementType}|${filters.requestMode}|${filters.status}|${filters.forwardDate}`,
+  });
+
   const toggle = (name: string) =>
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -138,7 +156,7 @@ export default function WarehouseForwardedHistoryPage() {
         </div>
         <Link
           to="/warehouse/material-requests/forwarded"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-primary-600 no-underline hover:bg-slate-50"
+          className="btn-secondary no-underline"
         >
           Procurement Required
         </Link>
@@ -155,17 +173,17 @@ export default function WarehouseForwardedHistoryPage() {
 
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+          <table className="data-table">
+            <thead>
               <tr>
-                <th className="whitespace-nowrap px-4 py-3 text-left">MR Number</th>
-                <th className="whitespace-nowrap px-4 py-3 text-left">Forwarded Date</th>
-                <th className="whitespace-nowrap px-4 py-3 text-left">Forwarded By</th>
-                <th className="whitespace-nowrap px-4 py-3 text-left">Current Status</th>
-                <th className="whitespace-nowrap px-4 py-3 text-left">RFQ Number</th>
-                <th className="whitespace-nowrap px-4 py-3 text-left">PO Number</th>
-                <th className="whitespace-nowrap px-4 py-3 text-left">Current Stage</th>
-                <th className="whitespace-nowrap px-4 py-3 text-right">View</th>
+                <th>MR Number</th>
+                <th>Forwarded Date</th>
+                <th>Forwarded By</th>
+                <th>Current Status</th>
+                <th>RFQ Number</th>
+                <th>PO Number</th>
+                <th>Current Stage</th>
+                <th className="text-right">View</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
@@ -182,7 +200,7 @@ export default function WarehouseForwardedHistoryPage() {
                   </td>
                 </tr>
               ) : (
-                rows.map((row) => (
+                pageRows.map((row) => (
                   <Fragment key={row.mrNumber}>
                     <HistoryRow
                       row={row}
@@ -203,13 +221,18 @@ export default function WarehouseForwardedHistoryPage() {
             </tbody>
           </table>
         </div>
+        {!isLoading && rows.length > 0 && (
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={totalRecords}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            recordLabel="requests"
+          />
+        )}
       </div>
-
-      {!isLoading && rows.length > 0 && (
-        <p className="text-xs text-slate-500">
-          {rows.length} of {data.length} forwarded Material Request(s).
-        </p>
-      )}
 
       {statusMr && (
         <MaterialRequestStatusModal
@@ -261,7 +284,9 @@ function HistoryRow({
         {row.forwardedOn ? formatDate(row.forwardedOn) : "—"}
       </td>
       <td className="whitespace-nowrap px-4 py-3 text-slate-600">{row.forwardedBy || "—"}</td>
-      <td className="whitespace-nowrap px-4 py-3 text-slate-600">{row.status}</td>
+      <td className="whitespace-nowrap px-4 py-3">
+        <StatusBadge status={row.status} />
+      </td>
       <td className="whitespace-nowrap px-4 py-3">
         {row.rfqNumber ? (
           <Link
@@ -287,18 +312,13 @@ function HistoryRow({
         )}
       </td>
       <td className="whitespace-nowrap px-4 py-3">
-        <span
-          className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${STAGE_STYLES[row.currentStage]}`}
-        >
-          {row.currentStage}
-        </span>
+        <StatusBadge
+          status={row.currentStage}
+          tone={STAGE_TONES[row.currentStage]}
+        />
       </td>
       <td className="whitespace-nowrap px-4 py-3 text-right">
-        <button
-          type="button"
-          onClick={onView}
-          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-primary-600 hover:bg-slate-50"
-        >
+        <button type="button" onClick={onView} className="btn-secondary">
           <Activity className="h-3.5 w-3.5" />
           View
         </button>

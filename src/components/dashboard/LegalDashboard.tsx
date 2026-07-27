@@ -24,6 +24,7 @@ import {
 } from "../../api/approvalWorkflow";
 import { formatCurrency, formatDate } from "../../utils/format";
 import DashboardHeader from "./DashboardHeader";
+import DashboardKpiCard, { DashboardKpiGrid } from "./DashboardKpiCard";
 import SlaCountdownWidget from "../sla/SlaCountdownWidget";
 
 interface Props {
@@ -91,23 +92,37 @@ export default function LegalDashboard({ greetingName }: Props) {
     <div className="dashboard-stack">
       <DashboardHeader config={dashboardConfig} greetingName={greetingName} />
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <KpiCard
+      <DashboardKpiGrid columns={4}>
+        <DashboardKpiCard
           icon={Clock}
           label="Pending Reviews"
           value={counters.pendingLegal}
-          tone="warning"
-          highlight={counters.pendingLegal > 0}
+          iconClassName="bg-warning-50 text-warning-600"
+          className={
+            counters.pendingLegal > 0
+              ? "border-warning-200 ring-1 ring-warning-100"
+              : undefined
+          }
         />
-        <KpiCard icon={CheckCircle2} label="Approved" value={counters.approved} tone="success" />
-        <KpiCard icon={XCircle} label="Rejected" value={counters.rejected} tone="danger" />
-        <KpiCard
+        <DashboardKpiCard
+          icon={CheckCircle2}
+          label="Approved"
+          value={counters.approved}
+          iconClassName="bg-success-50 text-success-600"
+        />
+        <DashboardKpiCard
+          icon={XCircle}
+          label="Rejected"
+          value={counters.rejected}
+          iconClassName="bg-danger-50 text-danger-600"
+        />
+        <DashboardKpiCard
           icon={DollarSign}
           label="Pending Value"
           value={formatCurrency(counters.pendingLegalValue)}
-          tone="primary"
+          iconClassName="bg-primary-50 text-primary-600"
         />
-      </div>
+      </DashboardKpiGrid>
 
       <SlaCountdownWidget role="legal" title="Legal SLA Countdown" />
 
@@ -274,44 +289,6 @@ export default function LegalDashboard({ greetingName }: Props) {
             </Link>
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-function KpiCard({
-  icon: Icon,
-  label,
-  value,
-  tone,
-  highlight,
-}: {
-  icon: typeof Clock;
-  label: string;
-  value: number | string;
-  tone: "warning" | "success" | "danger" | "primary";
-  highlight?: boolean;
-}) {
-  const iconTones = {
-    warning: "bg-warning-50 text-warning-600",
-    success: "bg-success-50 text-success-600",
-    danger: "bg-danger-50 text-danger-600",
-    primary: "bg-primary-50 text-primary-600",
-  };
-  return (
-    <div
-      className={`flex items-center gap-3 rounded-xl border bg-white px-4 py-3.5 shadow-sm ${
-        highlight ? "border-warning-200 ring-1 ring-warning-100" : "border-neutral-200"
-      }`}
-    >
-      <div className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg ${iconTones[tone]}`}>
-        <Icon className="h-5 w-5" />
-      </div>
-      <div className="min-w-0">
-        <p className="truncate text-2xl font-bold tabular-nums text-neutral-900">{value}</p>
-        <p className="truncate text-[11px] font-medium uppercase tracking-wider text-neutral-500">
-          {label}
-        </p>
       </div>
     </div>
   );

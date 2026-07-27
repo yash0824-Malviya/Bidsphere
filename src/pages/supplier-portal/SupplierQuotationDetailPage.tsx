@@ -17,6 +17,7 @@ import {
 
 import { getSupplierQuotation } from "../../api/sourcing";
 import { getLegalDocs } from "../../api/legalDocs";
+import { getSupplierRfqDetail } from "../../api/supplierRfqDetail";
 import type { SupplierQuotation } from "../../types/erpnext";
 import EmptyState from "../../components/EmptyState";
 import { Skeleton } from "../../components/Skeleton";
@@ -24,6 +25,11 @@ import StatusBadge from "../../components/StatusBadge";
 import SupplierLegalDocuments from "../../components/supplier/SupplierLegalDocuments";
 import { isSelectedAsWinner } from "../../utils/supplierLegalDocs";
 import { formatCurrency, formatDate, formatDateTime } from "../../utils/format";
+import {
+  getItemTargetPrice,
+  isItemTargetPriceVisibleToSupplier,
+  isTargetPriceVisibleToSupplier,
+} from "../../utils/rfqTargetPrice";
 
 /* -------------------------------------------------------------------------- */
 /*  Helper sub-components                                                      */
@@ -187,6 +193,23 @@ export default function SupplierQuotationDetailPage() {
       (it) => (it as { request_for_quotation?: string }).request_for_quotation
     ) as { request_for_quotation?: string } | undefined)?.request_for_quotation ??
     null;
+
+  /* Linked RFQ (sanitized) — Target Price only when buyer enabled visibility. */
+  const rfqQuery = useQuery({
+    queryKey: ["supplier-sq-linked-rfq", rfqRef, supplierName],
+    queryFn: () => getSupplierRfqDetail(String(rfqRef), String(supplierName)),
+    enabled: !!rfqRef && !!supplierName && !!sq,
+    retry: false,
+    staleTime: 60_000,
+  });
+  const linkedRfq = rfqQuery.data;
+  const showTargetPrice = isTargetPriceVisibleToSupplier(linkedRfq);
+  const targetByItem = new Map(
+    (linkedRfq?.items ?? []).map((it) => {
+      const show = isItemTargetPriceVisibleToSupplier(it, linkedRfq);
+      return [it.item_code, show ? getItemTargetPrice(it) : null] as const;
+    }),
+  );
 
   const docstatus = (sq as { docstatus?: number } | undefined)?.docstatus;
   const statusLabel =
@@ -391,6 +414,9 @@ export default function SupplierQuotationDetailPage() {
                     <th className="px-4 py-3">Description</th>
                     <th className="px-4 py-3 text-right">Qty</th>
                     <th className="px-4 py-3">UOM</th>
+                    {showTargetPrice ? (
+                      <th className="px-4 py-3 text-right">Target Price</th>
+                    ) : null}
                     <th className="px-4 py-3 text-right">Unit Price</th>
                     <th className="px-4 py-3 text-right">Line Total</th>
                   </tr>
@@ -398,6 +424,9 @@ export default function SupplierQuotationDetailPage() {
                 <tbody className="divide-y divide-neutral-200">
                   {items.map((it, idx) => {
                     const lineTotal = it.amount ?? it.rate * it.qty;
+                    const target = showTargetPrice
+                      ? (targetByItem.get(it.item_code) ?? null)
+                      : null;
                     return (
                       <tr key={it.name ?? idx} className="hover:bg-neutral-50/60">
                         <td className="px-4 py-3 text-neutral-400">{idx + 1}</td>
@@ -416,6 +445,25 @@ export default function SupplierQuotationDetailPage() {
                         <td className="px-4 py-3 text-neutral-600">
                           {it.uom ?? "Nos"}
                         </td>
+                        {showTargetPrice ? (
+                          <td className="px-4 py-3 text-right align-top">
+                            {target != null ? (
+                              <div className="inline-flex flex-col items-end leading-tight">
+                                <span className="text-[10px] font-semibold uppercase tracking-wide text-neutral-500">
+                                  Target Price
+                                </span>
+                                <span className="text-sm font-semibold tabular-nums text-neutral-900">
+                                  {formatCurrency(target)}{" "}
+                                  <span className="text-xs font-medium text-neutral-500">
+                                    / Unit
+                                  </span>
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-neutral-400">—</span>
+                            )}
+                          </td>
+                        ) : null}
                         <td className="px-4 py-3 text-right tabular-nums text-neutral-900">
                           {formatCurrency(it.rate)}
                         </td>

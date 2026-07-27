@@ -7,6 +7,8 @@ import {
 } from "../../api/materialRequestWorkflow";
 import PageHeader from "../../components/PageHeader";
 import StatusBadge from "../../components/StatusBadge";
+import Pagination from "../../components/ui/Pagination";
+import { useClientPagination } from "../../hooks/usePagination";
 import { formatDate } from "../../utils/format";
 
 export default function MaterialRequestWarehousePage() {
@@ -14,6 +16,16 @@ export default function MaterialRequestWarehousePage() {
     queryKey: ["mr-warehouse-queue"],
     queryFn: () => listWarehouseMaterialRequestQueue(),
   });
+
+  const {
+    pageRows,
+    totalRecords,
+    totalPages,
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+  } = useClientPagination(data);
 
   return (
     <div>
@@ -38,7 +50,7 @@ export default function MaterialRequestWarehousePage() {
             ) : data.length === 0 ? (
               <tr><td colSpan={5} className="px-4 py-8 text-center text-neutral-500">No pending reviews.</td></tr>
             ) : (
-              data.map((mr) => (
+              pageRows.map((mr) => (
                 <tr key={mr.name} className="hover:bg-neutral-50">
                   <td className="px-4 py-3">
                     <Link
@@ -59,6 +71,17 @@ export default function MaterialRequestWarehousePage() {
             )}
           </tbody>
         </table>
+        {!isLoading && data.length > 0 && (
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={totalRecords}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            recordLabel="requests"
+          />
+        )}
       </div>
     </div>
   );

@@ -34,8 +34,10 @@ import { TableSkeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
 import ExportButton from "../../components/export/ExportButton";
 import { FilterBar, FilterField, SearchInput, SortableTableHeader, ErpNextDatePicker } from "../../components/ui";
+import Pagination from "../../components/ui/Pagination";
 import { useListSort } from "../../hooks/useListSort";
 import { useDebounce } from "../../hooks/useDebounce";
+import { useClientPagination } from "../../hooks/usePagination";
 import type { ExportColumn } from "../../utils/export";
 import type { PaymentEntry } from "../../types/erpnext";
 import {
@@ -209,6 +211,18 @@ export default function PaymentsPage() {
     PAYMENT_DEFAULT_SORT,
     PAYMENT_COMPARATORS
   );
+
+  const {
+    pageRows,
+    totalRecords,
+    totalPages,
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+  } = useClientPagination(sortedRows, {
+    resetKey: `${debouncedSearch}|${statusFilter}|${methodFilter}|${dateFrom}|${dateTo}|${sort.key}|${sort.direction}`,
+  });
 
   const kpis = useMemo(() => computePaymentKpis(mergedRows), [mergedRows]);
   const trend = useMemo(() => monthlyPaymentTrend(mergedRows), [mergedRows]);
@@ -440,6 +454,7 @@ export default function PaymentsPage() {
                 }
               />
             ) : (
+              <>
               <div className="overflow-x-auto">
                 <table className="data-table">
                   <thead>
@@ -456,7 +471,7 @@ export default function PaymentsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedRows.map((p) => {
+                    {pageRows.map((p) => {
                       const isWorkflow = !!(
                         p.name && workflowVoucherByName.has(p.name)
                       );
@@ -530,6 +545,16 @@ export default function PaymentsPage() {
                   </tbody>
                 </table>
               </div>
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                totalRecords={totalRecords}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                onPageSizeChange={setPageSize}
+                recordLabel="payments"
+              />
+              </>
             )}
           </div>
         </div>

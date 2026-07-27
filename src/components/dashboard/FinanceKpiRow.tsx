@@ -1,5 +1,4 @@
 import { memo } from "react";
-import { Link } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
 import {
   CheckCircle2,
@@ -10,11 +9,14 @@ import {
   Wallet,
 } from "lucide-react";
 
-import { Skeleton } from "../Skeleton";
 import type { FinanceWorkflowKpis } from "../../api/financeWorkflow";
 import { formatCurrency } from "../../utils/format";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+  DashboardKpiSkeleton,
+} from "./DashboardKpiCard";
 
-interface KpiCard {
+interface KpiDef {
   label: string;
   value: string;
   hint: string;
@@ -31,16 +33,10 @@ interface Props {
 
 function FinanceKpiRow({ kpis, loading }: Props) {
   if (loading || !kpis) {
-    return (
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <Skeleton key={i} className="min-h-[104px] rounded-xl" />
-        ))}
-      </div>
-    );
+    return <DashboardKpiSkeleton count={6} />;
   }
 
-  const cards: KpiCard[] = [
+  const cards: KpiDef[] = [
     {
       label: "Pending RFQ Reviews",
       value: kpis.pendingRfqReviews.toLocaleString(),
@@ -95,35 +91,20 @@ function FinanceKpiRow({ kpis, loading }: Props) {
   ];
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {cards.map((c) => {
-        const Icon = c.icon;
-        return (
-          <Link
-            key={c.label}
-            to={c.to}
-            className={`rounded-xl border bg-white px-4 py-3.5 shadow-sm transition-shadow hover:shadow-md ${
-              c.highlight ? "border-amber-200" : "border-neutral-200/80"
-            }`}
-          >
-            <div className="flex items-center justify-between gap-1">
-              <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
-                {c.label}
-              </p>
-              <span
-                className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md ${c.accent}`}
-              >
-                <Icon className="h-3.5 w-3.5" />
-              </span>
-            </div>
-            <p className="mt-1 truncate text-2xl font-bold tabular-nums leading-none text-neutral-900">
-              {c.value}
-            </p>
-            <p className="mt-1.5 truncate text-xs text-neutral-500">{c.hint}</p>
-          </Link>
-        );
-      })}
-    </div>
+    <DashboardKpiGrid>
+      {cards.map((c) => (
+        <DashboardKpiCard
+          key={c.label}
+          label={c.label}
+          value={c.value}
+          subtitle={c.hint}
+          icon={c.icon}
+          iconClassName={c.accent}
+          to={c.to}
+          className={c.highlight ? "border-amber-200" : undefined}
+        />
+      ))}
+    </DashboardKpiGrid>
   );
 }
 

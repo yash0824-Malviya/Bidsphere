@@ -710,27 +710,26 @@ export default function MaterialRequestCreatePage() {
               />
             </Field>
 
-            <Field label="Department" required>
-              <input
-                value={departmentTouched ? department : fallbackDepartment}
-
-                onChange={(e) => {
-                  setDepartmentTouched(true);
-                  setDepartment(e.target.value);
-                }}
-
-                onBlur={() => {
-                  if (!department.trim()) {
-                    setDepartment("");
-                    setDepartmentTouched(false);
-                  }
-                }}
-
-                disabled={busy}
-
-                className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm"
-              />
-            </Field>
+            {/* Production portal: department is implied — keep value for save, hide UI. */}
+            {user?.role !== "department" ? (
+              <Field label="Department" required>
+                <input
+                  value={departmentTouched ? department : fallbackDepartment}
+                  onChange={(e) => {
+                    setDepartmentTouched(true);
+                    setDepartment(e.target.value);
+                  }}
+                  onBlur={() => {
+                    if (!department.trim()) {
+                      setDepartment("");
+                      setDepartmentTouched(false);
+                    }
+                  }}
+                  disabled={busy}
+                  className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm"
+                />
+              </Field>
+            ) : null}
 
             <Field label={t("procurementType.label")} required>
               <ProcurementTypePicker

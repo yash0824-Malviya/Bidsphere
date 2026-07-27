@@ -37,7 +37,10 @@ import { deriveRfqProcurementWorkflow } from "../../api/rfqProcurementWorkflow";
 import { invalidateApprovalWorkflow } from "../../api/approvalWorkflow";
 import POStatusTimeline from "../../components/p2p/POStatusTimeline";
 import { Skeleton } from "../../components/Skeleton";
-import { canManagePurchaseOrders } from "../../config/roles";
+import {
+  canManagePurchaseOrders,
+  formatRfqOwnerFromDoc,
+} from "../../config/roles";
 import { useAuthStore } from "../../store/authStore";
 import { buildProcurementWorkflowSteps } from "../../utils/procurementStatusWorkflow";
 import { formatCurrency, formatDate } from "../../utils/format";
@@ -378,7 +381,7 @@ export default function RFQtoPOConversionPage() {
               <InfoField label="Company" value={rfq.company ?? "—"} />
               <InfoField label="Transaction Date" value={formatDate(rfq.transaction_date)} />
               <InfoField label="Status" value={rfq.status ?? "Draft"} />
-              <InfoField label="Created By" value={rfq.owner} />
+              <InfoField label="Created By" value={formatRfqOwnerFromDoc(rfq)} />
               <InfoField label="Valid Till" value={rfq.valid_till ? formatDate(rfq.valid_till) : "—"} />
             </div>
           </Section>
@@ -649,10 +652,10 @@ export default function RFQtoPOConversionPage() {
             </div>
           </div>
 
-          {/* PO Status */}
+          {/* Procurement Status */}
           <div className="rounded-xl border border-neutral-200 bg-white shadow-sm">
             <div className="border-b border-neutral-100 px-5 py-4">
-              <h3 className="text-sm font-bold text-neutral-900">PO Status</h3>
+              <h3 className="text-sm font-bold text-neutral-900">Procurement Status</h3>
             </div>
             <POStatusTimeline steps={procurementSteps} compact />
           </div>

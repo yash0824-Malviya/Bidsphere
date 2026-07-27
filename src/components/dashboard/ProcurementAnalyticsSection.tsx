@@ -86,7 +86,7 @@ const KPI_META: Record<AnalyticsKpiKey, KpiMeta & { accent: Accent }> = {
   },
 };
 
-/** Six analytics cards on the Procurement Dashboard (above charts). */
+/** Six analytics cards on the Procurement Dashboard (legacy / drawer). */
 export const PRIMARY_DASHBOARD_ANALYTICS: AnalyticsKpiKey[] = [
   "costSavings",
   "budgetUtilisation",
@@ -94,6 +94,15 @@ export const PRIMARY_DASHBOARD_ANALYTICS: AnalyticsKpiKey[] = [
   "supplierResponse",
   "cycleTime",
   "onTimeDelivery",
+];
+
+/** Secondary performance KPIs shown below charts on Procurement Dashboard. */
+export const SECONDARY_DASHBOARD_ANALYTICS: AnalyticsKpiKey[] = [
+  "costSavings",
+  "budgetUtilisation",
+  "supplierResponse",
+  "onTimeDelivery",
+  "cycleTime",
 ];
 
 /** Charts on the main Procurement Dashboard (2-column grid). */
@@ -132,6 +141,10 @@ interface Props {
   /** Optional RFQ pipeline stages for the RFQ Pipeline chart. */
   rfqPipeline?: RfqPipelineStage[];
   pipelineLoading?: boolean;
+  /** Chart card height (px). Procurement Dashboard uses 360. */
+  chartHeight?: number;
+  /** Extra class on the KPI grid (e.g. secondary density). */
+  kpiGridClassName?: string;
 }
 
 export default function ProcurementAnalyticsSection({
@@ -146,6 +159,8 @@ export default function ProcurementAnalyticsSection({
   cardVariant = "default",
   rfqPipeline,
   pipelineLoading,
+  chartHeight,
+  kpiGridClassName = "",
 }: Props) {
   const chartKeys = charts ?? PRIMARY_DASHBOARD_CHARTS;
   const needsTurnaround =
@@ -198,30 +213,34 @@ export default function ProcurementAnalyticsSection({
   const cols =
     kpis.length >= 6
       ? "grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6"
+      : kpis.length === 5
+        ? "grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5"
       : kpis.length === 4
         ? "grid-cols-1 sm:grid-cols-2 xl:grid-cols-4"
         : kpis.length >= 3
           ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
           : "grid-cols-1 sm:grid-cols-2";
 
+  const sectionHeading = title ? (
+    <div className="flex items-end justify-between gap-3">
+      <div>
+        <h2 className="text-[18px] font-semibold leading-tight text-[#1E293B]">
+          {title}
+        </h2>
+        {subtitle ? (
+          <p className="mt-0.5 text-[13px] font-normal text-[#64748B]">
+            {subtitle}
+          </p>
+        ) : null}
+      </div>
+      {headerAction}
+    </div>
+  ) : null;
+
   if (primaryQuery.isError) {
     return (
-      <section className="flex flex-col gap-4">
-        {title ? (
-          <div className="flex items-end justify-between gap-3">
-            <div>
-              <h2 className="text-[18px] font-semibold leading-tight text-[#111827]">
-                {title}
-              </h2>
-              {subtitle ? (
-                <p className="mt-0.5 text-[13px] font-normal text-[#64748B]">
-                  {subtitle}
-                </p>
-              ) : null}
-            </div>
-            {headerAction}
-          </div>
-        ) : null}
+      <section className="flex flex-col gap-6">
+        {sectionHeading}
         <DashboardWidgetError
           title="Unable to load dashboard data"
           error={primaryQuery.error}
@@ -232,68 +251,57 @@ export default function ProcurementAnalyticsSection({
   }
 
   return (
-    <section className="flex flex-col gap-4">
-      {title ? (
-        <div className="flex items-end justify-between gap-3">
-          <div>
-            <h2 className="text-[18px] font-semibold leading-tight text-[#111827]">
-              {title}
-            </h2>
-            {subtitle ? (
-              <p className="mt-0.5 text-[13px] font-normal text-[#64748B]">
-                {subtitle}
-              </p>
-            ) : null}
-          </div>
-          {headerAction}
+    <section className="flex flex-col gap-6">
+      {sectionHeading}
+
+      {kpis.length > 0 ? (
+        <div className={`grid gap-5 ${cols} ${kpiGridClassName}`.trim()}>
+          {kpis.map((key) => {
+            const meta = KPI_META[key];
+            const heavy = HEAVY_KPI_KEYS.has(key);
+            const kpi: AnalyticsKpi | null = data ? data[key] : null;
+            const loading = heavy
+              ? primaryLoading || turnaroundLoading
+              : primaryLoading;
+            return (
+              <AnalyticsKpiCard
+                key={key}
+                icon={meta.icon}
+                title={meta.title}
+                description={meta.description}
+                kpi={kpi}
+                loading={loading}
+                compact={compact}
+                variant={cardVariant}
+                accent={meta.accent}
+              />
+            );
+          })}
         </div>
       ) : null}
 
-      <div className={`grid gap-4 ${cols}`}>
-        {kpis.map((key) => {
-          const meta = KPI_META[key];
-          const heavy = HEAVY_KPI_KEYS.has(key);
-          const kpi: AnalyticsKpi | null = data ? data[key] : null;
-          const loading = heavy
-            ? primaryLoading || turnaroundLoading
-            : primaryLoading;
-          return (
-            <AnalyticsKpiCard
-              key={key}
-              icon={meta.icon}
-              title={meta.title}
-              description={meta.description}
-              kpi={kpi}
-              loading={loading}
-              compact={compact}
-              variant={cardVariant}
-              accent={meta.accent}
-            />
-          );
-        })}
-      </div>
-
       {showCharts ? (
-        <div className="mt-1">
-          <Suspense
-            fallback={
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:items-stretch">
-                {chartKeys.map((k) => (
-                  <Skeleton key={k} className="h-[300px] rounded-2xl" />
-                ))}
-              </div>
-            }
-          >
-            <ProcurementAnalyticsCharts
-              data={data}
-              loading={primaryLoading}
-              turnaroundLoading={turnaroundLoading}
-              only={chartKeys}
-              rfqPipeline={rfqPipeline}
-              pipelineLoading={pipelineLoading}
-            />
-          </Suspense>
-        </div>
+        <Suspense
+          fallback={
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:items-stretch">
+              {chartKeys.map((k) => (
+                <div key={k} style={{ height: chartHeight ?? 300 }}>
+                  <Skeleton className="h-full w-full rounded-2xl" />
+                </div>
+              ))}
+            </div>
+          }
+        >
+          <ProcurementAnalyticsCharts
+            data={data}
+            loading={primaryLoading}
+            turnaroundLoading={turnaroundLoading}
+            only={chartKeys}
+            rfqPipeline={rfqPipeline}
+            pipelineLoading={pipelineLoading}
+            chartHeight={chartHeight}
+          />
+        </Suspense>
       ) : null}
     </section>
   );

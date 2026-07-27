@@ -22,6 +22,9 @@ import PageHeader from "../../components/PageHeader";
 import PaginationBar from "../../components/PaginationBar";
 import { TableSkeleton } from "../../components/Skeleton";
 import ExportButton from "../../components/export/ExportButton";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+} from "../../components/dashboard/DashboardKpiCard";
 import { usePagination } from "../../hooks/usePagination";
 import { formatCurrencyIn, formatDateTime } from "../../utils/format";
 import type { ExportColumn } from "../../utils/export";
@@ -112,45 +115,45 @@ export default function ReverseBiddingListPage() {
       />
 
       {/* Dashboard cards */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard
+      <DashboardKpiGrid columns={4}>
+        <DashboardKpiCard
           icon={Activity}
           label="Active Auctions"
           value={stats ? String(stats.live) : "—"}
-          tone="emerald"
+          iconClassName="bg-emerald-50 text-emerald-600"
         />
-        <KpiCard
+        <DashboardKpiCard
           icon={CalendarClock}
           label="Scheduled"
           value={stats ? String(stats.scheduled) : "—"}
-          tone="amber"
+          iconClassName="bg-amber-50 text-amber-600"
         />
-        <KpiCard
+        <DashboardKpiCard
           icon={CheckCircle2}
           label="Completed"
           value={stats ? String(stats.completed) : "—"}
-          tone="blue"
+          iconClassName="bg-[var(--color-primary-light)] text-[var(--color-primary)]"
         />
-        <KpiCard
+        <DashboardKpiCard
           icon={TrendingDown}
           label="Average Savings"
           value={stats ? `${stats.avgSavingsPct.toFixed(1)}%` : "—"}
-          tone="violet"
+          iconClassName="bg-[var(--color-primary-light)] text-[var(--color-primary)]"
         />
-      </div>
+      </DashboardKpiGrid>
 
       {stats && (stats.lowestActiveBid != null || stats.upcoming.length > 0) && (
         <div className="grid gap-3 lg:grid-cols-2">
-          <div className="rounded-xl border border-neutral-200 bg-white p-4">
-            <p className="text-xs font-medium uppercase tracking-wide text-neutral-500">
-              Current Lowest Live Bid
-            </p>
-            <p className="mt-1 text-2xl font-bold tabular-nums text-emerald-600">
-              {stats.lowestActiveBid != null
+          <DashboardKpiCard
+            icon={Gavel}
+            label="Current Lowest Live Bid"
+            value={
+              stats.lowestActiveBid != null
                 ? formatCurrencyIn(stats.lowestActiveBid)
-                : "No live bids"}
-            </p>
-          </div>
+                : "No live bids"
+            }
+            iconClassName="bg-emerald-50 text-emerald-600"
+          />
           <div className="rounded-xl border border-neutral-200 bg-white p-4">
             <p className="text-xs font-medium uppercase tracking-wide text-neutral-500">
               Upcoming Auctions
@@ -331,40 +334,3 @@ function AuctionRow({
   );
 }
 
-function KpiCard({
-  icon: Icon,
-  label,
-  value,
-  tone,
-}: {
-  icon: typeof Activity;
-  label: string;
-  value: string;
-  tone: "emerald" | "amber" | "blue" | "violet";
-}) {
-  const tones: Record<string, string> = {
-    emerald: "bg-emerald-50 text-emerald-600",
-    amber: "bg-amber-50 text-amber-600",
-    blue: "bg-blue-50 text-blue-600",
-    violet: "bg-violet-50 text-violet-600",
-  };
-  return (
-    <div className="rounded-xl border border-neutral-200 bg-white p-4">
-      <div className="flex items-center gap-3">
-        <span
-          className={`inline-flex h-9 w-9 items-center justify-center rounded-lg ${tones[tone]}`}
-        >
-          <Icon className="h-5 w-5" />
-        </span>
-        <div className="min-w-0">
-          <p className="truncate text-xs font-medium text-neutral-500">
-            {label}
-          </p>
-          <p className="text-xl font-bold tabular-nums text-neutral-900">
-            {value}
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}

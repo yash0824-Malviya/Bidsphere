@@ -289,17 +289,17 @@ export default function LoginPage({ portal }: LoginPageProps) {
   return (
     <AuthShell>
       <div
-        className="bsphere-rise w-full max-w-[440px]"
+        className="bsphere-rise mx-auto flex w-full max-w-[440px] flex-col items-center"
         style={{ animationDelay: "120ms" }}
       >
-            <div className="rounded-[28px] border border-white/40 bg-white/80 p-7 shadow-[0_40px_120px_-28px_rgba(3,32,71,0.65)] ring-1 ring-white/30 backdrop-blur-2xl sm:p-9">
+            <div className="flex w-full max-h-[min(720px,calc(100dvh-7.5rem))] flex-col overflow-hidden rounded-[24px] border border-white/40 bg-white/80 px-5 py-5 shadow-[0_18px_48px_-22px_rgba(3,32,71,0.55)] ring-1 ring-white/30 backdrop-blur-2xl">
               {/* Card header */}
-              <div className="mb-7 flex flex-col items-center text-center">
-                <BrandLogo whiteBg size="sm" />
-                <h2 className="mt-4 text-2xl font-semibold tracking-tight text-neutral-900">
+              <div className="flex shrink-0 flex-col items-center text-center">
+                <BrandLogo whiteBg size="md" />
+                <h2 className="mt-3 text-xl font-semibold tracking-tight text-neutral-900">
                   {t("login.welcomeBack")}
                 </h2>
-                <p className="mt-1.5 text-sm text-neutral-500">
+                <p className="mt-1 text-sm leading-snug text-neutral-500">
                   {portal
                     ? `Sign in to the ${staffPortalLabel(portal)} portal`
                     : t("login.subtitle")}
@@ -309,13 +309,16 @@ export default function LoginPage({ portal }: LoginPageProps) {
               {formError && (
                 <div
                   role="alert"
-                  className="mb-5 rounded-xl border border-danger-100 bg-danger-50/90 px-4 py-3 text-sm text-danger-700"
+                  className="mt-3 shrink-0 rounded-xl border border-danger-100 bg-danger-50/90 px-3 py-2 text-left text-sm text-danger-700"
                 >
                   {formError}
                 </div>
               )}
 
-              <form onSubmit={handleSubmit} className="space-y-5">
+              <form
+                onSubmit={handleSubmit}
+                className={`space-y-2.5 ${formError ? "mt-2.5" : "mt-4"}`}
+              >
                 <GlassField
                   id="username"
                   label={t("login.usernameLabel")}
@@ -346,14 +349,14 @@ export default function LoginPage({ portal }: LoginPageProps) {
                   hideLabel={t("login.hidePassword")}
                 />
 
-                <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center justify-between gap-3 pt-0.5">
                   <label className="flex cursor-pointer items-center gap-2 text-sm text-neutral-600">
                     <input
                       type="checkbox"
                       checked={rememberMe}
                       onChange={(e) => setRememberMe(e.target.checked)}
                       disabled={isLoading}
-                      className="h-4 w-4 rounded border-neutral-300 text-primary focus:ring-primary/30"
+                      className="h-4 w-4 shrink-0 rounded border-neutral-300 text-primary focus:ring-primary/30"
                     />
                     {t("login.rememberMe")}
                   </label>
@@ -362,7 +365,7 @@ export default function LoginPage({ portal }: LoginPageProps) {
                     type="button"
                     onClick={handleForgotPassword}
                     disabled={isLoading}
-                    className="text-sm font-medium text-primary-600 transition hover:text-primary-700 disabled:opacity-60"
+                    className="shrink-0 text-sm font-medium text-primary-600 transition hover:text-primary-700 disabled:opacity-60"
                   >
                     {t("login.forgotPassword")}
                   </button>
@@ -371,7 +374,7 @@ export default function LoginPage({ portal }: LoginPageProps) {
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className="group flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-primary/30 transition-all hover:bg-primary-600 hover:shadow-primary/40 focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="group flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-white shadow-md shadow-primary/25 transition-all hover:bg-primary-600 hover:shadow-primary/35 focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {isLoading ? (
                     <>
@@ -387,18 +390,18 @@ export default function LoginPage({ portal }: LoginPageProps) {
                 </button>
               </form>
 
-              <div className="mt-6">
+              <div className="mt-3">
                 <Divider label={t("login.or")} />
 
-                <div className="mt-5 space-y-3">
+                <div className="mt-2.5 flex w-full flex-col items-stretch gap-4 sm:flex-row sm:items-center sm:justify-center">
                   <SsoButton
-                    label={t("login.continueMicrosoft")}
+                    label="Microsoft"
                     icon={<MicrosoftIcon />}
                     onClick={handleMicrosoftSso}
                     disabled={isLoading}
                   />
                   <SsoButton
-                    label={t("login.continueGoogle")}
+                    label="Google"
                     icon={<GoogleIcon />}
                     onClick={handleGoogleSso}
                     disabled={isLoading}
@@ -407,8 +410,8 @@ export default function LoginPage({ portal }: LoginPageProps) {
               </div>
             </div>
 
-            <p className="mt-5 flex items-center justify-center gap-1.5 text-xs text-white/70">
-              <ShieldCheck className="h-3.5 w-3.5" />
+            <p className="mt-2.5 flex shrink-0 items-center justify-center gap-1.5 text-xs text-white/70">
+              <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
               {t("login.secureNotice")}
             </p>
       </div>
@@ -421,7 +424,7 @@ export default function LoginPage({ portal }: LoginPageProps) {
 /* -------------------------------------------------------------------------- */
 
 const glassInputCls =
-  "w-full rounded-xl border border-white/70 bg-white/70 px-3 py-2.5 text-sm text-neutral-900 shadow-sm transition placeholder:text-neutral-400 focus:border-primary focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:cursor-not-allowed disabled:opacity-60";
+  "h-11 w-full rounded-xl border border-white/70 bg-white/70 px-3.5 text-sm leading-none text-neutral-900 shadow-sm transition placeholder:text-neutral-400 focus:border-primary focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/25 disabled:cursor-not-allowed disabled:opacity-60";
 
 interface GlassFieldProps {
   id: string;
@@ -447,7 +450,7 @@ function GlassField({
   disabled,
 }: GlassFieldProps) {
   return (
-    <div>
+    <div className="w-full">
       <label
         htmlFor={id}
         className="mb-1.5 block text-sm font-medium text-neutral-700"
@@ -455,7 +458,7 @@ function GlassField({
         {label}
       </label>
       <div className="relative">
-        <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-neutral-400">
+        <span className="pointer-events-none absolute left-0 top-0 flex h-11 w-10 items-center justify-center text-neutral-400">
           {icon}
         </span>
         <input
@@ -467,7 +470,7 @@ function GlassField({
           autoComplete={autoComplete}
           required={required}
           disabled={disabled}
-          className={`${glassInputCls} pl-9`}
+          className={`${glassInputCls} pl-10`}
         />
       </div>
     </div>
@@ -498,7 +501,7 @@ function PasswordField({
   hideLabel,
 }: PasswordFieldProps) {
   return (
-    <div>
+    <div className="w-full">
       <label
         htmlFor="password"
         className="mb-1.5 block text-sm font-medium text-neutral-700"
@@ -506,7 +509,7 @@ function PasswordField({
         {label}
       </label>
       <div className="relative">
-        <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-neutral-400">
+        <span className="pointer-events-none absolute left-0 top-0 flex h-11 w-10 items-center justify-center text-neutral-400">
           <Lock className="h-4 w-4" />
         </span>
         <input
@@ -518,12 +521,12 @@ function PasswordField({
           autoComplete="current-password"
           required
           disabled={disabled}
-          className={`${glassInputCls} pl-9 pr-10`}
+          className={`${glassInputCls} pl-10 pr-11`}
         />
         <button
           type="button"
           onClick={onToggleShow}
-          className="absolute inset-y-0 right-0 flex items-center pr-3 text-neutral-400 transition hover:text-neutral-700"
+          className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center text-neutral-400 transition hover:text-neutral-700"
           aria-label={show ? hideLabel : showLabel}
           tabIndex={-1}
         >
@@ -538,7 +541,7 @@ function Divider({ label }: { label: string }) {
   return (
     <div className="relative flex items-center">
       <div className="flex-1 border-t border-neutral-300/70" />
-      <span className="mx-4 text-xs font-semibold uppercase tracking-wider text-neutral-400">
+      <span className="mx-3 text-xs font-semibold uppercase tracking-wider text-neutral-400">
         {label}
       </span>
       <div className="flex-1 border-t border-neutral-300/70" />
@@ -559,12 +562,12 @@ function SsoButton({ label, icon, onClick, disabled }: SsoButtonProps) {
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="flex w-full items-center justify-center gap-3 rounded-xl border border-white/60 bg-white/70 px-4 py-2.5 text-sm font-medium text-neutral-800 shadow-sm transition hover:border-neutral-200 hover:bg-white hover:shadow focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
+      className="inline-flex h-11 w-full shrink-0 items-center justify-center gap-2.5 rounded-xl border border-[#E5E7EB] bg-white px-3 text-[15px] font-medium text-neutral-800 transition duration-200 ease-out hover:border-primary hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-60 sm:w-[190px] sm:max-w-[190px]"
     >
-      <span className="flex h-5 w-5 shrink-0 items-center justify-center">
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center [&>svg]:h-5 [&>svg]:w-5" aria-hidden>
         {icon}
       </span>
-      {label}
+      <span>{label}</span>
     </button>
   );
 }

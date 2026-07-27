@@ -39,6 +39,9 @@ import { useSlaVisible } from "../../hooks/useSlaVisible";
 import SlaCountdownWidget from "../../components/sla/SlaCountdownWidget";
 import ErrorState from "../../components/ErrorState";
 import PageHeader from "../../components/PageHeader";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+} from "../../components/dashboard/DashboardKpiCard";
 import { useAuthStore } from "../../store/authStore";
 import { formatDate, formatDateTime } from "../../utils/format";
 
@@ -330,7 +333,7 @@ export default function WarehouseDashboardPage() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="flex flex-col gap-5">
       {/* Single primary title (the global header shows the breadcrumb above). */}
       <PageHeader
         title="Warehouse Dashboard"
@@ -370,131 +373,129 @@ export default function WarehouseDashboardPage() {
       </div>
 
       {/* 2 · KPI Cards */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
-        <KpiCard
+      <DashboardKpiGrid>
+        <DashboardKpiCard
           icon={ClipboardList}
-          accent="bg-amber-50 text-amber-600"
+          iconClassName="bg-amber-50 text-amber-600"
           label="Pending Requests"
           value={kpis.pending}
-          desc="Awaiting review"
+          subtitle="Awaiting review"
           loading={pendingQuery.isLoading}
           to="/warehouse/material-requests/pending"
         />
-        <KpiCard
+        <DashboardKpiCard
           icon={CheckCircle}
-          accent="bg-emerald-50 text-emerald-600"
+          iconClassName="bg-emerald-50 text-emerald-600"
           label="Ready to Issue"
           value={kpis.readyToIssue}
-          desc="Requests fully in stock"
+          subtitle="Requests fully in stock"
           loading={pendingQuery.isLoading}
           to="/warehouse/issue-items"
         />
-        <KpiCard
+        <DashboardKpiCard
           icon={TrendingUp}
-          accent="bg-blue-50 text-blue-600"
+          iconClassName="bg-blue-50 text-blue-600"
           label="Issued Today"
           value={kpis.issuedToday}
-          desc="Stock issued today"
+          subtitle="Stock issued today"
           loading={issuedQuery.isLoading}
           to="/warehouse/material-requests/issued"
         />
-        <KpiCard
+        <DashboardKpiCard
           icon={FileSearch}
-          accent="bg-indigo-50 text-indigo-600"
+          iconClassName="bg-indigo-50 text-indigo-600"
           label="Procurement Required"
           value={kpis.procurementRequired}
-          desc="Shortages to send"
+          subtitle="Shortages to send"
           loading={pendingQuery.isLoading || procurementRequiredPersistedQuery.isLoading}
           to="/warehouse/material-requests/forwarded"
         />
-        <KpiCard
+        <DashboardKpiCard
           icon={Split}
-          accent="bg-orange-50 text-orange-600"
+          iconClassName="bg-orange-50 text-orange-600"
           label="Partially Issued"
           value={kpis.partiallyIssued}
-          desc="Issue + procurement"
+          subtitle="Issue + procurement"
           loading={pendingQuery.isLoading}
           to="/warehouse/material-requests/pending"
         />
-        <KpiCard
+        <DashboardKpiCard
           icon={AlertTriangle}
-          accent="bg-rose-50 text-rose-600"
+          iconClassName="bg-rose-50 text-rose-600"
           label="Low Stock Items"
           value={kpis.lowStock}
-          desc="Low or out of stock"
+          subtitle="Low or out of stock"
           loading={inventoryQuery.isLoading}
           to="/warehouse/inventory/stock"
         />
-      </div>
+      </DashboardKpiGrid>
 
       {/* 2a · Material Issue KPIs */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
-        <KpiCard
+      <DashboardKpiGrid>
+        <DashboardKpiCard
           icon={PackageCheck}
-          accent="bg-sky-50 text-sky-600"
+          iconClassName="bg-sky-50 text-sky-600"
           label="Today's Material Issues"
           value={kpis.todaysReceiptIssues || kpis.todaysIssues}
-          desc="Issues + receipts today"
+          subtitle="Issues + receipts today"
           loading={issuedQuery.isLoading}
           to="/warehouse/material-requests/issued"
         />
-        <KpiCard
+        <DashboardKpiCard
           icon={ClipboardList}
-          accent="bg-amber-50 text-amber-700"
+          iconClassName="bg-amber-50 text-amber-700"
           label="Pending Signatures"
           value={kpis.pendingSignatures}
-          desc="Warehouse or department"
-          loading={false}
+          subtitle="Warehouse or department"
           to="/warehouse/material-requests/issued"
         />
-        <KpiCard
+        <DashboardKpiCard
           icon={FileSearch}
-          accent="bg-rose-50 text-rose-600"
+          iconClassName="bg-rose-50 text-rose-600"
           label="Pending Department Acceptance"
           value={kpis.receiptsAwaitingConfirmation}
-          desc="Awaiting department digital acceptance"
-          loading={false}
+          subtitle="Awaiting department digital acceptance"
           to="/warehouse/issue-items/pending-acceptance"
         />
-        <KpiCard
+        <DashboardKpiCard
           icon={PackagePlus}
-          accent="bg-violet-50 text-violet-600"
+          iconClassName="bg-violet-50 text-violet-600"
           label="Pending Issues"
           value={kpis.pendingIssues}
-          desc="Ready to issue now"
+          subtitle="Ready to issue now"
           loading={pendingQuery.isLoading}
           to="/warehouse/issue-items"
         />
-        <KpiCard
+        <DashboardKpiCard
           icon={Split}
-          accent="bg-orange-50 text-orange-600"
+          iconClassName="bg-orange-50 text-orange-600"
           label="Partial Issues"
           value={kpis.partialIssues}
-          desc="History · partial"
+          subtitle="History · partial"
           loading={issuedQuery.isLoading}
           to="/warehouse/material-requests/issued"
         />
-        <KpiCard
+        <DashboardKpiCard
           icon={CheckCircle}
-          accent="bg-emerald-50 text-emerald-600"
+          iconClassName="bg-emerald-50 text-emerald-600"
           label="Completed Today"
           value={kpis.completedToday}
-          desc="Full issues today"
+          subtitle="Full issues today"
           loading={issuedQuery.isLoading}
           to="/warehouse/material-requests/issued"
         />
-        <KpiCard
+        <DashboardKpiCard
           icon={Activity}
-          accent="bg-teal-50 text-teal-600"
+          iconClassName="bg-teal-50 text-teal-600"
           label="Issue Success Rate"
           value={
             kpis.issueSuccessRate == null ? "—" : `${kpis.issueSuccessRate}%`
           }
-          desc="Full / today's issues"
+          subtitle="Full / today's issues"
           loading={issuedQuery.isLoading}
           to="/warehouse/material-requests/issued"
         />
-      </div>
+      </DashboardKpiGrid>
 
       {/* 2b · SLA countdowns for warehouse-owned stages */}
       <SlaCountdownWidget role="warehouse" title="Warehouse SLA Countdown" />
@@ -829,48 +830,6 @@ function QuickAction({
         <p className="truncate text-sm font-semibold text-slate-900">{label}</p>
         <p className="truncate text-[11px] text-slate-500">{desc}</p>
       </div>
-    </Link>
-  );
-}
-
-function KpiCard({
-  icon: Icon,
-  accent,
-  label,
-  value,
-  desc,
-  loading,
-  to,
-}: {
-  icon: LucideIcon;
-  accent: string;
-  label: string;
-  value: number | string;
-  desc: string;
-  loading?: boolean;
-  to: string;
-}) {
-  return (
-    <Link
-      to={to}
-      className="group rounded-xl border border-slate-200 bg-white px-3.5 py-3 shadow-sm transition-all hover:border-primary-200 hover:shadow-md no-underline"
-    >
-      <div className="flex items-center justify-between gap-1">
-        <span className="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-          {label}
-        </span>
-        <span className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md ${accent}`}>
-          <Icon className="h-3.5 w-3.5" />
-        </span>
-      </div>
-      {loading ? (
-        <div className="mt-2 h-7 w-12 animate-pulse rounded bg-slate-100" />
-      ) : (
-        <p className="mt-1.5 text-2xl font-bold leading-none tabular-nums text-slate-900">
-          {value}
-        </p>
-      )}
-      <p className="mt-1 truncate text-[11px] text-slate-500">{desc}</p>
     </Link>
   );
 }

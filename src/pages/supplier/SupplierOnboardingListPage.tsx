@@ -1,9 +1,26 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Inbox, Plus, Search } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import {
+  CheckCircle2,
+  Clock,
+  FileText,
+  Inbox,
+  Link2,
+  Pencil,
+  Plus,
+  Search,
+  Send,
+  TimerOff,
+  XCircle,
+} from "lucide-react";
+import toast from "react-hot-toast";
 import PageHeader from "../../components/PageHeader";
 import PaginationBar from "../../components/PaginationBar";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+} from "../../components/dashboard/DashboardKpiCard";
 import { useClientPagination } from "../../hooks/usePagination";
 import NewOnboardingModal from "../../components/supplier-onboarding/NewOnboardingModal";
 import {
@@ -15,31 +32,13 @@ import { useAuthStore } from "../../store/authStore";
 import { queryClient } from "../../queryClient";
 import { ONB } from "../../components/supplier-onboarding/enterprise/onboardingUi";
 import ExportButton from "../../components/export/ExportButton";
+import StatusBadge from "../../components/StatusBadge";
+import { TableRowActions } from "../../components/ui";
 import type { ExportColumn } from "../../utils/export";
 import type { OnboardingListRow } from "../../api/supplierOnboarding";
 
-function statusClass(status?: string): string {
-  switch (status) {
-    case "Approved":
-      return "bg-emerald-50 text-emerald-700 border-emerald-200";
-    case "Rejected":
-    case "Expired":
-      return "bg-rose-50 text-rose-700 border-rose-200";
-    case "Under Review":
-    case "Submitted":
-      return "bg-primary-50 text-primary-800 border-primary-200";
-    case "Changes Requested":
-      return "bg-amber-50 text-amber-800 border-amber-200";
-    case "Link Generated":
-    case "Opened":
-    case "In Progress":
-      return "bg-indigo-50 text-indigo-700 border-indigo-200";
-    default:
-      return "bg-slate-50 text-slate-700 border-slate-200";
-  }
-}
-
 export default function SupplierOnboardingListPage() {
+  const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
@@ -74,15 +73,60 @@ export default function SupplierOnboardingListPage() {
   const cards = useMemo(() => {
     const s = statsQuery.data;
     return [
-      { label: "Total Requests", value: s?.total ?? "—", accent: ONB.primary },
-      { label: "Draft", value: s?.draft ?? "—", accent: "#64748B" },
-      { label: "Generated", value: s?.generated ?? "—", accent: "#6366F1" },
-      { label: "Submitted", value: s?.submitted ?? "—", accent: "#0098EA" },
-      { label: "Pending Review", value: s?.pending_review ?? "—", accent: ONB.warning },
-      { label: "Approved", value: s?.approved ?? "—", accent: ONB.success },
-      { label: "Rejected", value: s?.rejected ?? "—", accent: ONB.error },
-      { label: "Expired", value: s?.expired ?? "—", accent: "#94A3B8" },
-    ];
+      {
+        label: "Total Requests",
+        value: s?.total ?? "—",
+        icon: Inbox,
+        iconClassName: "bg-primary-50 text-primary-600",
+      },
+      {
+        label: "Draft",
+        value: s?.draft ?? "—",
+        icon: FileText,
+        iconClassName: "bg-slate-100 text-slate-600",
+      },
+      {
+        label: "Generated",
+        value: s?.generated ?? "—",
+        icon: Link2,
+        iconClassName: "bg-indigo-50 text-indigo-600",
+      },
+      {
+        label: "Submitted",
+        value: s?.submitted ?? "—",
+        icon: Send,
+        iconClassName: "bg-[var(--color-primary-light)] text-[var(--color-primary)]",
+      },
+      {
+        label: "Pending Review",
+        value: s?.pending_review ?? "—",
+        icon: Clock,
+        iconClassName: "bg-amber-50 text-amber-600",
+      },
+      {
+        label: "Approved",
+        value: s?.approved ?? "—",
+        icon: CheckCircle2,
+        iconClassName: "bg-emerald-50 text-emerald-600",
+      },
+      {
+        label: "Rejected",
+        value: s?.rejected ?? "—",
+        icon: XCircle,
+        iconClassName: "bg-rose-50 text-rose-600",
+      },
+      {
+        label: "Expired",
+        value: s?.expired ?? "—",
+        icon: TimerOff,
+        iconClassName: "bg-neutral-100 text-neutral-500",
+      },
+    ] as {
+      label: string;
+      value: string | number;
+      icon: LucideIcon;
+      iconClassName: string;
+    }[];
   }, [statsQuery.data]);
 
   const listRows = listQuery.data ?? [];
@@ -163,24 +207,18 @@ export default function SupplierOnboardingListPage() {
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <DashboardKpiGrid columns={4}>
         {cards.map((c) => (
-          <div
+          <DashboardKpiCard
             key={c.label}
-            className="rounded-2xl border border-neutral-200/80 bg-white p-4 shadow-sm transition hover:shadow-md"
-          >
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-              {c.label}
-            </p>
-            <p
-              className="mt-2 text-3xl font-bold tabular-nums tracking-tight"
-              style={{ color: c.accent }}
-            >
-              {c.value}
-            </p>
-          </div>
+            label={c.label}
+            value={c.value}
+            icon={c.icon}
+            iconClassName={c.iconClassName}
+            loading={statsQuery.isLoading}
+          />
         ))}
-      </div>
+      </DashboardKpiGrid>
 
       <div className="rounded-2xl border border-neutral-200/80 bg-white p-5 shadow-sm">
         <div className="mb-5 flex flex-wrap items-center gap-2">
@@ -257,7 +295,7 @@ export default function SupplierOnboardingListPage() {
                 <th className="px-3 py-3">Msgs</th>
                 <th className="px-3 py-3">Created By</th>
                 <th className="px-3 py-3">Created Date</th>
-                <th className="px-3 py-3">Actions</th>
+                <th className="col-actions px-3 py-3 text-center">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -275,48 +313,73 @@ export default function SupplierOnboardingListPage() {
                   </td>
                 </tr>
               )}
-              {pageRows.map((row) => (
-                <tr
-                  key={row.name}
-                  className="border-t border-slate-100 transition hover:bg-slate-50/80"
-                >
-                  <td className="px-3 py-3 font-semibold text-slate-800">{row.name}</td>
-                  <td className="px-3 py-3 font-medium text-slate-800">{row.company_name}</td>
-                  <td className="px-3 py-3 text-slate-600">{row.contact_person}</td>
-                  <td className="px-3 py-3 text-slate-600">{row.email}</td>
-                  <td className="px-3 py-3 text-slate-600">{row.supplier_type}</td>
-                  <td className="px-3 py-3 text-slate-600">{row.supplier_category}</td>
-                  <td className="px-3 py-3">
-                    <span
-                      className={`inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${statusClass(row.status)}`}
-                    >
-                      {row.status}
-                    </span>
-                  </td>
-                  <td className="px-3 py-3">
-                    {Number(row.unread_for_procurement || 0) > 0 ? (
-                      <span className="inline-flex rounded-full bg-rose-600 px-2 py-0.5 text-[11px] font-semibold text-white">
-                        {row.unread_for_procurement}
-                      </span>
-                    ) : (
-                      <span className="text-xs text-slate-400">0</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-3 text-slate-600">{row.created_by_user || "—"}</td>
-                  <td className="px-3 py-3 text-slate-600">
-                    {row.creation ? String(row.creation).slice(0, 10) : "—"}
-                  </td>
-                  <td className="px-3 py-3">
-                    <Link
-                      to={`/suppliers/onboarding/${encodeURIComponent(row.name)}`}
-                      className="inline-flex rounded-lg px-2.5 py-1 text-xs font-bold text-white"
-                      style={{ backgroundColor: ONB.primary }}
-                    >
-                      Open
-                    </Link>
-                  </td>
-                </tr>
-              ))}
+              {pageRows.map((row) => {
+                const detailPath = `/suppliers/onboarding/${encodeURIComponent(row.name)}`;
+                return (
+                  <tr
+                    key={row.name}
+                    className="border-t border-slate-100 transition hover:bg-[#EEF4FF]"
+                  >
+                    <td className="px-3 py-3 font-semibold text-slate-800">{row.name}</td>
+                    <td className="px-3 py-3 font-medium text-slate-800">{row.company_name}</td>
+                    <td className="px-3 py-3 text-slate-600">{row.contact_person}</td>
+                    <td className="px-3 py-3 text-slate-600">{row.email}</td>
+                    <td className="px-3 py-3 text-slate-600">{row.supplier_type}</td>
+                    <td className="px-3 py-3 text-slate-600">{row.supplier_category}</td>
+                    <td className="px-3 py-3">
+                      <StatusBadge status={row.status} />
+                    </td>
+                    <td className="px-3 py-3">
+                      {Number(row.unread_for_procurement || 0) > 0 ? (
+                        <span className="inline-flex rounded-full bg-rose-600 px-2 py-0.5 text-[11px] font-semibold text-white">
+                          {row.unread_for_procurement}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-slate-400">0</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-3 text-slate-600">{row.created_by_user || "—"}</td>
+                    <td className="px-3 py-3 text-slate-600">
+                      {row.creation ? String(row.creation).slice(0, 10) : "—"}
+                    </td>
+                    <td className="col-actions px-3 py-3 text-center">
+                      <TableRowActions
+                        label={row.name}
+                        viewTo={detailPath}
+                        items={[
+                          {
+                            id: "edit",
+                            label: "Edit",
+                            icon: Pencil,
+                            onClick: () => navigate(detailPath),
+                          },
+                          {
+                            id: "copy",
+                            label: "Copy Link",
+                            icon: Link2,
+                            onClick: () => {
+                              void navigator.clipboard
+                                .writeText(
+                                  `${window.location.origin}${detailPath}`,
+                                )
+                                .then(() => toast.success("Link copied"))
+                                .catch(() =>
+                                  toast.error("Could not copy link"),
+                                );
+                            },
+                          },
+                          {
+                            id: "docs",
+                            label: "Documents",
+                            icon: FileText,
+                            onClick: () => navigate(detailPath),
+                          },
+                        ]}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           <PaginationBar

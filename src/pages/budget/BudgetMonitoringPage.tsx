@@ -23,6 +23,9 @@ import {
 import type { SpendBucket } from "../../api/budgetLedger";
 import PageHeader from "../../components/PageHeader";
 import { Skeleton } from "../../components/Skeleton";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+} from "../../components/dashboard/DashboardKpiCard";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
 import { formatCurrencyCompactIn, formatCurrencyIn } from "../../utils/format";
 
@@ -132,36 +135,41 @@ export default function BudgetMonitoringPage() {
       {isLoading ? (
         <Skeleton className="mb-4 h-20 rounded-xl" />
       ) : (
-        <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-5">
-          <KpiCard
+        <DashboardKpiGrid columns={5} className="mb-4">
+          <DashboardKpiCard
             label="Total Budget"
             value={fmt(kpis?.totalBudget ?? 0)}
-            icon={<Wallet className="h-4 w-4 text-primary-600" />}
+            icon={Wallet}
+            iconClassName="bg-primary-50 text-primary-600"
           />
-          <KpiCard
+          <DashboardKpiCard
             label="Reserved"
             value={fmt(kpis?.reservedBudget ?? 0)}
-            hint="Open Purchase Orders"
-            icon={<Layers className="h-4 w-4 text-amber-600" />}
+            subtitle="Open Purchase Orders"
+            icon={Layers}
+            iconClassName="bg-amber-50 text-amber-600"
           />
-          <KpiCard
+          <DashboardKpiCard
             label="Consumed"
             value={fmt(kpis?.consumedBudget ?? 0)}
-            hint="Purchase Invoices"
-            icon={<BarChart3 className="h-4 w-4 text-rose-600" />}
+            subtitle="Purchase Invoices"
+            icon={BarChart3}
+            iconClassName="bg-rose-50 text-rose-600"
           />
-          <KpiCard
+          <DashboardKpiCard
             label="Available"
             value={fmt(kpis?.availableBudget ?? 0)}
-            icon={<CheckCircle2 className="h-4 w-4 text-emerald-600" />}
+            icon={CheckCircle2}
+            iconClassName="bg-emerald-50 text-emerald-600"
           />
-          <KpiCard
+          <DashboardKpiCard
             label="Utilization"
             value={`${kpis?.utilizationPct ?? 0}%`}
-            hint={`${kpis?.activeBudgets ?? 0} active budgets`}
-            icon={<LineChart className="h-4 w-4 text-indigo-600" />}
+            subtitle={`${kpis?.activeBudgets ?? 0} active budgets`}
+            icon={LineChart}
+            iconClassName="bg-indigo-50 text-indigo-600"
           />
-        </div>
+        </DashboardKpiGrid>
       )}
 
       {noData ? (
@@ -273,31 +281,6 @@ export default function BudgetMonitoringPage() {
           )}
         </>
       )}
-    </div>
-  );
-}
-
-function KpiCard({
-  label,
-  value,
-  hint,
-  icon,
-}: {
-  label: string;
-  value: string;
-  hint?: string;
-  icon: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-xl border border-neutral-200 bg-white px-4 py-3 shadow-sm">
-      <div className="mb-1 flex items-center justify-between">
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400">
-          {label}
-        </p>
-        {icon}
-      </div>
-      <p className="text-lg font-bold tabular-nums text-neutral-900">{value}</p>
-      {hint && <p className="mt-0.5 text-[10px] text-neutral-400">{hint}</p>}
     </div>
   );
 }

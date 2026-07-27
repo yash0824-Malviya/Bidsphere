@@ -9,7 +9,11 @@ import {
 } from "react";
 import { useLocation } from "react-router-dom";
 
-type SidebarMode = "drawer" | "collapsed" | "full";
+/**
+ * Breakpoints (aligned with product responsive system):
+ * Mobile 0–639 · Tablet 640–1023 · Laptop 1024–1439 · Desktop 1440+
+ */
+export type SidebarMode = "drawer" | "collapsed" | "compact" | "full";
 
 interface LayoutContextValue {
   mobileNavOpen: boolean;
@@ -17,6 +21,8 @@ interface LayoutContextValue {
   closeMobileNav: () => void;
   toggleMobileNav: () => void;
   sidebarMode: SidebarMode;
+  /** Pixel width reserved by the fixed sidebar (0 in drawer mode). */
+  sidebarOffset: number;
   mobileSearchOpen: boolean;
   setMobileSearchOpen: (open: boolean) => void;
   toggleMobileSearch: () => void;
@@ -29,10 +35,24 @@ interface LayoutContextValue {
 
 const LayoutContext = createContext<LayoutContextValue | null>(null);
 
+export const SIDEBAR_WIDTH = {
+  collapsed: 64,
+  compact: 252,
+  full: 272,
+} as const;
+
 function resolveSidebarMode(width: number): SidebarMode {
-  if (width < 768) return "drawer";
+  if (width < 640) return "drawer";
   if (width < 1024) return "collapsed";
+  if (width < 1440) return "compact";
   return "full";
+}
+
+export function sidebarOffsetPx(mode: SidebarMode): number {
+  if (mode === "drawer") return 0;
+  if (mode === "collapsed") return SIDEBAR_WIDTH.collapsed;
+  if (mode === "compact") return SIDEBAR_WIDTH.compact;
+  return SIDEBAR_WIDTH.full;
 }
 
 export function LayoutProvider({ children }: { children: ReactNode }) {
@@ -94,6 +114,8 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  const sidebarOffset = sidebarOffsetPx(sidebarMode);
+
   const value = useMemo(
     () => ({
       mobileNavOpen,
@@ -101,6 +123,7 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
       closeMobileNav,
       toggleMobileNav,
       sidebarMode,
+      sidebarOffset,
       mobileSearchOpen,
       setMobileSearchOpen,
       toggleMobileSearch,
@@ -114,6 +137,7 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
       closeMobileNav,
       toggleMobileNav,
       sidebarMode,
+      sidebarOffset,
       mobileSearchOpen,
       toggleMobileSearch,
       pageHeaderCount,

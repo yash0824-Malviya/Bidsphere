@@ -1,6 +1,6 @@
 /**
  * Department Issued Items — single data source for:
- *   Pending Acceptance · Accepted Items · Issue Receipts · Dashboard KPIs
+ *   Pending Acceptance · Issue Receipts · Dashboard KPIs
  *
  * Performance model:
  *   1) Render from localStorage cache immediately (< 1s)

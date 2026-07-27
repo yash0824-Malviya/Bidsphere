@@ -101,7 +101,7 @@ export function SpendTrendChart({ data, loading }: SpendTrendProps) {
               <Bar
                 dataKey="spend"
                 name="Spend"
-                fill="#0098EA"
+                fill="#1F3A6D"
                 radius={[4, 4, 0, 0]}
                 maxBarSize={40}
               />

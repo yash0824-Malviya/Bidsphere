@@ -551,6 +551,37 @@ export async function fetchCategorySpendFiltered(
   return { lines: resolved, currency, basis };
 }
 
+/**
+ * Procurement Dashboard category spend — submitted Purchase Orders only.
+ *
+ * Path: Purchase Order (docstatus=1) → line items → Item → Item Group,
+ * summing `base_net_amount` (company currency). Always scopes via parent PO
+ * names so child-table `docstatus` quirks cannot empty the widget.
+ */
+export async function fetchProcurementCategorySpend(): Promise<CategorySpendSource> {
+  const currency = await fetchDefaultCurrency();
+
+  const poNames = await fetchSpendParentNames(
+    "Purchase Order",
+    "transaction_date",
+    {},
+  );
+  if (poNames.length === 0) {
+    return { items: [], currency, basis: "none" };
+  }
+
+  const lines = await fetchSpendChildLinesByParents(
+    "Purchase Order Item",
+    poNames,
+  );
+  if (!lines.some((l) => (l.base_amount ?? 0) > 0)) {
+    return { items: [], currency, basis: "none" };
+  }
+
+  const resolved = await resolveItemGroups(lines);
+  return { items: resolved, currency, basis: "po" };
+}
+
 /* ── Procurement Summary (Category Spend fallback) ─────────────────────── */
 
 export interface ProcurementSummary {
@@ -936,6 +967,49 @@ export interface ProcurementDashboardKpis {
   pendingPurchaseOrders: number;
   ytdSpend: number;
   currency: string;
+}
+
+/**
+ * Operational Health ERP counts that can be resolved with `get_count`.
+ * Returns `null` for a metric when the query fails (permission / field).
+ */
+export interface OperationalHealthErpCounts {
+  overdueRfqs: number | null;
+  lateDeliveries: number | null;
+  blockedSuppliers: number | null;
+}
+
+export async function fetchOperationalHealthErpCounts(): Promise<OperationalHealthErpCounts> {
+  const today = format(new Date(), "yyyy-MM-dd");
+  const fourteenDaysAgo = new Date();
+  fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+  const agingDate = format(fourteenDaysAgo, "yyyy-MM-dd");
+
+  const [overdueRes, lateRes, blockedRes] = await Promise.allSettled([
+    timedDashApi("Operational Health · Overdue RFQs", () =>
+      getExactCount("Request for Quotation", [
+        ["status", "in", ["Submitted", "Open"]],
+        ["modified", "<", `${agingDate} 00:00:00`],
+      ]),
+    ),
+    timedDashApi("Operational Health · Late Deliveries", () =>
+      getExactCount("Purchase Order", [
+        ["docstatus", "=", 1],
+        ["schedule_date", "<", today],
+        ["status", "in", ["To Receive and Bill", "To Receive", "To Bill"]],
+      ]),
+    ),
+    timedDashApi("Operational Health · Blocked Suppliers", () =>
+      getExactCount("Supplier", [["disabled", "=", 1]]),
+    ),
+  ]);
+
+  return {
+    overdueRfqs: overdueRes.status === "fulfilled" ? overdueRes.value : null,
+    lateDeliveries: lateRes.status === "fulfilled" ? lateRes.value : null,
+    blockedSuppliers:
+      blockedRes.status === "fulfilled" ? blockedRes.value : null,
+  };
 }
 
 export async function fetchProcurementDashboardKpis(): Promise<ProcurementDashboardKpis> {

@@ -1,9 +1,20 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Calendar, FileCheck2 } from "lucide-react";
+import toast from "react-hot-toast";
+import {
+  Ban,
+  Calendar,
+  CheckCircle2,
+  Copy,
+  Download,
+  Eye,
+  FileCheck2,
+  Printer,
+} from "lucide-react";
 
 import { fetchPagedList } from "../../api/erpnext";
+import { getPurchaseOrder } from "../../api/purchasing";
 import { getSuppliers } from "../../api/supplier";
 import type { Filter } from "../../api/erpnext";
 import type {
@@ -25,7 +36,10 @@ import {
   ResponsiveTable,
   SearchInput,
   SortableTableHeader,
+  TableRowActions,
 } from "../../components/ui";
+import { canManagePurchaseOrders } from "../../config/roles";
+import { useAuthStore } from "../../store/authStore";
 import { usePagination } from "../../hooks/usePagination";
 import { useDebounce } from "../../hooks/useDebounce";
 import {
@@ -35,6 +49,10 @@ import {
   sortRows,
 } from "../../utils/listSort";
 import { formatCurrency, formatDate } from "../../utils/format";
+import {
+  downloadPurchaseOrderPdf,
+  printPurchaseOrderPdf,
+} from "../../utils/pdf";
 
 const PO_DOCTYPE = "Purchase Order";
 
@@ -81,6 +99,8 @@ export default function PurchaseOrdersPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const preset = (searchParams.get("preset") ?? "").toLowerCase();
+  const userRole = useAuthStore((s) => s.user?.role);
+  const canManagePo = canManagePurchaseOrders(userRole);
   const [status, setStatus] = useState<"" | PurchaseOrderStatus>("");
   const [supplier, setSupplier] = useState("");
   const [from, setFrom] = useState("");
@@ -88,6 +108,20 @@ export default function PurchaseOrdersPage() {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const debouncedSearch = useDebounce(search, 300);
+
+  async function withFullPo(
+    name: string,
+    fn: (po: PurchaseOrder) => void | Promise<void>,
+  ) {
+    try {
+      const po = await getPurchaseOrder(name);
+      await fn(po);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Could not load Purchase Order.",
+      );
+    }
+  }
 
   const { data: suppliers = [] } = useQuery({
     queryKey: ["supplier-options"],
@@ -348,6 +382,37 @@ export default function PurchaseOrdersPage() {
                 header: "% Billed",
                 render: (po: PurchaseOrder) => `${po.per_billed ?? 0}%`,
               },
+              {
+                key: "actions",
+                header: "Actions",
+                hideOnMobile: false,
+                render: (po: PurchaseOrder) => {
+                  const detailPath = `/p2p/purchase-orders/${encodeURIComponent(po.name)}`;
+                  return (
+                    <TableRowActions
+                      label={po.name}
+                      viewTo={detailPath}
+                      items={[
+                        {
+                          id: "view",
+                          label: "View",
+                          icon: Eye,
+                          onClick: () => navigate(detailPath),
+                        },
+                        {
+                          id: "pdf",
+                          label: "Download PDF",
+                          icon: Download,
+                          onClick: () =>
+                            void withFullPo(po.name, (full) =>
+                              downloadPurchaseOrderPdf(full),
+                            ),
+                        },
+                      ]}
+                    />
+                  );
+                },
+              },
             ]}
           >
             <table className="data-table">
@@ -407,47 +472,128 @@ export default function PurchaseOrdersPage() {
                     onSort={setSort}
                     className="w-[140px]"
                   />
+                  <th className="col-actions">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {sortedRows.map((po: PurchaseOrder) => (
-                  <tr
-                    key={po.name}
-                    onClick={() => navigate(`/p2p/purchase-orders/${po.name}`)}
-                    className="cursor-pointer"
-                  >
-                    <td onClick={(e) => e.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        checked={selected.has(po.name)}
-                        onChange={() => toggleOne(po.name)}
-                        className="h-4 w-4 rounded border-neutral-300 text-primary focus:ring-primary/30"
-                        aria-label={`Select ${po.name}`}
-                      />
-                    </td>
-                    <td>
-                      <span className="table-link">{po.name}</span>
-                    </td>
-                    <td className="text-neutral-600">
-                      {po.supplier_name ?? po.supplier}
-                    </td>
-                    <td className="text-neutral-600">
-                      {formatDate(po.transaction_date)}
-                    </td>
-                    <td>
-                      <StatusBadge status={po.status ?? "Draft"} />
-                    </td>
-                    <td className="text-right font-medium tabular-nums">
-                      {formatCurrency(po.grand_total)}
-                    </td>
-                    <td>
-                      <ProgressCell value={po.per_received ?? 0} />
-                    </td>
-                    <td>
-                      <ProgressCell value={po.per_billed ?? 0} />
-                    </td>
-                  </tr>
-                ))}
+                {sortedRows.map((po: PurchaseOrder) => {
+                  const detailPath = `/p2p/purchase-orders/${encodeURIComponent(po.name)}`;
+                  const statusLower = (po.status ?? "").toLowerCase();
+                  const canCancelClose =
+                    canManagePo &&
+                    statusLower !== "cancelled" &&
+                    statusLower !== "closed" &&
+                    statusLower !== "completed";
+                  return (
+                    <tr
+                      key={po.name}
+                      onClick={() => navigate(detailPath)}
+                      className="cursor-pointer"
+                    >
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selected.has(po.name)}
+                          onChange={() => toggleOne(po.name)}
+                          className="h-4 w-4 rounded border-neutral-300 text-primary focus:ring-primary/30"
+                          aria-label={`Select ${po.name}`}
+                        />
+                      </td>
+                      <td>
+                        <span className="table-link">{po.name}</span>
+                      </td>
+                      <td className="text-neutral-600">
+                        {po.supplier_name ?? po.supplier}
+                      </td>
+                      <td className="text-neutral-600">
+                        {formatDate(po.transaction_date)}
+                      </td>
+                      <td>
+                        <StatusBadge status={po.status ?? "Draft"} />
+                      </td>
+                      <td className="text-right font-medium tabular-nums">
+                        {formatCurrency(po.grand_total)}
+                      </td>
+                      <td>
+                        <ProgressCell value={po.per_received ?? 0} />
+                      </td>
+                      <td>
+                        <ProgressCell value={po.per_billed ?? 0} />
+                      </td>
+                      <td className="col-actions">
+                        <TableRowActions
+                          label={po.name}
+                          viewTo={detailPath}
+                          items={[
+                            {
+                              id: "view",
+                              label: "View",
+                              icon: Eye,
+                              onClick: () => navigate(detailPath),
+                            },
+                            {
+                              id: "print",
+                              label: "Print",
+                              icon: Printer,
+                              onClick: () =>
+                                void withFullPo(po.name, (full) =>
+                                  printPurchaseOrderPdf(full),
+                                ),
+                            },
+                            {
+                              id: "pdf",
+                              label: "Download PDF",
+                              icon: Download,
+                              onClick: () =>
+                                void withFullPo(po.name, (full) =>
+                                  downloadPurchaseOrderPdf(full),
+                                ),
+                            },
+                            ...(canCancelClose
+                              ? [
+                                  {
+                                    id: "cancel",
+                                    label: "Cancel",
+                                    icon: Ban,
+                                    separatorBefore: true,
+                                    onClick: () => {
+                                      toast(
+                                        "Open the Purchase Order to cancel",
+                                        { icon: "ℹ️" },
+                                      );
+                                      navigate(detailPath);
+                                    },
+                                  },
+                                  {
+                                    id: "close",
+                                    label: "Close",
+                                    icon: CheckCircle2,
+                                    onClick: () => {
+                                      toast(
+                                        "Open the Purchase Order to close",
+                                        { icon: "ℹ️" },
+                                      );
+                                      navigate(detailPath);
+                                    },
+                                  },
+                                ]
+                              : []),
+                            {
+                              id: "duplicate",
+                              label: "Duplicate",
+                              icon: Copy,
+                              separatorBefore: true,
+                              onClick: () =>
+                                toast("Duplicate from Purchase Order details", {
+                                  icon: "ℹ️",
+                                }),
+                            },
+                          ]}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </ResponsiveTable>

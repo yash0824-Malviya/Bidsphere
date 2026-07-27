@@ -18,7 +18,13 @@ import {
   getSupplierQuotations,
   lookupDefaultWarehouse,
   submitRFQ,
+  updateRFQ,
 } from "../../api/sourcing";
+import {
+  getItemTargetPrice,
+  isItemTargetPriceVisibleToSupplier,
+  isTargetPriceVisibleToSupplier,
+} from "../../utils/rfqTargetPrice";
 import {
   getRfqResponses,
   type SupplierRfqResponse,
@@ -75,6 +81,7 @@ import {
   canManagePurchaseOrders,
   canManageRFQs,
   canManageReverseBidding,
+  formatRfqOwnerFromDoc,
 } from "../../config/roles";
 import {
   createReverseBiddingFromRFQ,
@@ -98,6 +105,11 @@ import {
   resolvePoItemScheduleDate,
   resolvePoTransactionDate,
 } from "../../utils/erpNextDate";
+import {
+  downloadRfqPdf,
+  printRfqPdf,
+  type RfqPdfData,
+} from "../../utils/pdf";
 import dayjs from "dayjs";
 
 const HAS_ANTHROPIC_KEY = !!(
@@ -1075,6 +1087,11 @@ export default function RFQDetailPage() {
         console.warn("[AI] Could not fetch historical data, scoring with quotation data only:", err);
       }
 
+      const targetPriceMap = new Map<string, number>();
+      for (const it of rfq.items ?? []) {
+        const t = getItemTargetPrice(it);
+        if (t != null && t > 0) targetPriceMap.set(it.item_code, t);
+      }
       const engineResult = scoreSuppliers(
         aiRequest.quotations,
         (rfq.items ?? []).length,
@@ -1084,7 +1101,8 @@ export default function RFQDetailPage() {
           quality_weight: scoringConfig.quality_weight,
           reliability_weight: scoringConfig.reliability_weight,
         },
-        historicalData
+        historicalData,
+        targetPriceMap.size > 0 ? targetPriceMap : undefined,
       );
       // eslint-disable-next-line no-console
       console.log("[SCORING ENGINE]", engineResult);
@@ -1185,6 +1203,11 @@ export default function RFQDetailPage() {
       // Never block procurement — always attempt local engine as last resort
       try {
         const scoringConfig = await getScoringConfig();
+        const targetPriceMap = new Map<string, number>();
+        for (const it of rfq.items ?? []) {
+          const t = getItemTargetPrice(it);
+          if (t != null && t > 0) targetPriceMap.set(it.item_code, t);
+        }
         const engineResult = scoreSuppliers(
           aiRequest.quotations,
           (rfq.items ?? []).length,
@@ -1193,7 +1216,9 @@ export default function RFQDetailPage() {
             delivery_weight: scoringConfig.delivery_weight,
             quality_weight: scoringConfig.quality_weight,
             reliability_weight: scoringConfig.reliability_weight,
-          }
+          },
+          undefined,
+          targetPriceMap.size > 0 ? targetPriceMap : undefined,
         );
         const localRec = buildLocalProcurementRecommendation(aiRequest, engineResult);
         const recommendedScored = engineResult.suppliers.find(
@@ -1867,9 +1892,25 @@ export default function RFQDetailPage() {
   const rfqExtra = rfq as {
     department?: string;
     custom_department?: string;
+    rfq_owner?: string;
+    custom_rfq_owner?: string;
+    custom_procurement_owner?: string;
+    buyer?: string;
+    custom_buyer?: string;
+    assigned_to?: string;
+    custom_assigned_to?: string;
   };
   const departmentLabel = rfqExtra.department || rfqExtra.custom_department || "—";
-  const ownerLabel = rfq.owner || "—";
+  const ownerLabel = formatRfqOwnerFromDoc({
+    owner: rfq.owner,
+    rfq_owner: rfqExtra.rfq_owner,
+    custom_rfq_owner: rfqExtra.custom_rfq_owner,
+    custom_procurement_owner: rfqExtra.custom_procurement_owner,
+    buyer: rfqExtra.buyer,
+    custom_buyer: rfqExtra.custom_buyer,
+    assigned_to: rfqExtra.assigned_to,
+    custom_assigned_to: rfqExtra.custom_assigned_to,
+  });
   const companyLabel = rfq.company || COMPANY;
 
   const selectionReason =
@@ -1885,6 +1926,149 @@ export default function RFQDetailPage() {
       : hasQuotations && aiReady
         ? "Ready to analyze"
         : "Not Available";
+
+  const buyerLabel =
+    rfqExtra.buyer ||
+    rfqExtra.custom_buyer ||
+    rfqExtra.assigned_to ||
+    rfqExtra.custom_assigned_to ||
+    "";
+
+  const selectedQuote = resolvedSelectedSupplier
+    ? quoteForSupplier(localQuotes, resolvedSelectedSupplier)
+    : undefined;
+
+  const buildRfqPdfData = (): RfqPdfData => {
+    const awardValue =
+      approvalState?.selected_supplier_total ??
+      legalDoc?.grand_total ??
+      selectedQuote?.total ??
+      null;
+
+    const rawValidTill = rfq.valid_till || parsedMessage.validTill || null;
+    const rawDelivery =
+      rfqScheduleDates.length > 0 ? rfqScheduleDates.sort()[0]! : rawValidTill;
+
+    const approvals: RfqPdfData["approvals"] = [];
+    if (hasSelectedSupplier && resolvedSelectedSupplier) {
+      approvals.push({
+        approver: ownerLabel || "Procurement",
+        status: "Supplier Selected",
+        date: approvalState?.submitted_at ?? legalDoc?.submission_date ?? null,
+        remarks: resolvedSelectedSupplier,
+      });
+    }
+    if (
+      legalDoc?.review_status &&
+      legalDoc.review_status !== "Pending"
+    ) {
+      approvals.push({
+        approver: legalDoc.approved_by || "Legal Reviewer",
+        status: legalDoc.review_status,
+        date: legalDoc.approved_on ?? null,
+        remarks:
+          legalDoc.legal_comments || legalDoc.rejection_reason || null,
+      });
+    }
+    if (
+      legalDoc?.finance_status &&
+      legalDoc.finance_status !== "Pending" &&
+      legalDoc.finance_status !== ""
+    ) {
+      approvals.push({
+        approver: legalDoc.finance_approved_by || "Finance Manager",
+        status: legalDoc.finance_status,
+        date: legalDoc.finance_approved_on ?? null,
+        remarks:
+          legalDoc.finance_comments ||
+          legalDoc.finance_rejection_reason ||
+          null,
+      });
+    }
+
+    return {
+      rfq_number: rfq.name,
+      title: parsedMessage.title || rfq.name,
+      status: isCompleted ? "Completed" : rfq.status || "Draft",
+      company: companyLabel,
+      department: departmentLabel !== "—" ? departmentLabel : null,
+      buyer: buyerLabel || null,
+      owner: ownerLabel,
+      currency: currencyLabel,
+      created_date: rfq.transaction_date || rfq.creation || null,
+      valid_till: rawValidTill,
+      material_request:
+        materialRequestLabel !== "—" ? materialRequestLabel : null,
+      selected_supplier: resolvedSelectedSupplier || null,
+      award_value: awardValue && awardValue > 0 ? awardValue : null,
+      delivery_date: rawDelivery,
+      purchase_order_status: poExists
+        ? "Created"
+        : workflow.purchaseOrderStatus || null,
+      purchase_order_name:
+        completionSummary.poName !== "—" ? completionSummary.poName : null,
+      items: (rfq.items ?? []).map((it) => {
+        const cell = selectedQuote?.byItem.get(it.item_code);
+        const rateFromItem = Number(
+          (it as { rate?: number }).rate ?? NaN,
+        );
+        const unit_price = cell?.unit_price
+          ?? (Number.isFinite(rateFromItem) ? rateFromItem : null);
+        const qty = Number(it.qty ?? 0);
+        const total =
+          cell?.total ??
+          (unit_price != null ? unit_price * qty : null);
+        const target = getItemTargetPrice(it);
+        const showLine = isItemTargetPriceVisibleToSupplier(it, rfq);
+        return {
+          item_code: it.item_code,
+          item_name: it.item_name || it.item_code,
+          qty,
+          uom: it.uom || "Nos",
+          unit_price,
+          total,
+          /* External PDFs only include Target Price when the line is flagged. */
+          target_price: showLine ? target : null,
+        };
+      }),
+      include_target_price:
+        isTargetPriceVisibleToSupplier(rfq) ||
+        (rfq.items ?? []).some((it) =>
+          isItemTargetPriceVisibleToSupplier(it, rfq),
+        ),
+      ai: copilotHasAnalysis
+        ? {
+            recommended_supplier:
+              savedAnalysis?.recommended_supplier || null,
+            confidence: aiConfidence ?? null,
+            summary: selectionReason,
+            risk_level: copilotRiskLevel,
+            savings:
+              copilotSavings && copilotSavings.amount > 0
+                ? copilotSavings.amount
+                : null,
+          }
+        : null,
+      approvals,
+      terms: (rfq.terms || parsedMessage.body || "").trim() || null,
+    };
+  };
+
+  const handleExportPdf = () => {
+    void downloadRfqPdf(buildRfqPdfData()).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error("[RFQ PDF]", err);
+      toast.error("Unable to generate RFQ PDF.");
+    });
+  };
+
+  const handlePrintPdf = () => {
+    void printRfqPdf(buildRfqPdfData()).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error("[RFQ PDF]", err);
+      toast.error("Unable to print RFQ PDF.");
+    });
+  };
 
   return (
     <RFQDetailEnterpriseLayout
@@ -1954,8 +2138,8 @@ export default function RFQDetailPage() {
       onViewAnalysis={handleViewAnalysis}
       onReAnalyze={handleReAnalyze}
       onCreatePO={() => void handleCreatePO(resolvedSelectedSupplier)}
-      onPrint={() => window.print()}
-      onExportPdf={() => window.print()}
+      onPrint={handlePrintPdf}
+      onExportPdf={handleExportPdf}
       resolveSupplierStatus={(s, hasQuote, validTill, hasDecline) =>
         resolveSupplierStatus(
           s,
@@ -2108,6 +2292,7 @@ export default function RFQDetailPage() {
                 item_name: it.item_name,
                 qty: it.qty,
                 uom: it.uom,
+                target_price: getItemTargetPrice(it),
               }))}
               quotes={Array.from(localQuotes.values())
                 .filter((q) => q.sqName)
@@ -2204,9 +2389,9 @@ function ReverseBiddingCTA({
   if (!allowCreate && !existing) return null;
 
   return (
-    <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-[#0098EA]/30 bg-[#0098EA]/5 p-5 sm:flex-row sm:items-center sm:justify-between">
+    <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-[#1F3A6D]/30 bg-[#1F3A6D]/5 p-5 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex items-start gap-3">
-        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-[#0098EA]/15 text-[#0098EA]">
+        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-[#1F3A6D]/15 text-[#1F3A6D]">
           <Activity className="h-5 w-5" />
         </span>
         <div>
@@ -2227,7 +2412,7 @@ function ReverseBiddingCTA({
               `/sourcing/reverse-bidding/${encodeURIComponent(existing.name)}`
             )
           }
-          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-[#0098EA] bg-white px-4 py-2 text-sm font-semibold text-[#0098EA] shadow-sm transition hover:bg-[#0098EA]/5"
+          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-[#1F3A6D] bg-white px-4 py-2 text-sm font-semibold text-[#1F3A6D] shadow-sm transition hover:bg-[#1F3A6D]/5"
         >
           <Sparkles className="h-4 w-4" />
           View Reverse Auction
@@ -2237,7 +2422,7 @@ function ReverseBiddingCTA({
           type="button"
           onClick={() => createMutation.mutate()}
           disabled={createMutation.isPending || !allowCreate}
-          className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#0098EA] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#1F3A6D] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Sparkles className="h-4 w-4" />
           {createMutation.isPending ? "Creating…" : "Create Reverse Bidding"}

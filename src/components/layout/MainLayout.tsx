@@ -8,27 +8,20 @@ import Header from "./Header";
 import PageContainer from "./PageContainer";
 import Sidebar from "./Sidebar";
 
-function sidebarOffsetPx(mode: "drawer" | "collapsed" | "full"): number {
-  if (mode === "drawer") return 0;
-  if (mode === "collapsed") return 64;
-  return 240;
-}
-
 function MainLayoutShell() {
-  const { mobileNavOpen, closeMobileNav, sidebarMode } = useLayout();
+  const { mobileNavOpen, closeMobileNav, sidebarMode, sidebarOffset } =
+    useLayout();
   useDocumentTitle();
 
   const sidebarVariant =
-    sidebarMode === "drawer"
-      ? "full"
-      : sidebarMode === "collapsed"
-        ? "collapsed"
+    sidebarMode === "collapsed"
+      ? "collapsed"
+      : sidebarMode === "compact"
+        ? "compact"
         : "full";
 
-  const offset = sidebarOffsetPx(sidebarMode);
-
   return (
-    <div className="min-h-screen w-full bg-surface-page">
+    <div className="min-h-screen w-full min-w-0 overflow-x-clip bg-surface-page">
       {sidebarMode !== "drawer" && (
         <Sidebar variant={sidebarVariant} fixed />
       )}
@@ -37,18 +30,23 @@ function MainLayoutShell() {
         <button
           type="button"
           aria-label="Close navigation menu"
-          className="fixed inset-0 z-40 bg-neutral-900/40 md:hidden"
+          className="fixed inset-0 z-40 bg-neutral-900/40"
           onClick={closeMobileNav}
         />
       )}
 
       {sidebarMode === "drawer" && (
         <div
-          className={`fixed inset-y-0 left-0 z-50 transform transition-transform duration-300 ease-in-out md:hidden ${
+          className={`fixed inset-y-0 left-0 z-50 max-w-[100vw] transform transition-transform duration-300 ease-in-out ${
             mobileNavOpen ? "translate-x-0" : "-translate-x-full"
           }`}
         >
-          <Sidebar variant="full" onNavigate={closeMobileNav} fixed />
+          <Sidebar
+            variant="full"
+            onNavigate={closeMobileNav}
+            fixed
+            className="app-drawer-panel"
+          />
         </div>
       )}
 
@@ -57,10 +55,10 @@ function MainLayoutShell() {
         style={
           sidebarMode !== "drawer"
             ? {
-                marginLeft: offset,
-                width: `calc(100% - ${offset}px)`,
+                marginLeft: sidebarOffset,
+                width: `calc(100% - ${sidebarOffset}px)`,
               }
-            : undefined
+            : { width: "100%" }
         }
       >
         <Header />

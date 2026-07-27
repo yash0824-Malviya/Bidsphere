@@ -21,7 +21,9 @@ import PageHeader from "../../components/PageHeader";
 import { TableSkeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
 import { FilterBar, FilterField, SearchInput } from "../../components/ui";
+import Pagination from "../../components/ui/Pagination";
 import { useDebounce } from "../../hooks/useDebounce";
+import { useClientPagination } from "../../hooks/usePagination";
 import type { Bin, Item } from "../../types/erpnext";
 import { formatNumber } from "../../utils/format";
 import { generateItemCode } from "../../utils/itemCode";
@@ -270,9 +272,22 @@ export default function InventoryPage() {
     });
   }, [itemsQuery.data, stockByItem]);
 
-  const visibleRows = showLowOnly
-    ? rows.filter((r) => r.is_below_reorder)
-    : rows;
+  const visibleRows = useMemo(
+    () => (showLowOnly ? rows.filter((r) => r.is_below_reorder) : rows),
+    [rows, showLowOnly],
+  );
+
+  const {
+    pageRows,
+    totalRecords,
+    totalPages,
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+  } = useClientPagination(visibleRows, {
+    resetKey: `${debouncedSearch}|${group}|${showLowOnly}`,
+  });
 
   const lowStockCount = useMemo(
     () => rows.filter((r) => r.is_below_reorder).length,
@@ -352,64 +367,75 @@ export default function InventoryPage() {
             }
           />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Item Code</th>
-                  <th>Name</th>
-                  <th>Group</th>
-                  <th>UOM</th>
-                  <th className="text-right">Stock Level</th>
-                  <th className="text-right">Reorder Level</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {visibleRows.map((row) => (
-                  <tr
-                    key={row.name}
-                    onClick={() =>
-                      navigate(`/inventory/${encodeURIComponent(row.item_code)}`)
-                    }
-                    className="cursor-pointer"
-                  >
-                    <td>
-                      <span className="table-link">{row.item_code}</span>
-                    </td>
-                    <td className="text-neutral-700">
-                      {row.item_name}
-                    </td>
-                    <td className="text-neutral-600">
-                      {row.item_group ?? "—"}
-                    </td>
-                    <td className="text-neutral-600">
-                      {row.stock_uom ?? "—"}
-                    </td>
-                    <td
-                      className={`text-right font-medium tabular-nums ${
-                        row.is_below_reorder
-                          ? "text-danger-500"
-                          : "text-neutral-900"
-                      }`}
-                    >
-                      {formatNumber(row.stock_level)}
-                    </td>
-                    <td className="text-right tabular-nums text-neutral-600">
-                      {row.reorder_level > 0
-                        ? formatNumber(row.reorder_level)
-                        : "—"}
-                    </td>
-                    <td>
-                      {row.is_below_reorder && (
-                        <StatusBadge status="Below Reorder" tone="danger" />
-                      )}
-                    </td>
+          <>
+            <div className="overflow-x-auto">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Item Code</th>
+                    <th>Name</th>
+                    <th>Group</th>
+                    <th>UOM</th>
+                    <th className="text-right">Stock Level</th>
+                    <th className="text-right">Reorder Level</th>
+                    <th />
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {pageRows.map((row) => (
+                    <tr
+                      key={row.name}
+                      onClick={() =>
+                        navigate(`/inventory/${encodeURIComponent(row.item_code)}`)
+                      }
+                      className="cursor-pointer"
+                    >
+                      <td>
+                        <span className="table-link">{row.item_code}</span>
+                      </td>
+                      <td className="text-neutral-700">
+                        {row.item_name}
+                      </td>
+                      <td className="text-neutral-600">
+                        {row.item_group ?? "—"}
+                      </td>
+                      <td className="text-neutral-600">
+                        {row.stock_uom ?? "—"}
+                      </td>
+                      <td
+                        className={`text-right font-medium tabular-nums ${
+                          row.is_below_reorder
+                            ? "text-danger-500"
+                            : "text-neutral-900"
+                        }`}
+                      >
+                        {formatNumber(row.stock_level)}
+                      </td>
+                      <td className="text-right tabular-nums text-neutral-600">
+                        {row.reorder_level > 0
+                          ? formatNumber(row.reorder_level)
+                          : "—"}
+                      </td>
+                      <td>
+                        {row.is_below_reorder && (
+                          <StatusBadge status="Below Reorder" tone="danger" />
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalRecords={totalRecords}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+              recordLabel="items"
+            />
+          </>
         )}
       </div>
 

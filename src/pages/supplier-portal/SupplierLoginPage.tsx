@@ -332,14 +332,14 @@ export default function SupplierLoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col lg:flex-row">
+    <div className="flex min-h-screen min-w-0 flex-col overflow-x-clip sm:flex-row">
       <SupplierLoginHeroPanel />
 
-      <aside className="relative flex w-full flex-col justify-center bg-white px-6 py-10 lg:w-[35%] lg:min-h-screen lg:px-10 lg:py-12">
-        <div className="relative mx-auto w-full max-w-[400px]">
-          <div className="rounded-2xl border border-neutral-200 bg-white p-7 shadow-sm sm:p-8">
+      <aside className="relative flex w-full flex-col justify-center bg-white px-4 py-8 sm:w-1/2 sm:min-h-screen sm:px-6 sm:py-10 lg:w-[40%] lg:px-8 desktop:w-[35%] desktop:px-10 desktop:py-12">
+        <div className="relative mx-auto w-full max-w-[420px]">
+          <div className="w-full rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm sm:p-8">
             <div className="mb-7">
-              <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[#0098EA] text-white shadow-md shadow-[#0098EA]/25">
+              <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[#1F3A6D] text-white shadow-md shadow-[#1F3A6D]/25">
                 <Building2 className="h-5 w-5" />
               </div>
               <h2 className="text-2xl font-semibold tracking-tight text-neutral-900">

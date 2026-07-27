@@ -23,6 +23,9 @@ import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
 import PaginationBar from "../../components/PaginationBar";
 import { TableSkeleton } from "../../components/Skeleton";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+} from "../../components/dashboard/DashboardKpiCard";
 import CalendarDatePicker from "../../components/ui/CalendarDatePicker";
 import { useClientPagination } from "../../hooks/usePagination";
 import { formatUkDisplayDate } from "../../utils/erpNextDate";
@@ -395,44 +398,44 @@ export default function SupplierDeliverySchedulePage() {
       />
 
       {/* KPI Cards — counts from derived displayStatus only */}
-      <div className="grid grid-cols-2 gap-5 lg:grid-cols-3 xl:grid-cols-6">
-        <KpiCard
+      <DashboardKpiGrid columns={6}>
+        <DashboardKpiCard
           label="Scheduled"
           value={counts.scheduled}
-          icon={<CalendarDays className="h-5 w-5 text-neutral-500" />}
-          bg="bg-neutral-100"
+          icon={CalendarDays}
+          iconClassName="bg-neutral-100 text-neutral-500"
         />
-        <KpiCard
+        <DashboardKpiCard
           label="Ready for Dispatch"
           value={counts.ready}
-          icon={<CalendarDays className="h-5 w-5 text-primary-500" />}
-          bg="bg-primary-50"
+          icon={CalendarDays}
+          iconClassName="bg-primary-50 text-primary-500"
         />
-        <KpiCard
+        <DashboardKpiCard
           label="In Transit"
           value={counts.inTransit}
-          icon={<Truck className="h-5 w-5 text-purple-500" />}
-          bg="bg-purple-50"
+          icon={Truck}
+          iconClassName="bg-purple-50 text-purple-500"
         />
-        <KpiCard
+        <DashboardKpiCard
           label="Arrived"
           value={counts.arrived}
-          icon={<MapPin className="h-5 w-5 text-orange-500" />}
-          bg="bg-orange-50"
+          icon={MapPin}
+          iconClassName="bg-orange-50 text-orange-500"
         />
-        <KpiCard
+        <DashboardKpiCard
           label="Delivered"
           value={counts.delivered}
-          icon={<MapPin className="h-5 w-5 text-success-500" />}
-          bg="bg-success-50"
+          icon={MapPin}
+          iconClassName="bg-success-50 text-success-500"
         />
-        <KpiCard
+        <DashboardKpiCard
           label="Delayed"
           value={counts.delayed}
-          icon={<AlertTriangle className="h-5 w-5 text-danger-500" />}
-          bg="bg-danger-50"
+          icon={AlertTriangle}
+          iconClassName="bg-danger-50 text-danger-500"
         />
-      </div>
+      </DashboardKpiGrid>
 
       {/* Table */}
       <section className="card">
@@ -670,34 +673,6 @@ export default function SupplierDeliverySchedulePage() {
 }
 
 /* ─── Sub-components ─────────────────────────────────────────────────── */
-
-function KpiCard({
-  label,
-  value,
-  icon,
-  bg,
-}: {
-  label: string;
-  value: number;
-  icon: React.ReactNode;
-  bg: string;
-}) {
-  return (
-    <div className="card flex items-center gap-3 px-4 py-4">
-      <div
-        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${bg}`}
-      >
-        {icon}
-      </div>
-      <div className="min-w-0">
-        <p className="text-2xl font-bold tabular-nums text-neutral-900">
-          {value}
-        </p>
-        <p className="truncate text-xs text-neutral-500">{label}</p>
-      </div>
-    </div>
-  );
-}
 
 function TimelineItem({ row }: { row: DeliveryRow }) {
   const status = row.displayStatus;

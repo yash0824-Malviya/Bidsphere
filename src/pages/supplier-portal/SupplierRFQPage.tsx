@@ -43,6 +43,11 @@ import {
   SupplierRfqAccessError,
   supplierRfqFailureTitle,
 } from "../../api/supplierRfqDetail";
+import {
+  getItemTargetPrice,
+  isItemTargetPriceVisibleToSupplier,
+  isTargetPriceVisibleToSupplier,
+} from "../../utils/rfqTargetPrice";
 import { triggerQuotationDeclined } from "../../api/notifications";
 import NoQuoteDialog, {
   type NoQuotePayload,
@@ -98,6 +103,8 @@ interface QuoteLine {
   unit_price: number;
   delivery_days: number;
   notes: string;
+  /** Present only when RFQ allows Target Price visibility to suppliers. */
+  target_price?: number | null;
   part_name?: string;
   drawing_2d_url?: string;
   attachments?: import("../../utils/materialRequestItemFiles").EngineeringAttachment[];
@@ -506,13 +513,24 @@ export default function SupplierRFQPage() {
           };
 
           if (draft.items?.length) {
-            const byCode = new Map(
+            const engByItem = new Map(
               (rfq.items ?? []).map((it) => [it.item_code, engFor(it)]),
+            );
+            const targetByItem = new Map(
+              (rfq.items ?? []).map((it) => {
+                const show = isItemTargetPriceVisibleToSupplier(it, rfq);
+                return [
+                  it.item_code,
+                  show ? getItemTargetPrice(it) : null,
+                ] as const;
+              }),
             );
             setLines(
               draft.items.map((line) => ({
                 ...line,
-                ...byCode.get(line.item_code),
+                ...engByItem.get(line.item_code),
+                /* Always re-bind Target Price from live RFQ (never trust draft). */
+                target_price: targetByItem.get(line.item_code) ?? null,
               })),
             );
             if (draft.payment_terms) setPaymentTerms(draft.payment_terms);
@@ -550,6 +568,9 @@ export default function SupplierRFQPage() {
           unit_price: 0,
           delivery_days: 7,
           notes: "",
+          target_price: isItemTargetPriceVisibleToSupplier(it, rfq)
+            ? getItemTargetPrice(it)
+            : null,
           ...engFor(it),
         })),
       );
@@ -1287,6 +1308,15 @@ export default function SupplierRFQPage() {
                   pickEngineeringDocs(
                     (rfq.items ?? []).find((i) => i.item_code === line.item_code),
                   );
+                const rfqItem = (rfq.items ?? []).find(
+                  (i) => i.item_code === line.item_code,
+                );
+                const target = isItemTargetPriceVisibleToSupplier(
+                  rfqItem ?? {},
+                  rfq,
+                )
+                  ? getItemTargetPrice(rfqItem ?? {})
+                  : null;
                 return (
                 <div key={line.item_code} className="space-y-2 p-4 bg-neutral-50/40">
                   <div>
@@ -1298,6 +1328,7 @@ export default function SupplierRFQPage() {
                     drawing2dUrl={eng.drawing_2d_url}
                     attachments={eng.attachments}
                   />
+                  {target != null ? <SupplierTargetPriceBadge price={target} /> : null}
                   <div className="grid grid-cols-2 gap-2 text-sm">
                     <div>
                       <p className="text-[10px] font-medium uppercase text-neutral-500">Quantity</p>
@@ -1338,6 +1369,9 @@ export default function SupplierRFQPage() {
                     <th className="px-4 py-2">Attachments</th>
                     <th className="px-4 py-2 text-right">Qty</th>
                     <th className="px-4 py-2">UOM</th>
+                    {isTargetPriceVisibleToSupplier(rfq) ? (
+                      <th className="px-4 py-2 text-right">Target Price</th>
+                    ) : null}
                     <th className="px-4 py-2 text-right">Unit Price</th>
                     <th className="px-4 py-2 text-right">Total</th>
                     <th className="px-4 py-2 text-right">Delivery (days)</th>
@@ -1353,6 +1387,15 @@ export default function SupplierRFQPage() {
                           (i) => i.item_code === line.item_code,
                         ),
                       );
+                    const rfqItem = (rfq.items ?? []).find(
+                      (i) => i.item_code === line.item_code,
+                    );
+                    const target = isItemTargetPriceVisibleToSupplier(
+                      rfqItem ?? {},
+                      rfq,
+                    )
+                      ? getItemTargetPrice(rfqItem ?? {})
+                      : null;
                     return (
                     <tr key={line.item_code} className="bg-neutral-50/40">
                       <td className="px-4 py-2 align-top">
@@ -1370,6 +1413,15 @@ export default function SupplierRFQPage() {
                       </td>
                       <td className="px-4 py-2 text-right tabular-nums text-neutral-700">{line.qty}</td>
                       <td className="px-4 py-2 text-neutral-700">{line.uom}</td>
+                      {isTargetPriceVisibleToSupplier(rfq) ? (
+                        <td className="px-4 py-2 text-right align-top">
+                          {target != null ? (
+                            <SupplierTargetPriceBadge price={target} compact />
+                          ) : (
+                            <span className="text-neutral-400">—</span>
+                          )}
+                        </td>
+                      ) : null}
                       <td className="px-4 py-2 text-right tabular-nums font-medium text-neutral-900">{formatCurrency(line.unit_price)}</td>
                       <td className="px-4 py-2 text-right font-semibold tabular-nums text-neutral-900">{formatCurrency(line.unit_price * line.qty)}</td>
                       <td className="px-4 py-2 text-right tabular-nums text-neutral-700">{line.delivery_days}</td>
@@ -1874,6 +1926,41 @@ function HeaderMeta({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** Professional Target Price block for supplier portal (only when buyer enabled). */
+function SupplierTargetPriceBadge({
+  price,
+  compact = false,
+}: {
+  price: number;
+  compact?: boolean;
+}) {
+  if (!Number.isFinite(price) || price < 0) return null;
+  if (compact) {
+    return (
+      <div className="inline-flex flex-col items-end leading-tight">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-neutral-500">
+          Target Price
+        </span>
+        <span className="text-sm font-semibold tabular-nums text-neutral-900">
+          {formatCurrency(price)}{" "}
+          <span className="text-xs font-medium text-neutral-500">/ Unit</span>
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2.5 shadow-sm">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
+        Target Price
+      </p>
+      <p className="mt-0.5 text-base font-semibold tabular-nums text-neutral-900">
+        {formatCurrency(price)}{" "}
+        <span className="text-sm font-medium text-neutral-500">/ Unit</span>
+      </p>
+    </div>
+  );
+}
+
 function WorkflowProgress({
   steps,
   activeStepId,
@@ -2032,6 +2119,12 @@ function QuoteItemCard({
         drawing2dUrl={line.drawing_2d_url}
         attachments={line.attachments}
       />
+
+      {line.target_price != null && Number.isFinite(line.target_price) ? (
+        <div className="mt-2">
+          <SupplierTargetPriceBadge price={line.target_price} />
+        </div>
+      ) : null}
 
       <div className="mt-2 grid gap-1.5 sm:grid-cols-3">
         <div>

@@ -28,8 +28,11 @@ import {
 } from "recharts";
 
 import { getFinanceManagerDashboard } from "../../api/budget";
-import { Skeleton } from "../Skeleton";
 import { formatCurrency, formatDateTime } from "../../utils/format";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+  DashboardKpiSkeleton,
+} from "./DashboardKpiCard";
 
 const fmt = (n: number) => formatCurrency(n);
 
@@ -43,7 +46,7 @@ export default function FinanceManagerBudgetDashboard() {
   const kpis = data?.kpis;
 
   return (
-    <div className="-mt-1 space-y-4">
+    <div className="-mt-1 space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 ring-1 ring-emerald-100">
@@ -70,30 +73,26 @@ export default function FinanceManagerBudgetDashboard() {
       </div>
 
       {isLoading ? (
-        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="h-20 rounded-xl" />
-          ))}
-        </div>
+        <DashboardKpiSkeleton count={8} />
       ) : kpis ? (
         <>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8">
-            <KpiCard icon={Clock} tone="amber" label="Pending Approvals" value={String(kpis.pendingApprovals)} />
-            <KpiCard icon={CheckCircle2} tone="green" label="Approved" value={String(kpis.approvedCount)} />
-            <KpiCard icon={Zap} tone="emerald" label="Active" value={String(kpis.activeCount)} />
-            <KpiCard icon={XCircle} tone="red" label="Rejected" value={String(kpis.rejectedCount)} />
-            <KpiCard icon={DollarSign} tone="blue" label="Total Approved" value={fmt(kpis.totalApprovedBudget)} />
-            <KpiCard icon={BarChart3} tone="violet" label="Utilization" value={`${kpis.utilizationPct}%`} />
-            <KpiCard icon={AlertTriangle} tone="red" label="Over Budget Depts" value={String(kpis.overBudgetDepartments)} />
-            <KpiCard icon={TrendingUp} tone="amber" label="Expiring Budgets" value={String(kpis.expiringBudgets)} />
-          </div>
+          <DashboardKpiGrid>
+            <DashboardKpiCard icon={Clock} iconClassName="bg-amber-50 text-amber-600" label="Pending Approvals" value={String(kpis.pendingApprovals)} />
+            <DashboardKpiCard icon={CheckCircle2} iconClassName="bg-success-50 text-success-600" label="Approved" value={String(kpis.approvedCount)} />
+            <DashboardKpiCard icon={Zap} iconClassName="bg-emerald-50 text-emerald-600" label="Active" value={String(kpis.activeCount)} />
+            <DashboardKpiCard icon={XCircle} iconClassName="bg-danger-50 text-danger-600" label="Rejected" value={String(kpis.rejectedCount)} />
+            <DashboardKpiCard icon={DollarSign} iconClassName="bg-[var(--color-primary-light)] text-[var(--color-primary)]" label="Total Approved" value={fmt(kpis.totalApprovedBudget)} />
+            <DashboardKpiCard icon={BarChart3} iconClassName="bg-[var(--color-primary-light)] text-[var(--color-primary)]" label="Utilization" value={`${kpis.utilizationPct}%`} />
+            <DashboardKpiCard icon={AlertTriangle} iconClassName="bg-danger-50 text-danger-600" label="Over Budget Depts" value={String(kpis.overBudgetDepartments)} />
+            <DashboardKpiCard icon={TrendingUp} iconClassName="bg-amber-50 text-amber-600" label="Expiring Budgets" value={String(kpis.expiringBudgets)} />
+          </DashboardKpiGrid>
 
           <div className="grid gap-4 lg:grid-cols-2">
             <ChartCard title="Department Budget Utilization" icon={BarChart3}>
               {(data?.departmentUtilization.length ?? 0) === 0 ? (
                 <EmptyChart message="No active budget utilization data" />
               ) : (
-                <ResponsiveContainer width="100%" height={220}>
+                <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={data!.departmentUtilization.slice(0, 6)} layout="vertical">
                     <XAxis type="number" tick={{ fontSize: 10 }} />
                     <YAxis type="category" dataKey="department" width={90} tick={{ fontSize: 10 }} />
@@ -109,7 +108,7 @@ export default function FinanceManagerBudgetDashboard() {
               {(data?.budgetVsActual.length ?? 0) === 0 ? (
                 <EmptyChart message="No budget vs actual data" />
               ) : (
-                <ResponsiveContainer width="100%" height={220}>
+                <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={data!.budgetVsActual}>
                     <XAxis dataKey="label" tick={{ fontSize: 10 }} />
                     <YAxis tick={{ fontSize: 10 }} />
@@ -126,7 +125,7 @@ export default function FinanceManagerBudgetDashboard() {
               {(data?.monthlyConsumption.length ?? 0) === 0 ? (
                 <EmptyChart message="No PO consumption data from ERPNext" />
               ) : (
-                <ResponsiveContainer width="100%" height={220}>
+                <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={data!.monthlyConsumption}>
                     <XAxis dataKey="month" tick={{ fontSize: 10 }} />
                     <YAxis tick={{ fontSize: 10 }} />
@@ -141,7 +140,7 @@ export default function FinanceManagerBudgetDashboard() {
               {(data?.statusDistribution.length ?? 0) === 0 ? (
                 <EmptyChart message="No budgets in ERPNext" />
               ) : (
-                <ResponsiveContainer width="100%" height={220}>
+                <ResponsiveContainer width="100%" height={200}>
                   <RechartsPie>
                     <Pie
                       data={data!.statusDistribution}
@@ -215,38 +214,6 @@ export default function FinanceManagerBudgetDashboard() {
           </div>
         </>
       ) : null}
-    </div>
-  );
-}
-
-function KpiCard({
-  icon: Icon,
-  label,
-  value,
-  tone,
-}: {
-  icon: typeof DollarSign;
-  label: string;
-  value: string;
-  tone: "amber" | "green" | "emerald" | "red" | "blue" | "violet";
-}) {
-  const tones = {
-    amber: "bg-amber-50 text-amber-600",
-    green: "bg-success-50 text-success-600",
-    emerald: "bg-emerald-50 text-emerald-600",
-    red: "bg-danger-50 text-danger-600",
-    blue: "bg-blue-50 text-blue-600",
-    violet: "bg-violet-50 text-violet-600",
-  };
-  return (
-    <div className="rounded-xl border border-neutral-200 bg-white px-3 py-2.5 shadow-sm">
-      <div className="mb-1 flex items-center gap-2">
-        <div className={`flex h-6 w-6 items-center justify-center rounded-md ${tones[tone]}`}>
-          <Icon className="h-3 w-3" />
-        </div>
-        <span className="text-[9px] font-semibold uppercase tracking-wider text-neutral-500">{label}</span>
-      </div>
-      <p className="truncate text-sm font-bold tabular-nums text-neutral-900">{value}</p>
     </div>
   );
 }

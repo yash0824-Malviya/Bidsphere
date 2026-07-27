@@ -13,6 +13,9 @@ import {
 } from "lucide-react";
 
 import { computeSla, fetchSlaReport, listAllOpenTimers } from "../../api/sla";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+} from "../../components/dashboard/DashboardKpiCard";
 import SlaBadge from "../../components/sla/SlaBadge";
 import { Skeleton } from "../../components/Skeleton";
 import { useSlaNow } from "../../hooks/useSlaTicker";
@@ -106,20 +109,15 @@ export default function SlaDashboardPage() {
         <Skeleton className="h-40 w-full" />
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-7">
-            <Kpi icon={Clock} accent="bg-blue-50 text-blue-600" label="Running" value={report.running} />
-            <Kpi icon={AlertTriangle} accent="bg-amber-50 text-amber-600" label="Warning" value={report.dueSoon} />
-            <Kpi icon={AlertTriangle} accent="bg-rose-50 text-rose-600" label="Breached" value={report.breached} />
-            <Kpi icon={CheckCircle2} accent="bg-emerald-50 text-emerald-600" label="Completed" value={report.completed} />
-            <Kpi icon={CalendarClock} accent="bg-rose-50 text-rose-600" label="Today's Breaches" value={report.todaysBreaches} />
-            <Kpi icon={TrendingUp} accent="bg-amber-50 text-amber-600" label="Upcoming Breaches" value={report.upcomingBreaches} />
-            <Kpi
-              icon={Timer}
-              accent="bg-primary/10 text-primary"
-              label="Avg Completion"
-              value={fmtMinutes(report.avgResolutionMinutes)}
-            />
-          </div>
+          <DashboardKpiGrid columns={6}>
+            <DashboardKpiCard icon={Clock} iconClassName="bg-[var(--color-primary-light)] text-[var(--color-primary)]" label="Running" value={report.running} />
+            <DashboardKpiCard icon={AlertTriangle} iconClassName="bg-amber-50 text-amber-600" label="Warning" value={report.dueSoon} />
+            <DashboardKpiCard icon={AlertTriangle} iconClassName="bg-rose-50 text-rose-600" label="Breached" value={report.breached} />
+            <DashboardKpiCard icon={CheckCircle2} iconClassName="bg-emerald-50 text-emerald-600" label="Completed" value={report.completed} />
+            <DashboardKpiCard icon={CalendarClock} iconClassName="bg-rose-50 text-rose-600" label="Today's Breaches" value={report.todaysBreaches} />
+            <DashboardKpiCard icon={TrendingUp} iconClassName="bg-amber-50 text-amber-600" label="Upcoming Breaches" value={report.upcomingBreaches} />
+            <DashboardKpiCard icon={Timer} iconClassName="bg-[var(--color-primary-light)] text-[var(--color-primary)]" label="Avg Completion" value={fmtMinutes(report.avgResolutionMinutes)} />
+          </DashboardKpiGrid>
 
           <div className="grid gap-4 lg:grid-cols-3">
             <div className="lg:col-span-2 overflow-hidden rounded-xl border border-neutral-200 bg-white">
@@ -212,26 +210,3 @@ export default function SlaDashboardPage() {
   );
 }
 
-function Kpi({
-  icon: Icon,
-  accent,
-  label,
-  value,
-}: {
-  icon: typeof Timer;
-  accent: string;
-  label: string;
-  value: number | string;
-}) {
-  return (
-    <div className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
-      <span className={`inline-flex h-8 w-8 items-center justify-center rounded-lg ${accent}`}>
-        <Icon className="h-4 w-4" />
-      </span>
-      <p className="mt-2 text-2xl font-bold tabular-nums text-neutral-900">{value}</p>
-      <p className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
-        {label}
-      </p>
-    </div>
-  );
-}

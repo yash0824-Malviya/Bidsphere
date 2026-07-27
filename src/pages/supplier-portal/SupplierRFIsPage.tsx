@@ -3,9 +3,12 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   Calendar,
+  CheckCircle2,
+  ClipboardList,
   Eye,
   FileQuestion,
-  Search,
+  Send,
+  XCircle,
 } from "lucide-react";
 
 import {
@@ -15,10 +18,15 @@ import {
   type SupplierRfiListRow,
 } from "../../api/rfi";
 import EmptyState from "../../components/EmptyState";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+} from "../../components/dashboard/DashboardKpiCard";
 import PaginationBar from "../../components/PaginationBar";
+import StatusBadge from "../../components/StatusBadge";
 import { TableSkeleton } from "../../components/Skeleton";
 import ConnectionError from "../../components/ConnectionError";
 import SupplierBreadcrumb from "../../components/supplier-portal/SupplierBreadcrumb";
+import { SearchInput } from "../../components/ui";
 import { useClientPagination } from "../../hooks/usePagination";
 import { formatDate, formatDateTime } from "../../utils/format";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
@@ -39,20 +47,6 @@ const STATUS_OPTIONS: SupplierRfiFacingStatus[] = [
   "Rejected",
   "Closed",
 ];
-
-const STATUS_BADGE: Record<SupplierRfiFacingStatus, string> = {
-  Draft: "bg-neutral-100 text-neutral-700 ring-1 ring-inset ring-neutral-200",
-  "In Progress":
-    "bg-sky-50 text-sky-800 ring-1 ring-inset ring-sky-200",
-  Submitted:
-    "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
-  "Under Review":
-    "bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200",
-  Approved:
-    "bg-primary-50 text-primary-700 ring-1 ring-inset ring-primary-200",
-  Rejected: "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200",
-  Closed: "bg-neutral-100 text-neutral-600 ring-1 ring-inset ring-neutral-200",
-};
 
 function daysUntil(deadline: string | undefined): number | null {
   if (!deadline) return null;
@@ -251,17 +245,51 @@ export default function SupplierRFIsPage() {
     label: string;
     value: number;
     filter: StatusFilter;
+    icon: typeof FileQuestion;
+    iconClassName: string;
   }> = [
-    { label: "Total RFIs", value: statusCounts.total, filter: "all" },
-    { label: "Draft", value: statusCounts.Draft, filter: "Draft" },
+    {
+      label: "Total RFIs",
+      value: statusCounts.total,
+      filter: "all",
+      icon: ClipboardList,
+      iconClassName: "bg-neutral-100 text-neutral-500",
+    },
+    {
+      label: "Draft",
+      value: statusCounts.Draft,
+      filter: "Draft",
+      icon: FileQuestion,
+      iconClassName: "bg-neutral-100 text-neutral-500",
+    },
     {
       label: "In Progress",
       value: statusCounts["In Progress"],
       filter: "In Progress",
+      icon: Calendar,
+      iconClassName: "bg-amber-50 text-amber-600",
     },
-    { label: "Submitted", value: statusCounts.Submitted, filter: "Submitted" },
-    { label: "Approved", value: statusCounts.Approved, filter: "Approved" },
-    { label: "Rejected", value: statusCounts.Rejected, filter: "Rejected" },
+    {
+      label: "Submitted",
+      value: statusCounts.Submitted,
+      filter: "Submitted",
+      icon: Send,
+      iconClassName: "bg-[var(--color-primary-light)] text-[var(--color-primary)]",
+    },
+    {
+      label: "Approved",
+      value: statusCounts.Approved,
+      filter: "Approved",
+      icon: CheckCircle2,
+      iconClassName: "bg-emerald-50 text-emerald-600",
+    },
+    {
+      label: "Rejected",
+      value: statusCounts.Rejected,
+      filter: "Rejected",
+      icon: XCircle,
+      iconClassName: "bg-rose-50 text-rose-600",
+    },
   ];
 
   return (
@@ -287,44 +315,35 @@ export default function SupplierRFIsPage() {
         </p>
       </header>
 
-      <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
-        {kpiCards.map((kpi) => {
-          const active = statusFilter === kpi.filter;
-          return (
-            <button
-              key={kpi.label}
-              type="button"
-              onClick={() => setStatusFilter(kpi.filter)}
-              className={`rounded-xl border px-3 py-3 text-left shadow-sm transition ${
-                active
-                  ? "border-primary-300 bg-primary-50 ring-1 ring-primary-200"
-                  : "border-neutral-200 bg-white hover:border-primary-200"
-              }`}
-            >
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
-                {kpi.label}
-              </p>
-              <p className="mt-1 text-2xl font-bold tabular-nums text-neutral-900">
-                {loading ? "—" : kpi.value}
-              </p>
-            </button>
-          );
-        })}
-      </section>
+      <DashboardKpiGrid columns={6}>
+        {kpiCards.map((kpi) => (
+          <DashboardKpiCard
+            key={kpi.label}
+            icon={kpi.icon}
+            label={kpi.label}
+            value={loading ? "—" : kpi.value}
+            iconClassName={kpi.iconClassName}
+            onClick={() => setStatusFilter(kpi.filter)}
+            className={
+              statusFilter === kpi.filter
+                ? "ring-1 ring-primary-200 border-primary-400"
+                : ""
+            }
+          />
+        ))}
+      </DashboardKpiGrid>
 
       <div className="space-y-5">
         <div className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
           <div className="grid gap-3 lg:grid-cols-4">
-            <label className="relative block lg:col-span-1">
+            <label className="block lg:col-span-1">
               <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
                 Search
               </span>
-              <Search className="pointer-events-none absolute bottom-2.5 left-3 h-4 w-4 text-neutral-400" />
-              <input
+              <SearchInput
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={setSearch}
                 placeholder="RFI number, title, buyer…"
-                className="w-full rounded-lg border border-neutral-200 py-2 pl-9 pr-3 text-sm outline-none focus:border-primary-400"
               />
             </label>
             <label className="block">
@@ -336,7 +355,7 @@ export default function SupplierRFIsPage() {
                 onChange={(e) =>
                   setStatusFilter(e.target.value as StatusFilter)
                 }
-                className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+                className="select-field"
               >
                 <option value="all">All</option>
                 {STATUS_OPTIONS.map((s) => (
@@ -353,7 +372,7 @@ export default function SupplierRFIsPage() {
               <select
                 value={categoryFilter}
                 onChange={(e) => setCategoryFilter(e.target.value)}
-                className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+                className="select-field"
               >
                 <option value="all">All categories</option>
                 {categories.map((c) => (
@@ -372,7 +391,7 @@ export default function SupplierRFIsPage() {
                 onChange={(e) =>
                   setDeadlineFilter(e.target.value as DeadlineFilter)
                 }
-                className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+                className="select-field"
               >
                 <option value="all">Any deadline</option>
                 <option value="overdue">Overdue</option>
@@ -501,16 +520,12 @@ export default function SupplierRFIsPage() {
                             </div>
                           </td>
                           <td className="px-4 py-3.5">
-                            <span
-                              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${STATUS_BADGE[facing]}`}
-                            >
-                              {facing}
-                            </span>
+                            <StatusBadge status={facing} />
                           </td>
                           <td className="px-4 py-3.5 text-right">
                             <Link
                               to={`/supplier/rfis/${encodeURIComponent(rfi.name)}`}
-                              className="inline-flex items-center gap-1.5 rounded-lg border border-primary-200 bg-primary-50 px-3 py-1.5 text-xs font-semibold text-primary-700 no-underline hover:bg-primary-100"
+                              className="btn-secondary no-underline"
                             >
                               <Eye className="h-3.5 w-3.5" />
                               View

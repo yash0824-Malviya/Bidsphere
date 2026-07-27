@@ -381,10 +381,10 @@ export default function PurchaseOrderDetailPage() {
             </div>
           </div>
 
-          {/* PO Status timeline */}
+          {/* Procurement Status timeline */}
           <div className="rounded-lg border border-neutral-200 bg-white shadow-sm">
             <div className="border-b border-neutral-100 px-3 py-1.5">
-              <h2 className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">PO Status</h2>
+              <h2 className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">Procurement Status</h2>
             </div>
             <POStatusTimeline steps={procurementSteps} />
           </div>

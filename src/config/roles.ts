@@ -197,11 +197,8 @@ const P2P_LABEL_OVERRIDES: Partial<
 
 const SOURCING_CHILDREN_FULL: NavChild[] = [
   { label: "All RFIs", to: "/sourcing/rfi" },
-  { label: "Create RFI", to: "/sourcing/rfi/new" },
   { label: "All RFPs", to: "/sourcing/rfp" },
-  { label: "Create RFP", to: "/sourcing/rfp/new" },
   { label: "All RFQs", to: "/sourcing/rfq" },
-  { label: "New RFQ", to: "/sourcing/rfq/new" },
   { label: "Upload BOM", to: "/upload-bom" },
   { label: "RFQ Template Library", to: "/sourcing/rfq-templates" },
   { label: "Legal Reviews", to: "/sourcing/legal-reviews" },
@@ -210,11 +207,8 @@ const SOURCING_CHILDREN_FULL: NavChild[] = [
 /** Procurement — full RFx workspace (no standalone quotations module). */
 const PROCUREMENT_SOURCING_CHILDREN: NavChild[] = [
   { label: "All RFIs", to: "/sourcing/rfi" },
-  { label: "Create RFI", to: "/sourcing/rfi/new" },
   { label: "All RFPs", to: "/sourcing/rfp" },
-  { label: "Create RFP", to: "/sourcing/rfp/new" },
   { label: "All RFQs", to: "/sourcing/rfq" },
-  { label: "New RFQ", to: "/sourcing/rfq/new" },
   { label: "Upload BOM", to: "/upload-bom" },
   { label: "RFQ Template Library", to: "/sourcing/rfq-templates" },
   { label: "Reverse Bidding", to: "/sourcing/reverse-bidding" },
@@ -303,8 +297,16 @@ const ROLE_NAV_CONFIG: Record<AppRole, RoleNavConfig> = {
   },
   // Procurement Manager — RFQ lifecycle through PO Approval only.
   // Operational Purchase Order work is owned by Procurement Team.
+  // Reports → Total Spend (KPI drill-down + financial reporting).
   procurement: {
-    modules: ["dashboard", "sourcing", "material_requests", "suppliers", "budget"],
+    modules: [
+      "dashboard",
+      "sourcing",
+      "material_requests",
+      "suppliers",
+      "budget",
+      "reports",
+    ],
     p2pChildren: [],
   },
   // Procurement Team — PO create/manage + read-only GRN. No invoices/vouchers/
@@ -465,6 +467,85 @@ export function ownerTitleFromEmail(email?: string | null): string {
   if (!email) return "—";
   const role = resolveRoleFromUser({ name: email, email });
   return ROLE_LABELS[role];
+}
+
+/** System / unassigned ERPNext identities that must never appear as RFQ Owner. */
+function isSystemOrUnassignedRfqOwner(value?: string | null): boolean {
+  const v = (value ?? "").trim().toLowerCase();
+  if (!v) return true;
+  if (v === "administrator" || v === "guest" || v === "admin") return true;
+  if (v.startsWith("administrator@")) return true;
+  if (v === "admin@example.com" || v === "administrator@example.com") return true;
+  if (v === "admin@netlink.com") return true;
+  return false;
+}
+
+/** Humanize a login / email into a short display name (jane.doe@x → Jane Doe). */
+function humanizeRfqOwnerIdentity(value: string): string {
+  const local = (value.includes("@") ? value.split("@")[0]! : value).trim();
+  if (!local || isSystemOrUnassignedRfqOwner(local)) return "";
+  return local
+    .replace(/[._+-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/**
+ * Owner label for procurement RFQ surfaces (list, detail, dashboard, export).
+ *
+ * Priority among candidates (first usable wins):
+ * 1. Explicit RFQ owner / assigned user
+ * 2. Document creator (`owner`)
+ * 3. Buyer / assigned procurement user
+ *
+ * Never displays "Administrator". Unassigned / system accounts → "Procurement Team".
+ * Known role mailboxes use ROLE_LABELS; other real users are humanized from identity.
+ */
+export function formatRfqOwnerLabel(
+  ...candidates: Array<string | null | undefined>
+): string {
+  for (const raw of candidates) {
+    const value = (raw ?? "").trim();
+    if (!value || isSystemOrUnassignedRfqOwner(value)) continue;
+
+    const email = normalizeEmail(value);
+    const mapped = ROLE_USER_EMAILS[email] ?? ROLE_USER_EMAILS[value.toLowerCase()];
+    if (mapped === "admin") continue;
+    if (mapped) return ROLE_LABELS[mapped];
+
+    const humanized = humanizeRfqOwnerIdentity(value);
+    if (humanized) return humanized;
+  }
+  return "Procurement Team";
+}
+
+/**
+ * Resolve RFQ Owner from a document-like object, preferring explicit owner /
+ * buyer / assignee fields when present, then falling back to `owner`.
+ */
+export function formatRfqOwnerFromDoc(doc?: {
+  owner?: string | null;
+  rfq_owner?: string | null;
+  custom_rfq_owner?: string | null;
+  custom_procurement_owner?: string | null;
+  buyer?: string | null;
+  custom_buyer?: string | null;
+  assigned_to?: string | null;
+  custom_assigned_to?: string | null;
+  modified_by?: string | null;
+} | null): string {
+  if (!doc) return "Procurement Team";
+  return formatRfqOwnerLabel(
+    doc.rfq_owner,
+    doc.custom_rfq_owner,
+    doc.custom_procurement_owner,
+    doc.owner,
+    doc.buyer,
+    doc.custom_buyer,
+    doc.assigned_to,
+    doc.custom_assigned_to,
+  );
 }
 
 /* ─── Sidebar generation (dynamic, no hardcoded per-role menus) ─────────── */
@@ -690,7 +771,6 @@ export function getNavGroupsForRole(role: AppRole): NavGroup[] {
             children: [
               { label: "New Request", to: "/material-requests/new" },
               { label: "Request History", to: "/material-requests/list" },
-              { label: "Track Request", to: "/material-requests/list?f=procurement" },
             ],
           },
           {
@@ -701,10 +781,6 @@ export function getNavGroupsForRole(role: AppRole): NavGroup[] {
               {
                 label: "Pending Acceptance",
                 to: "/department/issued-items/pending-acceptance",
-              },
-              {
-                label: "Accepted Items",
-                to: "/department/issued-items/accepted-items",
               },
               {
                 label: "Issue Receipts",
@@ -1125,7 +1201,7 @@ export function canAccessPath(
     ) {
       return true;
     }
-    // Issued Items module (Pending Acceptance / Accepted / Issue Receipts)
+    // Issued Items module (Pending Acceptance / Issue Receipts)
     if (path === "/department" || path.startsWith("/department/")) {
       return (
         path === "/department/issued-items" ||

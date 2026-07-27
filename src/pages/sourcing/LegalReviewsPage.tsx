@@ -25,6 +25,9 @@ import type { LegalReviewItem, LegalReviewStatus } from "../../types/erpnext";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
 import RejectedReviewActions from "../../components/sourcing/RejectedReviewActions";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+} from "../../components/dashboard/DashboardKpiCard";
 import { formatDate, formatCurrency } from "../../utils/format";
 
 /* -------------------------------------------------------------------------- */
@@ -180,32 +183,44 @@ export default function LegalReviewsPage() {
       />
 
       {/* KPI strip — click to filter */}
-      <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <KpiCard
+      <DashboardKpiGrid columns={3} className="mb-5">
+        <DashboardKpiCard
           icon={Clock}
           label="Pending"
           value={kpis.pending}
-          tone="warning"
-          active={statusFilter === "Pending Legal Review"}
+          iconClassName="bg-warning-50 text-warning-600"
+          className={
+            statusFilter === "Pending Legal Review"
+              ? "ring-2 ring-primary/20 border-[var(--color-primary)]"
+              : ""
+          }
           onClick={() => setStatusFilter("Pending Legal Review")}
         />
-        <KpiCard
+        <DashboardKpiCard
           icon={CheckCircle2}
           label="Approved"
           value={kpis.approved}
-          tone="success"
-          active={statusFilter === "Approved"}
+          iconClassName="bg-success-50 text-success-600"
+          className={
+            statusFilter === "Approved"
+              ? "ring-2 ring-primary/20 border-[var(--color-primary)]"
+              : ""
+          }
           onClick={() => setStatusFilter("Approved")}
         />
-        <KpiCard
+        <DashboardKpiCard
           icon={XCircle}
           label="Rejected"
           value={kpis.rejected}
-          tone="danger"
-          active={statusFilter === "Rejected"}
+          iconClassName="bg-danger-50 text-danger-600"
+          className={
+            statusFilter === "Rejected"
+              ? "ring-2 ring-primary/20 border-[var(--color-primary)]"
+              : ""
+          }
           onClick={() => setStatusFilter("Rejected")}
         />
-      </div>
+      </DashboardKpiGrid>
 
       {/* Filter pills */}
       <div className="mb-5 flex flex-wrap items-center gap-2">
@@ -730,49 +745,3 @@ function HistoryField({
   );
 }
 
-function KpiCard({
-  icon: Icon,
-  label,
-  value,
-  tone,
-  active,
-  onClick,
-}: {
-  icon: typeof Clock;
-  label: string;
-  value: number;
-  tone: "neutral" | "warning" | "success" | "danger" | "primary";
-  active?: boolean;
-  onClick?: () => void;
-}) {
-  const iconTones = {
-    neutral: "bg-neutral-100 text-neutral-500",
-    warning: "bg-warning-50 text-warning-600",
-    success: "bg-success-50 text-success-600",
-    danger: "bg-danger-50 text-danger-600",
-    primary: "bg-primary-50 text-primary-600",
-  };
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex w-full items-center gap-3 rounded-xl border bg-white px-4 py-3.5 text-left shadow-sm transition hover:shadow-md cursor-pointer ${
-        active
-          ? "border-primary ring-2 ring-primary/20"
-          : "border-neutral-200 hover:border-neutral-300"
-      }`}
-    >
-      <div
-        className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg ${iconTones[tone]}`}
-      >
-        <Icon className="h-5 w-5" />
-      </div>
-      <div>
-        <p className="text-2xl font-bold tabular-nums text-neutral-900">{value}</p>
-        <p className="text-[11px] font-medium uppercase tracking-wider text-neutral-500">
-          {label}
-        </p>
-      </div>
-    </button>
-  );
-}

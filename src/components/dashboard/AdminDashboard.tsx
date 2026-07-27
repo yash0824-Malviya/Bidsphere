@@ -182,8 +182,8 @@ export default function AdminDashboard({ role, greetingName }: Props) {
         <Suspense
           fallback={
             <div className="dashboard-grid-2">
-              <Skeleton className="min-h-[320px] rounded-xl" />
-              <Skeleton className="min-h-[320px] rounded-xl" />
+              <Skeleton className="min-h-[280px] rounded-card" />
+              <Skeleton className="min-h-[280px] rounded-card" />
             </div>
           }
         >

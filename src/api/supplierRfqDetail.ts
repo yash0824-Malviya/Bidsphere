@@ -9,6 +9,7 @@ import { isAxiosError } from "axios";
 
 import { getRFQ } from "./sourcing";
 import type { RFQ } from "../types/erpnext";
+import { sanitizeRfqForSupplier } from "../utils/rfqTargetPrice";
 
 const LOG = "[SupplierRFQ Detail]";
 
@@ -195,7 +196,18 @@ export async function getSupplierRfqDetail(
     );
   }
 
+  /* Never leak hidden Target Prices to supplier clients / DevTools / exports. */
+  const sanitized = sanitizeRfqForSupplier(rfq);
+
   // eslint-disable-next-line no-console
-  console.info(LOG, "Access granted", { rfqName: name, supplierId: supplier });
-  return rfq;
+  console.info(LOG, "Access granted", {
+    rfqName: name,
+    supplierId: supplier,
+    show_target_price: sanitized.show_target_price,
+    targetPricesReturned: sanitized.show_target_price
+      ? sanitized.items.filter((i) => i.target_price != null).length
+      : 0,
+  });
+
+  return sanitized;
 }

@@ -1,13 +1,18 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
+  Archive,
   ClipboardList,
+  Copy,
   FileText,
+  Link2,
+  Pencil,
   Plus,
   Send,
   CheckCircle2,
 } from "lucide-react";
+import toast from "react-hot-toast";
 
 import {
   getRfpStats,
@@ -17,12 +22,15 @@ import {
 import type { RfpStatus } from "../../types/rfp";
 import { rfpNeedsNarrativeSync } from "../../api/rfpStorage";
 import ConnectionError from "../../components/ConnectionError";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+} from "../../components/dashboard/DashboardKpiCard";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
 import PaginationBar from "../../components/PaginationBar";
 import { TableSkeleton } from "../../components/Skeleton";
 import StatusBadge from "../../components/StatusBadge";
-import { SearchInput } from "../../components/ui";
+import { SearchInput, TableRowActions } from "../../components/ui";
 import { useDebounce } from "../../hooks/useDebounce";
 import { usePagination } from "../../hooks/usePagination";
 import { formatDate } from "../../utils/format";
@@ -86,65 +94,46 @@ export default function RFPListPage() {
   const total = listQuery.data?.total ?? 0;
   const stats = statsQuery.data;
 
-  const kpis = useMemo(
-    () => [
-      {
-        label: "Draft",
-        value: stats?.draft ?? "—",
-        icon: ClipboardList,
-      },
-      {
-        label: "Published",
-        value: stats?.published ?? "—",
-        icon: Send,
-      },
-      {
-        label: "Under Review",
-        value: stats?.underReview ?? "—",
-        icon: FileText,
-      },
-      {
-        label: "Closed",
-        value: stats?.closed ?? "—",
-        icon: CheckCircle2,
-      },
-    ],
-    [stats],
-  );
-
   return (
     <div className="space-y-6">
       <PageHeader
         title="RFP"
         description="Request for Proposal — collect supplier proposals."
         actions={
-          <Link
-            to="/sourcing/rfp/new"
-            className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
-          >
-            <Plus className="h-4 w-4" />
+          <Link to="/sourcing/rfp/new" className="btn-primary">
+            <Plus />
             Create RFP
           </Link>
         }
       />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {kpis.map((kpi) => (
-          <div
-            key={kpi.label}
-            className="rounded-xl border border-neutral-200 bg-white p-4"
-          >
-            <div className="flex items-center gap-2 text-neutral-500">
-              <kpi.icon className="h-4 w-4" />
-              <span className="text-xs font-medium uppercase tracking-wide">
-                {kpi.label}
-              </span>
-            </div>
-            <p className="mt-2 text-2xl font-bold tabular-nums text-neutral-900">
-              {kpi.value}
-            </p>
-          </div>
-        ))}
+      <div className="sourcing-list-kpis">
+        <DashboardKpiGrid columns={4}>
+          <DashboardKpiCard
+            icon={ClipboardList}
+            label="Draft"
+            value={stats?.draft ?? "—"}
+            iconClassName="bg-neutral-100 text-neutral-500"
+          />
+          <DashboardKpiCard
+            icon={Send}
+            label="Published"
+            value={stats?.published ?? "—"}
+            iconClassName="bg-[var(--color-primary-light)] text-[var(--color-primary)]"
+          />
+          <DashboardKpiCard
+            icon={FileText}
+            label="Under Review"
+            value={stats?.underReview ?? "—"}
+            iconClassName="bg-amber-50 text-amber-600"
+          />
+          <DashboardKpiCard
+            icon={CheckCircle2}
+            label="Closed"
+            value={stats?.closed ?? "—"}
+            iconClassName="bg-emerald-50 text-emerald-600"
+          />
+        </DashboardKpiGrid>
       </div>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -158,7 +147,7 @@ export default function RFPListPage() {
         <select
           value={status}
           onChange={(e) => setStatus(e.target.value as "" | RfpStatus)}
-          className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm outline-none focus:border-primary-400"
+          className="select-field w-auto sm:w-[180px]"
         >
           {STATUS_FILTERS.map((s) => (
             <option key={s.label} value={s.value}>
@@ -183,10 +172,7 @@ export default function RFPListPage() {
             title="No RFPs yet"
             description="Create a Request for Proposal to invite suppliers and collect proposal documents."
             action={
-              <Link
-                to="/sourcing/rfp/new"
-                className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
-              >
+              <Link to="/sourcing/rfp/new" className="btn-primary">
                 <Plus className="h-4 w-4" />
                 Create RFP
               </Link>
@@ -203,42 +189,88 @@ export default function RFPListPage() {
                   <th>Status</th>
                   <th>Suppliers</th>
                   <th>Owner</th>
+                  <th className="col-actions">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
-                  <tr
-                    key={r.name}
-                    className="cursor-pointer hover:bg-neutral-50"
-                    onClick={() =>
-                      navigate(`/sourcing/rfp/${encodeURIComponent(r.name)}`)
-                    }
-                  >
-                    <td>
-                      <button
-                        type="button"
-                        className="table-link"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate(
-                            `/sourcing/rfp/${encodeURIComponent(r.name)}`,
-                          );
-                        }}
-                      >
-                        {r.name}
-                      </button>
-                    </td>
-                    <td className="max-w-[240px] truncate font-medium text-neutral-900">
-                      {r.title}
-                    </td>
-                    <td>{formatDate(r.submission_deadline)}</td>
-                    <td>
-                      <StatusBadge status={r.status} />
-                    </td>
-                    <td className="tabular-nums">{r.suppliers.length}</td>
-                    <td>{ownerTitleFromEmail(r.owner)}</td>
-                  </tr>
-                ))}
+                {rows.map((r) => {
+                  const detailPath = `/sourcing/rfp/${encodeURIComponent(r.name)}`;
+                  return (
+                    <tr
+                      key={r.name}
+                      className="cursor-pointer"
+                      onClick={() => navigate(detailPath)}
+                    >
+                      <td>
+                        <button
+                          type="button"
+                          className="table-link"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(detailPath);
+                          }}
+                        >
+                          {r.name}
+                        </button>
+                      </td>
+                      <td className="max-w-[240px] truncate font-medium text-neutral-900">
+                        {r.title}
+                      </td>
+                      <td>{formatDate(r.submission_deadline)}</td>
+                      <td>
+                        <StatusBadge status={r.status} />
+                      </td>
+                      <td className="tabular-nums">{r.suppliers.length}</td>
+                      <td>{ownerTitleFromEmail(r.owner)}</td>
+                      <td className="col-actions">
+                        <TableRowActions
+                          label={r.name}
+                          viewTo={detailPath}
+                          items={[
+                            {
+                              id: "edit",
+                              label: "Edit",
+                              icon: Pencil,
+                              onClick: () => navigate(detailPath),
+                            },
+                            {
+                              id: "duplicate",
+                              label: "Duplicate",
+                              icon: Copy,
+                              onClick: () =>
+                                toast("Duplicate from RFP details", {
+                                  icon: "ℹ️",
+                                }),
+                            },
+                            {
+                              id: "copy",
+                              label: "Copy Link",
+                              icon: Link2,
+                              onClick: () => {
+                                void navigator.clipboard
+                                  .writeText(
+                                    `${window.location.origin}${detailPath}`,
+                                  )
+                                  .then(() => toast.success("Link copied"))
+                                  .catch(() =>
+                                    toast.error("Could not copy link"),
+                                  );
+                              },
+                            },
+                            {
+                              id: "archive",
+                              label: "Archive",
+                              icon: Archive,
+                              separatorBefore: true,
+                              onClick: () =>
+                                toast.success(`Archive queued for ${r.name}`),
+                            },
+                          ]}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

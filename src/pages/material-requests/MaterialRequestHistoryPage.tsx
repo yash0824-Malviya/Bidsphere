@@ -10,6 +10,7 @@ import {
 } from "../../api/forwardedMaterialRequests";
 import ErrorState from "../../components/ErrorState";
 import { TableSkeleton } from "../../components/Skeleton";
+import Pagination from "../../components/ui/Pagination";
 import {
   Drawing2dCell,
   PartNameCell,
@@ -19,6 +20,7 @@ import ForwardedFilterBar, {
   EMPTY_FORWARDED_FILTERS,
   type ForwardedFilters,
 } from "../../components/material-requests/ForwardedFilterBar";
+import { useClientPagination } from "../../hooks/usePagination";
 import { formatDate, formatDateTime } from "../../utils/format";
 
 /** Colour tokens per lifecycle stage — keeps the neutral module palette. */
@@ -88,6 +90,18 @@ export default function MaterialRequestHistoryPage() {
       return true;
     });
   }, [data, filters]);
+
+  const {
+    pageRows,
+    totalRecords,
+    totalPages,
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+  } = useClientPagination(rows, {
+    resetKey: `${filters.search}|${filters.department}|${filters.warehouse}|${filters.priority}|${filters.procurementType}|${filters.requestMode}|${filters.status}|${filters.forwardDate}`,
+  });
 
   const toggle = (name: string) =>
     setExpanded((prev) => {
@@ -174,7 +188,7 @@ export default function MaterialRequestHistoryPage() {
                   </td>
                 </tr>
               ) : (
-                rows.map((row) => (
+                pageRows.map((row) => (
                   <Fragment key={row.mrNumber}>
                     <HistoryRow
                       row={row}
@@ -195,13 +209,18 @@ export default function MaterialRequestHistoryPage() {
             </tbody>
           </table>
         </div>
+        {!isLoading && rows.length > 0 && (
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={totalRecords}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            recordLabel="requests"
+          />
+        )}
       </div>
-
-      {!isLoading && rows.length > 0 && (
-        <p className="mt-4 text-xs text-neutral-500">
-          {rows.length} of {data.length} forwarded Material Request(s).
-        </p>
-      )}
 
       {statusMr && (
         <MaterialRequestStatusModal

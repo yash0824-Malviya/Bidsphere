@@ -18,6 +18,7 @@ import { getDeclinedSuppliersByRfq } from "../../api/supplierRfqResponse";
 import type { SupplierQuotation } from "../../types/erpnext";
 import EmptyState from "../../components/EmptyState";
 import PaginationBar from "../../components/PaginationBar";
+import StatusBadge from "../../components/StatusBadge";
 import { TableSkeleton } from "../../components/Skeleton";
 import { usePagination } from "../../hooks/usePagination";
 import { formatDate } from "../../utils/format";
@@ -49,13 +50,6 @@ const STATUS_LABEL: Record<WorklistStatus, string> = {
   Submitted: "Quotation Submitted",
   Awarded: "Awarded",
   Closed: "Closed",
-};
-
-const STATUS_BADGE: Record<WorklistStatus, string> = {
-  Awaiting: "bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200",
-  Submitted: "bg-primary-50 text-primary-700 ring-1 ring-inset ring-primary-200",
-  Awarded: "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
-  Closed: "bg-neutral-100 text-neutral-600 ring-1 ring-inset ring-neutral-200",
 };
 
 const SUMMARY_CARDS: Array<{
@@ -135,13 +129,15 @@ function withinDateFilter(iso: string | undefined, filter: DateFilter): boolean 
 }
 
 function StatusPill({ status }: { status: WorklistStatus }) {
-  return (
-    <span
-      className={`inline-flex h-6 items-center whitespace-nowrap rounded-md px-2 text-[12px] font-medium ${STATUS_BADGE[status]}`}
-    >
-      {STATUS_LABEL[status]}
-    </span>
-  );
+  const tone =
+    status === "Awaiting"
+      ? ("warning" as const)
+      : status === "Submitted"
+        ? ("info" as const)
+        : status === "Awarded"
+          ? ("success" as const)
+          : ("closed" as const);
+  return <StatusBadge status={STATUS_LABEL[status]} tone={tone} />;
 }
 
 function ActionCell({
@@ -152,8 +148,7 @@ function ActionCell({
   action: ActionKind;
 }) {
   const to = `/supplier/rfq/${encodeURIComponent(rfqName)}`;
-  const className =
-    "inline-flex h-8 items-center rounded-xl border border-[#E8EDF5] bg-white px-3 text-[13px] font-medium text-[#111827] transition hover:border-primary-200 hover:bg-primary-50 hover:text-primary-700";
+  const className = "btn-secondary no-underline";
 
   if (action === "continue") {
     return (
@@ -404,7 +399,7 @@ export default function SupplierRFQsPage() {
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-              className="select-field h-10 w-full sm:w-[160px]"
+              className="select-field w-full sm:w-[160px]"
               aria-label="Status filter"
             >
               <option value="all">All statuses</option>
@@ -416,7 +411,7 @@ export default function SupplierRFQsPage() {
             <select
               value={dateFilter}
               onChange={(e) => setDateFilter(e.target.value as DateFilter)}
-              className="select-field h-10 w-full sm:w-[160px]"
+              className="select-field w-full sm:w-[160px]"
               aria-label="Date filter"
             >
               <option value="all">All dates</option>
@@ -428,7 +423,7 @@ export default function SupplierRFQsPage() {
               type="button"
               onClick={handleRefresh}
               disabled={refreshing}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[#E8EDF5] bg-white px-3.5 text-[13px] font-medium text-[#111827] transition hover:bg-neutral-50 disabled:opacity-60"
+              className="btn-secondary"
             >
               <RefreshCw
                 className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`}

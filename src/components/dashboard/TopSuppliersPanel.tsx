@@ -24,11 +24,11 @@ function statusLabel(risk: TopSupplierTrendRow["riskLevel"]): {
 }
 
 const PANEL_SHELL =
-  "rounded-2xl border border-[#E8EDF5] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)]";
+  "rounded-2xl border border-[#E5E7EB] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)]";
 
 function TopSuppliersPanel({ rows, loading }: Props) {
   if (loading) {
-    return <Skeleton className={`min-h-[280px] w-full ${PANEL_SHELL}`} />;
+    return <Skeleton className={`min-h-[250px] w-full ${PANEL_SHELL}`} />;
   }
 
   return (

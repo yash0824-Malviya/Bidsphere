@@ -3,8 +3,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
   Edit3,
   Key,
   MoreHorizontal,
@@ -21,7 +19,7 @@ import {
 import toast from "react-hot-toast";
 
 import {
-  getUsers,
+  getUsersPaged,
   getUserDetail,
   toggleUserEnabled,
   createUser,
@@ -32,10 +30,10 @@ import {
 } from "../../api/admin";
 import type { ErpUser } from "../../api/admin";
 import { Skeleton } from "../../components/Skeleton";
+import Pagination from "../../components/ui/Pagination";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
+import { usePagination } from "../../hooks/usePagination";
 import { formatDateTime } from "../../utils/format";
-
-const PAGE_SIZE = 50;
 
 const BIDSPHERE_ROLES = [
   "Administrator",
@@ -87,9 +85,11 @@ export default function UserManagementPage() {
   }, [layout]);
 
   const qc = useQueryClient();
-  const [page, setPage] = useState(0);
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
+  const { page, pageSize, setPage, setPageSize } = usePagination({
+    resetKey: search,
+  });
 
   // Panel state
   const [panelMode, setPanelMode] = useState<PanelMode>("closed");
@@ -102,11 +102,14 @@ export default function UserManagementPage() {
   // Action menu
   const [actionMenu, setActionMenu] = useState<string | null>(null);
 
-  const { data: users = [], isLoading } = useQuery({
-    queryKey: ["admin-users", page, search],
-    queryFn: () => getUsers(page, PAGE_SIZE, search || undefined),
+  const { data: usersPage, isLoading } = useQuery({
+    queryKey: ["admin-users", page, pageSize, search],
+    queryFn: () => getUsersPaged(page, pageSize, search || undefined),
     staleTime: 30_000,
   });
+  const users = usersPage?.data ?? [];
+  const totalRecords = usersPage?.total_records ?? 0;
+  const totalPages = usersPage?.total_pages ?? 1;
 
   const { data: editUserDetail, isLoading: loadingDetail } = useQuery({
     queryKey: ["admin-user-detail", panelUserId],
@@ -275,14 +278,14 @@ export default function UserManagementPage() {
             type="text"
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && (() => { setSearch(searchInput.trim()); setPage(0); })()}
+            onKeyDown={(e) => e.key === "Enter" && setSearch(searchInput.trim())}
             placeholder="Search users by name..."
             className="w-full rounded-md border border-neutral-200 bg-white py-1.5 pl-8 pr-3 text-xs text-neutral-800 placeholder:text-neutral-400 focus:border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-200"
           />
         </div>
         <button
           type="button"
-          onClick={() => { setSearch(searchInput.trim()); setPage(0); }}
+          onClick={() => setSearch(searchInput.trim())}
           className="rounded-md bg-primary-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm hover:bg-primary-700 cursor-pointer border-none"
         >
           Search
@@ -363,17 +366,15 @@ export default function UserManagementPage() {
               ))}
             </tbody>
           </table>
-          <div className="flex items-center justify-between border-t border-neutral-200 px-3 py-1.5">
-            <p className="text-[11px] text-neutral-500">Page {page + 1} &middot; {users.length} users</p>
-            <div className="flex items-center gap-1">
-              <button type="button" disabled={page === 0} onClick={() => setPage((p) => p - 1)} className="inline-flex items-center gap-0.5 rounded px-2 py-1 text-[11px] font-medium text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 cursor-pointer bg-transparent border-none">
-                <ChevronLeft className="h-3 w-3" /> Prev
-              </button>
-              <button type="button" disabled={users.length < PAGE_SIZE} onClick={() => setPage((p) => p + 1)} className="inline-flex items-center gap-0.5 rounded px-2 py-1 text-[11px] font-medium text-neutral-600 hover:bg-neutral-100 disabled:opacity-40 cursor-pointer bg-transparent border-none">
-                Next <ChevronRight className="h-3 w-3" />
-              </button>
-            </div>
-          </div>
+          <Pagination
+            currentPage={page}
+            totalPages={totalPages}
+            totalRecords={totalRecords}
+            pageSize={pageSize}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            recordLabel="users"
+          />
         </div>
       )}
 

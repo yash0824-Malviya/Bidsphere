@@ -42,7 +42,7 @@ export default function DashboardWidgetError({
         <button
           type="button"
           onClick={onRetry}
-          className="mt-1 rounded-xl bg-[#146CE8] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0F5BC7]"
+          className="mt-1 rounded-xl bg-[#1F3A6D] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#17315D]"
         >
           Retry
         </button>

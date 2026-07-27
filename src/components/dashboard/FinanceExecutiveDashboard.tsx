@@ -26,6 +26,10 @@ import type { BudgetWorkflowStatus } from "../../api/erpBudget";
 import { Skeleton } from "../Skeleton";
 import { useAuthStore } from "../../store/authStore";
 import { formatCurrency, formatDate, formatDateTime } from "../../utils/format";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+  DashboardKpiSkeleton,
+} from "./DashboardKpiCard";
 
 const fmt = (n: number) => formatCurrency(n);
 
@@ -189,7 +193,7 @@ export default function FinanceExecutiveDashboard({ greetingName }: Props) {
   ] as const;
 
   return (
-    <div className="-mt-1 space-y-4">
+    <div className="-mt-1 space-y-5">
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
@@ -222,49 +226,40 @@ export default function FinanceExecutiveDashboard({ greetingName }: Props) {
 
       {/* KPI row */}
       {isLoading ? (
-        <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
-          {[1, 2, 3, 4, 5].map((i) => (
-            <Skeleton key={i} className="h-[88px] rounded-xl" />
-          ))}
-        </div>
+        <DashboardKpiSkeleton count={5} />
       ) : (
-        <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
-          <KpiCard
+        <DashboardKpiGrid>
+          <DashboardKpiCard
             icon={FileText}
-            iconBg="bg-neutral-50"
-            iconColor="text-neutral-600"
+            iconClassName="bg-neutral-50 text-neutral-600"
             label="Draft Budgets"
             value={String(stats.draftCount)}
           />
-          <KpiCard
+          <DashboardKpiCard
             icon={Send}
-            iconBg="bg-amber-50"
-            iconColor="text-amber-600"
+            iconClassName="bg-amber-50 text-amber-600"
             label="Submitted"
             value={String(stats.submittedCount)}
           />
-          <KpiCard
+          <DashboardKpiCard
             icon={CheckCircle2}
-            iconBg="bg-success-50"
-            iconColor="text-success-600"
+            iconClassName="bg-success-50 text-success-600"
             label="Approved"
             value={String(stats.approvedCount)}
           />
-          <KpiCard
+          <DashboardKpiCard
             icon={XCircle}
-            iconBg="bg-danger-50"
-            iconColor="text-danger-600"
+            iconClassName="bg-danger-50 text-danger-600"
             label="Rejected"
             value={String(stats.rejectedCount)}
           />
-          <KpiCard
+          <DashboardKpiCard
             icon={Wallet}
-            iconBg="bg-emerald-50"
-            iconColor="text-emerald-600"
+            iconClassName="bg-emerald-50 text-emerald-600"
             label="Total Approved Budget"
             value={fmt(stats.totalApprovedBudget)}
           />
-        </div>
+        </DashboardKpiGrid>
       )}
 
       {/* Recent Budgets — full-width live ERPNext table */}
@@ -567,36 +562,6 @@ function EmptyPanel({
     <div className="py-10 text-center">
       <p className="text-xs text-neutral-500">{message}</p>
       {action && <div className="mt-2">{action}</div>}
-    </div>
-  );
-}
-
-function KpiCard({
-  icon: Icon,
-  iconBg,
-  iconColor,
-  label,
-  value,
-}: {
-  icon: typeof Wallet;
-  iconBg: string;
-  iconColor: string;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-xl border border-neutral-200 bg-white px-3 py-3 shadow-sm">
-      <div className="mb-1.5 flex items-center gap-2">
-        <div
-          className={`flex h-7 w-7 items-center justify-center rounded-lg ${iconBg}`}
-        >
-          <Icon className={`h-3.5 w-3.5 ${iconColor}`} />
-        </div>
-        <span className="text-[9px] font-semibold uppercase tracking-wider text-neutral-500">
-          {label}
-        </span>
-      </div>
-      <p className="text-lg font-bold tabular-nums text-neutral-900">{value}</p>
     </div>
   );
 }

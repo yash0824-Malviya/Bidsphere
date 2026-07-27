@@ -3,8 +3,18 @@
  * user/role management, workflow config, and report data.
  */
 
-import { apiGet, apiPost, apiPut, apiDelete, buildResourceUrl, buildListConfig, withSilent } from "./erpnext";
-import type { Filter } from "./erpnext";
+import {
+  apiGet,
+  apiPost,
+  apiPut,
+  apiDelete,
+  buildResourceUrl,
+  buildListConfig,
+  withSilent,
+  fetchPagedList,
+  type Filter,
+  type PagedListResult,
+} from "./erpnext";
 
 /* ─── Types ───────────────────────────────────────────────────────────────── */
 
@@ -107,13 +117,23 @@ export async function getAdminKpis(): Promise<AdminKpis> {
 /* ─── User Management ─────────────────────────────────────────────────────── */
 
 export async function getUsers(page = 0, pageSize = 50, search?: string): Promise<ErpUser[]> {
+  const result = await getUsersPaged(page + 1, pageSize, search);
+  return result.data;
+}
+
+/** Server-side paginated users (`page` is 1-based). */
+export async function getUsersPaged(
+  page = 1,
+  pageSize = 10,
+  search?: string,
+): Promise<PagedListResult<ErpUser>> {
   const filters: Filter[] = [["user_type", "=", "System User"]];
   if (search) {
     filters.push(["full_name", "like", `%${search}%`]);
   }
 
   try {
-    const users = await apiGet<Array<{
+    const result = await fetchPagedList<{
       name: string;
       email: string;
       full_name: string;
@@ -121,23 +141,33 @@ export async function getUsers(page = 0, pageSize = 50, search?: string): Promis
       creation: string;
       last_active?: string;
       user_type?: string;
-    }>>(
-      buildResourceUrl("User"),
-      {
-        ...buildListConfig({
-          fields: ["name", "email", "full_name", "enabled", "creation", "last_active", "user_type"],
-          filters,
-          order_by: "creation desc",
-          limit_page_length: pageSize,
-          limit_start: page * pageSize,
-        }),
-        ...withSilent(),
-      }
-    );
-
-    return (users ?? []).map((u) => ({ ...u, roles: [] }));
+    }>("User", {
+      fields: [
+        "name",
+        "email",
+        "full_name",
+        "enabled",
+        "creation",
+        "last_active",
+        "user_type",
+      ],
+      filters,
+      order_by: "creation desc",
+      page,
+      pageSize,
+    });
+    return {
+      ...result,
+      data: result.data.map((u) => ({ ...u, roles: [] as string[] })),
+    };
   } catch {
-    return [];
+    return {
+      data: [],
+      total_records: 0,
+      total_pages: 1,
+      current_page: 1,
+      page_size: pageSize,
+    };
   }
 }
 

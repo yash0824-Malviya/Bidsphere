@@ -7,6 +7,7 @@ import {
   FileSpreadsheet,
   FileText,
   Loader2,
+  Printer,
   Table2,
 } from "lucide-react";
 
@@ -27,6 +28,8 @@ interface Props<T> {
   title?: string;
   disabled?: boolean;
   className?: string;
+  /** Optional Print action shown in the export menu. */
+  onPrint?: () => void;
 }
 
 const FORMATS: Array<{
@@ -37,21 +40,21 @@ const FORMATS: Array<{
 }> = [
   {
     id: "xlsx",
-    label: "Excel (.xlsx)",
-    hint: "Spreadsheet for analysis",
+    label: "Excel",
+    hint: "Spreadsheet (.xlsx)",
     Icon: FileSpreadsheet,
-  },
-  {
-    id: "pdf",
-    label: "PDF",
-    hint: "Printable report",
-    Icon: FileText,
   },
   {
     id: "csv",
     label: "CSV",
     hint: "Plain comma-separated",
     Icon: Table2,
+  },
+  {
+    id: "pdf",
+    label: "PDF",
+    hint: "Printable report",
+    Icon: FileText,
   },
 ];
 
@@ -67,6 +70,7 @@ export default function ExportButton<T>({
   title,
   disabled,
   className = "",
+  onPrint,
 }: Props<T>) {
   const user = useAuthStore((s) => s.user);
   const [open, setOpen] = useState(false);
@@ -202,12 +206,12 @@ export default function ExportButton<T>({
         aria-expanded={open}
       >
         {busy ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
+          <Loader2 className="h-[18px] w-[18px] animate-spin" />
         ) : (
-          <Download className="h-4 w-4" />
+          <Download className="h-[18px] w-[18px]" />
         )}
         Export
-        <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+        <ChevronDown className="h-4 w-4 opacity-70" />
       </button>
 
       {open ? (
@@ -241,6 +245,28 @@ export default function ExportButton<T>({
                   </span>
                 </button>
               ))}
+              {onPrint ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={busy}
+                  onClick={() => {
+                    setOpen(false);
+                    onPrint();
+                  }}
+                  className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition hover:bg-neutral-50"
+                >
+                  <Printer className="mt-0.5 h-4 w-4 text-primary-600" />
+                  <span>
+                    <span className="block text-sm font-semibold text-neutral-800">
+                      Print
+                    </span>
+                    <span className="block text-[11px] text-neutral-500">
+                      Print current view
+                    </span>
+                  </span>
+                </button>
+              ) : null}
             </div>
           ) : (
             <div className="p-3">
@@ -300,7 +326,7 @@ export default function ExportButton<T>({
                     setPanel("menu");
                     setPendingFormat(null);
                   }}
-                  className="btn-secondary flex-1 justify-center py-1.5 text-xs"
+                  className="btn-secondary flex-1 justify-center"
                 >
                   Back
                 </button>
@@ -308,7 +334,7 @@ export default function ExportButton<T>({
                   type="button"
                   disabled={busy || !pendingFormat}
                   onClick={() => pendingFormat && void runExport(pendingFormat)}
-                  className="btn-primary flex-1 justify-center py-1.5 text-xs"
+                  className="btn-primary flex-1 justify-center"
                 >
                   {busy ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />

@@ -17,6 +17,9 @@ import {
   type SlaReportBreakdownRow,
 } from "../../api/sla";
 import { SLA_PRIORITIES, SLA_WORKFLOWS } from "../../config/slaWorkflows";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+} from "../../components/dashboard/DashboardKpiCard";
 import { Skeleton } from "../../components/Skeleton";
 import { useOptionalLayout } from "../../contexts/LayoutContext";
 
@@ -157,14 +160,14 @@ export default function SlaReportsPage() {
         <Skeleton className="h-40 w-full" />
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
-            <Kpi icon={ListChecks} accent="bg-slate-50 text-slate-600" label="Total SLAs" value={String(report.total)} />
-            <Kpi icon={CheckCircle2} accent="bg-emerald-50 text-emerald-600" label="Completed On Time" value={String(report.completedOnTime)} />
-            <Kpi icon={AlertTriangle} accent="bg-rose-50 text-rose-600" label="Breached" value={String(report.breached)} />
-            <Kpi icon={Timer} accent="bg-amber-50 text-amber-600" label="Avg Resolution" value={fmtMinutes(report.avgResolutionMinutes)} />
-            <Kpi icon={Gauge} accent="bg-primary/10 text-primary" label="Compliance" value={`${report.compliancePct}%`} />
-            <Kpi icon={Clock} accent="bg-blue-50 text-blue-600" label="Open (Run/Due)" value={String(report.running + report.dueSoon)} />
-          </div>
+          <DashboardKpiGrid columns={6}>
+            <DashboardKpiCard icon={ListChecks} iconClassName="bg-slate-50 text-slate-600" label="Total SLAs" value={String(report.total)} />
+            <DashboardKpiCard icon={CheckCircle2} iconClassName="bg-emerald-50 text-emerald-600" label="Completed On Time" value={String(report.completedOnTime)} />
+            <DashboardKpiCard icon={AlertTriangle} iconClassName="bg-rose-50 text-rose-600" label="Breached" value={String(report.breached)} />
+            <DashboardKpiCard icon={Timer} iconClassName="bg-amber-50 text-amber-600" label="Avg Resolution" value={fmtMinutes(report.avgResolutionMinutes)} />
+            <DashboardKpiCard icon={Gauge} iconClassName="bg-[var(--color-primary-light)] text-[var(--color-primary)]" label="Compliance" value={`${report.compliancePct}%`} />
+            <DashboardKpiCard icon={Clock} iconClassName="bg-[var(--color-primary-light)] text-[var(--color-primary)]" label="Open (Run/Due)" value={String(report.running + report.dueSoon)} />
+          </DashboardKpiGrid>
 
           <div className="grid gap-4 lg:grid-cols-2">
             <BreakdownTable title="By Workflow" rows={report.byWorkflow} />
@@ -193,37 +196,13 @@ function FilterSelect({
     <label className="text-sm">
       <span className="mb-1 block font-medium text-neutral-600">{label}</span>
       <select
-        className="input-field"
+        className="select-field"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
         {children}
       </select>
     </label>
-  );
-}
-
-function Kpi({
-  icon: Icon,
-  accent,
-  label,
-  value,
-}: {
-  icon: typeof Timer;
-  accent: string;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
-      <span className={`inline-flex h-8 w-8 items-center justify-center rounded-lg ${accent}`}>
-        <Icon className="h-4 w-4" />
-      </span>
-      <p className="mt-2 text-2xl font-bold tabular-nums text-neutral-900">{value}</p>
-      <p className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
-        {label}
-      </p>
-    </div>
   );
 }
 

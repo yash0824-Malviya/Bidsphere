@@ -3,6 +3,8 @@ export { default as PageHeader } from "./PageHeader";
 export { default as EmptyState } from "./EmptyState";
 export { default as StatCard } from "./StatCard";
 export { default as DataTable } from "./DataTable";
+export { default as Pagination } from "./Pagination";
+export type { PaginationProps } from "./Pagination";
 export { default as ConfirmDialog } from "./ConfirmDialog";
 export { default as ProgressCell } from "./ProgressCell";
 export { default as FilterBar, FilterField } from "./FilterBar";
@@ -20,6 +22,8 @@ export { Popover, PopoverTrigger, PopoverContent, PopoverAnchor } from "./popove
 
 export { default as SortableTableHeader } from "./SortableTableHeader";
 export { default as ResponsiveTable } from "./ResponsiveTable";
+export { default as TableRowActions } from "./TableRowActions";
+export type { TableRowActionItem, TableRowActionsProps } from "./TableRowActions";
 export type { SortDirection, SortState } from "./SortableTableHeader";
 export type { Column } from "./DataTable";
 export type { StatTone } from "./StatCard";

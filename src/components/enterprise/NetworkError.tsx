@@ -37,7 +37,7 @@ export default function NetworkError({
         <button
           type="button"
           onClick={onRetry}
-          className="mt-6 inline-flex items-center gap-2 rounded-xl bg-[#146CE8] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0F5BC7]"
+          className="mt-6 inline-flex items-center gap-2 rounded-xl bg-[#1F3A6D] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#17315D]"
         >
           <RotateCw className="h-3.5 w-3.5" />
           Retry

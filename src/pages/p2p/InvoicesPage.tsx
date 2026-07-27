@@ -15,8 +15,10 @@ import { AppLoading } from "../../components/enterprise";
 import PageHeader from "../../components/PageHeader";
 import StatusBadge from "../../components/StatusBadge";
 import { FilterBar, FilterField, SearchInput, SortableTableHeader } from "../../components/ui";
+import Pagination from "../../components/ui/Pagination";
 import { useListSort } from "../../hooks/useListSort";
 import { useDebounce } from "../../hooks/useDebounce";
+import { useClientPagination } from "../../hooks/usePagination";
 import {
   INVOICE_DEFAULT_SORT,
   invoiceComparators,
@@ -112,6 +114,18 @@ export default function InvoicesPage() {
     INVOICE_COMPARATORS
   );
 
+  const {
+    pageRows,
+    totalRecords,
+    totalPages,
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+  } = useClientPagination(sortedRows, {
+    resetKey: `${debouncedSearch}|${status}|${sort.key}|${sort.direction}`,
+  });
+
   // Summary counts shown in the toolbar
   const submittedCount = sortedRows.filter((r) => r.docstatus === 1).length;
   const draftCount = sortedRows.filter((r) => (r.docstatus ?? 0) === 0).length;
@@ -179,85 +193,96 @@ export default function InvoicesPage() {
             description="Submitted purchase invoices will appear here."
           />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <SortableTableHeader label="Invoice" sortKey="name" sort={sort} onSort={setSort} />
-                  <SortableTableHeader label="Supplier" sortKey="supplier" sort={sort} onSort={setSort} />
-                  <SortableTableHeader label="Posting Date" sortKey="date" sort={sort} onSort={setSort} />
-                  <SortableTableHeader label="Due Date" sortKey="due" sort={sort} onSort={setSort} />
-                  <SortableTableHeader label="Status" sortKey="status" sort={sort} onSort={setSort} />
-                  <th>Age</th>
-                  <SortableTableHeader label="Total" sortKey="total" sort={sort} onSort={setSort} className="text-right" />
-                  <SortableTableHeader label="Outstanding" sortKey="outstanding" sort={sort} onSort={setSort} className="text-right" />
-                </tr>
-              </thead>
-              <tbody>
-                {sortedRows.map((inv) => {
-                  const unpaid =
-                    inv.status !== "Paid" && inv.status !== "Cancelled";
-                  const overdue = unpaid && isOverdue(inv.due_date);
-                  const effectiveStatus = overdue
-                    ? "Overdue"
-                    : inv.status ?? "Draft";
-                  const age = daysOverdue(inv.due_date);
-                  return (
-                    <tr
-                      key={inv.name}
-                      onClick={() =>
-                        navigate(`/p2p/invoices/${encodeURIComponent(inv.name)}`)
-                      }
-                      className="cursor-pointer"
-                    >
-                      <td>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="table-link">
-                            {inv.name}
-                          </span>
-                          {(inv.docstatus ?? 0) === 0 && (
-                            <span
-                              className="rounded-full border border-warning-300 bg-warning-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-warning-700"
-                              title="Draft — submit this invoice to record it in accounting and enable payment"
-                            >
-                              Draft
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="text-neutral-600">
-                        {inv.supplier_name ?? inv.supplier}
-                      </td>
-                      <td className="text-neutral-600">
-                        {formatDate(inv.posting_date)}
-                      </td>
-                      <td
-                        className={
-                          overdue
-                            ? "font-medium text-danger-500"
-                            : "text-neutral-600"
+          <>
+            <div className="overflow-x-auto">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <SortableTableHeader label="Invoice" sortKey="name" sort={sort} onSort={setSort} />
+                    <SortableTableHeader label="Supplier" sortKey="supplier" sort={sort} onSort={setSort} />
+                    <SortableTableHeader label="Posting Date" sortKey="date" sort={sort} onSort={setSort} />
+                    <SortableTableHeader label="Due Date" sortKey="due" sort={sort} onSort={setSort} />
+                    <SortableTableHeader label="Status" sortKey="status" sort={sort} onSort={setSort} />
+                    <th>Age</th>
+                    <SortableTableHeader label="Total" sortKey="total" sort={sort} onSort={setSort} className="text-right" />
+                    <SortableTableHeader label="Outstanding" sortKey="outstanding" sort={sort} onSort={setSort} className="text-right" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {pageRows.map((inv) => {
+                    const unpaid =
+                      inv.status !== "Paid" && inv.status !== "Cancelled";
+                    const overdue = unpaid && isOverdue(inv.due_date);
+                    const effectiveStatus = overdue
+                      ? "Overdue"
+                      : inv.status ?? "Draft";
+                    const age = daysOverdue(inv.due_date);
+                    return (
+                      <tr
+                        key={inv.name}
+                        onClick={() =>
+                          navigate(`/p2p/invoices/${encodeURIComponent(inv.name)}`)
                         }
+                        className="cursor-pointer"
                       >
-                        {formatDate(inv.due_date)}
-                      </td>
-                      <td>
-                        <StatusBadge status={effectiveStatus} />
-                      </td>
-                      <td>
-                        <AgeBadge days={age} paid={!unpaid} />
-                      </td>
-                      <td className="text-right font-medium tabular-nums">
-                        {formatCurrency(inv.grand_total)}
-                      </td>
-                      <td className="text-right tabular-nums text-neutral-700">
-                        {formatCurrency(inv.outstanding_amount ?? 0)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                        <td>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="table-link">
+                              {inv.name}
+                            </span>
+                            {(inv.docstatus ?? 0) === 0 && (
+                              <span
+                                className="rounded-full border border-warning-300 bg-warning-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-warning-700"
+                                title="Draft — submit this invoice to record it in accounting and enable payment"
+                              >
+                                Draft
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="text-neutral-600">
+                          {inv.supplier_name ?? inv.supplier}
+                        </td>
+                        <td className="text-neutral-600">
+                          {formatDate(inv.posting_date)}
+                        </td>
+                        <td
+                          className={
+                            overdue
+                              ? "font-medium text-danger-500"
+                              : "text-neutral-600"
+                          }
+                        >
+                          {formatDate(inv.due_date)}
+                        </td>
+                        <td>
+                          <StatusBadge status={effectiveStatus} />
+                        </td>
+                        <td>
+                          <AgeBadge days={age} paid={!unpaid} />
+                        </td>
+                        <td className="text-right font-medium tabular-nums">
+                          {formatCurrency(inv.grand_total)}
+                        </td>
+                        <td className="text-right tabular-nums text-neutral-700">
+                          {formatCurrency(inv.outstanding_amount ?? 0)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalRecords={totalRecords}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+              recordLabel="invoices"
+            />
+          </>
         )}
       </div>
     </div>

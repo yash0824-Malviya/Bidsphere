@@ -46,7 +46,7 @@ const WORKFLOW_NODES = [
 
 export default function SupplierLoginHeroPanel() {
   return (
-    <section className="supplier-login-hero relative flex min-h-[520px] w-full flex-col overflow-hidden lg:min-h-screen lg:w-[65%]">
+    <section className="supplier-login-hero relative flex min-h-[420px] w-full flex-col overflow-hidden sm:min-h-screen sm:w-1/2 lg:w-[60%] desktop:w-[65%] wide:w-[70%]">
       <div className="supplier-login-hero-bg pointer-events-none absolute inset-0" aria-hidden />
       <div className="login-grid-mesh pointer-events-none absolute inset-0 opacity-30" aria-hidden />
 

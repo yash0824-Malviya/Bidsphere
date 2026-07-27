@@ -5,22 +5,24 @@ import { Loader2 } from "lucide-react";
 import { cn } from "../../lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-semibold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#146CE8]/40 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[12px] text-[14px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:h-[18px] [&_svg]:w-[18px]",
   {
     variants: {
       variant: {
         default:
-          "bg-gradient-to-r from-[#146CE8] to-[#1a7ff0] text-white shadow-lg shadow-[#146CE8]/25 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-[#146CE8]/35 login-btn-glow",
+          "bg-primary text-white shadow-sm hover:bg-[var(--color-primary-hover)] active:bg-[var(--color-primary-active)]",
         outline:
-          "border border-slate-200 bg-white text-[#0F172A] hover:bg-slate-50",
-        ghost: "text-[#146CE8] hover:bg-[#146CE8]/5",
-        link: "text-[#146CE8] underline-offset-4 hover:underline",
+          "border border-[var(--color-border)] bg-white text-[var(--color-text)] hover:bg-neutral-50",
+        ghost: "text-primary hover:bg-[var(--color-primary-light)]",
+        link: "text-primary underline-offset-4 hover:underline",
+        danger:
+          "border border-danger-500 bg-white text-danger-600 hover:bg-danger-50",
       },
       size: {
-        default: "h-11 px-6",
-        sm: "h-9 px-4 text-xs",
-        lg: "h-12 px-8 text-base",
-        icon: "h-10 w-10",
+        default: "h-11 px-5",
+        sm: "h-11 px-5",
+        lg: "h-11 px-5",
+        icon: "h-11 w-11",
       },
     },
     defaultVariants: {
@@ -44,7 +46,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       disabled={disabled || loading}
       {...props}
     >
-      {loading && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />}
+      {loading && <Loader2 className="animate-spin" aria-hidden />}
       {children}
     </button>
   )

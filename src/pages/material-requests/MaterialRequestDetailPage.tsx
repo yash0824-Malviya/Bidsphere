@@ -453,7 +453,7 @@ function TimelineShell({ children }: { children: React.ReactNode }) {
     <div className="card mb-6 p-5">
       <div className="mb-4 flex items-center gap-2">
         <CheckCircle2 className="h-4 w-4 text-primary-600" />
-        <h3 className="text-sm font-bold text-neutral-900">Workflow Progress</h3>
+        <h3 className="text-sm font-bold text-neutral-900">Procurement Status</h3>
       </div>
       {children}
     </div>
@@ -1009,7 +1009,8 @@ export default function MaterialRequestDetailPage() {
         </span>
         <ProcurementTypeBadge type={procurementType} />
         <RequestModeBadge mode={requestMode} />
-        {mr.custom_department ? (
+        {/* Department is never shown in the Department User portal. */}
+        {role !== "department" && mr.custom_department ? (
           <>
             <span className="text-neutral-300">•</span>
             <span>{mr.custom_department}</span>
@@ -1030,7 +1031,9 @@ export default function MaterialRequestDetailPage() {
           { label: "Request Date", value: formatDate(mr.transaction_date) },
           { label: "Required Date", value: formatDate(mr.schedule_date) },
           { label: "Requested By", value: requesterName },
-          { label: "Department", value: mr.custom_department },
+          ...(role === "department"
+            ? []
+            : [{ label: "Department", value: mr.custom_department }]),
           { label: t("procurementType.label"), value: t(
             procurementType === "Direct"
               ? "procurementType.direct"

@@ -9,6 +9,8 @@ export interface ComparisonItem {
   item_name?: string;
   qty: number;
   uom?: string;
+  /** Internal target unit price for variance / savings. */
+  target_price?: number | null;
 }
 
 export interface ComparisonQuote {
@@ -62,6 +64,9 @@ export default function CompareQuotationsModal({
   const positiveTotals = safeQuotes.map((q) => q.total).filter((t) => t > 0);
   const lowestTotal =
     positiveTotals.length > 0 ? Math.min(...positiveTotals) : 0;
+  const hasAnyTarget = safeItems.some(
+    (it) => it.target_price != null && Number(it.target_price) > 0,
+  );
 
   return (
     <div
@@ -148,6 +153,10 @@ export default function CompareQuotationsModal({
               <tbody>
                 {safeItems.map((it) => {
                   const lowest = lowestUnitPriceByItem.get(it.item_code) ?? 0;
+                  const target =
+                    it.target_price != null && Number(it.target_price) > 0
+                      ? Number(it.target_price)
+                      : null;
                   return (
                     <tr key={it.item_code}>
                       <td className="sticky left-0 z-10 border-b border-neutral-100 bg-white px-4 py-3 align-top">
@@ -157,11 +166,24 @@ export default function CompareQuotationsModal({
                         <p className="text-xs text-neutral-500">
                           Qty {it.qty} {it.uom ?? "Nos"}
                         </p>
+                        {target != null ? (
+                          <p className="mt-1 text-xs font-medium text-neutral-600">
+                            Target {formatCurrency(target)}
+                          </p>
+                        ) : null}
                       </td>
                       {safeQuotes.map((q) => {
                         const cell = q.byItem.get(it.item_code);
                         const isLowest =
                           !!cell && cell.unit_price > 0 && cell.unit_price === lowest;
+                        const variance =
+                          cell && cell.unit_price > 0 && target != null
+                            ? cell.unit_price - target
+                            : null;
+                        const savings =
+                          variance != null && variance < 0
+                            ? Math.abs(variance) * (it.qty || 0)
+                            : null;
                         return (
                           <td
                             key={q.sqName || q.supplier}
@@ -177,6 +199,21 @@ export default function CompareQuotationsModal({
                                 <span className="ml-1 text-xs text-neutral-400">
                                   /unit
                                 </span>
+                                {hasAnyTarget && variance != null ? (
+                                  <p
+                                    className={`mt-1 text-[11px] font-medium ${
+                                      variance <= 0
+                                        ? "text-success-700"
+                                        : "text-danger-600"
+                                    }`}
+                                  >
+                                    {variance <= 0 ? "−" : "+"}
+                                    {formatCurrency(Math.abs(variance))} vs target
+                                    {savings != null && savings > 0
+                                      ? ` · save ${formatCurrency(savings)}`
+                                      : ""}
+                                  </p>
+                                ) : null}
                               </>
                             ) : (
                               "—"

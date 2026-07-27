@@ -19,11 +19,16 @@ export interface RFQItemLine {
   description: string;
   qty: number;
   uom: string;
+  /** Target unit price — set at RFQ creation; analyzed later (read-only). */
+  target_price?: number | null;
+  /** Per-line: show Target Price to invited suppliers. */
+  show_to_supplier?: boolean;
+  /** Required-by / schedule date (YYYY-MM-DD). */
+  required_by?: string;
   /** Optional engineering docs from MR (read-only on RFQ). */
   part_name?: string;
   drawing_2d_url?: string;
   attachments?: import("../utils/materialRequestItemFiles").EngineeringAttachment[];
-  /** Primary attachment convenience (maps EngineeringAttachment.file*). */
   attachment_name?: string;
   attachment_url?: string;
   attachment_type?: string;
@@ -178,10 +183,10 @@ export default function RFQItemLineRow({
               {!row.item_group
                 ? "Select group first"
                 : itemsLoading
-                ? "Loading items…"
-                : groupItems.length === 0 && !row.item_code
-                ? "No items available in this group."
-                : "Select item…"}
+                  ? "Loading items…"
+                  : groupItems.length === 0 && !row.item_code
+                    ? "No items available in this group."
+                    : "Select item…"}
             </option>
             {groupItems.map((item) => (
               <option key={item.item_code} value={item.item_code}>
@@ -202,23 +207,15 @@ export default function RFQItemLineRow({
             Loading items…
           </div>
         )}
-        {row.item_group && !itemsLoading && groupItems.length === 0 && (
-          <p className="mt-1 text-[11px] text-warning-600">
-            No items available in this group.
-          </p>
-        )}
         {itemError && (
           <p className="mt-1 text-[11px] text-danger-600">Required</p>
         )}
-      </td>
-      <td className="px-3 py-3 align-top min-w-[200px]">
-        <input
-          value={row.description}
-          onChange={(e) => onChange({ description: e.target.value })}
-          disabled={!row.item_code}
-          placeholder="Auto-filled from item"
-          className={inputCls(false, !row.item_code)}
-        />
+        {row.item_code ? (
+          <p className="mt-1 truncate text-[11px] text-neutral-500" title={row.description}>
+            {row.item_code}
+            {row.description ? ` · ${row.description}` : ""}
+          </p>
+        ) : null}
       </td>
       <td className="px-3 py-3 align-top w-[100px]">
         <input
@@ -230,9 +227,7 @@ export default function RFQItemLineRow({
           className={inputCls(qtyError) + " text-right tabular-nums"}
         />
         {qtyError && (
-          <p className="mt-1 text-right text-[11px] text-danger-600">
-            &gt; 0
-          </p>
+          <p className="mt-1 text-right text-[11px] text-danger-600">&gt; 0</p>
         )}
       </td>
       <td className="px-3 py-3 align-top w-[90px]">
@@ -243,10 +238,53 @@ export default function RFQItemLineRow({
           className={inputCls(false, true) + " text-center"}
         />
       </td>
-      <td className="px-3 py-3 align-top min-w-[140px]">
-        <PartNameCell value={row.part_name} />
+      <td className="px-3 py-3 align-top w-[120px]">
+        <input
+          type="number"
+          min={0}
+          step="any"
+          value={row.target_price ?? ""}
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (raw === "") {
+              onChange({ target_price: null });
+              return;
+            }
+            const n = Number(raw);
+            onChange({
+              target_price: Number.isFinite(n) && n > 0 ? n : null,
+            });
+          }}
+          placeholder="0.00"
+          title="Target Price"
+          className={inputCls(false) + " text-right tabular-nums"}
+        />
+      </td>
+      <td className="px-3 py-3 align-top w-[120px] text-center">
+        <label className="inline-flex cursor-pointer items-center justify-center gap-2">
+          <input
+            type="checkbox"
+            checked={!!row.show_to_supplier}
+            onChange={(e) => onChange({ show_to_supplier: e.target.checked })}
+            className="h-4 w-4 rounded border-neutral-300 text-primary-600 focus:ring-primary-500"
+            aria-label={`Show Target Price to Supplier for ${row.item_code || "line"}`}
+          />
+          <span className="text-xs text-neutral-600">Show</span>
+        </label>
+      </td>
+      <td className="px-3 py-3 align-top w-[140px]">
+        <input
+          type="date"
+          value={row.required_by ?? ""}
+          onChange={(e) => onChange({ required_by: e.target.value })}
+          className={inputCls(false)}
+          aria-label={`Required by for ${row.item_code || "line"}`}
+        />
       </td>
       <td className="px-3 py-3 align-top min-w-[120px]">
+        <PartNameCell value={row.part_name} />
+      </td>
+      <td className="px-3 py-3 align-top min-w-[100px]">
         <Drawing2dCell
           url={row.drawing_2d_url}
           attachments={row.attachments}

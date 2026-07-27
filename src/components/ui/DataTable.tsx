@@ -2,14 +2,14 @@ import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   ChevronsUpDown,
   ChevronUp,
 } from "lucide-react";
 import EmptyState from "../EmptyState";
 import { TableSkeleton } from "../Skeleton";
 import SearchInput from "./SearchInput";
+import Pagination from "./Pagination";
+import { useClientPagination } from "../../hooks/usePagination";
 
 export type Align = "left" | "right" | "center";
 
@@ -37,6 +37,7 @@ interface Props<T> {
   emptyTitle?: string;
   emptyMessage?: string;
   onRowClick?: (row: T) => void;
+  recordLabel?: string;
 }
 
 interface SortState {
@@ -57,14 +58,14 @@ export default function DataTable<T>({
   searchKeys,
   hideSearch,
   searchPlaceholder = "Search…",
-  pageSize = 10,
+  pageSize: pageSizeProp,
   isLoading,
   emptyTitle = "No results",
   emptyMessage = "There is nothing to show here yet.",
   onRowClick,
+  recordLabel = "records",
 }: Props<T>) {
   const [search, setSearch] = useState("");
-  const [page, setPage] = useState(0);
   const [sort, setSort] = useState<SortState | null>(null);
 
   const showSearch = !hideSearch && !!searchKeys?.length;
@@ -76,7 +77,7 @@ export default function DataTable<T>({
       searchKeys.some((k) => {
         const v = row[k];
         return v != null && String(v).toLowerCase().includes(needle);
-      })
+      }),
     );
   }, [data, search, searchKeys, showSearch]);
 
@@ -99,9 +100,19 @@ export default function DataTable<T>({
     return [...filtered].sort((a, b) => cmp(a, b) * dir);
   }, [filtered, sort, columns]);
 
-  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
-  const safePage = Math.min(page, totalPages - 1);
-  const pageRows = sorted.slice(safePage * pageSize, (safePage + 1) * pageSize);
+  const {
+    pageRows,
+    totalRecords,
+    totalPages,
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+  } = useClientPagination(sorted, {
+    syncUrl: false,
+    defaultPageSize: pageSizeProp as 10 | 25 | 50 | 100 | undefined,
+    resetKey: `${search}|${sort?.key ?? ""}|${sort?.dir ?? ""}|${data.length}`,
+  });
 
   function getKey(row: T): string {
     if (typeof rowKey === "function") return rowKey(row);
@@ -125,7 +136,6 @@ export default function DataTable<T>({
             value={search}
             onChange={(v) => {
               setSearch(v);
-              setPage(0);
             }}
             placeholder={searchPlaceholder}
             className="max-w-sm flex-1"
@@ -182,7 +192,7 @@ export default function DataTable<T>({
           </div>
 
           {/* Desktop / tablet table */}
-          <div className="hidden overflow-x-auto md:block">
+          <div className="table-shell-scroll hidden md:block">
             <table className="data-table">
               <thead>
                 <tr>
@@ -202,9 +212,7 @@ export default function DataTable<T>({
                         scope="col"
                         style={col.width ? { width: col.width } : undefined}
                         className={`${ALIGN_CLASSES[align]} ${
-                          col.sortable
-                            ? "cursor-pointer select-none hover:text-neutral-600"
-                            : ""
+                          col.sortable ? "cursor-pointer select-none" : ""
                         } ${col.className ?? ""}`}
                         onClick={() => toggleSort(col)}
                       >
@@ -247,32 +255,16 @@ export default function DataTable<T>({
         </>
       )}
 
-      {sorted.length > pageSize && (
-        <div className="flex items-center justify-between border-t border-neutral-100 px-4 py-2.5 text-xs text-neutral-600">
-          <span>
-            Page {safePage + 1} of {totalPages}
-          </span>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-              disabled={safePage === 0}
-              className="btn-secondary h-7 px-2 disabled:opacity-50"
-            >
-              <ChevronLeft className="h-3 w-3" />
-              Prev
-            </button>
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-              disabled={safePage >= totalPages - 1}
-              className="btn-secondary h-7 px-2 disabled:opacity-50"
-            >
-              Next
-              <ChevronRight className="h-3 w-3" />
-            </button>
-          </div>
-        </div>
+      {!isLoading && totalRecords > 0 && (
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalRecords={totalRecords}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+          recordLabel={recordLabel}
+        />
       )}
     </div>
   );

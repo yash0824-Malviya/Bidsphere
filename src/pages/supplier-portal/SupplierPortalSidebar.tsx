@@ -142,19 +142,29 @@ interface Props {
   supplierName: string;
   unlocked?: boolean;
   statusBadge?: string;
+  className?: string;
+  onNavigate?: () => void;
 }
 
 export default function SupplierPortalSidebar({
   supplierName,
   unlocked = true,
+  className = "",
+  onNavigate,
 }: Props) {
   const { pathname } = useLocation();
   const { t } = useTranslation();
 
   return (
-    <aside className="hidden h-full w-[300px] shrink-0 flex-col overflow-hidden border-r border-neutral-800 bg-sidebar text-sidebar-text lg:flex">
+    <aside
+      className={`flex h-full w-[252px] shrink-0 flex-col overflow-hidden border-r border-neutral-800 bg-sidebar text-sidebar-text desktop:w-[272px] ${className}`}
+    >
       <div className="border-b border-white/5 px-4 py-5">
-        <Link to="/supplier/dashboard" className="flex items-center gap-2.5">
+        <Link
+          to="/supplier/dashboard"
+          onClick={onNavigate}
+          className="flex items-center gap-2.5"
+        >
           <BrandLogo size="xs" markOnly />
           <div className="min-w-0">
             <p className="text-sm font-bold text-white">{APP_SUPPLIER_PORTAL}</p>
@@ -165,7 +175,7 @@ export default function SupplierPortalSidebar({
         </Link>
       </div>
 
-      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
+      <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain px-3 py-4">
         {NAV.map((group) => (
           <SidebarGroup
             key={group.labelKey}
@@ -173,6 +183,7 @@ export default function SupplierPortalSidebar({
             pathname={pathname}
             t={t}
             unlocked={unlocked}
+            onNavigate={onNavigate}
           />
         ))}
       </nav>
@@ -189,11 +200,13 @@ function SidebarGroup({
   pathname,
   t,
   unlocked,
+  onNavigate,
 }: {
   group: NavGroup;
   pathname: string;
   t: TFunction;
   unlocked: boolean;
+  onNavigate?: () => void;
 }) {
   const hasChildren = (group.children?.length ?? 0) > 0;
   const active = groupActive(pathname, group);
@@ -207,7 +220,7 @@ function SidebarGroup({
 
   const label = (
     <>
-      <Icon className="h-4 w-4 shrink-0" />
+      <Icon className="h-5 w-5 shrink-0" />
       <span className="flex-1">{t(group.labelKey, group.labelKey.replace("supplierNav.", ""))}</span>
       {locked && <Lock className="h-3.5 w-3.5 opacity-70" />}
     </>
@@ -218,10 +231,11 @@ function SidebarGroup({
       <Link
         to={locked ? "/supplier/locked" : group.to}
         state={locked ? { title: t(group.labelKey) } : undefined}
-        className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition ${
+        onClick={onNavigate}
+        className={`relative flex h-10 items-center gap-2.5 rounded-xl px-3 text-[13px] font-medium transition ${
           active
-            ? "bg-primary/20 text-white shadow-[inset_3px_0_0_0_#0098EA]"
-            : "text-slate-400 hover:bg-slate-800 hover:text-white"
+            ? "bg-white/[0.10] text-white shadow-sm before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[3px] before:rounded-full before:bg-primary"
+            : "text-sidebar-text hover:bg-white/[0.06] hover:text-white"
         } ${locked ? "opacity-70" : ""}`}
       >
         {label}
@@ -234,8 +248,10 @@ function SidebarGroup({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] font-medium transition ${
-          active ? "bg-primary/15 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"
+        className={`relative flex h-10 w-full items-center gap-2.5 rounded-xl px-3 text-left text-[13px] font-medium transition ${
+          active
+            ? "bg-white/[0.10] text-white shadow-sm before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[3px] before:rounded-full before:bg-primary"
+            : "text-sidebar-text hover:bg-white/[0.06] hover:text-white"
         }`}
       >
         {label}
@@ -246,7 +262,7 @@ function SidebarGroup({
         )}
       </button>
       {open && (
-        <div className="mt-1.5 mr-2 ml-5 border-l border-white/15 pl-3">
+        <div className="mt-1.5 mr-2 ml-5 border-l border-white/10 pl-3">
           <div className="space-y-1">
             {group.children!.map((child) => {
               const childActive = isActive(pathname, child.to);
@@ -256,10 +272,11 @@ function SidebarGroup({
                   key={child.to}
                   to={childLocked ? "/supplier/locked" : child.to}
                   state={childLocked ? { title: t(child.labelKey) } : undefined}
-                  className={`mx-2 flex items-center justify-between px-2.5 py-1.5 text-[12px] font-medium transition-[background-color] duration-150 ease-in-out ${
+                  onClick={onNavigate}
+                  className={`relative mx-1 flex h-8 items-center justify-between px-2 text-[12px] font-medium transition ${
                     childActive
-                      ? "rounded-[10px] bg-primary/25 text-white"
-                      : "rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white"
+                      ? "rounded-[10px] bg-white/[0.10] text-white"
+                      : "rounded-lg text-sidebar-text hover:bg-white/[0.06] hover:text-white"
                   } ${childLocked ? "opacity-70" : ""}`}
                 >
                   <span>{t(child.labelKey)}</span>

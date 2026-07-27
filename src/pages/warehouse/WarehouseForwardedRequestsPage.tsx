@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, Eye, FileSearch, Search } from "lucide-react";
+import { Activity, Eye, FileSearch } from "lucide-react";
 
 import {
   getPendingMaterialRequests,
@@ -10,15 +10,10 @@ import {
 } from "../../services/warehouseService";
 import EmptyState from "../../components/EmptyState";
 import ErrorState from "../../components/ErrorState";
+import StatusBadge from "../../components/StatusBadge";
 import { TableSkeleton } from "../../components/Skeleton";
+import { SearchInput } from "../../components/ui";
 import { formatDate } from "../../utils/format";
-
-const PRIORITY_STYLES: Record<string, string> = {
-  Urgent: "bg-rose-50 text-rose-700 border-rose-200",
-  High: "bg-amber-50 text-amber-700 border-amber-200",
-  Medium: "bg-blue-50 text-blue-700 border-blue-200",
-  Low: "bg-slate-100 text-slate-600 border-slate-200",
-};
 
 /**
  * Warehouse → Material Requests → Procurement Required.
@@ -91,7 +86,7 @@ export default function WarehouseForwardedRequestsPage() {
         </div>
         <Link
           to="/warehouse/material-requests/history"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-primary-600 no-underline hover:bg-slate-50"
+          className="btn-secondary no-underline"
         >
           <Activity className="h-4 w-4" />
           Forwarded History
@@ -99,14 +94,11 @@ export default function WarehouseForwardedRequestsPage() {
       </div>
 
       <div className="flex flex-col gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm md:flex-row md:items-center">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search by MR number or department…"
+        <div className="flex-1">
+          <SearchInput
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-lg border border-slate-200 py-2 pl-10 pr-4 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            onChange={setSearch}
+            placeholder="Search by MR number or department…"
           />
         </div>
       </div>
@@ -168,48 +160,59 @@ function ProcurementRequiredTable({
         </div>
       ) : (
         <div className="flex-1 overflow-x-auto">
-          <table className="w-full border-collapse text-left">
+          <table className="data-table">
             <thead>
-              <tr className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                <th className="px-6 py-4">MR Number</th>
-                <th className="px-6 py-4">Department</th>
-                <th className="px-6 py-4">Required Date</th>
-                <th className="px-6 py-4">Priority</th>
-                <th className="px-6 py-4 text-right">Missing Items</th>
-                <th className="px-6 py-4 text-right">Required Qty</th>
-                <th className="px-6 py-4 text-right">Action</th>
+              <tr>
+                <th>MR Number</th>
+                <th>Department</th>
+                <th>Required Date</th>
+                <th>Priority</th>
+                <th className="text-right">Missing Items</th>
+                <th className="text-right">Required Qty</th>
+                <th className="text-right">Action</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 text-sm">
+            <tbody>
               {rows.map((r) => (
-                <tr key={r.name} className="transition-colors hover:bg-slate-50/75">
-                  <td className="px-6 py-4">
+                <tr key={r.name}>
+                  <td>
                     <button
                       type="button"
                       onClick={() => onOpen(r.name)}
-                      className="font-semibold text-primary-600 hover:underline"
+                      className="table-link"
                     >
                       {r.name}
                     </button>
                   </td>
-                  <td className="px-6 py-4 text-slate-600">{r.department}</td>
-                  <td className="px-6 py-4 text-slate-500">
+                  <td className="text-slate-600">{r.department}</td>
+                  <td className="text-slate-500">
                     {r.requiredDate ? formatDate(r.requiredDate) : "—"}
                   </td>
-                  <td className="px-6 py-4">
-                    <PriorityPill priority={r.priority} />
+                  <td>
+                    <StatusBadge
+                      status={r.priority}
+                      tone={
+                        r.priority === "Urgent"
+                          ? "danger"
+                          : r.priority === "High"
+                            ? "warning"
+                            : r.priority === "Medium"
+                              ? "info"
+                              : "neutral"
+                      }
+                    />
                   </td>
-                  <td className="px-6 py-4 text-right tabular-nums text-slate-700">
+                  <td className="text-right tabular-nums text-slate-700">
                     {r.missingItems}
                   </td>
-                  <td className="px-6 py-4 text-right font-semibold tabular-nums text-orange-700">
+                  <td className="text-right font-semibold tabular-nums text-orange-700">
                     {r.requiredQty} {r.uom}
                   </td>
-                  <td className="px-6 py-4 text-right">
+                  <td className="text-right">
                     <button
                       type="button"
                       onClick={() => onOpen(r.name)}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-primary-700 shadow-sm transition-colors hover:bg-slate-50"
+                      className="btn-secondary"
                     >
                       <Eye className="h-4 w-4" />
                       View Details
@@ -222,17 +225,5 @@ function ProcurementRequiredTable({
         </div>
       )}
     </div>
-  );
-}
-
-function PriorityPill({ priority }: { priority: string }) {
-  return (
-    <span
-      className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-        PRIORITY_STYLES[priority] ?? PRIORITY_STYLES.Low
-      }`}
-    >
-      {priority}
-    </span>
   );
 }

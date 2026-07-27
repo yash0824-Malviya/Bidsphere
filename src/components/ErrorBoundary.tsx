@@ -60,10 +60,10 @@ export default class ErrorBoundary extends Component<Props, State> {
       <div className="flex min-h-screen w-full items-center justify-center bg-white p-4">
         <div className="enterprise-fade-in w-full max-w-lg rounded-2xl border border-neutral-100 bg-white p-8 shadow-xl">
           <div className="mb-6 flex flex-col items-center text-center">
-            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl border border-[#146CE8]/15 bg-white shadow-sm">
+            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl border border-[#1F3A6D]/15 bg-white shadow-sm">
               <BrandLogo size="xs" className="max-h-8 max-w-[2rem]" />
             </div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#146CE8]">
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#1F3A6D]">
               {APP_NAME}
             </p>
           </div>
@@ -102,7 +102,7 @@ export default class ErrorBoundary extends Component<Props, State> {
             <button
               type="button"
               onClick={this.handleReload}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#146CE8] px-3.5 py-2 text-sm font-semibold text-white hover:bg-[#0F5BC7]"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1F3A6D] px-3.5 py-2 text-sm font-semibold text-white hover:bg-[#17315D]"
             >
               <RefreshCw className="h-3.5 w-3.5" />
               Retry

@@ -10,6 +10,8 @@ import {
 } from "../../api/materialIssueReceipt";
 import PageHeader from "../../components/PageHeader";
 import StatusBadge from "../../components/StatusBadge";
+import Pagination from "../../components/ui/Pagination";
+import { useClientPagination } from "../../hooks/usePagination";
 import { formatDate } from "../../utils/format";
 
 type Mode = "all" | "pending-acceptance" | "awaiting-warehouse-sign";
@@ -37,6 +39,15 @@ export default function WarehouseIssueReceiptsPage({
   });
 
   const rows = listQuery.data ?? [];
+  const {
+    pageRows,
+    totalRecords,
+    totalPages,
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+  } = useClientPagination(rows, { resetKey: mode });
   const title =
     mode === "pending-acceptance"
       ? "Pending Department Acceptance"
@@ -106,7 +117,7 @@ export default function WarehouseIssueReceiptsPage({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {rows.map((r) => (
+                {pageRows.map((r) => (
                   <tr key={r.id} className="hover:bg-slate-50/80">
                     <td className="px-4 py-3 font-mono font-semibold">
                       {r.issue_number}
@@ -135,6 +146,15 @@ export default function WarehouseIssueReceiptsPage({
                 ))}
               </tbody>
             </table>
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalRecords={totalRecords}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+              recordLabel="receipts"
+            />
           </div>
         )}
       </div>

@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 
 import type { RFQCreationMeta } from "../../api/rfqCreationMeta";
 import { formatRequiredDocumentsList } from "../../api/rfqCreationMeta";
+import { formatRfqOwnerLabel } from "../../config/roles";
 import type { RFQTemplateWorkflowRules } from "../../types/erpnext";
 import { formatCurrency } from "../../utils/format";
 
@@ -108,7 +109,7 @@ export default function RFQCreationSummaryCard({
             <p className="mt-1.5 text-xs text-neutral-600">
               Created by{" "}
               <span className="font-semibold text-neutral-800">
-                {meta.created_by || "Procurement Manager"}
+                {formatRfqOwnerLabel(meta.created_by)}
               </span>
             </p>
           )}

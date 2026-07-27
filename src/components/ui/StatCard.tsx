@@ -1,7 +1,7 @@
-import { Link } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
 import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
-import { Skeleton } from "../Skeleton";
+
+import DashboardKpiCard from "../dashboard/DashboardKpiCard";
 
 export type StatTone = "primary" | "accent" | "warning" | "danger" | "neutral";
 
@@ -32,7 +32,7 @@ const TONE_CLASSES: Record<StatTone, string> = {
 };
 
 export default function StatCard({
-  icon: Icon,
+  icon,
   label,
   value,
   sub,
@@ -42,59 +42,41 @@ export default function StatCard({
   to,
   onClick,
 }: Props) {
-  const Wrapper: React.ElementType = to ? Link : onClick ? "button" : "div";
-  const wrapperProps: Record<string, unknown> = to
-    ? { to }
-    : onClick
-    ? { type: "button", onClick }
-    : {};
-
-  const isInteractive = !!to || !!onClick;
-  const hoverClasses = isInteractive
-    ? "transition-shadow hover:shadow-card-hover cursor-pointer text-left"
-    : "";
+  const subtitle = trend
+    ? formatTrendSubtitle(trend, sub)
+    : sub;
 
   return (
-    <Wrapper
-      {...wrapperProps}
-      className={`card block p-5 ${hoverClasses}`}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.05em] text-neutral-400">
-            {label}
-          </p>
-          {loading ? (
-            <Skeleton className="mt-2 h-7 w-24" />
-          ) : (
-            <p className="mt-1 text-xl font-semibold tabular-nums leading-tight text-neutral-900 sm:text-2xl">
-              {value}
-            </p>
-          )}
-          {sub && !loading && (
-            <p className="mt-0.5 truncate text-xs text-neutral-500">{sub}</p>
-          )}
-          {trend && !loading && <TrendChip trend={trend} />}
-        </div>
-        <div
-          className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl ${TONE_CLASSES[tone]}`}
-        >
-          <Icon className="h-5 w-5" />
-        </div>
-      </div>
-    </Wrapper>
+    <DashboardKpiCard
+      icon={icon}
+      label={label}
+      value={value}
+      subtitle={subtitle}
+      iconClassName={TONE_CLASSES[tone]}
+      loading={loading}
+      to={to}
+      onClick={onClick}
+    />
   );
 }
 
-function TrendChip({ trend }: { trend: Trend }) {
+function formatTrendSubtitle(trend: Trend, sub?: string): string {
+  const isUp = trend.value > 0;
+  const formatted = `${isUp ? "+" : ""}${trend.value.toFixed(1)}%`;
+  const trendBit = trend.label ? `${formatted} ${trend.label}` : formatted;
+  return sub ? `${sub} · ${trendBit}` : trendBit;
+}
+
+/** @deprecated — trend UI is folded into DashboardKpiCard subtitle. */
+export function TrendChip({ trend }: { trend: Trend }) {
   const isUp = trend.value > 0;
   const isFlat = trend.value === 0;
   const isPositive = trend.inverted ? !isUp : isUp;
   const tone = isFlat
     ? "text-neutral-500"
     : isPositive
-    ? "text-success-500"
-    : "text-danger-500";
+      ? "text-success-500"
+      : "text-danger-500";
   const Icon = isFlat ? Minus : isUp ? ArrowUpRight : ArrowDownRight;
   const formatted = `${isUp ? "+" : ""}${trend.value.toFixed(1)}%`;
 

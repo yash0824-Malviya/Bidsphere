@@ -32,7 +32,7 @@ function ChartCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="dashboard-panel min-h-[320px]">
+    <div className="dashboard-panel min-h-[280px]">
       <div className="dashboard-panel-header flex-col items-start gap-0.5 border-b border-neutral-100">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
           {title}
@@ -41,7 +41,7 @@ function ChartCard({
           <p className="text-xs text-neutral-400">{subtitle}</p>
         ) : null}
       </div>
-      <div className="dashboard-panel-body min-h-[240px] flex-1 p-4">{children}</div>
+      <div className="dashboard-panel-body chart-host flex-1 p-3">{children}</div>
     </div>
   );
 }
@@ -50,8 +50,8 @@ function AdminSpendCharts({ monthlySpend, loading }: Props) {
   if (loading) {
     return (
       <div className="dashboard-grid-2">
-        <Skeleton className="min-h-[320px] rounded-xl" />
-        <Skeleton className="min-h-[320px] rounded-xl" />
+        <Skeleton className="min-h-[280px] rounded-card" />
+        <Skeleton className="min-h-[280px] rounded-card" />
       </div>
     );
   }
@@ -111,9 +111,9 @@ function AdminSpendCharts({ monthlySpend, loading }: Props) {
                 <Line
                   type="monotone"
                   dataKey="spend"
-                  stroke="#0098EA"
+                  stroke="#1F3A6D"
                   strokeWidth={2}
-                  dot={{ r: 2, fill: "#0098EA" }}
+                  dot={{ r: 2, fill: "#1F3A6D" }}
                 />
               </LineChart>
             </ResponsiveContainer>
@@ -121,7 +121,7 @@ function AdminSpendCharts({ monthlySpend, loading }: Props) {
         </div>
       </ChartCard>
 
-      <Suspense fallback={<Skeleton className="min-h-[320px] rounded-xl" />}>
+      <Suspense fallback={<Skeleton className="min-h-[280px] rounded-card" />}>
         <CategorySpendBreakdown />
       </Suspense>
     </div>

@@ -992,7 +992,7 @@ export default function GRNDetailPage() {
           </section>
 
           {/* Procurement workflow — replaces GRN submitted banner */}
-          <ProcurementTimeline steps={workflow.steps} title="Procurement Workflow" />
+          <ProcurementTimeline steps={workflow.steps} title="Procurement Status" />
 
           {/* Finance processing */}
           {(isSubmitted || hasVoucher || isDraft) && (

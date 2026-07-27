@@ -101,12 +101,13 @@ const FAQ_ITEMS = [
     question: "How do I create a new RFQ?",
     answer: (
       <>
-        Go to{" "}
-        <Link to="/sourcing/rfq/new" className="text-primary hover:underline">
-          Sourcing → New RFQ
+        Open{" "}
+        <Link to="/sourcing/rfq" className="text-primary hover:underline">
+          Sourcing → All RFQs
         </Link>
-        , add items and quantities, select suppliers, and submit. Suppliers can
-        respond via the Supplier Portal or you can enter quotations manually.
+        {" "}and use the Create New RFQ button. Add items and quantities, select
+        suppliers, and submit. Suppliers can respond via the Supplier Portal or
+        you can enter quotations manually.
       </>
     ),
   },

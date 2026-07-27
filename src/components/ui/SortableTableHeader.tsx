@@ -25,17 +25,17 @@ export default function SortableTableHeader({
       <button
         type="button"
         onClick={() => onSort(toggleSortDirection(sort, sortKey))}
-        className="inline-flex items-center gap-1 text-left font-medium uppercase tracking-wider text-neutral-400 transition-colors hover:text-neutral-700"
+        className="inline-flex items-center gap-1 text-left text-[13px] font-semibold uppercase tracking-[0.06em] text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text)]"
       >
         <span>{label}</span>
         {active ? (
           sort.direction === "desc" ? (
-            <ChevronDown className="h-3.5 w-3.5 text-primary" aria-hidden />
+            <ChevronDown className="h-4 w-4 text-primary" aria-hidden />
           ) : (
-            <ChevronUp className="h-3.5 w-3.5 text-primary" aria-hidden />
+            <ChevronUp className="h-4 w-4 text-primary" aria-hidden />
           )
         ) : (
-          <ChevronsUpDown className="h-3.5 w-3.5 opacity-40" aria-hidden />
+          <ChevronsUpDown className="h-4 w-4 opacity-40" aria-hidden />
         )}
       </button>
     </th>

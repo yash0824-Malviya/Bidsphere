@@ -125,10 +125,12 @@ export default function MaterialIssueReceiptView({
               {receipt.stock_entry || "—"}
             </dd>
           </div>
-          <div>
-            <dt className="text-xs text-neutral-500">Department</dt>
-            <dd className="font-medium">{receipt.department || "—"}</dd>
-          </div>
+          {audience !== "department" ? (
+            <div>
+              <dt className="text-xs text-neutral-500">Department</dt>
+              <dd className="font-medium">{receipt.department || "—"}</dd>
+            </div>
+          ) : null}
           <div>
             <dt className="text-xs text-neutral-500">Company</dt>
             <dd className="font-medium">{receipt.company || "—"}</dd>

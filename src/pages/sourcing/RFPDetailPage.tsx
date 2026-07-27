@@ -166,10 +166,7 @@ export default function RFPDetailPage() {
         description={rfp.title}
         actions={
           <div className="flex flex-wrap gap-2">
-            <Link
-              to="/sourcing/rfp"
-              className="inline-flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 hover:bg-neutral-50"
-            >
+            <Link to="/sourcing/rfp" className="btn-secondary">
               <ArrowLeft className="h-4 w-4" />
               Back
             </Link>
@@ -183,7 +180,7 @@ export default function RFPDetailPage() {
                       deleteMut.mutate();
                     }
                   }}
-                  className="inline-flex items-center gap-2 rounded-lg border border-danger-200 bg-white px-3 py-2 text-sm text-danger-700 hover:bg-danger-50"
+                  className="btn-danger"
                 >
                   <Trash2 className="h-4 w-4" />
                   Delete
@@ -200,7 +197,7 @@ export default function RFPDetailPage() {
                       }
                       publishMut.mutate();
                     }}
-                    className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50"
+                    className="btn-primary"
                   >
                     {publishMut.isPending ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -226,7 +223,7 @@ export default function RFPDetailPage() {
                       closeMut.mutate();
                     }
                   }}
-                  className="inline-flex items-center gap-2 rounded-lg border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-800 hover:bg-neutral-50 disabled:opacity-50"
+                  className="btn-secondary"
                 >
                   {closeMut.isPending ? (
                     <Loader2 className="h-4 w-4 animate-spin" />

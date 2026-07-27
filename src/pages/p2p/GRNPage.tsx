@@ -338,7 +338,7 @@ export default function GRNPage() {
                                     }
                                   }
                                 }}
-                                className="rounded bg-primary-600 px-2 py-0.5 text-xs font-semibold text-white hover:bg-primary-700 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                                className="btn-primary"
                               >
                                 Submit
                               </button>

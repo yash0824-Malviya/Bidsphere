@@ -8,7 +8,6 @@ import {
   countDepartmentPendingAcceptance,
   departmentReceiptStatusLabel,
   isDepartmentIssuedSyncInProgress,
-  listDepartmentAcceptedItems,
   listDepartmentAcceptedItemsLocal,
   listDepartmentIssueReceipts,
   listDepartmentIssueReceiptsLocal,
@@ -21,11 +20,13 @@ import {
 } from "../../api/departmentIssuedItems";
 import PageHeader from "../../components/PageHeader";
 import StatusBadge from "../../components/StatusBadge";
+import Pagination from "../../components/ui/Pagination";
+import { useClientPagination } from "../../hooks/usePagination";
 import { formatDate } from "../../utils/format";
 import { downloadMaterialIssueReceiptPdf } from "../../utils/pdf/materialIssueReceiptPdf";
 import type { MaterialIssueReceipt } from "../../types/materialIssueReceipt";
 
-type Mode = "pending" | "accepted" | "all";
+type Mode = "pending" | "all";
 
 const CACHE_STALE_MS = 45_000;
 
@@ -43,6 +44,8 @@ function totals(r: MaterialIssueReceipt) {
 /**
  * Department → Issued Items module lists.
  * Cache-first: render local receipts immediately, sync ERP in background.
+ *
+ * Workflow: Pending Acceptance → accept → Issue Receipts (historical record).
  */
 export default function DepartmentIssuedItemsPage({
   mode = "pending",
@@ -52,7 +55,6 @@ export default function DepartmentIssuedItemsPage({
   const queryClient = useQueryClient();
   const pageStart = useMemo(() => performance.now(), []);
   const [mrFilter, setMrFilter] = useState("");
-  const [deptFilter, setDeptFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [statusFilter, setStatusFilter] = useState<
@@ -62,23 +64,16 @@ export default function DepartmentIssuedItemsPage({
 
   const filter: DepartmentIssuedFilter = useMemo(
     () => ({
-      status:
-        mode === "all"
-          ? statusFilter
-          : mode === "pending"
-            ? "pending"
-            : "accepted",
+      status: mode === "all" ? statusFilter : "pending",
       mrName: mrFilter,
-      department: deptFilter,
       dateFrom,
       dateTo,
     }),
-    [mode, statusFilter, mrFilter, deptFilter, dateFrom, dateTo],
+    [mode, statusFilter, mrFilter, dateFrom, dateTo],
   );
 
   const localSeed = useMemo(() => {
     if (mode === "pending") return listDepartmentPendingAcceptanceLocal();
-    if (mode === "accepted") return listDepartmentAcceptedItemsLocal();
     return listDepartmentIssueReceiptsLocal(filter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
@@ -90,9 +85,7 @@ export default function DepartmentIssuedItemsPage({
       const rows =
         mode === "pending"
           ? await listDepartmentPendingAcceptance()
-          : mode === "accepted"
-            ? await listDepartmentAcceptedItems()
-            : await listDepartmentIssueReceipts(filter);
+          : await listDepartmentIssueReceipts(filter);
       // eslint-disable-next-line no-console
       console.log("[DeptIssued Perf] page listQuery", {
         mode,
@@ -155,20 +148,24 @@ export default function DepartmentIssuedItemsPage({
   }, [queryClient, pageStart]);
 
   const rows = listQuery.data ?? localSeed;
+  const {
+    pageRows,
+    totalRecords,
+    totalPages,
+    currentPage,
+    pageSize,
+    setPage,
+    setPageSize,
+  } = useClientPagination(rows, {
+    resetKey: `${mode}|${statusFilter}|${mrFilter}|${dateFrom}|${dateTo}`,
+  });
   const showInitialSpinner =
     listQuery.isLoading && rows.length === 0 && !listQuery.isFetching;
-  const title =
-    mode === "pending"
-      ? "Pending Acceptance"
-      : mode === "accepted"
-        ? "Accepted Items"
-        : "Issue Receipts";
+  const title = mode === "pending" ? "Pending Acceptance" : "Issue Receipts";
   const description =
     mode === "pending"
       ? "Material Issue Receipts waiting for your acceptance and digital signature."
-      : mode === "accepted"
-        ? "Receipts you have digitally accepted."
-        : "Complete Material Issue Receipt history for your department.";
+      : "Official historical record of Material Issue Receipts for your department.";
 
   return (
     <div className="space-y-5">
@@ -216,16 +213,6 @@ export default function DepartmentIssuedItemsPage({
           Pending Acceptance
         </Link>
         <Link
-          to="/department/issued-items/accepted-items"
-          className={`rounded-lg border px-3 py-1.5 no-underline ${
-            mode === "accepted"
-              ? "border-primary-200 bg-primary-50 text-primary-800"
-              : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-          }`}
-        >
-          Accepted Items
-        </Link>
-        <Link
           to="/department/issued-items/issue-receipts"
           className={`rounded-lg border px-3 py-1.5 no-underline ${
             mode === "all"
@@ -260,15 +247,6 @@ export default function DepartmentIssuedItemsPage({
               value={mrFilter}
               onChange={(e) => setMrFilter(e.target.value)}
               placeholder="MAT-MR-…"
-            />
-          </label>
-          <label className="text-xs font-semibold text-slate-600">
-            Department
-            <input
-              className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-sm"
-              value={deptFilter}
-              onChange={(e) => setDeptFilter(e.target.value)}
-              placeholder="Department"
             />
           </label>
           <label className="text-xs font-semibold text-slate-600">
@@ -309,10 +287,15 @@ export default function DepartmentIssuedItemsPage({
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Background sync in progress…
               </span>
+            ) : mode === "pending" ? (
+              <>
+                No receipts waiting for acceptance. After Warehouse issues
+                material, records appear here automatically.
+              </>
             ) : (
               <>
-                No receipts in this view yet. After Warehouse issues material,
-                records appear here automatically.
+                No issue receipts yet. Accepted materials are recorded here as
+                the official history.
               </>
             )}
           </div>
@@ -323,27 +306,17 @@ export default function DepartmentIssuedItemsPage({
                 <tr>
                   <th className="px-4 py-3">Receipt No.</th>
                   <th className="px-4 py-3">Material Request</th>
-                  <th className="px-4 py-3">Department</th>
                   <th className="px-4 py-3">Warehouse</th>
-                  {mode === "accepted" ? (
-                    <>
-                      <th className="px-4 py-3">Accepted Date</th>
-                      <th className="px-4 py-3">Accepted By</th>
-                    </>
-                  ) : (
-                    <>
-                      <th className="px-4 py-3">Issue Date</th>
-                      <th className="px-4 py-3">Receiver</th>
-                      <th className="px-4 py-3 text-right">Requested</th>
-                      <th className="px-4 py-3 text-right">Issued</th>
-                    </>
-                  )}
+                  <th className="px-4 py-3">Issue Date</th>
+                  <th className="px-4 py-3">Receiver</th>
+                  <th className="px-4 py-3 text-right">Requested</th>
+                  <th className="px-4 py-3 text-right">Issued</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {rows.map((r) => {
+                {pageRows.map((r) => {
                   const qty = totals(r);
                   const pending =
                     r.status === "Pending Department Acceptance" ||
@@ -354,33 +327,17 @@ export default function DepartmentIssuedItemsPage({
                         {r.issue_number}
                       </td>
                       <td className="px-4 py-3 font-mono">{r.mr_name}</td>
-                      <td className="px-4 py-3">{r.department || "—"}</td>
                       <td className="px-4 py-3">{r.warehouse || "—"}</td>
-                      {mode === "accepted" ? (
-                        <>
-                          <td className="px-4 py-3">
-                            {formatDate(
-                              r.confirmed_at || r.department_signed_at || "",
-                            )}
-                          </td>
-                          <td className="px-4 py-3">
-                            {r.department_signature?.signer_name || "—"}
-                          </td>
-                        </>
-                      ) : (
-                        <>
-                          <td className="px-4 py-3">
-                            {formatDate(r.issue_date)}
-                          </td>
-                          <td className="px-4 py-3">{r.received_by || "—"}</td>
-                          <td className="px-4 py-3 text-right tabular-nums">
-                            {qty.requested}
-                          </td>
-                          <td className="px-4 py-3 text-right tabular-nums font-medium">
-                            {qty.issued}
-                          </td>
-                        </>
-                      )}
+                      <td className="px-4 py-3">
+                        {formatDate(r.issue_date)}
+                      </td>
+                      <td className="px-4 py-3">{r.received_by || "—"}</td>
+                      <td className="px-4 py-3 text-right tabular-nums">
+                        {qty.requested}
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums font-medium">
+                        {qty.issued}
+                      </td>
                       <td className="px-4 py-3">
                         <StatusBadge
                           status={
@@ -392,8 +349,7 @@ export default function DepartmentIssuedItemsPage({
                       </td>
                       <td className="px-4 py-3 text-right">
                         <div className="flex flex-wrap justify-end gap-2">
-                          {(mode === "accepted" || mode === "all") &&
-                          r.status === "Confirmed" ? (
+                          {mode === "all" && r.status === "Confirmed" ? (
                             <button
                               type="button"
                               className="inline-flex items-center gap-1 text-sm font-medium text-slate-700 hover:underline"
@@ -418,6 +374,15 @@ export default function DepartmentIssuedItemsPage({
                 })}
               </tbody>
             </table>
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalRecords={totalRecords}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+              recordLabel="receipts"
+            />
           </div>
         )}
       </div>

@@ -1,16 +1,21 @@
-import { useMemo } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
   ClipboardList,
   Clock,
+  Copy,
+  FileText,
+  Link2,
   Loader2,
   PackageCheck,
+  Pencil,
   Plus,
   Split,
   Truck,
 } from "lucide-react";
+import toast from "react-hot-toast";
 
 import {
   getMaterialRequestMode,
@@ -24,12 +29,16 @@ import type {
   MaterialRequestProcurementType,
   MaterialRequestWorkflowStatus,
 } from "../../types/materialRequestWorkflow";
+import DashboardKpiCard, {
+  DashboardKpiGrid,
+} from "../../components/dashboard/DashboardKpiCard";
 import PageHeader from "../../components/PageHeader";
 import PaginationBar from "../../components/PaginationBar";
 import StatusBadge from "../../components/StatusBadge";
 import ProcurementTypeBadge from "../../components/ProcurementTypeBadge";
 import RequestModeBadge from "../../components/RequestModeBadge";
 import ExportButton from "../../components/export/ExportButton";
+import { SearchInput, TableRowActions } from "../../components/ui";
 import type { ExportColumn } from "../../utils/export";
 import { usePagination } from "../../hooks/usePagination";
 import { useAuthStore } from "../../store/authStore";
@@ -51,6 +60,7 @@ const FULFILLMENT_FILTERS: Record<string, RequestFulfillmentStatus[]> = {
 
 export default function MaterialRequestsListPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const statusFilter = params.get(
     "status",
@@ -63,6 +73,7 @@ export default function MaterialRequestsListPage() {
     modeParam === "Existing" || modeParam === "New" ? modeParam : null;
   const user = useAuthStore((s) => s.user);
   const canCreate = canCreateMaterialRequest(user?.role);
+  const [search, setSearch] = useState("");
 
   const setTypeFilter = (next: MaterialRequestProcurementType | null) => {
     const nextParams = new URLSearchParams(params);
@@ -133,6 +144,23 @@ export default function MaterialRequestsListPage() {
 
   const rows = useMemo(() => {
     let base = data;
+    const q = search.trim().toLowerCase();
+
+    if (q) {
+      base = base.filter((m) => {
+        const haystack = [
+          m.name,
+          m.custom_priority,
+          getMaterialRequestWorkflowStatus(m),
+          getMaterialRequestProcurementType(m),
+          getMaterialRequestMode(m),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(q);
+      });
+    }
 
     if (typeFilter) {
       base = base.filter(
@@ -187,14 +215,14 @@ export default function MaterialRequestsListPage() {
 
       return workflow === statusFilter || status === statusFilter;
     });
-  }, [data, statusFilter, fParam, typeFilter, modeFilter]);
+  }, [data, statusFilter, fParam, typeFilter, modeFilter, search]);
 
   // This queue is built from a computed workflow-status roll-up (not a raw
   // ERPNext column), so the underlying fetch stays a single bulk query —
   // pagination is applied client-side, over the already-filtered rows, purely
   // to cap how many are rendered per page.
   const { page, pageSize, setPage, setPageSize } = usePagination({
-    resetKey: `${statusFilter ?? ""}|${fParam ?? ""}|${typeFilter ?? ""}|${modeFilter ?? ""}`,
+    resetKey: `${statusFilter ?? ""}|${fParam ?? ""}|${typeFilter ?? ""}|${modeFilter ?? ""}|${search}`,
   });
   const totalRecords = rows.length;
   const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
@@ -232,11 +260,6 @@ export default function MaterialRequestsListPage() {
         accessor: (r) => r.schedule_date,
       },
       {
-        id: "department",
-        label: "Department",
-        accessor: (r) => r.custom_department,
-      },
-      {
         id: "priority",
         label: "Priority",
         type: "status",
@@ -255,8 +278,8 @@ export default function MaterialRequestsListPage() {
   return (
     <div>
       <PageHeader
-        title="My Requests"
-        description="Request items and track their fulfillment."
+        title="Request History"
+        description="Search, filter, and manage all of your Material Requests in one place."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <ExportButton
@@ -266,10 +289,7 @@ export default function MaterialRequestsListPage() {
               rows={rows}
             />
             {canCreate ? (
-              <Link
-                to="/material-requests/new"
-                className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white no-underline"
-              >
+              <Link to="/material-requests/new" className="btn-primary no-underline">
                 <Plus className="h-4 w-4" />
                 New Request
               </Link>
@@ -278,102 +298,111 @@ export default function MaterialRequestsListPage() {
         }
       />
 
-      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        <SummaryCard
+      <DashboardKpiGrid columns={5} className="mb-5">
+        <DashboardKpiCard
           to="/material-requests/list"
-          active={!fParam}
           icon={ClipboardList}
           label="Total Requests"
           value={summary.total}
-          tone="neutral"
+          iconClassName="bg-neutral-100 text-neutral-500"
+          className={!fParam ? "ring-1 ring-primary-200 border-primary-400" : ""}
         />
-        <SummaryCard
+        <DashboardKpiCard
           to="/material-requests/list?f=pending"
-          active={fParam === "pending"}
           icon={Clock}
           label="Pending Review"
           value={summary.pending}
-          tone="neutral"
+          iconClassName="bg-amber-50 text-amber-600"
+          className={fParam === "pending" ? "ring-1 ring-primary-200 border-primary-400" : ""}
         />
-        <SummaryCard
+        <DashboardKpiCard
           to="/material-requests/list?f=partial"
-          active={fParam === "partial"}
           icon={Split}
           label="Partially Fulfilled"
           value={summary.partial}
-          tone="orange"
+          iconClassName="bg-orange-50 text-orange-600"
+          className={fParam === "partial" ? "ring-1 ring-primary-200 border-primary-400" : ""}
         />
-        <SummaryCard
+        <DashboardKpiCard
           to="/material-requests/list?f=issued"
-          active={fParam === "issued"}
           icon={PackageCheck}
           label="Fully Issued"
           value={summary.issued}
-          tone="emerald"
+          iconClassName="bg-emerald-50 text-emerald-600"
+          className={fParam === "issued" ? "ring-1 ring-primary-200 border-primary-400" : ""}
         />
-        <SummaryCard
+        <DashboardKpiCard
           to="/material-requests/list?f=procurement"
-          active={fParam === "procurement"}
           icon={Truck}
           label="Sent to Procurement"
           value={summary.procurement}
-          tone="blue"
+          iconClassName="bg-[var(--color-primary-light)] text-[var(--color-primary)]"
+          className={fParam === "procurement" ? "ring-1 ring-primary-200 border-primary-400" : ""}
         />
-      </div>
+      </DashboardKpiGrid>
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
-          {t("procurementType.filterLabel")}
-        </span>
-        {([null, "Direct", "Indirect"] as const).map((opt) => {
-          const active = typeFilter === opt;
-          const label =
-            opt === null
-              ? t("procurementType.all")
-              : opt === "Direct"
-                ? t("procurementType.direct")
-                : t("procurementType.indirect");
-          return (
-            <button
-              key={opt ?? "all"}
-              type="button"
-              onClick={() => setTypeFilter(opt)}
-              className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                active
-                  ? "bg-primary-600 text-white"
-                  : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
-              }`}
-            >
-              {label}
-            </button>
-          );
-        })}
-        <span className="ml-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
-          {t("requestMode.filterLabel")}
-        </span>
-        {([null, "Existing", "New"] as const).map((opt) => {
-          const active = modeFilter === opt;
-          const label =
-            opt === null
-              ? t("requestMode.all")
-              : opt === "Existing"
-                ? t("requestMode.existing")
-                : t("requestMode.new");
-          return (
-            <button
-              key={opt ?? "all-mode"}
-              type="button"
-              onClick={() => setModeFilter(opt)}
-              className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                active
-                  ? "bg-primary-600 text-white"
-                  : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
-              }`}
-            >
-              {label}
-            </button>
-          );
-        })}
+      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-neutral-200 bg-white p-3 shadow-sm">
+        <div className="min-w-[220px] flex-1">
+          <SearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Search by MR number, status, or priority…"
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+            {t("procurementType.filterLabel")}
+          </span>
+          {([null, "Direct", "Indirect"] as const).map((opt) => {
+            const active = typeFilter === opt;
+            const label =
+              opt === null
+                ? t("procurementType.all")
+                : opt === "Direct"
+                  ? t("procurementType.direct")
+                  : t("procurementType.indirect");
+            return (
+              <button
+                key={opt ?? "all"}
+                type="button"
+                onClick={() => setTypeFilter(opt)}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                  active
+                    ? "bg-primary-600 text-white"
+                    : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+          <span className="ml-1 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+            {t("requestMode.filterLabel")}
+          </span>
+          {([null, "Existing", "New"] as const).map((opt) => {
+            const active = modeFilter === opt;
+            const label =
+              opt === null
+                ? t("requestMode.all")
+                : opt === "Existing"
+                  ? t("requestMode.existing")
+                  : t("requestMode.new");
+            return (
+              <button
+                key={opt ?? "all-mode"}
+                type="button"
+                onClick={() => setModeFilter(opt)}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                  active
+                    ? "bg-primary-600 text-white"
+                    : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="card overflow-hidden">
@@ -383,59 +412,101 @@ export default function MaterialRequestsListPage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-neutral-200 text-sm">
-              <thead className="bg-neutral-50 text-left text-xs font-medium uppercase text-neutral-500">
+            <table className="data-table table-fixed">
+              <thead>
                 <tr>
-                  <th className="px-4 py-3">MR Number</th>
-                  <th className="px-4 py-3">{t("procurementType.label")}</th>
-                  <th className="px-4 py-3">{t("requestMode.label")}</th>
-                  <th className="px-4 py-3">Request Date</th>
-                  <th className="px-4 py-3">Required Date</th>
-                  <th className="px-4 py-3">Department</th>
-                  <th className="px-4 py-3">Priority</th>
-                  <th className="px-4 py-3">Status</th>
+                  <th className="w-[15%]">MR Number</th>
+                  <th className="w-[11%]">{t("procurementType.label")}</th>
+                  <th className="w-[11%]">{t("requestMode.label")}</th>
+                  <th className="w-[13%]">Request Date</th>
+                  <th className="w-[13%]">Required Date</th>
+                  <th className="w-[10%]">Priority</th>
+                  <th className="w-[17%]">Status</th>
+                  <th className="col-actions">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-neutral-200">
-                {pagedRows.map((mr) => (
-                  <tr key={mr.name} className="hover:bg-neutral-50">
-                    <td className="px-4 py-3">
-                      <Link
-                        to={`/material-requests/${encodeURIComponent(mr.name)}`}
-                        className="font-semibold text-primary-600 no-underline"
-                      >
-                        {mr.name}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3">
-                      <ProcurementTypeBadge
-                        type={getMaterialRequestProcurementType(mr)}
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <RequestModeBadge mode={getMaterialRequestMode(mr)} />
-                    </td>
-                    <td className="px-4 py-3">
-                      {formatDate(mr.transaction_date)}
-                    </td>
-                    <td className="px-4 py-3">
-                      {formatDate(mr.schedule_date)}
-                    </td>
-                    <td className="px-4 py-3">{mr.custom_department ?? "—"}</td>
-                    <td className="px-4 py-3">{mr.custom_priority ?? "—"}</td>
-                    <td className="px-4 py-3">
-                      <StatusBadge
-                        status={getMaterialRequestWorkflowStatus(mr)}
-                      />
-                    </td>
-                  </tr>
-                ))}
+              <tbody>
+                {pagedRows.map((mr) => {
+                  const detailPath = `/material-requests/${encodeURIComponent(mr.name)}`;
+                  return (
+                    <tr key={mr.name}>
+                      <td>
+                        <Link
+                          to={detailPath}
+                          className="table-link no-underline"
+                        >
+                          {mr.name}
+                        </Link>
+                      </td>
+                      <td>
+                        <ProcurementTypeBadge
+                          type={getMaterialRequestProcurementType(mr)}
+                        />
+                      </td>
+                      <td>
+                        <RequestModeBadge mode={getMaterialRequestMode(mr)} />
+                      </td>
+                      <td>{formatDate(mr.transaction_date)}</td>
+                      <td>{formatDate(mr.schedule_date)}</td>
+                      <td>{mr.custom_priority ?? "—"}</td>
+                      <td>
+                        <StatusBadge
+                          status={getMaterialRequestWorkflowStatus(mr)}
+                        />
+                      </td>
+                      <td className="col-actions">
+                        <TableRowActions
+                          label={mr.name}
+                          viewTo={detailPath}
+                          items={[
+                            {
+                              id: "edit",
+                              label: "Edit",
+                              icon: Pencil,
+                              onClick: () => navigate(detailPath),
+                            },
+                            {
+                              id: "duplicate",
+                              label: "Duplicate",
+                              icon: Copy,
+                              onClick: () =>
+                                toast("Duplicate from Material Request details", {
+                                  icon: "ℹ️",
+                                }),
+                            },
+                            {
+                              id: "pdf",
+                              label: "Export PDF",
+                              icon: FileText,
+                              onClick: () =>
+                                toast("Open the Material Request to export PDF", {
+                                  icon: "ℹ️",
+                                }),
+                            },
+                            {
+                              id: "copy",
+                              label: "Copy Link",
+                              icon: Link2,
+                              onClick: () => {
+                                void navigator.clipboard
+                                  .writeText(
+                                    `${window.location.origin}${detailPath}`,
+                                  )
+                                  .then(() => toast.success("Link copied"))
+                                  .catch(() =>
+                                    toast.error("Could not copy link"),
+                                  );
+                              },
+                            },
+                          ]}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
                 {rows.length === 0 && (
                   <tr>
-                    <td
-                      colSpan={7}
-                      className="px-4 py-12 text-center text-neutral-500"
-                    >
+                    <td colSpan={8} className="py-12 text-center text-neutral-500">
                       No material requests found.
                     </td>
                   </tr>
@@ -460,44 +531,3 @@ export default function MaterialRequestsListPage() {
   );
 }
 
-const CARD_TONES = {
-  neutral: "text-neutral-500",
-  orange: "text-orange-500",
-  emerald: "text-emerald-500",
-  blue: "text-blue-500",
-} as const;
-
-function SummaryCard({
-  to,
-  active,
-  icon: Icon,
-  label,
-  value,
-  tone,
-}: {
-  to: string;
-  active: boolean;
-  icon: typeof ClipboardList;
-  label: string;
-  value: number;
-  tone: keyof typeof CARD_TONES;
-}) {
-  return (
-    <Link
-      to={to}
-      className={`flex flex-col gap-1 rounded-xl border bg-white p-4 no-underline shadow-sm transition hover:shadow-md ${
-        active ? "border-primary-400 ring-1 ring-primary-200" : "border-neutral-200"
-      }`}
-    >
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
-          {label}
-        </span>
-        <Icon className={`h-4 w-4 ${CARD_TONES[tone]}`} />
-      </div>
-      <span className="text-2xl font-bold tabular-nums text-neutral-900">
-        {value}
-      </span>
-    </Link>
-  );
-}

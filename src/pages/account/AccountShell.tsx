@@ -15,7 +15,7 @@ export default function AccountShell({
   children,
 }: Props) {
   return (
-    <div className="mx-auto w-full max-w-[720px]">
+    <div className="form-shell mx-auto max-w-[720px]">
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-[18px] font-semibold tracking-tight text-neutral-900">

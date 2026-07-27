@@ -29,6 +29,7 @@ import {
 import { apiGet, ENV_DEFAULTS } from "../../api/erpnext";
 import { queryClient } from "../../queryClient";
 import { createRFQ, getItemGroups, updateRFQ } from "../../api/sourcing";
+import { persistRfqTargetPricing } from "../../api/rfqTargetPricingPersist";
 import {
   ActiveRfqExistsError,
   buildRFQPrefillFromMaterialRequest,
@@ -54,13 +55,9 @@ import RFQItemLineRow, {
   type RFQItemLine,
 } from "../../components/RFQItemLineRow";
 import StatusBadge from "../../components/StatusBadge";
-import {
-  Drawing2dCell,
-  PartNameCell,
-} from "../../components/warehouse/EngineeringDocCells";
 import { ErpNextDatePicker } from "../../components/ui";
 import { useDebounce } from "../../hooks/useDebounce";
-import { ownerTitleFromEmail } from "../../config/roles";
+import { formatRfqOwnerLabel } from "../../config/roles";
 import { useAuthStore } from "../../store/authStore";
 import type { Supplier } from "../../types/erpnext";
 import { isoDateOffset, todayIso, formatCurrency } from "../../utils/format";
@@ -93,7 +90,7 @@ interface MrContext {
   warehouse_remarks: string;
 }
 
-const newItemRow = (): ItemRow => ({
+const newItemRow = (requiredBy?: string): ItemRow => ({
   id: generateId(),
   item_group: "",
   item_code: "",
@@ -101,6 +98,9 @@ const newItemRow = (): ItemRow => ({
   description: "",
   qty: 1,
   uom: "Nos",
+  target_price: null,
+  show_to_supplier: false,
+  required_by: requiredBy ?? "",
 });
 
 function buildTemplateTermsBlock(template: RFQTemplate): string {
@@ -215,6 +215,7 @@ export default function NewRFQPage() {
             detail?.description ||
             tplItem.item_name ||
             "";
+          const tplTarget = Number(tplItem.target_price);
           return {
             id: generateId(),
             item_group: detail?.item_group ?? "",
@@ -223,10 +224,14 @@ export default function NewRFQPage() {
             description: baseDesc,
             qty: tplItem.qty ?? 1,
             uom: detail?.stock_uom ?? tplItem.uom ?? "Nos",
+            target_price:
+              Number.isFinite(tplTarget) && tplTarget > 0 ? tplTarget : null,
+            show_to_supplier: false,
+            required_by: validTill || "",
           };
         });
 
-        setItems(itemRows.length > 0 ? itemRows : [newItemRow()]);
+        setItems(itemRows.length > 0 ? itemRows : [newItemRow(validTill)]);
       }
 
       // Resolve suppliers — fetch full Supplier records for the template's defaults
@@ -305,9 +310,7 @@ export default function NewRFQPage() {
           department: dept,
           company: prefill.company || ENV_DEFAULTS.company || "—",
           priority: prefill.priority?.trim() || "Medium",
-          procurement_owner:
-            ownerTitleFromEmail(user?.email ?? user?.name) ||
-            "Procurement Manager",
+          procurement_owner: formatRfqOwnerLabel(user?.email ?? user?.name),
           warehouse_remarks: prefill.warehouse_remarks?.trim() || "",
         });
         if (prefill.items.length > 0) {
@@ -326,6 +329,9 @@ export default function NewRFQPage() {
                 description: row.description ?? "",
                 qty: row.qty,
                 uom: row.uom ?? "Nos",
+                target_price: null,
+                show_to_supplier: false,
+                required_by: validTill || "",
                 part_name: docs.part_name ?? row.custom_part_name,
                 drawing_2d_url: docs.drawing_2d_url ?? row.custom_2d_drawing,
                 attachments: docs.attachments,
@@ -475,7 +481,7 @@ export default function NewRFQPage() {
   /* ---------- Handlers ---------- */
 
   function addItemRow() {
-    setItems((rows) => [...rows, newItemRow()]);
+    setItems((rows) => [...rows, newItemRow(validTill)]);
   }
 
   function removeItemRow(id: string) {
@@ -538,21 +544,36 @@ export default function NewRFQPage() {
       }
       const message = lines.join("\n");
 
-      const scheduleIso = validTill
+      const fallbackSchedule = validTill
         ? assertERPNextDate(validTill, "schedule_date")
         : undefined;
+      const anyShowToSupplier = items.some((r) => !!r.show_to_supplier);
 
       const rfqPayload = {
         transaction_date: todayIso(),
         message_for_supplier: message,
         company: ENV_DEFAULTS.company || undefined,
+        custom_show_target_price_to_supplier: anyShowToSupplier
+          ? (1 as const)
+          : (0 as const),
         items: items.map((row) => ({
           item_code: row.item_code,
           item_name: row.item_name,
           description: row.description || row.item_name || row.item_code,
           qty: row.qty,
           uom: row.uom,
-          schedule_date: scheduleIso,
+          schedule_date: row.required_by
+            ? assertERPNextDate(row.required_by, "schedule_date")
+            : fallbackSchedule,
+          custom_target_price:
+            row.target_price != null &&
+            Number.isFinite(Number(row.target_price)) &&
+            Number(row.target_price) > 0
+              ? Number(row.target_price)
+              : null,
+          custom_show_target_price_to_supplier: row.show_to_supplier
+            ? (1 as const)
+            : (0 as const),
         })),
         suppliers: selectedSuppliers.map((s) => ({
           supplier: s.name,
@@ -582,9 +603,7 @@ export default function NewRFQPage() {
           ? buildManualCreationMeta({
               required_documents: { ...DEFAULT_REQUIRED_DOCUMENTS },
               workflow_rules: { ...DEFAULT_WORKFLOW_RULES },
-              created_by:
-                ownerTitleFromEmail(user?.email ?? user?.name) ||
-                "Procurement Manager",
+              created_by: formatRfqOwnerLabel(user?.email ?? user?.name),
               internal_notes: internalNotes.trim() || undefined,
             })
           : null;
@@ -596,22 +615,50 @@ export default function NewRFQPage() {
         incrementLocalTemplateUsage(appliedTemplate.name);
       }
 
-      // Custom field — written after create so createRFQ stays on stock fields.
+      // Header flags + Target Prices are written after create. ERPNext
+      // silently drops unknown custom fields, so this second write is the
+      // reliable path once setup-rfq-target-price.mjs has been run.
       if (requireCostBreakdown) {
         try {
-          await updateRFQ(created.name, {
-            custom_require_cost_breakdown: 1,
-          });
+          await updateRFQ(created.name, { custom_require_cost_breakdown: 1 });
         } catch (flagErr) {
           // eslint-disable-next-line no-console
           console.warn(
             "[RFQ] Could not set custom_require_cost_breakdown:",
             flagErr,
           );
-          toast.error(
-            "RFQ created, but Require Cost Breakdown could not be saved. Enable it on the RFQ if needed.",
-          );
         }
+      }
+
+      /* Persist per-line Target Price + Show-to-Supplier after create. */
+      try {
+        const linesByItemCode = new Map<
+          string,
+          { target_price: number | null; show_to_supplier: boolean }
+        >();
+        for (const row of items) {
+          if (!row.item_code) continue;
+          linesByItemCode.set(row.item_code, {
+            target_price:
+              row.target_price != null &&
+              Number.isFinite(Number(row.target_price)) &&
+              Number(row.target_price) > 0
+                ? Number(row.target_price)
+                : null,
+            show_to_supplier: !!row.show_to_supplier,
+          });
+        }
+        await persistRfqTargetPricing({
+          rfqName: created.name,
+          linesByItemCode,
+          audit: true,
+        });
+      } catch (tpErr) {
+        // eslint-disable-next-line no-console
+        console.warn("[RFQ] Could not persist Target Pricing:", tpErr);
+        toast.error(
+          "RFQ created, but Target Pricing could not be saved. Re-open the RFQ and confirm line Target Prices.",
+        );
       }
 
       toast.success(`RFQ ${created.name} created`);
@@ -1247,8 +1294,9 @@ function Step2({
             Requested Line Items
           </p>
           <p className="mt-0.5 text-xs text-neutral-600">
-            Select an Item Group first, then choose items from your inventory
-            master. Description and UOM are filled automatically.
+            Set Target Price and Show-to-Supplier per line during creation.
+            AI Analysis later uses these values read-only for variance and
+            savings.
           </p>
         </div>
       </div>
@@ -1259,19 +1307,23 @@ function Step2({
             <thead>
               <tr className="border-b border-neutral-200 bg-neutral-50/90 text-left text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
                 <th className="px-3 py-3 w-12">#</th>
-                <th className="px-3 py-3 min-w-[160px]">
+                <th className="px-3 py-3 min-w-[140px]">
                   Item Group <span className="text-danger-500">*</span>
                 </th>
                 <th className="px-3 py-3 min-w-[180px]">
                   Item <span className="text-danger-500">*</span>
                 </th>
-                <th className="px-3 py-3 min-w-[200px]">Description</th>
-                <th className="px-3 py-3 w-[100px] text-right">
+                <th className="px-3 py-3 w-[90px] text-right">
                   Qty <span className="text-danger-500">*</span>
                 </th>
-                <th className="px-3 py-3 w-[90px] text-center">UOM</th>
-                <th className="px-3 py-3 min-w-[140px]">Part Name</th>
-                <th className="px-3 py-3 min-w-[120px]">Attachments</th>
+                <th className="px-3 py-3 w-[80px] text-center">UOM</th>
+                <th className="px-3 py-3 w-[120px] text-right">Target Price</th>
+                <th className="px-3 py-3 w-[120px] text-center">
+                  Show to Supplier
+                </th>
+                <th className="px-3 py-3 w-[140px]">Required By</th>
+                <th className="px-3 py-3 min-w-[120px]">Part Name</th>
+                <th className="px-3 py-3 min-w-[100px]">Attachments</th>
                 <th className="px-3 py-3 w-12" />
               </tr>
             </thead>
@@ -1465,6 +1517,7 @@ function Step4({
   mrContext,
   requireCostBreakdown,
 }: Step4Props) {
+  const shownLines = items.filter((r) => !!r.show_to_supplier).length;
   const detailRows: Array<{ label: string; value: string }> = [
     { label: "RFQ Title", value: title || "—" },
     { label: "Valid Till", value: validTill || "—" },
@@ -1474,6 +1527,13 @@ function Step4({
     {
       label: "Cost Breakdown",
       value: requireCostBreakdown ? "Required" : "Not required",
+    },
+    {
+      label: "Target Price to Supplier",
+      value:
+        shownLines > 0
+          ? `${shownLines} of ${items.length} line(s) visible`
+          : "Hidden on all lines",
     },
   ];
   if (mrContext) {
@@ -1513,15 +1573,15 @@ function Step4({
       <div>
         <h4 className="mb-2 text-sm font-semibold text-neutral-800">Items</h4>
         <div className="overflow-x-auto rounded-xl border border-neutral-200">
-          <table className="w-full min-w-[760px] text-sm">
+          <table className="w-full min-w-[860px] text-sm">
             <thead>
               <tr className="border-b border-neutral-200 bg-neutral-50 text-left text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
                 <th className="px-3 py-2">Item</th>
-                <th className="px-3 py-2">Group</th>
                 <th className="px-3 py-2 text-right">Qty</th>
                 <th className="px-3 py-2 text-center">UOM</th>
-                <th className="px-3 py-2">Part Name</th>
-                <th className="px-3 py-2">Attachments</th>
+                <th className="px-3 py-2 text-right">Target Price</th>
+                <th className="px-3 py-2 text-center">Show to Supplier</th>
+                <th className="px-3 py-2">Required By</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-100">
@@ -1535,17 +1595,21 @@ function Step4({
                       <p className="text-xs text-neutral-400">{row.item_code}</p>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-neutral-600">{row.item_group || "—"}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{row.qty}</td>
                   <td className="px-3 py-2 text-center text-neutral-600">{row.uom}</td>
-                  <td className="px-3 py-2">
-                    <PartNameCell value={row.part_name} />
+                  <td className="px-3 py-2 text-right tabular-nums text-neutral-700">
+                    {row.target_price != null && Number.isFinite(row.target_price)
+                      ? row.target_price.toLocaleString(undefined, {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })
+                      : "—"}
                   </td>
-                  <td className="px-3 py-2">
-                    <Drawing2dCell
-                      url={row.drawing_2d_url}
-                      attachments={row.attachments}
-                    />
+                  <td className="px-3 py-2 text-center text-neutral-700">
+                    {row.show_to_supplier ? "Yes" : "No"}
+                  </td>
+                  <td className="px-3 py-2 text-neutral-600">
+                    {row.required_by || validTill || "—"}
                   </td>
                 </tr>
               ))}

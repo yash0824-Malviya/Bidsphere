@@ -94,7 +94,7 @@ function NetworkSphereScene() {
       <mesh>
         <sphereGeometry args={[RADIUS * 1.02, 48, 48]} />
         <meshBasicMaterial
-          color="#0098EA"
+          color="#1F3A6D"
           transparent
           opacity={0.04}
           side={THREE.DoubleSide}
@@ -131,7 +131,7 @@ function NetworkSphereScene() {
           <sphereGeometry args={[0.035 + (i % 5) * 0.004, 10, 10]} />
           <meshStandardMaterial
             color="#7dd3fc"
-            emissive="#0098EA"
+            emissive="#1F3A6D"
             emissiveIntensity={0.55 + (i % 3) * 0.15}
             metalness={0.2}
             roughness={0.35}
@@ -147,7 +147,7 @@ function NetworkSphereScene() {
           }}
         >
           <sphereGeometry args={[0.055, 8, 8]} />
-          <meshBasicMaterial color="#0098EA" transparent opacity={0.85} />
+          <meshBasicMaterial color="#1F3A6D" transparent opacity={0.85} />
         </mesh>
       ))}
 
@@ -204,7 +204,7 @@ function StaticNetworkSphere() {
           <sphereGeometry args={[0.035, 10, 10]} />
           <meshStandardMaterial
             color="#7dd3fc"
-            emissive="#0098EA"
+            emissive="#1F3A6D"
             emissiveIntensity={0.6}
           />
         </mesh>
@@ -230,8 +230,8 @@ export default function LoginNetworkSphere() {
     >
       <ambientLight intensity={0.85} />
       <pointLight position={[6, 4, 6]} intensity={1.4} color="#38bdf8" />
-      <pointLight position={[-5, -3, 4]} intensity={0.7} color="#007FC4" />
-      <pointLight position={[0, -4, 2]} intensity={0.35} color="#0098EA" />
+      <pointLight position={[-5, -3, 4]} intensity={0.7} color="#17315D" />
+      <pointLight position={[0, -4, 2]} intensity={0.35} color="#1F3A6D" />
       {reduced ? <StaticNetworkSphere /> : <NetworkSphereScene />}
     </Canvas>
   );
