@@ -116,7 +116,7 @@ export function saveDeliveryState(state: PODeliveryState): void {
 export async function persistDeliveryStateToErp(
   state: PODeliveryState,
   _erpSupplierId?: string,
-): Promise<void> {
+): Promise<any> {
   try {
     // eslint-disable-next-line no-console
     console.log("[PO Delivery] Shipment submitted → ERP upsert", {
@@ -163,6 +163,7 @@ export async function persistDeliveryStateToErp(
         refetchType: "active",
       }),
     ]);
+    return record;
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error("[PO Delivery] ERP shipment sync failed:", err);

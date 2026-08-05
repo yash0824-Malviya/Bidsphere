@@ -9,8 +9,6 @@ import {
   getItemMaster,
   listItemCodes,
   updateItemMaster,
-  type CreateItemMasterInput,
-  type UpdateItemMasterInput,
 } from "../../../api/itemMaster";
 import { getItemGroups } from "../../../api/sourcing";
 import { getWarehouses } from "../../../api/bom";
@@ -461,7 +459,7 @@ export default function ItemMasterFormPage() {
               </label>
               <SearchableSelect
                 value={form.item_group}
-                onChange={(v) => setField("item_group", v)}
+                onChange={(v: string) => setField("item_group", v)}
                 options={groupOptions}
                 placeholder="Select item group"
               />
@@ -565,7 +563,7 @@ export default function ItemMasterFormPage() {
               </label>
               <SearchableSelect
                 value={form.default_warehouse}
-                onChange={(v) => setField("default_warehouse", v)}
+                onChange={(v: string) => setField("default_warehouse", v)}
                 options={warehouseOptions}
                 placeholder="Select warehouse"
               />

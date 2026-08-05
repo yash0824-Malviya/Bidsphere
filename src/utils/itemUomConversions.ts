@@ -115,9 +115,9 @@ const UOM_ABBREV: Record<string, string> = {
   Drum: "Drum",
 };
 
-interface CategoryUomRow {
+export interface CategoryUomRow {
   uom: string;
-  conversion_factor?: number;
+  conversion_factor?: number | null;
 }
 
 function categoryBaseFactor(rows: CategoryUomRow[]): number {

@@ -1083,7 +1083,7 @@ export function canAccessPath(
   }
   if (path === "/department" || path.startsWith("/department/")) {
     if (path === "/department/projects" || path === "/department/programs") {
-      return role === "department" || role === "manufacturing" || role === "admin";
+      return role === "department" || role === "manufacturing";
     }
     if (role === "department") {
       return (

@@ -1060,7 +1060,7 @@ function rfqQuoteRoundDevMiddleware(): Plugin {
                           String(row.email_id ?? row.emailId ?? "") || undefined,
                       };
                     })
-                    .filter(Boolean)
+                    .filter((item): item is NonNullable<typeof item> => item !== null)
                 : undefined;
             const result = await core.createNextRfqRoundCore({
               rfqName,

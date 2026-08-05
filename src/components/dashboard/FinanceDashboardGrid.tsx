@@ -357,14 +357,15 @@ function FinanceDashboardGrid() {
                       borderRadius: 12,
                       padding: "12px 14px",
                     }}
-                    formatter={(v: number, _name, item) => {
+                    formatter={(v: any, _name, item) => {
+                      const val = Number(v ?? 0);
                       const mom = (item?.payload as { momPct?: number | null })
                         ?.momPct;
                       const label =
                         mom != null && Number.isFinite(mom)
                           ? `Spend (${mom >= 0 ? "+" : ""}${mom.toFixed(1)}% MoM)`
                           : "Monthly spend";
-                      return [formatCurrency(v), label];
+                      return [formatCurrency(val), label];
                     }}
                     labelFormatter={(label) => `Month: ${label}`}
                   />
@@ -439,9 +440,9 @@ function FinanceDashboardGrid() {
                         ))}
                     </Pie>
                     <Tooltip
-                      formatter={(v: number, name: string) => [
-                        formatCurrency(v),
-                        name,
+                      formatter={(v: any, name: any) => [
+                        formatCurrency(Number(v ?? 0)),
+                        String(name ?? ""),
                       ]}
                       contentStyle={{
                         ...TOOLTIP,
@@ -625,7 +626,7 @@ function FinanceDashboardGrid() {
                   <YAxis {...AXIS} width={40} tickFormatter={formatCurrencyCompact} />
                   <Tooltip
                     contentStyle={TOOLTIP}
-                    formatter={(v: number) => formatCurrency(v)}
+                    formatter={(v: any) => formatCurrency(Number(v ?? 0))}
                   />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <Bar

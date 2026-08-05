@@ -262,10 +262,11 @@ export function mergeUomDropdownOptions(
   groups: Array<{ label: string; uoms: string[] }>;
   all: string[];
 } {
-  const groups = ENTERPRISE_UOM_GROUPS.map((g) => ({
-    label: g.label,
-    uoms: [...g.uoms],
-  }));
+  const groups: Array<{ label: string; uoms: string[] }> =
+    ENTERPRISE_UOM_GROUPS.map((g) => ({
+      label: g.label,
+      uoms: [...g.uoms],
+    }));
   const masterLower = new Set(
     ENTERPRISE_UOM_MASTER.map((u) => u.toLowerCase()),
   );

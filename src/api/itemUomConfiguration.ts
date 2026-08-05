@@ -14,6 +14,7 @@ import { resolveStockUomFromItem } from "../utils/itemMasterUom";
 import {
   assembleCompatibleUomOptions,
   type CompatibleUomOption,
+  type CategoryUomRow,
 } from "../utils/itemUomConversions";
 
 const ITEM_DOCTYPE = "Item";
@@ -140,13 +141,20 @@ async function fetchUomCategoryName(uomName: string): Promise<string | null> {
 
 async function fetchUomsInCategoryByFilter(
   categoryName: string,
-): Promise<RawUomCategoryRow[]> {
+): Promise<CategoryUomRow[]> {
   try {
-    const rows = unwrapList<{ name: string }>(
+    const rows = unwrapList<RawUomDoc>(
       await apiGet(buildResourceUrl(UOM_DOCTYPE), {
         params: {
           fields: JSON.stringify(["name"]),
-          filters: JSON.stringify([["category", "=", categoryName]]),
+          filters: JSON.stringify([
+            [
+              UOM_DOCTYPE,
+              "uom_category",
+              "=",
+              categoryName,
+            ],
+          ]),
           limit_page_length: 100,
           order_by: "name asc",
         },
@@ -154,7 +162,7 @@ async function fetchUomsInCategoryByFilter(
     );
     return rows
       .map((r) => ({ uom: r.name?.trim() }))
-      .filter((r): r is RawUomCategoryRow => !!r.uom);
+      .filter((r): r is CategoryUomRow => Boolean(r.uom));
   } catch {
     return [];
   }
@@ -162,7 +170,7 @@ async function fetchUomsInCategoryByFilter(
 
 async function fetchUomCategoryMembers(
   categoryName: string,
-): Promise<RawUomCategoryRow[]> {
+): Promise<CategoryUomRow[]> {
   const trimmed = categoryName.trim();
   if (!trimmed) return [];
 
@@ -171,11 +179,11 @@ async function fetchUomCategoryMembers(
       buildResourceUrl(UOM_CATEGORY_DOCTYPE, trimmed),
     );
     const rows = (doc.uoms ?? [])
-      .map((row) => ({
-        uom: row.uom?.trim(),
+      .map((row): CategoryUomRow => ({
+        uom: row.uom?.trim() || "",
         conversion_factor: row.conversion_factor,
       }))
-      .filter((row): row is RawUomCategoryRow => !!row.uom);
+      .filter((row) => Boolean(row.uom));
     if (rows.length > 0) return rows;
   } catch {
     /* fall through to UOM list filter */

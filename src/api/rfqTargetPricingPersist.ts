@@ -39,7 +39,7 @@ export async function persistRfqTargetPricing(input: {
         tp != null && Number.isFinite(Number(tp)) && Number(tp) > 0
           ? Number(tp)
           : null,
-      custom_show_target_price_to_supplier: show ? 1 : 0,
+      custom_show_target_price_to_supplier: (show ? 1 : 0) as 0 | 1,
     };
   });
 

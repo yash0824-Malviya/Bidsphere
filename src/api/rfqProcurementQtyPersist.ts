@@ -135,11 +135,12 @@ export function readQtyTrailFromRfqItem(item: {
   custom_procurement_final_qty?: number | null;
   custom_qty_change_reason?: string | null;
 }) {
+  const fullItem = { ...item, qty: item.qty ?? 0 };
   return {
     item_code: item.item_code,
-    department_requested_qty: getDepartmentRequestedQty(item),
+    department_requested_qty: getDepartmentRequestedQty(fullItem),
     warehouse_available_qty: item.custom_warehouse_available_qty ?? null,
-    procurement_final_qty: getProcurementFinalQty(item),
+    procurement_final_qty: getProcurementFinalQty(fullItem),
     qty_change_reason: item.custom_qty_change_reason ?? null,
   };
 }

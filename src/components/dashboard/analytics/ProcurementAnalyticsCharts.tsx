@@ -282,7 +282,6 @@ function ProcurementAnalyticsCharts({
     respHas,
     turnHas,
     savHas,
-    pipelineHas,
     turnaroundSeries,
   } = chartFlags;
 

@@ -438,9 +438,9 @@ function LineActionPicker({
   onToggleMenu: () => void;
   onSelect: (action: StockDecisionAction) => void;
 }) {
-  const actions =
-    allowedActions.length > 0 ? allowedActions : (["forward"] as const);
-  const active = actions.includes(selected) ? selected : actions[0]!;
+  const actions: StockDecisionAction[] =
+    allowedActions.length > 0 ? allowedActions : ["forward"];
+  const active = (actions as readonly string[]).includes(selected) ? selected : actions[0]!;
   const isIssue = isIssueAction(active);
   const primaryClass = isIssue
     ? "bg-primary-600 hover:bg-primary-700 border-primary-500"
@@ -499,7 +499,7 @@ function LineActionPicker({
                 }`}
                 onClick={() => onSelect(action)}
               >
-                {action === "forward" && actions.includes("issue_partial")
+                {action === "forward" && (actions as readonly string[]).includes("issue_partial")
                   ? "Forward Entire Request"
                   : warehouseActionLabel(action)}
               </button>

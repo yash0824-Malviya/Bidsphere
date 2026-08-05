@@ -24,14 +24,18 @@ export interface SearchableOption {
 interface Props {
   options: SearchableOption[];
   /** Currently selected value ("" when none). */
-  selectedValue: string;
+  selectedValue?: string;
+  /** Alias for selectedValue. */
+  value?: string;
   /**
    * Human label for the current selection — displayed when the field is not
    * being actively searched. Lets callers show a selection even before the
    * option list has loaded (e.g. when hydrating an edit form).
    */
   selectedLabel?: string;
-  onSelect: (option: SearchableOption) => void;
+  onSelect?: (option: SearchableOption) => void;
+  /** Alias for onSelect passing selected option value. */
+  onChange?: (value: string) => void;
   /** Fired when the user clears the text while a value was selected. */
   onClear?: () => void;
   disabled?: boolean;
@@ -67,8 +71,10 @@ const inputCls = (invalid: boolean, disabled: boolean) =>
 export default function SearchableSelect({
   options,
   selectedValue,
+  value,
   selectedLabel,
   onSelect,
+  onChange,
   onClear,
   disabled = false,
   loading = false,
@@ -95,11 +101,14 @@ export default function SearchableSelect({
   const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  const effectiveValue = value ?? selectedValue ?? "";
+
   // Reflect external selection changes (select / clear / hydrate) in the input.
   // Keyed on the value only, so it never fights the user mid-typing.
   useEffect(() => {
-    setSearch(selectedLabel ?? "");
-  }, [selectedValue, selectedLabel]);
+    const matched = options.find((o) => o.value === effectiveValue);
+    setSearch(selectedLabel ?? matched?.label ?? effectiveValue ?? "");
+  }, [effectiveValue, selectedLabel, options]);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -167,7 +176,8 @@ export default function SearchableSelect({
 
   function handleSelect(option: SearchableOption) {
     if (option.disabled) return;
-    onSelect(option);
+    onSelect?.(option);
+    onChange?.(option.value);
     setSearch(option.label);
     setOpen(false);
   }

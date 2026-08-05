@@ -518,7 +518,7 @@ function normalizeRoundDoc(row: Record<string, unknown>): RfqRoundDoc {
   };
 }
 
-function stripChildNames(rows: RfqItemRow[] | RfqSupplierRow[] | undefined) {
+export function stripChildNames(rows: RfqItemRow[] | RfqSupplierRow[] | undefined) {
   return (rows ?? []).map((row) => {
     const copy = { ...row };
     delete copy.name;

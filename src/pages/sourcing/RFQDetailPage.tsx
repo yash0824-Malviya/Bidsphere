@@ -18,7 +18,6 @@ import {
   getSupplierQuotations,
   lookupDefaultWarehouse,
   submitRFQ,
-  updateRFQ,
 } from "../../api/sourcing";
 import {
   getItemTargetPrice,
@@ -2378,7 +2377,7 @@ export default function RFQDetailPage() {
     if (
       legalDoc?.finance_status &&
       legalDoc.finance_status !== "Pending" &&
-      legalDoc.finance_status !== ""
+      (legalDoc.finance_status as string) !== ""
     ) {
       approvals.push({
         approver: legalDoc.finance_approved_by || "Finance Manager",

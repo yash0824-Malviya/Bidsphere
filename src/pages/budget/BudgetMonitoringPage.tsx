@@ -486,8 +486,8 @@ function MonthlyTrend({
                   border: "1px solid #E3E6EB",
                   boxShadow: "0 1px 2px rgba(16,24,40,0.04)",
                 }}
-                formatter={(v: number) => [
-                  formatCurrencyIn(v, currency),
+                formatter={(v: any) => [
+                  formatCurrencyIn(Number(v ?? 0), currency),
                   "Spend",
                 ]}
                 labelFormatter={(label) => `Month: ${label}`}

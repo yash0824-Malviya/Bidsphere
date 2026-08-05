@@ -342,7 +342,7 @@ export async function getSupplierRfqDetail(
     itemCount: sanitized.items?.length ?? 0,
     show_target_price: sanitized.show_target_price,
     targetPricesReturned: sanitized.show_target_price
-      ? sanitized.items.filter((i) => i.target_price != null).length
+      ? sanitized.items.filter((i) => (i.target_price ?? i.custom_target_price) != null).length
       : 0,
   });
 

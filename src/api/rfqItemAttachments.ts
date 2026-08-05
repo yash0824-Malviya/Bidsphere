@@ -54,7 +54,7 @@ export async function syncRfqItemEngineeringFiles(
       custom_part_name: child.custom_part_name,
       custom_2d_drawing: child.custom_2d_drawing,
       custom_engineering_attachments: child.custom_engineering_attachments,
-    }).attachments;
+    });
 
     const byUrl = new Map<string, EngineeringAttachment>();
     for (const att of existingFromErp) {

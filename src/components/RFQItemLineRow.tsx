@@ -314,7 +314,7 @@ export default function RFQItemLineRow({
   groupsLoading,
   showErrors,
   canRemove,
-  canEditItemMasterUom,
+  canEditItemMasterUom: _canEditItemMasterUom,
   procurementType,
   procurementCategory = "",
   requestMode,

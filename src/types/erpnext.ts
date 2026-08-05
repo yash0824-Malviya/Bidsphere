@@ -233,6 +233,8 @@ export interface RFQItem extends ErpDoc {
   custom_part_name?: string;
   custom_2d_drawing?: string;
   custom_engineering_attachments?: string;
+  /** Alias / fallback target price field */
+  target_price?: number | null;
   /**
    * Internal target unit price for variance / savings analysis.
    * Set during RFQ creation. Provisioned by scripts/setup-rfq-target-price.mjs.
@@ -242,7 +244,7 @@ export interface RFQItem extends ErpDoc {
    * Per-line: when enabled, this line's Target Price is visible to suppliers.
    * Falls back to RFQ.custom_show_target_price_to_supplier for older RFQs.
    */
-  custom_show_target_price_to_supplier?: 0 | 1 | boolean;
+  custom_show_target_price_to_supplier?: 0 | 1 | boolean | number;
   /**
    * Original Department requested quantity (internal only).
    * Provisioned by scripts/setup-rfq-procurement-qty.mjs.

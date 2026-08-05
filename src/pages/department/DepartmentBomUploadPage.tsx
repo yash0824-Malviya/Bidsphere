@@ -104,7 +104,6 @@ export default function DepartmentBomUploadPage() {
 
   const rows = result?.rows ?? [];
   const summary = result?.summary;
-  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const pageRows = rows.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
 
   const newItemCount = rows.filter((r) => !r.exists_in_erp && r.status !== "invalid").length;

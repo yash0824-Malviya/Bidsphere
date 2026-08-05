@@ -811,7 +811,7 @@ export function validateItemImportRow(
   if (ctx.uoms.length > 0) {
     const uomMatch = matchErpLabel(enterpriseUom, ctx.uoms);
     if (uomMatch.ok) {
-      uom = uomMatch.value;
+      uom = uomMatch.value as typeof enterpriseUom;
     } else if (ctx.autoCreateUom) {
       uom = enterpriseUom;
       ensureUom = true;

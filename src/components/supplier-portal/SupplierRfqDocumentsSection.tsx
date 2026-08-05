@@ -56,7 +56,7 @@ function formatUploadedAt(iso?: string): string {
   }
 }
 
-function formatFileType(doc: SupplierRfqDocument): string {
+export function formatFileType(doc: SupplierRfqDocument): string {
   const ext = String(doc.fileType || "")
     .trim()
     .replace(/^\./, "")

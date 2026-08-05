@@ -358,6 +358,7 @@ export async function hydrateEngineeringDocsFromChild(
 }
 
 export function resolveEngineeringAttachments(source: {
+  custom_part_name?: string | null;
   custom_engineering_attachments?: string | null;
   custom_2d_drawing?: string | null;
   attachments?: EngineeringAttachment[] | null;
@@ -488,7 +489,7 @@ async function loadMaterialRequestItemChildRow(
       /* keep empty */
     }
   }
-  if (!childName) return item;
+  if (!childName) return { ...item, name: item.name ?? undefined };
 
   try {
     const full = await apiGet<{

@@ -29,7 +29,6 @@ import type {
   PoSpendSeriesPoint,
   SupplierOverviewMetrics,
 } from "../../utils/procurementExecutiveMetrics";
-import { formatCurrencyCompact } from "../../utils/format";
 import { Skeleton } from "../Skeleton";
 import SpendByCategoryWidget from "./SpendByCategoryWidget";
 

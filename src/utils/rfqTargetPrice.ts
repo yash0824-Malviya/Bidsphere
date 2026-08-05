@@ -68,7 +68,7 @@ export function getItemTargetPrice(
       : "target_price" in item
         ? item.target_price
         : null;
-  if (raw === null || raw === undefined || raw === "") return null;
+  if (raw === null || raw === undefined || (raw as any) === "") return null;
   const n = Number(raw);
   /* ERPNext Currency empty values serialize as 0 — treat as "not set". */
   if (!Number.isFinite(n) || n <= 0) return null;
@@ -116,7 +116,7 @@ export function sanitizeRfqForSupplier(rfq: RFQ): SupplierRfqView {
       } = withDocs as RFQItem & { target_price?: number | null };
       return {
         ...rest,
-        custom_show_target_price_to_supplier: 0,
+        custom_show_target_price_to_supplier: 0 as const,
         show_target_price: false,
       } as RFQItem & { show_target_price: boolean };
     }
@@ -125,7 +125,7 @@ export function sanitizeRfqForSupplier(rfq: RFQ): SupplierRfqView {
       ...withDocs,
       custom_target_price: target,
       target_price: target,
-      custom_show_target_price_to_supplier: 1,
+      custom_show_target_price_to_supplier: 1 as const,
       show_target_price: true,
     };
   });
