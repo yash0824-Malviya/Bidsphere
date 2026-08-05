@@ -140,7 +140,7 @@ export default function BudgetApprovalsPage() {
           pendingAction.item.budget_amount,
           user?.email ?? user?.full_name
         );
-        toast.success("Budget approved and activated in ERPNext");
+        toast.success("Budget approved and activated");
       } else {
         await rejectBudget(pendingAction.item.name, actionNotes.trim());
         triggerBudgetRejected(
@@ -174,7 +174,7 @@ export default function BudgetApprovalsPage() {
     <div>
       <PageHeader
         title="Budget Approval"
-        description={`Review submitted ERPNext budgets · ${submitted.length} pending`}
+        description={`Review submitted budgets · ${submitted.length} pending`}
       />
 
       <div className="mb-4 flex flex-wrap gap-2">

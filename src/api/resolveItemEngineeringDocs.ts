@@ -117,20 +117,67 @@ async function docsFromMrItemChild(
   return hydrateEngineeringDocsFromChild({ ...mrItem, name });
 }
 
+function mergeEngineeringDocs(
+  ...bundles: EngineeringDocs[]
+): EngineeringDocs {
+  const byUrl = new Map<
+    string,
+    EngineeringDocs["attachments"][number]
+  >();
+  let part_name: string | undefined;
+  for (const bundle of bundles) {
+    if (!part_name && bundle.part_name) part_name = bundle.part_name;
+    for (const att of bundle.attachments) {
+      const key = String(att.fileUrl || "").trim();
+      if (!key || byUrl.has(key)) continue;
+      byUrl.set(key, att);
+    }
+  }
+  const attachments = [...byUrl.values()];
+  return {
+    part_name,
+    drawing_2d_url: attachments[0]?.fileUrl,
+    attachments,
+  };
+}
+
+async function docsFromRfqItemChild(
+  rfqName: string,
+  itemCode: string,
+): Promise<EngineeringDocs> {
+  const rfqItem = await findRfqItemByCode(rfqName, itemCode);
+  if (!rfqItem?.name) return EMPTY;
+  const fromRfq = await hydrateEngineeringDocsFromChild(rfqItem, {
+    attachedToDoctype: "Request for Quotation Item",
+  });
+  const fromMr = await docsFromMrItemChild(rfqItem.material_request_item);
+  return mergeEngineeringDocs(fromRfq, fromMr);
+}
+
 export async function resolveItemEngineeringDocs(
   input: EngineeringDocsLookup,
 ): Promise<EngineeringDocs> {
-  // 1) Material Request Item (owner) when linked.
-  const fromMrItem = await docsFromMrItemChild(input.material_request_item);
-  if (fromMrItem.attachments.length > 0 || fromMrItem.part_name) {
-    return fromMrItem;
+  const itemCode = input.item_code?.trim();
+  const rfqHint = input.rfq_name?.trim();
+
+  // 1) RFQ Item row (supplier quotation lines) — primary for portal item cards.
+  if (rfqHint && itemCode) {
+    const fromRfqItem = await docsFromRfqItemChild(rfqHint, itemCode);
+    const inline = pickEngineeringDocs(input);
+    const mergedRfq = mergeEngineeringDocs(fromRfqItem, inline);
+    if (mergedRfq.attachments.length > 0 || mergedRfq.part_name) {
+      return mergedRfq;
+    }
   }
 
-  // 2) Inline reference JSON on the current row (copied refs / legacy).
-  // Also hydrate File DocType when the row is an RFQ/PO child with a name.
+  // 2) Material Request Item (owner) when linked.
+  const fromMrItem = await docsFromMrItemChild(input.material_request_item);
+
+  // 3) Inline reference JSON on the current row (RFQ/PO procurement add-ons).
   const inline = pickEngineeringDocs(input);
-  if (inline.attachments.length > 0 || inline.part_name) {
-    return inline;
+  const mergedPrimary = mergeEngineeringDocs(fromMrItem, inline);
+  if (mergedPrimary.attachments.length > 0 || mergedPrimary.part_name) {
+    return mergedPrimary;
   }
 
   // 3) Purchase Order Item → MR item / RFQ item.
@@ -151,7 +198,6 @@ export async function resolveItemEngineeringDocs(
 
   // 4) PO header → RFQ name (often stored in remarks) → RFQ Item by item_code.
   const poName = input.purchase_order?.trim();
-  const itemCode = input.item_code?.trim();
   if (poName && itemCode) {
     try {
       const po = await apiGet<{
@@ -191,14 +237,11 @@ export async function resolveItemEngineeringDocs(
     }
   }
 
-  // 5) Explicit RFQ hint + item_code.
-  const rfqHint = input.rfq_name?.trim();
+  // 5) Explicit RFQ hint + item_code (full hydrate including File DocType).
   if (rfqHint && itemCode) {
-    const rfqItem = await findRfqItemByCode(rfqHint, itemCode);
-    const fromRfq = pickEngineeringDocs(rfqItem);
-    if (fromRfq.attachments.length > 0 || fromRfq.part_name) return fromRfq;
-    if (rfqItem?.material_request_item) {
-      return docsFromMrItemChild(rfqItem.material_request_item);
+    const fromRfqItem = await docsFromRfqItemChild(rfqHint, itemCode);
+    if (fromRfqItem.attachments.length > 0 || fromRfqItem.part_name) {
+      return fromRfqItem;
     }
   }
 
@@ -314,14 +357,14 @@ function engineeringLookupKey(
   line: EngineeringDocsLookup,
   idx = 0,
 ): string {
+  if (line.rfq_name?.trim() && line.item_code?.trim()) {
+    return `${line.rfq_name.trim()}::${line.item_code.trim()}`;
+  }
   if (line.material_request_item?.trim()) {
     return line.material_request_item.trim();
   }
   if (line.purchase_order_item?.trim()) {
     return line.purchase_order_item.trim();
-  }
-  if (line.rfq_name?.trim() && line.item_code?.trim()) {
-    return `${line.rfq_name.trim()}::${line.item_code.trim()}`;
   }
   if (line.purchase_order?.trim() && line.item_code?.trim()) {
     return `${line.purchase_order.trim()}::${line.item_code.trim()}`;

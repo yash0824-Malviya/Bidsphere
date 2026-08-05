@@ -23,6 +23,7 @@ interface Props {
   paymentReference: string;
   paymentDate: string;
   status: UsPaymentUiStatus;
+  className?: string;
 }
 
 function SummaryRow({
@@ -66,9 +67,10 @@ export default function PaymentSummaryPanel({
   paymentReference,
   paymentDate,
   status,
+  className = "",
 }: Props) {
   return (
-    <div className="rounded-xl border border-neutral-200 bg-white shadow-sm">
+    <div className={`payment-summary-panel ${className}`.trim()}>
       <div className="border-b border-neutral-200 bg-neutral-50 px-5 py-4">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-sm font-semibold text-neutral-900">

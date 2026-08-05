@@ -161,7 +161,7 @@ export default function BudgetDetailPage() {
         setShowReject(false);
       } else if (confirmAction === "cancel") {
         await cancelBudget(decodedId);
-        toast.success("Budget cancelled in ERPNext");
+        toast.success("Budget cancelled successfully");
       }
       setConfirmAction(null);
       setRejectNote("");

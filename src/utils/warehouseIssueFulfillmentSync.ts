@@ -4,7 +4,7 @@
  * and persists Material Issue Receipt sidecars on MR remarks for cross-user sync.
  */
 
-type WarehouseTagKind = "ForwardedItems" | "MaterialIssue" | "MIR";
+type WarehouseTagKind = "ForwardedItems" | "MaterialIssue" | "MIR" | "StockDecisions";
 
 /**
  * Extract a BidSphere machine tag whose payload is nested JSON.
@@ -149,10 +149,13 @@ export function extractWarehouseMachineTags(remarks: string | null | undefined):
   const mir = extractBidSphereJsonTag(raw, "MIR");
   const prose = stripBidSphereJsonTag(
     stripBidSphereJsonTag(
-      stripBidSphereJsonTag(raw, "ForwardedItems"),
-      "MaterialIssue",
+      stripBidSphereJsonTag(
+        stripBidSphereJsonTag(raw, "ForwardedItems"),
+        "MaterialIssue",
+      ),
+      "MIR",
     ),
-    "MIR",
+    "StockDecisions",
   )
     .replace(/\n{3,}/g, "\n\n")
     .trim();

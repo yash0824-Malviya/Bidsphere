@@ -307,7 +307,7 @@ export default function BudgetCreatePage() {
         return;
       }
       const created = await createBudget(buildPayload());
-      toast.success("Budget draft saved to ERPNext");
+      toast.success("Budget draft saved successfully");
       navigate(`/budget/detail/${encodeURIComponent(created.name)}`);
     } catch (err) {
       reportCreateError(err);
@@ -358,7 +358,7 @@ export default function BudgetCreatePage() {
     <div>
       <PageHeader
         title="Create Budget"
-        description="Create an ERPNext Budget document for Finance Manager approval. All fields map directly to the standard Budget DocType."
+        description="Create a budget document for Finance Manager approval. All fields map directly to the standard budget form."
         actions={
           <Link
             to="/budget"
@@ -385,7 +385,7 @@ export default function BudgetCreatePage() {
                 <FormField
                   label="Budget Series"
                   required
-                  hint="Auto-generated from ERPNext naming series when the document is saved."
+                  hint="Auto-generated from the naming series when the document is saved."
                   error={undefined}
                   className="sm:col-span-2"
                 >
@@ -421,7 +421,7 @@ export default function BudgetCreatePage() {
                 <FormField
                   label="Fiscal Year"
                   required
-                  hint="ERPNext fiscal year for budget tracking."
+                  hint="Fiscal year for budget tracking."
                   error={showValidation ? errors.fiscalYear : undefined}
                 >
                   <select
@@ -576,7 +576,7 @@ export default function BudgetCreatePage() {
 
               <FormField
                 label="Monthly Distribution"
-                hint="Optional — spread budget across months using an ERPNext distribution template."
+                hint="Optional — spread budget across months using a distribution template."
               >
                 <select
                   value={monthlyDistribution}
@@ -608,7 +608,7 @@ export default function BudgetCreatePage() {
 
               <FormField
                 label="Remarks"
-                hint="Stored as an ERPNext comment on the budget document."
+                hint="Stored as a comment on the budget document."
                 className="sm:col-span-2"
               >
                 <textarea
@@ -630,12 +630,12 @@ export default function BudgetCreatePage() {
               <ReadOnlyField
                 label="Created Date"
                 value="—"
-                hint="Set automatically when the budget is saved in ERPNext."
+                hint="Set automatically when the budget is saved."
               />
               <ReadOnlyField
                 label="Last Modified"
                 value="—"
-                hint="Updated on each save in ERPNext."
+                hint="Updated on each save."
               />
             </div>
             <div className="mt-4 flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2.5">

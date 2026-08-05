@@ -11,6 +11,28 @@ import {
 import { apiGet, apiPut, buildListConfig, buildResourceUrl } from "../api/erpnext";
 import { getMaterialRequest } from "../api/purchasing";
 import type { MaterialRequestDraftLine } from "../components/material-requests/MaterialRequestItemLineRow";
+import {
+  fileLabelFromUrl,
+  filterSupplierVisibleAttachments,
+  inferDocumentTypeFromFileName,
+  isSupplierVisibleAttachment,
+  normalizeAttachmentVisibility,
+  parseAttachmentVisibilityRows,
+  RFQ_DOCUMENT_TYPES,
+  type AttachmentVisibility,
+  type RfqDocumentType,
+} from "./rfqAttachmentVisibility";
+
+export {
+  fileLabelFromUrl,
+  filterSupplierVisibleAttachments,
+  inferDocumentTypeFromFileName,
+  isSupplierVisibleAttachment,
+  normalizeAttachmentVisibility,
+  RFQ_DOCUMENT_TYPES,
+  type AttachmentVisibility,
+  type RfqDocumentType,
+};
 
 export const MR_ITEM_PART_NAME_FIELD = "custom_part_name";
 export const MR_ITEM_2D_FIELD = "custom_2d_drawing";
@@ -54,6 +76,13 @@ export interface EngineeringAttachment {
   source?: EngineeringAttachmentSource;
   /** Monotonic version; defaults to 1. */
   version?: number;
+  /**
+   * Supplier Visible (default) vs Internal Only.
+   * Existing RFQs without this field remain supplier-visible.
+   */
+  visibility?: AttachmentVisibility;
+  /** Human document classification shown in Supplier Portal. */
+  documentType?: string;
 }
 
 export interface PendingAttachment {
@@ -62,6 +91,8 @@ export interface PendingAttachment {
   localUrl: string;
   progress?: number;
   error?: string;
+  visibility?: AttachmentVisibility;
+  documentType?: string;
 }
 
 function fileExtension(name: string): string {
@@ -132,16 +163,6 @@ export function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function fileLabelFromUrl(url: string): string {
-  try {
-    const path = url.split("?")[0] ?? url;
-    const seg = path.split("/").pop() ?? path;
-    return decodeURIComponent(seg);
-  } catch {
-    return url;
-  }
-}
-
 function legacyAttachmentFromUrl(url: string): EngineeringAttachment {
   const fileName = fileLabelFromUrl(url);
   const ext = fileExtension(fileName).replace(".", "");
@@ -154,6 +175,8 @@ function legacyAttachmentFromUrl(url: string): EngineeringAttachment {
     uploadedAt: "",
     source: "department",
     version: 1,
+    visibility: "supplier",
+    documentType: inferDocumentTypeFromFileName(fileName),
   };
 }
 
@@ -166,47 +189,70 @@ export function normalizeAttachmentSource(
 export function parseEngineeringAttachments(
   raw: unknown,
 ): EngineeringAttachment[] {
-  if (!raw) return [];
-  let value: unknown = raw;
-  if (typeof raw === "string") {
-    const trimmed = raw.trim();
-    if (!trimmed) return [];
-    try {
-      value = JSON.parse(trimmed);
-    } catch {
-      return [];
-    }
-  }
-  if (!Array.isArray(value)) return [];
-  const out: EngineeringAttachment[] = [];
-  for (const row of value) {
-    if (!row || typeof row !== "object") continue;
-    const r = row as Record<string, unknown>;
-    const fileUrl = String(r.fileUrl ?? r.url ?? "").trim();
-    if (!fileUrl) continue;
-    const fileName = String(r.fileName ?? r.name ?? fileLabelFromUrl(fileUrl)).trim();
-    const versionRaw = Number(r.version ?? 1);
-    out.push({
-      id: String(r.id ?? newAttachmentId()),
-      fileName: fileName || fileLabelFromUrl(fileUrl),
-      fileUrl,
-      fileType: String(
-        r.fileType ?? (fileExtension(fileName).replace(".", "") || "file"),
-      ),
-      fileSize: Number(r.fileSize ?? r.size ?? 0) || 0,
-      uploadedBy: r.uploadedBy ? String(r.uploadedBy) : undefined,
-      uploadedAt: String(r.uploadedAt ?? r.uploaded_at ?? ""),
-      source: normalizeAttachmentSource(r.source),
-      version: Number.isFinite(versionRaw) && versionRaw > 0 ? versionRaw : 1,
-    });
-  }
-  return out;
+  return parseAttachmentVisibilityRows(raw).map((r) => ({
+    id: String(r.id ?? newAttachmentId()),
+    fileName: r.fileName || fileLabelFromUrl(r.fileUrl),
+    fileUrl: r.fileUrl,
+    fileType: r.fileType || "file",
+    fileSize: r.fileSize ?? 0,
+    uploadedBy: r.uploadedBy,
+    uploadedAt: r.uploadedAt || "",
+    source: normalizeAttachmentSource(r.source),
+    version: r.version ?? 1,
+    visibility: normalizeAttachmentVisibility(r.visibility),
+    documentType:
+      r.documentType || inferDocumentTypeFromFileName(r.fileName || r.fileUrl),
+  }));
 }
 
 export function serializeEngineeringAttachments(
   attachments: EngineeringAttachment[],
 ): string {
   return JSON.stringify(attachments);
+}
+
+/**
+ * Strip Internal Only attachments from an RFQ / MR item payload before
+ * returning it to a supplier client. Existing docs without a visibility
+ * flag remain supplier-visible.
+ */
+export function sanitizeItemAttachmentsForSupplier<T extends {
+  custom_2d_drawing?: string | null;
+  custom_engineering_attachments?: string | null;
+  drawing_2d_url?: string | null;
+  attachments?: EngineeringAttachment[] | null;
+  attachment_name?: string | null;
+  attachment_url?: string | null;
+  attachment_type?: string | null;
+}>(item: T): T {
+  const all = resolveEngineeringAttachments(item);
+  if (all.length === 0) return item;
+  const visible = filterSupplierVisibleAttachments(all);
+  if (visible.length === all.length) {
+    /* Still normalize JSON so visibility/documentType are present for clients. */
+    const primary = visible[0]?.fileUrl ?? String(item.custom_2d_drawing ?? "").trim();
+    return {
+      ...item,
+      custom_2d_drawing: primary || item.custom_2d_drawing,
+      custom_engineering_attachments: serializeEngineeringAttachments(visible),
+      drawing_2d_url: primary || item.drawing_2d_url,
+      attachments: visible,
+      attachment_url: primary || item.attachment_url,
+      attachment_name: visible[0]?.fileName ?? item.attachment_name,
+      attachment_type: visible[0]?.fileType ?? item.attachment_type,
+    };
+  }
+  const primary = visible[0]?.fileUrl ?? "";
+  return {
+    ...item,
+    custom_2d_drawing: primary,
+    custom_engineering_attachments: serializeEngineeringAttachments(visible),
+    drawing_2d_url: primary || undefined,
+    attachments: visible,
+    attachment_url: primary || undefined,
+    attachment_name: visible[0]?.fileName,
+    attachment_type: visible[0]?.fileType,
+  };
 }
 
 type ErpFileRow = {
@@ -223,16 +269,18 @@ type ErpFileRow = {
  */
 export async function fetchAttachedEngineeringFiles(
   childDocName: string,
+  attachedToDoctype = "Material Request Item",
 ): Promise<EngineeringAttachment[]> {
   const name = String(childDocName || "").trim();
   if (!name) return [];
+  const doctype = String(attachedToDoctype || "Material Request Item").trim();
   try {
     const rows = await apiGet<ErpFileRow[]>(
       buildResourceUrl("File"),
       buildListConfig({
         fields: ["name", "file_name", "file_url", "file_size"],
         filters: [
-          ["attached_to_doctype", "=", "Material Request Item"],
+          ["attached_to_doctype", "=", doctype],
           ["attached_to_name", "=", name],
           ["is_folder", "=", 0],
         ],
@@ -250,15 +298,18 @@ export async function fetchAttachedEngineeringFiles(
       const fileName = String(
         row.file_name || fileLabelFromUrl(fileUrl),
       ).trim();
+      const resolvedName = fileName || fileLabelFromUrl(fileUrl);
       out.push({
         id: String(row.name || newAttachmentId()),
-        fileName: fileName || fileLabelFromUrl(fileUrl),
+        fileName: resolvedName,
         fileUrl,
         fileType: fileExtension(fileName).replace(".", "") || "file",
         fileSize: Number(row.file_size ?? 0) || 0,
         uploadedAt: "",
         source: "department",
         version: 1,
+        visibility: "supplier",
+        documentType: inferDocumentTypeFromFileName(resolvedName),
       });
     }
     return out;
@@ -270,20 +321,26 @@ export async function fetchAttachedEngineeringFiles(
 /**
  * Merge JSON/legacy docs with File DocType attachments (no duplicates by URL).
  */
-export async function hydrateEngineeringDocsFromChild(source: {
-  name?: string | null;
-  custom_part_name?: string | null;
-  custom_2d_drawing?: string | null;
-  custom_engineering_attachments?: string | null;
-  part_name?: string | null;
-  drawing_2d_url?: string | null;
-  attachments?: EngineeringAttachment[] | null;
-} | null | undefined): Promise<EngineeringDocs> {
+export async function hydrateEngineeringDocsFromChild(
+  source: {
+    name?: string | null;
+    custom_part_name?: string | null;
+    custom_2d_drawing?: string | null;
+    custom_engineering_attachments?: string | null;
+    part_name?: string | null;
+    drawing_2d_url?: string | null;
+    attachments?: EngineeringAttachment[] | null;
+  } | null | undefined,
+  options?: { attachedToDoctype?: string },
+): Promise<EngineeringDocs> {
   const docs = pickEngineeringDocs(source);
   const childName = String(source?.name || "").trim();
   if (!childName) return docs;
 
-  const fromFiles = await fetchAttachedEngineeringFiles(childName);
+  const fromFiles = await fetchAttachedEngineeringFiles(
+    childName,
+    options?.attachedToDoctype ?? "Material Request Item",
+  );
   if (fromFiles.length === 0) return docs;
 
   const seen = new Set(docs.attachments.map((a) => a.fileUrl));
@@ -378,6 +435,123 @@ export function engineeringCustomFieldsForErp(source: {
     );
   }
   return out;
+}
+
+/** Normalized attachment summary for MR item API responses. */
+export type MaterialRequestItemAttachmentMeta = {
+  file_name: string;
+  file_url: string;
+  attachment_count: number;
+  attachments: EngineeringAttachment[];
+};
+
+/** Build display metadata from a hydrated attachment list. */
+export function buildItemAttachmentMeta(
+  attachments: EngineeringAttachment[],
+): MaterialRequestItemAttachmentMeta {
+  const list = attachments ?? [];
+  const primary = list[0];
+  return {
+    file_name: primary?.fileName ?? "",
+    file_url: primary?.fileUrl ?? "",
+    attachment_count: list.length,
+    attachments: list,
+  };
+}
+
+async function loadMaterialRequestItemChildRow(
+  item: {
+    name?: string | null;
+    item_code?: string;
+    custom_part_name?: string | null;
+    custom_2d_drawing?: string | null;
+    custom_engineering_attachments?: string | null;
+  },
+  mrName?: string,
+): Promise<typeof item & { name?: string }> {
+  let childName = String(item.name ?? "").trim();
+  if (!childName && mrName && item.item_code) {
+    try {
+      const rows = await apiGet<Array<{ name?: string }>>(
+        buildResourceUrl("Material Request Item"),
+        buildListConfig({
+          fields: ["name"],
+          filters: [
+            ["parent", "=", mrName],
+            ["item_code", "=", item.item_code],
+          ],
+          limit_page_length: 1,
+        }),
+      );
+      childName = String(rows?.[0]?.name ?? "").trim();
+    } catch {
+      /* keep empty */
+    }
+  }
+  if (!childName) return item;
+
+  try {
+    const full = await apiGet<{
+      name?: string;
+      custom_part_name?: string;
+      custom_2d_drawing?: string;
+      custom_engineering_attachments?: string;
+    }>(buildResourceUrl("Material Request Item", childName));
+    return {
+      ...item,
+      name: childName,
+      custom_part_name: full.custom_part_name ?? item.custom_part_name,
+      custom_2d_drawing: full.custom_2d_drawing ?? item.custom_2d_drawing,
+      custom_engineering_attachments:
+        full.custom_engineering_attachments ?? item.custom_engineering_attachments,
+    };
+  } catch {
+    return { ...item, name: childName };
+  }
+}
+
+/**
+ * Attachments are owned by Material Request Item child rows (JSON + File DocType).
+ * Parent get_doc may omit custom_* fields; this re-loads each child and merges
+ * File DocType links so downstream screens show uploaded files.
+ */
+export async function hydrateMaterialRequestItemsWithAttachments<
+  T extends {
+    name?: string | null;
+    item_code: string;
+    custom_part_name?: string | null;
+    custom_2d_drawing?: string | null;
+    custom_engineering_attachments?: string | null;
+    attachments?: EngineeringAttachment[] | null;
+    attachment_count?: number;
+    attachment_file_name?: string;
+    attachment_file_url?: string;
+  },
+>(mrName: string, items: T[]): Promise<T[]> {
+  return Promise.all(
+    items.map(async (item) => {
+      const loaded = await loadMaterialRequestItemChildRow(item, mrName);
+      const eng = await hydrateEngineeringDocsFromChild({
+        ...loaded,
+        name: loaded.name,
+      });
+      const meta = buildItemAttachmentMeta(eng.attachments);
+      return {
+        ...item,
+        ...loaded,
+        custom_part_name: eng.part_name ?? loaded.custom_part_name,
+        custom_2d_drawing: eng.drawing_2d_url ?? loaded.custom_2d_drawing,
+        custom_engineering_attachments:
+          meta.attachment_count > 0
+            ? serializeEngineeringAttachments(meta.attachments)
+            : loaded.custom_engineering_attachments,
+        attachments: meta.attachments,
+        attachment_count: meta.attachment_count,
+        attachment_file_name: meta.file_name,
+        attachment_file_url: meta.file_url,
+      };
+    }),
+  );
 }
 
 /** Map draft-line engineering fields onto an ERP Material Request Item payload. */
@@ -479,6 +653,10 @@ export async function syncMaterialRequestItemEngineeringFiles(
         uploadedAt: new Date().toISOString(),
         source: "department",
         version: 1,
+        visibility: normalizeAttachmentVisibility(item.visibility),
+        documentType:
+          item.documentType?.trim() ||
+          inferDocumentTypeFromFileName(item.file.name),
       });
       if (item.localUrl) {
         try {

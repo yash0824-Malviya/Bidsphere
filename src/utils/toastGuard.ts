@@ -7,7 +7,7 @@
 import toast from "react-hot-toast";
 
 import { isPermissionDeniedMessage } from "./permissionError";
-import { toEnterpriseUserMessage } from "./enterpriseUserMessage";
+import { resolveApiErrorMessage } from "./rfqDetailApiErrors";
 
 let installed = false;
 
@@ -34,18 +34,27 @@ export function installPermissionToastGuard(): void {
       return "";
     }
 
-    if (text) {
-      const safe = toEnterpriseUserMessage(
-        text,
-        "Something went wrong. Please try again.",
-      );
-      if (safe !== text && import.meta.env.DEV) {
-        // eslint-disable-next-line no-console
-        console.error("[toast.error] Sanitized technical message:", text);
-      }
-      return originalError(safe, ...rest);
+    const safe =
+      typeof message === "string"
+        ? resolveApiErrorMessage(message)
+        : resolveApiErrorMessage(message);
+
+    if (
+      typeof message === "string" &&
+      safe !== message &&
+      import.meta.env.DEV
+    ) {
+      // eslint-disable-next-line no-console
+      console.error("[toast.error] Sanitized technical message:", message);
+    } else if (
+      message instanceof Error &&
+      safe !== message.message &&
+      import.meta.env.DEV
+    ) {
+      // eslint-disable-next-line no-console
+      console.error("[toast.error] Sanitized technical message:", message);
     }
 
-    return originalError(message, ...rest);
+    return originalError(safe, ...rest);
   }) as typeof toast.error;
 }

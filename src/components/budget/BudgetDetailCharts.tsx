@@ -140,7 +140,7 @@ export default function BudgetDetailCharts({ data, currency }: Props) {
 
       <ChartCard
         title="Department-wise Budget Utilization"
-        subtitle="Utilization across active ERPNext budgets"
+        subtitle="Utilization across active budgets"
       >
         {dept.length > 0 ? (
           <ResponsiveContainer width="100%" height={Math.max(200, dept.length * 34)}>

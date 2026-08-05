@@ -7,9 +7,10 @@ import type { PaymentEntry, PaymentEntryReference } from "../../types/erpnext";
 
 interface Props {
   payment: PaymentEntry;
+  className?: string;
 }
 
-export default function PaymentTraceability({ payment }: Props) {
+export default function PaymentTraceability({ payment, className = "" }: Props) {
   const invoiceRefs = (payment.references ?? []).filter(
     (r): r is PaymentEntryReference & { reference_name: string } =>
       r.reference_doctype === "Purchase Invoice" && !!r.reference_name
@@ -25,7 +26,7 @@ export default function PaymentTraceability({ payment }: Props) {
 
   if (invoiceRefs.length === 0) {
     return (
-      <div className="mt-4 card p-5">
+      <section className={`payment-detail-panel ${className}`.trim()}>
         <div className="flex items-center gap-2 text-sm font-semibold text-neutral-800">
           <Link2 className="h-4 w-4 text-primary" />
           Source Document Traceability
@@ -33,18 +34,18 @@ export default function PaymentTraceability({ payment }: Props) {
         <p className="mt-2 text-xs text-neutral-500">
           No linked invoices — traceability chain unavailable for this payment.
         </p>
-      </div>
+      </section>
     );
   }
 
   return (
-    <div className="mt-4 card overflow-hidden">
-      <div className="border-b border-neutral-100 bg-gradient-to-r from-primary-50/80 to-white px-5 py-3.5">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-neutral-800">
+    <section className={`payment-detail-panel payment-detail-panel--flush ${className}`.trim()}>
+      <div className="payment-detail-panel__header">
+        <h3 className="payment-detail-panel__title payment-detail-panel__title--inline">
           <Link2 className="h-4 w-4 text-primary" />
           Source Document Traceability
         </h3>
-        <p className="mt-0.5 text-xs text-neutral-500">
+        <p className="mt-1 text-xs text-neutral-500">
           Payment → Invoice → Purchase Order
         </p>
       </div>
@@ -109,7 +110,7 @@ export default function PaymentTraceability({ payment }: Props) {
           );
         })}
       </div>
-    </div>
+    </section>
   );
 }
 

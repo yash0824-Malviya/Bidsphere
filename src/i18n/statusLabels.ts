@@ -37,7 +37,7 @@ const STATUS_KEYS: Record<string, string> = {
   Active: "statusBadge.active",
   Inactive: "statusBadge.inactive",
   "Below Reorder": "statusBadge.belowReorder",
-  "Admin Review": "statusBadge.adminReview",
+  "Admin Review": "statusBadge.underWarehouseReview",
   "Under Warehouse Review": "statusBadge.underWarehouseReview",
   "Stock Available": "statusBadge.stockAvailable",
   "Material Issued": "statusBadge.materialIssued",

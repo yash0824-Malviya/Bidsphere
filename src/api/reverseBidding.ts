@@ -33,7 +33,20 @@ import {
   type LegalDocumentItemSummary,
 } from "./legalDocs";
 import { formatERPNextDatetime, nowERPNextDatetime } from "../utils/erpNextDate";
+import { formatCurrencyIn } from "../utils/format";
+import {
+  lowestRateByItemFromRows,
+  recomputeBidItemState,
+  toBidRate,
+  validateItemBidCore,
+} from "../utils/reverseBiddingBidValidation";
 import type { PurchaseOrder } from "../types/erpnext";
+import { readSupplierSession } from "../hooks/useSupplierSession";
+import type { ClientBidSnapshot } from "../utils/reverseBiddingSubmitHelpers";
+import {
+  isSupplierPortalBidSession,
+  submitItemBidsViaServer,
+} from "./reverseBiddingSubmit";
 import type {
   AuctionStatus,
   BidItemStatus,
@@ -165,8 +178,8 @@ function isInvitationVisible(
 
 function bidValues(suppliers: ReverseBiddingSupplier[]): number[] {
   return suppliers
-    .map((s) => (typeof s.current_bid === "number" ? s.current_bid : NaN))
-    .filter((n) => Number.isFinite(n) && n > 0);
+    .map((s) => toBidRate(s.current_bid))
+    .filter((n) => n > 0);
 }
 
 /** Current lowest standing offer (bids + initial quotes fall back to starting price). */
@@ -505,14 +518,7 @@ function recomputeRanks(
 export function lowestRateByItem(
   items: ReverseBidItem[]
 ): Map<string, number> {
-  const map = new Map<string, number>();
-  for (const it of items) {
-    const rate = it.current_rate ?? 0;
-    if (!(rate > 0)) continue;
-    const prev = map.get(it.item_code);
-    if (prev == null || rate < prev) map.set(it.item_code, rate);
-  }
-  return map;
+  return lowestRateByItemFromRows(items);
 }
 
 /**
@@ -524,48 +530,14 @@ function recomputeItemState(
   items: ReverseBidItem[],
   opts: { completed?: boolean; winner?: string; live?: boolean } = {}
 ): ReverseBidItem[] {
-  // Group by item_code to rank suppliers within each item.
-  const byItem = new Map<string, ReverseBidItem[]>();
-  for (const it of items) {
-    const list = byItem.get(it.item_code) ?? [];
-    list.push(it);
-    byItem.set(it.item_code, list);
-  }
-  const rankOf = new Map<ReverseBidItem, number>();
-  const lowestFlag = new Map<ReverseBidItem, boolean>();
-  for (const [, rows] of byItem) {
-    const ranked = [...rows]
-      .filter((r) => (r.current_rate ?? 0) > 0)
-      .sort((a, b) => (a.current_rate ?? 0) - (b.current_rate ?? 0));
-    const min = ranked[0]?.current_rate ?? 0;
-    ranked.forEach((r, i) => rankOf.set(r, i + 1));
-    for (const r of rows) {
-      lowestFlag.set(r, (r.current_rate ?? 0) > 0 && r.current_rate === min);
-    }
-  }
-
-  return items.map((it) => {
-    const rate = it.current_rate ?? 0;
-    const rank = rankOf.get(it) ?? 0;
-    const isLowest = lowestFlag.get(it) ?? false;
-    let status: BidItemStatus;
-    if (opts.completed) {
-      status = opts.winner && sameSupplier(it.supplier, opts.winner) ? "Winner" : "Outbid";
-    } else if (rate <= 0) {
-      status = "Waiting";
-    } else if (isLowest) {
-      status = "Leading";
-    } else {
-      status = opts.live ? "Outbid" : "Active";
-    }
-    return {
-      ...it,
-      amount: rate * (it.qty ?? 0),
-      rank,
-      is_lowest: (isLowest ? 1 : 0) as 0 | 1,
-      status,
-    };
-  });
+  const recomputed = recomputeBidItemState(items, { live: opts.live });
+  if (!opts.completed) return recomputed;
+  return recomputed.map((it) => ({
+    ...it,
+    status: (opts.winner && sameSupplier(it.supplier, opts.winner)
+      ? "Winner"
+      : "Outbid") as BidItemStatus,
+  }));
 }
 
 /** Sum of item amounts per supplier (their running total quote). */
@@ -574,7 +546,7 @@ export function supplierTotalsFromItems(
 ): Map<string, number> {
   const map = new Map<string, number>();
   for (const it of items) {
-    const amt = (it.current_rate ?? 0) * (it.qty ?? 0);
+    const amt = toBidRate(it.current_rate) * toBidRate(it.qty);
     map.set(it.supplier, (map.get(it.supplier) ?? 0) + amt);
   }
   return map;
@@ -731,21 +703,16 @@ function isTimestampConflict(err: unknown): boolean {
   return /timestamp|has been modified|modified after|409|conflict/i.test(msg);
 }
 
-/**
- * Frappe treats child `name` values starting with `new-` as inserts on save.
- * Required when child DocTypes still use autoname "prompt" / "Set by user"
- * (see scripts/setup-reverse-bidding-naming.mjs).
- */
-function newChildRowName(doctype: string): string {
-  const slug = doctype.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-  const rand =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID().replace(/-/g, "").slice(0, 12)
-      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-  return `new-${slug}-${rand}`;
+/** True when the child row already exists in ERPNext (not a client-side placeholder). */
+function isPersistedChildRow(name?: string): boolean {
+  const trimmed = (name ?? "").trim();
+  return trimmed.length > 0 && !trimmed.startsWith("new-");
 }
 
-/** Strip read-only meta and ensure every child row has a usable `name`. */
+/**
+ * Normalize child rows for parent PUT. Persisted rows keep their `name`; new
+ * rows omit `name` so ERPNext hash autoname assigns a unique id on save.
+ */
 function prepareChildRowsForPut<T extends { name?: string; doctype?: string }>(
   rows: T[] | undefined,
 ): T[] {
@@ -757,12 +724,34 @@ function prepareChildRowsForPut<T extends { name?: string; doctype?: string }>(
     delete rec.modified_by;
     delete rec.owner;
     delete rec.docstatus;
-    const existing = typeof next.name === "string" ? next.name.trim() : "";
-    if (!existing) {
-      next.name = newChildRowName(String(next.doctype || "child"));
+    if (!isPersistedChildRow(next.name)) {
+      delete (next as Record<string, unknown>).name;
     }
     return next;
   });
+}
+
+/** Resolve ERP Supplier.name from the supplier portal session when available. */
+function resolveBidSupplierIdentity(explicit?: string): string {
+  const session = readSupplierSession();
+  const fromSession = String(
+    session?.linkedSupplier || session?.supplierName || "",
+  ).trim();
+  const requested = String(explicit ?? "").trim();
+
+  if (fromSession && requested && !sameSupplier(fromSession, requested)) {
+    throw new Error(
+      "Supplier session mismatch. Sign out and sign in again to the Supplier Portal.",
+    );
+  }
+
+  const supplier = fromSession || requested;
+  if (!supplier) {
+    throw new Error(
+      "Supplier identity is missing. Sign in to the Supplier Portal and try again.",
+    );
+  }
+  return supplier;
 }
 
 async function patchReverseBidding(
@@ -780,7 +769,7 @@ async function patchReverseBidding(
   const body: Record<string, unknown> = { ...patch };
   if (modified) body.modified = modified;
 
-  // Normalize child tables so new rows always carry a `new-*` name.
+  // New child rows omit `name` so ERPNext hash autoname assigns unique ids.
   if (Array.isArray(body.bid_history)) {
     body.bid_history = prepareChildRowsForPut(
       body.bid_history as ReverseBid[],
@@ -889,10 +878,7 @@ async function ensureSupplierBidSheet(
     rfq.items ?? [],
     quotations,
     [supplier],
-  ).map((row) => ({
-    ...row,
-    name: newChildRowName(RB_ITEM_DOCTYPE),
-  }));
+  );
 
   if (seeded.length === 0) {
     throw new Error(
@@ -1451,7 +1437,6 @@ export async function submitBid(input: SubmitBidInput): Promise<ReverseBidding> 
 
   const newBid: ReverseBid = {
     doctype: RB_BID_DOCTYPE,
-    name: newChildRowName(RB_BID_DOCTYPE),
     supplier: input.supplier,
     bid_amount: input.amount,
     previous_rate: previous,
@@ -1509,19 +1494,25 @@ export interface ItemBidInput {
 
 export interface SubmitItemBidsInput {
   auctionName: string;
-  supplier: string;
+  /** Staff-only override. Supplier Portal ignores this and uses the JWT session. */
+  supplier?: string;
   items: ItemBidInput[];
+  /** UI snapshot for server-side bid diagnostics (supplier portal). */
+  clientSnapshot?: ClientBidSnapshot;
 }
 
 export interface ItemBidValidation {
   ok: boolean;
   reason?: string;
+  reasonCode?: string;
   /** Lowest current rate for the item across suppliers. */
   currentLowest: number;
   /** Highest rate this bid may be (currentLowest − decrement). */
   maxAllowed: number;
   /** This supplier's own current rate for the item. */
   ownCurrent: number;
+  /** Whether this supplier already holds the lowest rate for the item. */
+  isLeader: boolean;
 }
 
 /**
@@ -1536,48 +1527,29 @@ export function validateItemBid(
   rate: number,
   now: number = Date.now()
 ): ItemBidValidation {
-  const items = doc.bid_items ?? [];
-  const forItem = items.filter((i) => i.item_code === itemCode);
-  const own = forItem.find((i) => sameSupplier(i.supplier, supplier));
-  const lowestMap = lowestRateByItem(items);
-  const currentLowest = lowestMap.get(itemCode) ?? own?.current_rate ?? 0;
-  const decrement = doc.minimum_decrement ?? 0;
-  const ownCurrent = own?.current_rate ?? 0;
-  // This supplier already holds (or ties) the lowest price for this item.
-  const isLeader = ownCurrent > 0 && currentLowest > 0 && ownCurrent <= currentLowest;
-  // A leader may keep improving their own price by any amount; a challenger
-  // must undercut the current lowest by at least the minimum decrement.
-  const maxAllowed = isLeader
-    ? ownCurrent
-    : decrement > 0
-      ? currentLowest - decrement
-      : currentLowest;
-
-  const status = deriveAuctionStatus(doc, now);
-  if (status !== "Live") {
-    return { ok: false, reason: "The auction is not live.", currentLowest, maxAllowed, ownCurrent };
-  }
-  if (!own) {
-    return { ok: false, reason: "This item is not part of your bid sheet.", currentLowest, maxAllowed, ownCurrent };
-  }
-  if (!(rate > 0)) {
-    return { ok: false, reason: "Rate must be greater than zero.", currentLowest, maxAllowed, ownCurrent };
-  }
-  // Rule: new bid must always be strictly lower than this supplier's previous
-  // price — this alone lets a leader keep bidding as many times as they like.
-  if (ownCurrent > 0 && rate >= ownCurrent) {
-    return { ok: false, reason: "Your bid must be lower than your previous bid.", currentLowest, maxAllowed, ownCurrent };
-  }
-  // A challenger (not currently lowest) must beat the current lowest price.
-  if (!isLeader) {
-    if (currentLowest > 0 && rate >= currentLowest) {
-      return { ok: false, reason: "Your bid must be lower than the current lowest price.", currentLowest, maxAllowed, ownCurrent };
-    }
-    if (decrement > 0 && rate > maxAllowed) {
-      return { ok: false, reason: `Bid must be at least ${decrement} below the current lowest (≤ ${maxAllowed}).`, currentLowest, maxAllowed, ownCurrent };
-    }
-  }
-  return { ok: true, currentLowest, maxAllowed, ownCurrent };
+  const invited = (doc.invited_suppliers ?? []).some((s) =>
+    sameSupplier(s.supplier, supplier),
+  );
+  const result = validateItemBidCore({
+    derivedAuctionStatus: deriveAuctionStatus(doc, now),
+    supplierInvited: invited,
+    items: doc.bid_items ?? [],
+    supplier,
+    itemCode,
+    rate: toBidRate(rate),
+    minimumDecrement: doc.minimum_decrement,
+    sameSupplier,
+    formatAmount: (value) => formatCurrencyIn(value, doc.currency),
+  });
+  return {
+    ok: result.ok,
+    reason: result.reason,
+    reasonCode: result.reasonCode,
+    currentLowest: result.currentLowest,
+    maxAllowed: result.maxAllowed,
+    ownCurrent: result.ownCurrent,
+    isLeader: result.isLeader,
+  };
 }
 
 /**
@@ -1589,10 +1561,23 @@ export async function submitItemBids(
   input: SubmitItemBidsInput
 ): Promise<ReverseBidding> {
   const auctionName = String(input.auctionName || "").trim();
-  const supplier = String(input.supplier || "").trim();
   if (!auctionName) throw new Error("Auction document name is missing.");
-  if (!supplier) throw new Error("Supplier identity is missing.");
 
+  if (isSupplierPortalBidSession()) {
+    // eslint-disable-next-line no-console
+    console.log("[ReverseBidding] submitItemBids → privileged server API", {
+      auctionId: auctionName,
+      itemCount: input.items?.length ?? 0,
+      session: readSupplierSession()?.linkedSupplier ?? readSupplierSession()?.supplierName,
+    });
+    return submitItemBidsViaServer({
+      auctionName,
+      items: input.items ?? [],
+      clientSnapshot: input.clientSnapshot,
+    });
+  }
+
+  const supplier = resolveBidSupplierIdentity(input.supplier);
   const endpoint = buildResourceUrl(RB_DOCTYPE, auctionName);
   // eslint-disable-next-line no-console
   console.log("[ReverseBidding] submitItemBids start", {
@@ -1713,8 +1698,6 @@ export async function submitItemBids(
 
   // Append one immutable history row per submitted item — never overwrite or
   // supersede prior rows, so the full negotiation trail is preserved.
-  // Each new Reverse Bids row gets a `new-*` name so ERPNext accepts the
-  // insert even when child autoname is still "prompt".
   const newHistoryRows: ReverseBid[] = clean.map((line) => {
     const prev = prevRateByItem.get(line.item_code);
     const previous = prev?.rate ?? 0;
@@ -1722,7 +1705,6 @@ export async function submitItemBids(
     const reductionPct = previous > 0 ? (reduction / previous) * 100 : 0;
     return {
       doctype: RB_BID_DOCTYPE,
-      name: newChildRowName(RB_BID_DOCTYPE),
       supplier,
       item_code: line.item_code,
       item_name: prev?.name ?? line.item_code,
@@ -1747,8 +1729,8 @@ export async function submitItemBids(
     supplierId: supplier,
     requestedDocumentName: auctionName,
     endpoint,
-    newHistoryNames: newHistoryRows.map((r) => r.name),
     itemsSubmitted: clean.map((c) => c.item_code),
+    newHistoryRows: newHistoryRows.length,
   });
 
   try {
@@ -1788,7 +1770,7 @@ export async function submitItemBids(
     const raw = err instanceof Error ? err.message : String(err);
     if (/Please set the document name|does not exist/i.test(raw)) {
       throw new Error(
-        "Could not save your bid history row. Ask an administrator to run the Reverse Bidding naming setup (hash autoname on Reverse Bids), then try again.",
+        "Could not save your bid history row. ERPNext could not assign a document name for Reverse Bids. Please try again in a moment or contact your administrator.",
       );
     }
     throw err instanceof Error ? err : new Error(raw);
@@ -1950,10 +1932,7 @@ export async function ensureBidItems(
     rfq.items ?? [],
     quotations,
     supplierIds
-  ).map((row) => ({
-    ...row,
-    name: row.name?.trim() || newChildRowName(RB_ITEM_DOCTYPE),
-  }));
+  );
   if (items.length === 0) return doc;
 
   return patchReverseBidding(

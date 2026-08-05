@@ -369,7 +369,7 @@ export default function WarehouseMaterialIssuePage() {
     if (!fromWarehouse) {
       return warehouseOptions.length > 1
         ? "Select a From Warehouse before issuing material."
-        : `No warehouse found for Company ${mrCompany}. Configure a warehouse in ERPNext.`;
+        : `No warehouse found for Company ${mrCompany}. Configure a warehouse before issuing material.`;
     }
     return validateIssueLines(
       lines.map((l) => ({

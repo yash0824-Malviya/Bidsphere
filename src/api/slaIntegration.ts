@@ -12,7 +12,6 @@ import {
   type SlaConfiguration,
 } from "./sla";
 import {
-  getMaterialRequestProcurementType,
   getMaterialRequestWorkflowStatus,
   type MaterialRequestWorkflowRecord,
 } from "./materialRequestWorkflow";
@@ -30,7 +29,6 @@ export async function syncMaterialRequestSla(
   configs?: SlaConfiguration[]
 ): Promise<void> {
   const status = getMaterialRequestWorkflowStatus(mr);
-  const ptype = getMaterialRequestProcurementType(mr);
   const priority = mr.custom_priority || "Medium";
   const department = mr.custom_department || "";
   const base = {
@@ -46,32 +44,13 @@ export async function syncMaterialRequestSla(
       return;
 
     case "Admin Review":
-      // Indirect procurement waits on the Admin manager.
-      await ensureSlaTimer({
-        ...base,
-        workflow: "Material Request",
-        stage: "Admin Review",
-        role: "admin",
-      });
-      return;
-
     case "Submitted":
     case "Under Warehouse Review":
-      // Direct requests are stock-checked by the warehouse first.
-      if (ptype === "Direct") {
-        await ensureSlaTimer({
-          ...base,
-          workflow: "Warehouse Review",
-          role: "warehouse",
-        });
-      } else {
-        await ensureSlaTimer({
-          ...base,
-          workflow: "Material Request",
-          stage: "Admin Review",
-          role: "admin",
-        });
-      }
+      await ensureSlaTimer({
+        ...base,
+        workflow: "Warehouse Review",
+        role: "warehouse",
+      });
       return;
 
     // "Procurement Required" = shortage identified, but Warehouse hasn't

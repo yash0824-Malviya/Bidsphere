@@ -12,7 +12,7 @@
  * item has not yet been created in ERPNext.
  *
  * Indirect workflow (never touches the RFQ module):
- *   Indirect Request → Admin Approval → Purchase Order → Warehouse Receipt →
+ *   Indirect Request → Warehouse Review → Purchase Order → Warehouse Receipt →
  *   Department Issue.
  */
 
@@ -23,10 +23,18 @@ export interface IndirectCatalogItem {
   uom: string;
 }
 
-/** The only Item Groups shown for Indirect procurement. */
+/**
+ * Indirect procurement catalog groups.
+ * Legacy groups (Housekeeping, Stationery) remain for backward compatibility.
+ */
 export const INDIRECT_ITEM_GROUPS = [
-  "Housekeeping",
+  "MRO",
   "IT Equipment",
+  "Office Supplies",
+  "Safety",
+  "Services",
+  "Logistics",
+  "Housekeeping",
   "Stationery",
 ] as const;
 
@@ -34,6 +42,30 @@ export type IndirectItemGroup = (typeof INDIRECT_ITEM_GROUPS)[number];
 
 /** Items available per Indirect Item Group. */
 export const INDIRECT_CATALOG: Record<string, IndirectCatalogItem[]> = {
+  MRO: [
+    { code: "HK-001", name: "Floor Cleaner", description: "Floor Cleaner", uom: "Litre" },
+    { code: "HK-002", name: "Glass Cleaner", description: "Glass Cleaner", uom: "Litre" },
+    { code: "HK-003", name: "Garbage Bags", description: "Garbage Bags", uom: "Pack" },
+  ],
+  "Office Supplies": [
+    { code: "ST-001", name: "A4 Paper", description: "A4 Paper", uom: "Ream" },
+    { code: "ST-002", name: "Ball Pen", description: "Ball Pen", uom: "Nos" },
+    { code: "ST-003", name: "Spiral Notebook", description: "Spiral Notebook", uom: "Nos" },
+    { code: "ST-004", name: "Stapler", description: "Stapler", uom: "Nos" },
+  ],
+  Safety: [
+    { code: "SF-001", name: "Safety Helmet", description: "Safety Helmet", uom: "Nos" },
+    { code: "SF-002", name: "Safety Gloves", description: "Safety Gloves", uom: "Pair" },
+    { code: "SF-003", name: "Safety Goggles", description: "Safety Goggles", uom: "Nos" },
+  ],
+  Services: [
+    { code: "SV-001", name: "Calibration Service", description: "Calibration Service", uom: "Nos" },
+    { code: "SV-002", name: "Maintenance Contract", description: "Maintenance Contract", uom: "Nos" },
+  ],
+  Logistics: [
+    { code: "LG-001", name: "Freight Service", description: "Freight Service", uom: "Nos" },
+    { code: "LG-002", name: "Courier Service", description: "Courier Service", uom: "Nos" },
+  ],
   Housekeeping: [
     { code: "HK-001", name: "Floor Cleaner", description: "Floor Cleaner", uom: "Litre" },
     { code: "HK-002", name: "Glass Cleaner", description: "Glass Cleaner", uom: "Litre" },

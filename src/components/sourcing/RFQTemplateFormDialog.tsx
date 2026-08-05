@@ -29,6 +29,7 @@ import {
   DEFAULT_WORKFLOW_RULES,
 } from "../../types/erpnext";
 import { generateId } from "../../utils/id";
+import UomSelect from "../UomSelect";
 
 type FormItem = {
   id: string;
@@ -266,7 +267,18 @@ export default function RFQTemplateFormDialog({
                       <input className="input-field text-xs" placeholder="Item Code *" value={item.item_code} onChange={(e) => setItems((p) => p.map((x) => x.id === item.id ? { ...x, item_code: e.target.value } : x))} />
                       <input className="input-field text-xs sm:col-span-2" placeholder="Item Name" value={item.item_name} onChange={(e) => setItems((p) => p.map((x) => x.id === item.id ? { ...x, item_name: e.target.value } : x))} />
                       <input type="number" min={1} className="input-field text-xs" placeholder="Qty" value={item.qty} onChange={(e) => setItems((p) => p.map((x) => x.id === item.id ? { ...x, qty: Number(e.target.value) || 1 } : x))} />
-                      <input className="input-field text-xs" placeholder="UOM" value={item.uom} onChange={(e) => setItems((p) => p.map((x) => x.id === item.id ? { ...x, uom: e.target.value } : x))} />
+                      <UomSelect
+                        className="input-field text-xs"
+                        value={item.uom}
+                        onChange={(v) =>
+                          setItems((p) =>
+                            p.map((x) =>
+                              x.id === item.id ? { ...x, uom: v } : x,
+                            ),
+                          )
+                        }
+                        erpUoms={item.uom ? [item.uom] : []}
+                      />
                       <input type="number" min={0} step={0.01} className="input-field text-xs" placeholder="Target Price" value={item.target_price || ""} onChange={(e) => setItems((p) => p.map((x) => x.id === item.id ? { ...x, target_price: parseFloat(e.target.value) || 0 } : x))} />
                     </div>
                     <input className="input-field mt-2 text-xs" placeholder="Specification / technical requirements" value={item.specification} onChange={(e) => setItems((p) => p.map((x) => x.id === item.id ? { ...x, specification: e.target.value } : x))} />

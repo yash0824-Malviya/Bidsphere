@@ -7,6 +7,7 @@ import {
   ClipboardList,
   Eye,
   FileQuestion,
+  Search,
   Send,
   XCircle,
 } from "lucide-react";

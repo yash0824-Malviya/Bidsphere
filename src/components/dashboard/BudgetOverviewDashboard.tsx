@@ -128,7 +128,7 @@ export default function BudgetOverviewDashboard() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="page-subtitle">
-            Live ERPNext budget allocation, consumption and utilization
+            Live budget allocation, consumption and utilization
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -194,7 +194,7 @@ export default function BudgetOverviewDashboard() {
           <div>
             <h2 className="text-base font-bold text-neutral-900">Budgets</h2>
             <p className="text-xs text-neutral-500">
-              Allocation vs consumption per ERPNext budget
+              Allocation vs consumption per budget
             </p>
           </div>
           <Link
@@ -239,7 +239,7 @@ export default function BudgetOverviewDashboard() {
                       No Active Budget Found
                     </p>
                     <p className="mt-0.5 text-xs text-neutral-400">
-                      Approved or active ERPNext budgets will appear here.
+                      Approved or active budgets will appear here.
                     </p>
                   </td>
                 </tr>

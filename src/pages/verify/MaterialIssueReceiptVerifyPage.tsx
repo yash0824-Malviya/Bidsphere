@@ -65,8 +65,20 @@ export default function MaterialIssueReceiptVerifyPage() {
     // eslint-disable-next-line no-console
     console.error("[verify] API request failed:", verifyQuery.error);
     return (
-      <div className="mx-auto max-w-lg p-8 text-center text-sm text-danger-700">
-        Unable to verify this receipt. Verification service error.
+      <div className="mx-auto flex min-h-[50vh] max-w-lg flex-col items-center justify-center gap-3 p-8 text-center">
+        <div className="grid h-12 w-12 place-items-center rounded-xl bg-rose-100 text-rose-800">
+          <ShieldAlert className="h-6 w-6" />
+        </div>
+        <h1 className="text-lg font-semibold text-slate-900">
+          Verification service unavailable.
+        </h1>
+        <p className="text-sm text-slate-600">
+          The verification page loaded, but the receipt service could not be
+          reached. Try again shortly or contact warehouse support.
+        </p>
+        {key ? (
+          <p className="font-mono text-xs text-slate-500">Issue: {key}</p>
+        ) : null}
       </div>
     );
   }

@@ -14,6 +14,7 @@ import {
   getRfqBudgetSummary,
   type RfqBudgetSummary,
 } from "../../api/erpBudget";
+import { resolveApiErrorMessage } from "../../utils/rfqDetailApiErrors";
 
 export interface CheckBudgetRfqItem {
   item_code?: string;
@@ -198,7 +199,7 @@ export default function CheckBudgetModal({
             <div className="flex items-center justify-center gap-3 py-14 text-neutral-500">
               <Loader2 className="h-5 w-5 animate-spin text-primary-500" />
               <span className="text-sm font-medium">
-                Fetching live budget data from ERPNext…
+                Fetching latest budget information…
               </span>
             </div>
           ) : query.isError ? (
@@ -207,8 +208,11 @@ export default function CheckBudgetModal({
               <div>
                 <p className="font-semibold">Unable to load budget</p>
                 <p className="mt-0.5 text-danger-600">
-                  {query.error instanceof Error
-                    ? query.error.message
+                  {query.error
+                    ? resolveApiErrorMessage(
+                        query.error,
+                        "Please try again.",
+                      )
                     : "Please try again."}
                 </p>
               </div>

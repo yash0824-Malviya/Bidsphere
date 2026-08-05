@@ -44,6 +44,8 @@ interface Props {
   ariaLabel?: string;
   emptyText?: string;
   errorText?: string;
+  /** Override input sizing/styling (e.g. enterprise 44px fields). */
+  inputClassName?: string;
 }
 
 const inputCls = (invalid: boolean, disabled: boolean) =>
@@ -78,6 +80,7 @@ export default function SearchableSelect({
   ariaLabel,
   emptyText = "No results.",
   errorText = "Couldn't load data. Please retry.",
+  inputClassName,
 }: Props) {
   const [search, setSearch] = useState(selectedLabel ?? "");
   const [open, setOpen] = useState(false);
@@ -298,7 +301,7 @@ export default function SearchableSelect({
           aria-invalid={invalid}
           aria-expanded={open}
           aria-autocomplete="list"
-          className={inputCls(invalid, disabled)}
+          className={inputClassName ?? inputCls(invalid, disabled)}
           placeholder={resolvedPlaceholder}
         />
         {loading ? (

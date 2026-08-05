@@ -42,13 +42,14 @@ import {
 import {
   type PODeliveryState,
   getDeliveryState,
-  ensureDeliveryState,
+  hydrateDeliveryStateFromErp,
   syncDeliveryStateFromERPNext,
 } from "../../api/poDeliveryWorkflow";
 import POStatusTimeline from "../../components/p2p/POStatusTimeline";
 import {
   buildPOWorkflowSteps,
   derivePOWorkflowSnapshot,
+  logPoWorkflowSnapshot,
 } from "../../utils/procurementStatusWorkflow";
 import { getAllVouchers } from "../../api/vouchers";
 import {
@@ -91,6 +92,7 @@ export default function PurchaseOrderDetailPage() {
     queryFn: () => getPurchaseOrder(name),
     enabled: !!name,
     staleTime: 0,
+    refetchOnWindowFocus: true,
   });
 
   const grnsQuery = useQuery({
@@ -98,6 +100,15 @@ export default function PurchaseOrderDetailPage() {
     queryFn: () => getGRNsForPO(name),
     enabled: !!name,
     staleTime: 0,
+    refetchOnWindowFocus: true,
+  });
+
+  const shipmentQuery = useQuery({
+    queryKey: ["po-shipment", name],
+    queryFn: () => hydrateDeliveryStateFromErp(name),
+    enabled: !!name,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
   });
 
   const invoicesQuery = useQuery({
@@ -105,6 +116,7 @@ export default function PurchaseOrderDetailPage() {
     queryFn: () => getInvoicesForPO(name),
     enabled: !!name,
     staleTime: 0,
+    refetchOnWindowFocus: true,
   });
 
   const vouchersQuery = useQuery({
@@ -121,6 +133,7 @@ export default function PurchaseOrderDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["purchase-order", name] });
       queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
       queryClient.invalidateQueries({ queryKey: ["po-grns", name] });
+      queryClient.invalidateQueries({ queryKey: ["po-shipment", name] });
       queryClient.invalidateQueries({ queryKey: ["procurement-analytics"] });
     },
   });
@@ -163,8 +176,9 @@ export default function PurchaseOrderDetailPage() {
 
   const syncedDeliveryState: PODeliveryState | null = (() => {
     if (!po.name) return null;
-    const base = isSubmitted ? ensureDeliveryState(po.name) : getDeliveryState(po.name);
-    if (!isSubmitted || !base) return base;
+    if (!isSubmitted) return getDeliveryState(po.name);
+    const base = shipmentQuery.data ?? getDeliveryState(po.name);
+    if (!base) return null;
     return (
       syncDeliveryStateFromERPNext(po.name, {
         poSubmitted: isSubmitted,
@@ -193,6 +207,7 @@ export default function PurchaseOrderDetailPage() {
 
   const workflowSnapshot = derivePOWorkflowSnapshot(po.name, workflowDocs);
   const procurementSteps = buildPOWorkflowSteps(po.name, workflowDocs);
+  logPoWorkflowSnapshot("procurement", po.name, workflowSnapshot);
 
   const {
     displayStatus,

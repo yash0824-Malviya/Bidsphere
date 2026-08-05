@@ -160,7 +160,7 @@ export async function fetchAllFinanceReviewRecords(): Promise<FinanceReviewQuery
     if (/403|permission|not permitted/i.test(msg)) {
       diagnostics.permissionError = msg;
     }
-    diagnostics.emptyReason = `Could not load Finance Reviews from ERPNext: ${msg}`;
+    diagnostics.emptyReason = `Could not load Finance Reviews: ${msg}`;
     // eslint-disable-next-line no-console
     console.error(LOG_TAG, "Workflow fetch failed:", msg);
     return { items: [], diagnostics };
@@ -221,7 +221,7 @@ export async function getFinanceReviews(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     diagnostics.apiError = msg;
-    diagnostics.emptyReason = `Could not load Finance Reviews from ERPNext: ${msg}`;
+    diagnostics.emptyReason = `Could not load Finance Reviews: ${msg}`;
     return { items: [], diagnostics };
   }
 }

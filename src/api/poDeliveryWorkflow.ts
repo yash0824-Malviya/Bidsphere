@@ -21,6 +21,7 @@ import {
   upsertPoShipmentRemote,
 } from "./poShipment";
 import { queryClient } from "../queryClient";
+import type { QueryClient } from "@tanstack/react-query";
 import {
   formatERPNextDate,
   nowERPNextDatetime,
@@ -76,6 +77,14 @@ export interface RejectPOPayload {
 }
 
 const STORAGE_PREFIX = "po_delivery_";
+
+function hasGrnSignal(
+  submittedGrnCount: number,
+  perReceived: number,
+  poSubmitted = true,
+): boolean {
+  return submittedGrnCount > 0 || (poSubmitted && perReceived > 0);
+}
 /* -------------------------------------------------------------------------- */
 
 function storageKey(poName: string): string {
@@ -143,6 +152,10 @@ export async function persistDeliveryStateToErp(
       }),
       queryClient.invalidateQueries({
         queryKey: ["po-shipments"],
+        refetchType: "active",
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["po-shipment", state.po_name],
         refetchType: "active",
       }),
       queryClient.invalidateQueries({
@@ -602,7 +615,11 @@ export function syncDeliveryStateFromERPNext(
   }
 
   const fullyReceived = metrics.perReceived >= 100;
-  const hasGrn = metrics.submittedGrnCount > 0;
+  const hasGrn = hasGrnSignal(
+    metrics.submittedGrnCount,
+    metrics.perReceived,
+    metrics.poSubmitted,
+  );
   const paymentDone =
     metrics.hasSubmittedInvoice &&
     (metrics.invoiceGrandTotal ?? 0) > 0 &&
@@ -610,12 +627,11 @@ export function syncDeliveryStateFromERPNext(
 
   let next: PODeliveryStatus = state.status;
 
-  // Fully received must never remain "In Transit".
   if (fullyReceived && hasGrn && metrics.hasSubmittedInvoice && paymentDone) {
     next = "Completed";
-  } else if (fullyReceived || (hasGrn && fullyReceived)) {
+  } else if (fullyReceived && hasGrn) {
     next = "Delivered";
-  } else if (hasGrn && (metrics.perReceived > 0 || state.status === "In Transit")) {
+  } else if (hasGrn) {
     next = "Partially Received";
   }
 
@@ -628,7 +644,118 @@ export function syncDeliveryStateFromERPNext(
     updated_by: "ERPNext sync",
   };
   saveDeliveryState(updated);
+
+  // eslint-disable-next-line no-console
+  console.log("[PO Workflow] Delivery status transition (local sync)", {
+    poName,
+    from: state.status,
+    to: next,
+    perReceived: metrics.perReceived,
+    submittedGrnCount: metrics.submittedGrnCount,
+  });
+
   return updated;
+}
+
+/**
+ * After GRN submit: reconcile PO Shipment + local cache from ERPNext PO metrics,
+ * persist to ERP, and invalidate portal caches so timelines stay aligned.
+ */
+export async function advancePoWorkflowAfterGrnSubmit(
+  poName: string,
+  metrics: {
+    perReceived: number;
+    perBilled: number;
+    submittedGrnCount: number;
+    hasSubmittedInvoice?: boolean;
+    invoiceOutstanding?: number;
+    invoiceGrandTotal?: number;
+  },
+): Promise<PODeliveryState | null> {
+  // eslint-disable-next-line no-console
+  console.log("[PO Workflow] GRN submit → reconciling PO shipment", {
+    poName,
+    ...metrics,
+  });
+
+  let base: PODeliveryState;
+  try {
+    base = await hydrateDeliveryStateFromErp(poName);
+  } catch {
+    base = ensureDeliveryState(poName);
+  }
+
+  const synced =
+    syncDeliveryStateFromERPNext(poName, {
+      poSubmitted: true,
+      perReceived: metrics.perReceived,
+      perBilled: metrics.perBilled,
+      submittedGrnCount: metrics.submittedGrnCount,
+      hasSubmittedInvoice: metrics.hasSubmittedInvoice ?? false,
+      invoiceOutstanding: metrics.invoiceOutstanding,
+      invoiceGrandTotal: metrics.invoiceGrandTotal,
+    }) ?? base;
+
+  const hasGrn = hasGrnSignal(
+    metrics.submittedGrnCount,
+    metrics.perReceived,
+    true,
+  );
+
+  if (
+    hasGrn &&
+    ["Accepted", "In Transit", "Delivered", "Arrived"].includes(synced.status)
+  ) {
+    synced.status =
+      metrics.perReceived >= 100 ? "Delivered" : "Partially Received";
+    synced.updated_at = nowERPNextDatetime();
+    synced.updated_by = "GRN submit";
+    saveDeliveryState(synced);
+  }
+
+  try {
+    const record = await persistDeliveryStateToErp(synced);
+    // eslint-disable-next-line no-console
+    console.log("[PO Workflow] PO shipment updated after GRN", {
+      poName,
+      shipment_status: record.shipment_status,
+      perReceived: metrics.perReceived,
+      receivedPct: metrics.perReceived,
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("[PO Workflow] ERP shipment persist after GRN failed:", err);
+  }
+
+  invalidatePoWorkflowQueries(queryClient, poName);
+  return synced;
+}
+
+/** Invalidate every React Query key that feeds PO workflow timelines. */
+export function invalidatePoWorkflowQueries(
+  client: QueryClient,
+  poName: string,
+): void {
+  const keys: readonly (readonly string[])[] = [
+    ["purchase-order", poName],
+    ["po-grns", poName],
+    ["po-shipment", poName],
+    ["po-invoices", poName],
+    ["supplier-portal-po", poName],
+    ["supplier-portal-po-grns", poName],
+    ["supplier-portal-po-invoices", poName],
+    ["incoming-purchase-orders"],
+    ["purchase-orders"],
+    ["supplier-portal-pos"],
+    ["po-shipments"],
+  ];
+
+  for (const queryKey of keys) {
+    void client.invalidateQueries({ queryKey, refetchType: "active" });
+  }
+
+  // eslint-disable-next-line no-console
+  console.log("[PO Workflow] Timeline refresh — cache invalidated", { poName });
 }
 
 /**

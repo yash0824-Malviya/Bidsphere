@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -60,8 +60,28 @@ import {
   paymentComparators,
   sortNewestFirst,
 } from "../../utils/listSort";
+import { useOptionalLayout } from "../../contexts/LayoutContext";
 
 const PAYMENT_COMPARATORS = paymentComparators<PaymentEntry>();
+const PAYMENT_CHART_HEIGHT = 340;
+
+/** Remount charts when sidebar or viewport width changes so Recharts recalculates layout. */
+function useChartLayoutKey(): number {
+  const layout = useOptionalLayout();
+  const [key, setKey] = useState(0);
+
+  useEffect(() => {
+    const bump = () => setKey((k) => k + 1);
+    window.addEventListener("resize", bump, { passive: true });
+    const timer = window.setTimeout(bump, 320);
+    return () => {
+      window.removeEventListener("resize", bump);
+      window.clearTimeout(timer);
+    };
+  }, [layout?.sidebarMode, layout?.sidebarOffset]);
+
+  return key;
+}
 
 export default function PaymentsPage() {
   const navigate = useNavigate();
@@ -231,6 +251,7 @@ export default function PaymentsPage() {
     [mergedRows]
   );
   const largePayments = useMemo(() => recentLargePayments(filtered, 5), [filtered]);
+  const chartLayoutKey = useChartLayoutKey();
 
   const exportColumns = useMemo<ExportColumn<PaymentEntry>[]>(
     () => [
@@ -273,7 +294,7 @@ export default function PaymentsPage() {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="payments-page">
       <PageHeader
         title="Payments"
         description="Accounts Payable disbursements — ACH, wire, check, and card payments to suppliers."
@@ -292,8 +313,7 @@ export default function PaymentsPage() {
         }
       />
 
-      {/* KPI cards */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="payments-kpi-grid">
         <PaymentKpiCard
           icon={Wallet}
           label="Total Payments"
@@ -324,8 +344,132 @@ export default function PaymentsPage() {
         />
       </div>
 
-      {/* Filters */}
-      <FilterBar>
+      <section className="payments-charts-section" aria-label="Payment analytics">
+        <div className="payments-charts-row">
+          <div className="payments-chart-card">
+            <div className="payments-chart-card__header">
+              <div>
+                <h3 className="payments-chart-card__title">
+                  Monthly Payment Trend
+                </h3>
+                <p className="payments-chart-card__subtitle">
+                  Payment spending month-wise
+                </p>
+              </div>
+            </div>
+            {isLoading ? (
+              <div
+                className="payments-chart-container payments-chart-container--skeleton"
+                aria-hidden
+              />
+            ) : (
+              <div className="payments-chart-container">
+                <ResponsiveContainer
+                  key={chartLayoutKey}
+                  width="100%"
+                  height={PAYMENT_CHART_HEIGHT}
+                >
+                  <BarChart
+                    data={trend}
+                    margin={{ top: 8, right: 12, left: 0, bottom: 4 }}
+                  >
+                    <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" vertical={false} />
+                    <XAxis
+                      dataKey="label"
+                      tick={{ fill: "#64748b", fontSize: 11 }}
+                      axisLine={{ stroke: "#e2e8f0" }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tick={{ fill: "#64748b", fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                      tickFormatter={(v: number) => formatCurrencyCompact(v)}
+                    />
+                    <Tooltip
+                      cursor={{ fill: "rgba(99,102,241,0.06)" }}
+                      contentStyle={{
+                        borderRadius: 8,
+                        border: "1px solid #e2e8f0",
+                        fontSize: 12,
+                      }}
+                      formatter={(value) =>
+                        formatCurrencyCompact(typeof value === "number" ? value : 0)
+                      }
+                    />
+                    <Bar dataKey="amount" name="Payments" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+
+          <aside className="payments-side-panels">
+            <div className="payments-side-panel">
+              <h3 className="payments-side-panel__title">
+                Top Suppliers by Payment
+              </h3>
+              <p className="payments-side-panel__subtitle">By total amount paid</p>
+              <ul className="payments-side-panel__list">
+                {topSuppliers.length === 0 ? (
+                  <li className="payments-side-panel__empty">No paid suppliers yet.</li>
+                ) : (
+                  topSuppliers.map((s, i) => (
+                    <li
+                      key={s.name}
+                      className="payments-side-panel__row"
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="payments-side-panel__rank">{i + 1}</span>
+                        <span className="payments-side-panel__name">{s.name}</span>
+                      </div>
+                      <span className="payments-side-panel__amount">
+                        {formatCurrencyCompact(s.total)}
+                      </span>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </div>
+
+            <div className="payments-side-panel">
+              <h3 className="payments-side-panel__title">
+                Recent Large Payments
+              </h3>
+              <p className="payments-side-panel__subtitle">Highest value disbursements</p>
+              <ul className="payments-side-panel__list payments-side-panel__list--compact">
+                {largePayments.length === 0 ? (
+                  <li className="payments-side-panel__empty">No payments yet.</li>
+                ) : (
+                  largePayments.map((p) => (
+                    <li key={p.name}>
+                      <button
+                        type="button"
+                        onClick={() => openPayment(p)}
+                        className="payments-side-panel__action"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-medium text-neutral-800">
+                            {p.name}
+                          </p>
+                          <p className="truncate text-[10px] text-neutral-500">
+                            {p.party_name ?? p.party}
+                          </p>
+                        </div>
+                        <span className="shrink-0 text-xs font-semibold tabular-nums text-primary">
+                          {formatCurrencyCompact(paymentAmount(p))}
+                        </span>
+                      </button>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <FilterBar className="payments-filters">
         <FilterField label="Search Payment Number" className="min-w-[200px] flex-1">
           <SearchInput
             value={search}
@@ -378,254 +522,129 @@ export default function PaymentsPage() {
         </FilterField>
       </FilterBar>
 
-      {/* Analytics + table */}
-      <div className="grid gap-6 xl:grid-cols-3">
-        <div className="space-y-6 xl:col-span-2">
-          {/* Monthly trend */}
-          <div className="card p-5">
-            <div className="mb-4 flex items-baseline justify-between">
-              <div>
-                <h3 className="text-sm font-semibold text-neutral-900">
-                  Monthly Payment Trend
-                </h3>
-                <p className="text-xs text-neutral-500">
-                  Payment spending month-wise
-                </p>
-              </div>
-            </div>
-            {isLoading ? (
-              <div className="h-52 animate-pulse rounded-xl bg-neutral-100" />
-            ) : (
-              <div className="h-52 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={trend} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                    <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" vertical={false} />
-                    <XAxis
-                      dataKey="label"
-                      tick={{ fill: "#64748b", fontSize: 11 }}
-                      axisLine={{ stroke: "#e2e8f0" }}
-                      tickLine={false}
-                    />
-                    <YAxis
-                      tick={{ fill: "#64748b", fontSize: 11 }}
-                      axisLine={false}
-                      tickLine={false}
-                      tickFormatter={(v: number) =>
-                        formatCurrencyCompact(v)
-                      }
-                    />
-                    <Tooltip
-                      cursor={{ fill: "rgba(99,102,241,0.06)" }}
-                      contentStyle={{
-                        borderRadius: 8,
-                        border: "1px solid #e2e8f0",
-                        fontSize: 12,
-                      }}
-                      formatter={(value) =>
-                        formatCurrencyCompact(typeof value === "number" ? value : 0)
-                      }
-                    />
-                    <Bar dataKey="amount" name="Payments" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-          </div>
-
-          {/* Table */}
-          <div className="table-shell">
-            {isLoading ? (
-              <TableSkeleton rows={8} columns={8} />
-            ) : isError && mergedRows.length === 0 ? (
-              <ConnectionError
-                error={error}
-                title="Could not load payments"
-                onRetry={() => void refetch()}
-              />
-            ) : sortedRows.length === 0 ? (
-              <EmptyState
-                icon={CreditCard}
-                title="No payments found"
-                description="Adjust filters or record a new payment against an invoice."
-                action={
-                  <Link to="/p2p/payments/new" className="btn-primary">
-                    <Plus className="h-4 w-4" /> New Payment
-                  </Link>
-                }
-              />
-            ) : (
-              <>
-              <div className="overflow-x-auto">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <SortableTableHeader label="Payment Number" sortKey="name" sort={sort} onSort={setSort} />
-                      <SortableTableHeader label="Supplier" sortKey="supplier" sort={sort} onSort={setSort} />
-                      <SortableTableHeader label="Date" sortKey="date" sort={sort} onSort={setSort} />
-                      <SortableTableHeader label="Payment Method" sortKey="method" sort={sort} onSort={setSort} />
-                      <th>Reference Number</th>
-                      <SortableTableHeader label="Status" sortKey="status" sort={sort} onSort={setSort} />
-                      <SortableTableHeader label="Amount" sortKey="amount" sort={sort} onSort={setSort} className="text-right" />
-                      <th>PDF</th>
-                      <th className="w-12" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pageRows.map((p) => {
-                      const isWorkflow = !!(
-                        p.name && workflowVoucherByName.has(p.name)
-                      );
-                      return (
-                        <tr
-                          key={p.name}
-                          className="cursor-pointer"
-                          onClick={() => openPayment(p)}
-                        >
-                          <td>
-                            <span className="table-link">{p.name}</span>
-                          </td>
-                          <td className="text-neutral-600">
-                            {p.party_name ?? p.party ?? "—"}
-                          </td>
-                          <td className="text-neutral-600">
-                            {formatUsDisplayDate(p.posting_date) || "—"}
-                          </td>
-                          <td className="text-neutral-600">
-                            {p.mode_of_payment
-                              ? getPaymentModeLabel(p.mode_of_payment)
-                              : "—"}
-                          </td>
-                          <td className="text-neutral-600">
-                            {p.reference_no ?? "—"}
-                          </td>
-                          <td>
-                            <StatusBadge status={mapPaymentUiStatus(p)} />
-                          </td>
-                          <td className="text-right tabular-nums">
-                            <span className="block font-medium">
-                              {formatCurrency(paymentAmount(p))}
-                            </span>
-                          </td>
-                          <td>
-                            <PdfActions
-                              variant="compact"
-                              stopPropagation
-                              filename={
-                                (p.name ?? "PAYMENT")
-                                  .toUpperCase()
-                                  .startsWith("PAY-")
-                                  ? `${p.name}.pdf`
-                                  : `PAY-${p.name ?? "PAYMENT"}.pdf`
+      <div className="payments-table-shell table-shell">
+        {isLoading ? (
+          <TableSkeleton rows={8} columns={8} />
+        ) : isError && mergedRows.length === 0 ? (
+          <ConnectionError
+            error={error}
+            title="Could not load payments"
+            onRetry={() => void refetch()}
+          />
+        ) : sortedRows.length === 0 ? (
+          <EmptyState
+            icon={CreditCard}
+            title="No payments found"
+            description="Adjust filters or record a new payment against an invoice."
+            action={
+              <Link to="/p2p/payments/new" className="btn-primary">
+                <Plus className="h-4 w-4" /> New Payment
+              </Link>
+            }
+          />
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <SortableTableHeader label="Payment Number" sortKey="name" sort={sort} onSort={setSort} />
+                    <SortableTableHeader label="Supplier" sortKey="supplier" sort={sort} onSort={setSort} />
+                    <SortableTableHeader label="Date" sortKey="date" sort={sort} onSort={setSort} />
+                    <SortableTableHeader label="Payment Method" sortKey="method" sort={sort} onSort={setSort} />
+                    <th>Reference Number</th>
+                    <SortableTableHeader label="Status" sortKey="status" sort={sort} onSort={setSort} />
+                    <SortableTableHeader label="Amount" sortKey="amount" sort={sort} onSort={setSort} className="text-right" />
+                    <th>PDF</th>
+                    <th className="w-12" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {pageRows.map((p) => {
+                    const isWorkflow = !!(
+                      p.name && workflowVoucherByName.has(p.name)
+                    );
+                    return (
+                      <tr
+                        key={p.name}
+                        className="cursor-pointer"
+                        onClick={() => openPayment(p)}
+                      >
+                        <td>
+                          <span className="table-link">{p.name}</span>
+                        </td>
+                        <td className="text-neutral-600">
+                          {p.party_name ?? p.party ?? "—"}
+                        </td>
+                        <td className="text-neutral-600">
+                          {formatUsDisplayDate(p.posting_date) || "—"}
+                        </td>
+                        <td className="text-neutral-600">
+                          {p.mode_of_payment
+                            ? getPaymentModeLabel(p.mode_of_payment)
+                            : "—"}
+                        </td>
+                        <td className="text-neutral-600">
+                          {p.reference_no ?? "—"}
+                        </td>
+                        <td>
+                          <StatusBadge status={mapPaymentUiStatus(p)} />
+                        </td>
+                        <td className="text-right tabular-nums">
+                          <span className="block font-medium">
+                            {formatCurrency(paymentAmount(p))}
+                          </span>
+                        </td>
+                        <td>
+                          <PdfActions
+                            variant="compact"
+                            stopPropagation
+                            filename={
+                              (p.name ?? "PAYMENT")
+                                .toUpperCase()
+                                .startsWith("PAY-")
+                                ? `${p.name}.pdf`
+                                : `PAY-${p.name ?? "PAYMENT"}.pdf`
+                            }
+                            build={async () => {
+                              const voucherId = p.name
+                                ? workflowVoucherByName.get(p.name)
+                                : undefined;
+                              if (voucherId) {
+                                const v = await getVoucherById(voucherId);
+                                if (!v) throw new Error("Voucher not found");
+                                return buildVoucherPaymentPdf(v);
                               }
-                              build={async () => {
-                                const voucherId = p.name
-                                  ? workflowVoucherByName.get(p.name)
-                                  : undefined;
-                                if (voucherId) {
-                                  const v = await getVoucherById(voucherId);
-                                  if (!v) throw new Error("Voucher not found");
-                                  return buildVoucherPaymentPdf(v);
-                                }
-                                return buildPaymentReceiptPdf(p);
-                              }}
-                            />
-                          </td>
-                          <td>
-                            {isWorkflow ? (
-                              <span className="text-[10px] text-neutral-400">
-                                —
-                              </span>
-                            ) : (
-                              <PaymentActionsMenu payment={p} />
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              <Pagination
-                currentPage={currentPage}
-                totalPages={totalPages}
-                totalRecords={totalRecords}
-                pageSize={pageSize}
-                onPageChange={setPage}
-                onPageSizeChange={setPageSize}
-                recordLabel="payments"
-              />
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Sidebar analytics */}
-        <div className="space-y-4">
-          <div className="card p-5">
-            <h3 className="text-sm font-semibold text-neutral-900">
-              Top Suppliers by Payment
-            </h3>
-            <p className="text-xs text-neutral-500">By total amount paid</p>
-            <ul className="mt-4 space-y-3">
-              {topSuppliers.length === 0 ? (
-                <li className="text-xs text-neutral-400">No paid suppliers yet.</li>
-              ) : (
-                topSuppliers.map((s, i) => (
-                  <li
-                    key={s.name}
-                    className="flex items-center justify-between gap-2 rounded-lg bg-neutral-50 px-3 py-2"
-                  >
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary-50 text-xs font-bold text-primary">
-                        {i + 1}
-                      </span>
-                      <span className="truncate text-sm font-medium text-neutral-800">
-                        {s.name}
-                      </span>
-                    </div>
-                    <span className="shrink-0 text-xs font-semibold tabular-nums text-neutral-700">
-                      {formatCurrencyCompact(s.total)}
-                    </span>
-                  </li>
-                ))
-              )}
-            </ul>
-          </div>
-
-          <div className="card p-5">
-            <h3 className="text-sm font-semibold text-neutral-900">
-              Recent Large Payments
-            </h3>
-            <p className="text-xs text-neutral-500">Highest value disbursements</p>
-            <ul className="mt-4 space-y-2">
-              {largePayments.length === 0 ? (
-                <li className="text-xs text-neutral-400">No payments yet.</li>
-              ) : (
-                largePayments.map((p) => (
-                  <li key={p.name}>
-                    <button
-                      type="button"
-                      onClick={() => openPayment(p)}
-                      className="flex w-full items-center justify-between gap-2 rounded-lg border border-neutral-100 px-3 py-2 text-left transition hover:border-primary-200 hover:bg-primary-50/50"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate text-xs font-medium text-neutral-800">
-                          {p.name}
-                        </p>
-                        <p className="truncate text-[10px] text-neutral-500">
-                          {p.party_name ?? p.party}
-                        </p>
-                      </div>
-                      <span className="shrink-0 text-xs font-semibold tabular-nums text-primary">
-                        {formatCurrencyCompact(paymentAmount(p))}
-                      </span>
-                    </button>
-                  </li>
-                ))
-              )}
-            </ul>
-          </div>
-        </div>
+                              return buildPaymentReceiptPdf(p);
+                            }}
+                          />
+                        </td>
+                        <td>
+                          {isWorkflow ? (
+                            <span className="text-[10px] text-neutral-400">
+                              —
+                            </span>
+                          ) : (
+                            <PaymentActionsMenu payment={p} />
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalRecords={totalRecords}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+              recordLabel="payments"
+            />
+          </>
+        )}
       </div>
     </div>
   );

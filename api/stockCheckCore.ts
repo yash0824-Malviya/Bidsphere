@@ -65,6 +65,7 @@ export type StockCheckWarehouseQty = {
 export type StockCheckRecommendation =
   | "Issue Material"
   | "Stock available in another warehouse"
+  | "Issue Partial Stock"
   | "Forward to Procurement";
 
 export type StockCheckLineResult = {
@@ -649,6 +650,9 @@ export async function runStockCheck(
       } else if (totalAvailable + 1e-9 >= item.requested_qty) {
         // e.g. 0 in Stores, 3 in Finished Goods - NSGAI
         recommendation = "Stock available in another warehouse";
+      } else if (totalAvailable > 0) {
+        // Partial stock — issue available + forward shortage (company policy Option A).
+        recommendation = "Issue Partial Stock";
       } else {
         recommendation = "Forward to Procurement";
       }

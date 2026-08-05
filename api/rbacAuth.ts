@@ -394,8 +394,19 @@ export const LEGAL_REVIEW_ROLES: AppRole[] = ["admin", "legal"];
 /** Finance review write APIs (same gateway may serve finance). */
 export const FINANCE_REVIEW_ROLES: AppRole[] = ["admin", "finance"];
 
-/** BOM / manufacturing APIs. */
-export const BOM_ROLES: AppRole[] = ["admin", "manufacturing", "procurement"];
+/** Department BOM upload / validation (NOT procurement). */
+export const DEPARTMENT_BOM_ROLES: AppRole[] = ["admin", "department", "manufacturing"];
+
+/** Master Data — Temporary Item Store review. */
+export const MASTER_DATA_BOM_ROLES: AppRole[] = ["admin", "manufacturing"];
+
+/** @deprecated Legacy procurement RFQ-from-BOM — admin-only fallback. */
+export const BOM_RFQ_LEGACY_ROLES: AppRole[] = ["admin"];
+
+/** BOM APIs — department upload + master data (procurement excluded). */
+export const BOM_ROLES: AppRole[] = [...DEPARTMENT_BOM_ROLES, ...MASTER_DATA_BOM_ROLES].filter(
+  (r, i, a) => a.indexOf(r) === i,
+);
 
 /** Map supplier-onboarding action → required roles (null = public / portal-session). */
 export function rolesForOnboardingAction(action: string): AppRole[] | "portal" | "public" {

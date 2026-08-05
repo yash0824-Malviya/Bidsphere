@@ -202,7 +202,7 @@ export default function FinanceExecutiveDashboard({ greetingName }: Props) {
           </div>
           <div>
             <p className="text-xs text-neutral-500">
-              Welcome back, {displayName} · Live ERPNext budgets
+              Welcome back, {displayName} · Live budgets
             </p>
           </div>
         </div>

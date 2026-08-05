@@ -127,50 +127,66 @@ async function enableSetting() {
 const SERVER_SCRIPT_NAME = "GRN Allow Future Posting Dates";
 
 const SERVER_SCRIPT_BODY = `
-# ─── GRN Allow Future Posting Dates ─────────────────────────────────
+# ─── GRN Posting Date (date-only + optional future) ─────────────────
 # Before Validate hook for Purchase Receipt.
-#
-# When Stock Settings > Allow Future GRN Dates is checked, this script
-# replaces validate_posting_time() with a version that sets defaults
-# (posting_date / posting_time) but does NOT throw on future dates.
 #
 # Root cause:
 #   erpnext/controllers/stock_controller.py → validate_posting_time()
-#   unconditionally throws "Posting Date cannot be future date".
-#   There is no Stock Settings flag to disable it.
+#   throws "Posting Date cannot be future date" when
+#   getdate(posting_date) > getdate(nowdate()).
 #
-# This targeted monkey-patch affects only the current document instance.
+# This script:
+#   1) Compares DATE portions only (getdate / nowdate).
+#   2) Clamps a 1-day timezone / clock skew to ERP today (does NOT
+#      allow arbitrary future dates).
+#   3) When Stock Settings.allow_future_grn_dates is on, skips the
+#      future-date throw for intentional future postings.
 # ─────────────────────────────────────────────────────────────────────
 
 import frappe
 from frappe.utils import getdate, nowdate, nowtime
 
 allow_future = frappe.db.get_single_value("Stock Settings", "allow_future_grn_dates")
+today_str = nowdate()
+today = getdate(today_str)
 posting = getdate(doc.posting_date) if doc.posting_date else None
-today   = getdate(nowdate())
+
+# Normalize wire value to YYYY-MM-DD (strip any accidental time).
+if doc.posting_date:
+    doc.posting_date = str(getdate(doc.posting_date))
+
+result = "STANDARD"
+if posting and posting > today:
+    delta_days = (posting - today).days
+    if allow_future:
+        result = "FUTURE_ALLOWED"
+        def _safe_validate_posting_time():
+            if not doc.posting_date:
+                doc.posting_date = nowdate()
+            if not doc.posting_time:
+                doc.posting_time = nowtime()
+        doc.validate_posting_time = _safe_validate_posting_time
+    elif delta_days == 1:
+        # Browser TZ ahead of site TZ (e.g. IST vs UTC near midnight).
+        doc.posting_date = today_str
+        result = "TZ_SKEW_CLAMPED_TO_TODAY"
+        frappe.logger("grn_future_date").info(
+            "[GRN Posting Date] clamped 1-day skew to ERP today=%s (was %s)"
+            % (today_str, posting)
+        )
+    else:
+        result = "FUTURE_BLOCKED"
 
 frappe.logger("grn_future_date").info(
     "[GRN FUTURE DATE VALIDATION] "
-    "PO Date: {po_date}, Posting Date: {pd}, Today: {today}, "
+    "Posting Date: {pd}, ERP Today: {today}, "
     "Allow Future GRN: {af}, Result: {result}".format(
-        po_date=getattr(doc, "purchase_order_date", "N/A"),
         pd=doc.posting_date,
-        today=nowdate(),
+        today=today_str,
         af=allow_future,
-        result="FUTURE_ALLOWED" if (allow_future and posting and posting > today)
-               else "STANDARD",
+        result=result,
     )
 )
-
-if allow_future and posting and posting > today:
-    def _safe_validate_posting_time():
-        """Set defaults but skip future-date throw."""
-        if not doc.posting_date:
-            doc.posting_date = nowdate()
-        if not doc.posting_time:
-            doc.posting_time = nowtime()
-
-    doc.validate_posting_time = _safe_validate_posting_time
 `.trim();
 
 async function ensureServerScript() {

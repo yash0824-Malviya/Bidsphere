@@ -19,8 +19,6 @@ import {
   Lock,
   Loader2,
   Package,
-  Save,
-  Send,
   Shield,
   ShieldAlert,
   Sparkles,
@@ -54,13 +52,13 @@ import NoQuoteDialog, {
 } from "../../components/supplier-portal/NoQuoteDialog";
 import { uploadFileToERPNext, getFullFileUrl } from "../../api/legalDocsStorage";
 import { AppLoading } from "../../components/enterprise";
-import EngineeringDocumentsPanel from "../../components/supplier-portal/EngineeringDocumentsPanel";
+import SupplierItemAttachmentsPanel from "../../components/supplier-portal/SupplierItemAttachmentsPanel";
+import SupplierRfqDocumentsSection from "../../components/supplier-portal/SupplierRfqDocumentsSection";
 import CostBreakdownPanel, {
   type CostBreakdownPanelHandle,
 } from "../../components/supplier-portal/CostBreakdownPanel";
 import SectionErrorBoundary from "../../components/supplier-portal/SectionErrorBoundary";
 import {
-  Drawing2dCell,
   PartNameCell,
 } from "../../components/warehouse/EngineeringDocCells";
 import type { RFQ, RFQItem } from "../../types/erpnext";
@@ -71,8 +69,10 @@ import {
   isoDateOffset,
   todayIso,
 } from "../../utils/format";
+import { formatRfqRoundLabel } from "../../utils/rfqRoundTracking";
 import { resolveItemEngineeringDocsBatch } from "../../api/resolveItemEngineeringDocs";
 import {
+  filterSupplierVisibleAttachments,
   pickEngineeringDocs,
   type EngineeringDocs,
 } from "../../utils/materialRequestItemFiles";
@@ -85,6 +85,127 @@ import {
 } from "../../components/ui/select";
 
 const DELIVERY_DAY_OPTIONS = [1, 2, 3, 5, 7, 10, 14, 15, 21, 30, 45, 60, 90] as const;
+
+/** Enterprise procurement UI tokens (supplier quotation). */
+const ENT_CARD =
+  "rounded-2xl border border-[#E2E8F0] bg-white shadow-[0_1px_3px_rgba(15,23,42,0.06),0_4px_12px_rgba(15,23,42,0.04)] transition-shadow hover:shadow-[0_2px_8px_rgba(15,23,42,0.08)]";
+const ENT_CARD_PAD = "p-4";
+const ENT_SECTION_HEAD = "border-b border-[#E2E8F0] px-4 py-2.5";
+const ENT_LABEL = "mb-2 block text-[13px] font-medium text-[#64748B]";
+const ENT_INPUT =
+  "h-11 w-full rounded-2xl border border-[#E2E8F0] bg-white px-3 text-[15px] text-[#0F172A] shadow-sm transition placeholder:text-[#94A3B8] focus:border-[#1F3A6D] focus:outline-none focus:ring-2 focus:ring-[#1F3A6D]/20";
+
+/** Quotation page shell — 1680px max, 24px inline padding, 73/27 column split. */
+const QUOTE_PAGE_SHELL = "mx-auto w-full max-w-[1680px] px-6";
+const QUOTE_MAIN_GRID =
+  "grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,73fr)_minmax(0,27fr)] lg:items-start";
+const CMD_BAR_BTN =
+  "inline-flex h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold whitespace-nowrap transition disabled:cursor-not-allowed disabled:opacity-60";
+const CMD_BAR_BTN_OUTLINE = `${CMD_BAR_BTN} border border-[#CBD5E1] bg-white text-[#334155] shadow-sm hover:border-[#1F3A6D]/40 hover:bg-[#F8FAFC] hover:text-[#1F3A6D]`;
+const CMD_BAR_BTN_DANGER = `${CMD_BAR_BTN} border border-red-200 bg-white text-red-700 shadow-sm hover:border-red-300 hover:bg-red-50`;
+const CMD_BAR_BTN_PRIMARY = `${CMD_BAR_BTN} bg-[#1F3A6D] text-white shadow-[0_2px_8px_rgba(31,58,109,0.25)] hover:bg-[#17315D] disabled:bg-[#CBD5E1] disabled:text-[#64748B] disabled:shadow-none`;
+
+function formatRelativeSavedAt(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return formatDateTime(iso);
+
+  const diffMin = Math.floor((Date.now() - then) / 60_000);
+  if (diffMin < 1) return "just now";
+  if (diffMin < 60) return `${diffMin} min${diffMin === 1 ? "" : "s"} ago`;
+
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr} hr${diffHr === 1 ? "" : "s"} ago`;
+
+  return formatDateTime(iso);
+}
+
+/** Show contextual action bar after ~75% scroll or when Review section is near viewport. */
+function useQuotationFooterVisibility(enabled: boolean) {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    if (!enabled) {
+      setVisible(false);
+      return;
+    }
+
+    const reviewEl = document.getElementById("section-review");
+
+    const getScrollRoot = (): HTMLElement | Window => {
+      const main = document.querySelector(
+        ".supplier-portal-layout main.app-shell-scroll",
+      );
+      return main instanceof HTMLElement ? main : window;
+    };
+
+    const evaluate = () => {
+      const scrollRoot = getScrollRoot();
+      const viewportHeight =
+        scrollRoot instanceof Window
+          ? window.innerHeight
+          : scrollRoot.clientHeight;
+
+      const scrollTop =
+        scrollRoot instanceof Window ? window.scrollY : scrollRoot.scrollTop;
+      const scrollHeight =
+        scrollRoot instanceof Window
+          ? document.documentElement.scrollHeight
+          : scrollRoot.scrollHeight;
+
+      const scrollable = scrollHeight - viewportHeight;
+      const scrollPct = scrollable > 0 ? scrollTop / scrollable : 0;
+
+      let nearReview = false;
+      if (reviewEl) {
+        const top = reviewEl.getBoundingClientRect().top;
+        nearReview = top <= viewportHeight * 0.85;
+      }
+
+      setVisible(scrollPct >= 0.75 || nearReview);
+    };
+
+    evaluate();
+
+    const scrollRoot = getScrollRoot();
+    scrollRoot.addEventListener("scroll", evaluate, { passive: true });
+    window.addEventListener("resize", evaluate, { passive: true });
+
+    const observer =
+      reviewEl &&
+      new ResizeObserver(() => {
+        evaluate();
+      });
+    if (observer && reviewEl) observer.observe(reviewEl);
+
+    return () => {
+      scrollRoot.removeEventListener("scroll", evaluate);
+      window.removeEventListener("resize", evaluate);
+      observer?.disconnect();
+    };
+  }, [enabled]);
+
+  return visible;
+}
+
+function rfqItemHasWarehouseShortage(item?: RFQItem | null): boolean {
+  if (!item) return false;
+  const whAvail =
+    item.custom_warehouse_available_qty != null &&
+    Number.isFinite(Number(item.custom_warehouse_available_qty))
+      ? Math.max(0, Number(item.custom_warehouse_available_qty))
+      : null;
+  const requested =
+    item.custom_department_requested_qty != null &&
+    Number.isFinite(Number(item.custom_department_requested_qty))
+      ? Number(item.custom_department_requested_qty)
+      : item.qty;
+  const requestedDisplay = Number(requested) || 0;
+  return (
+    whAvail != null &&
+    requestedDisplay > 0 &&
+    whAvail + 1e-9 < requestedDisplay
+  );
+}
 
 interface SupplierSession {
   supplierName: string;
@@ -457,123 +578,177 @@ export default function SupplierRFQPage() {
   } | null>(null);
 
   useEffect(() => {
-    if (!rfq?.items || !supplierName) return;
+    if (!rfq || !supplierName) return;
 
+    const items = rfq.items ?? [];
     let cancelled = false;
 
-    void (async () => {
-      // Resolve from RFQ Item JSON and/or linked Material Request Item + File
-      // DocType — never re-upload; same references Warehouse/Procurement use.
-      const engMap = await resolveItemEngineeringDocsBatch(
-        (rfq.items ?? []).map((it) => ({
-          item_code: it.item_code,
-          material_request: it.material_request,
-          material_request_item: it.material_request_item,
-          custom_part_name: it.custom_part_name,
-          custom_2d_drawing: it.custom_2d_drawing,
-          custom_engineering_attachments: it.custom_engineering_attachments,
-          rfq_name: rfq.name,
-        })),
-      );
-      if (cancelled) return;
+    const quoteLineFromItem = (
+      it: RFQItem,
+      eng?: EngineeringDocs,
+    ): QuoteLine => {
+      const raw = eng ?? pickEngineeringDocs(it);
+      const visible = filterSupplierVisibleAttachments(raw.attachments ?? []);
+      return {
+        item_code: it.item_code,
+        item_name: it.item_name ?? it.item_code,
+        description: it.description ?? "",
+        qty: it.qty,
+        uom: it.uom ?? "Nos",
+        unit_price: 0,
+        delivery_days: 7,
+        notes: "",
+        target_price: isItemTargetPriceVisibleToSupplier(it, rfq)
+          ? getItemTargetPrice(it)
+          : null,
+        ...raw,
+        attachments: visible,
+        drawing_2d_url: visible[0]?.fileUrl || raw.drawing_2d_url,
+      };
+    };
 
-      const engFor = (it: RFQItem) =>
-        engMap.get(String(it.material_request_item || "").trim()) ||
-        engMap.get(`${rfq.name}::${it.item_code}`) ||
-        engMap.get(it.item_code) ||
-        pickEngineeringDocs(it);
-
-      const byCode = new Map<string, EngineeringDocs>();
-      for (const it of rfq.items ?? []) {
-        byCode.set(it.item_code, engFor(it));
-      }
-      setEngByCode(byCode);
-
-      const draftKey = `draft_quotation_${rfq.name}_${supplierName}`;
-      const raw = sessionStorage.getItem(draftKey);
-      if (raw) {
-        try {
-          const draft = JSON.parse(raw) as {
-            items?: QuoteLine[];
-            payment_terms?: string;
-            valid_till?: string;
-            notes?: string;
-            legal_documents?: {
-              terms_conditions_pdf?: string | null;
-              terms_conditions_note?: string;
-              terms_conditions_name?: string;
-              warranty_certificate_pdf?: string | null;
-              warranty_certificate_note?: string;
-              warranty_certificate_name?: string;
-              insurance_certificate_pdf?: string | null;
-              insurance_certificate_note?: string;
-              insurance_certificate_name?: string;
-            };
-            saved_at?: string;
+    // Populate lines immediately so Quote Summary / Cost Breakdown / item
+    // cards never stay empty while engineering-doc resolution runs.
+    const draftKey = `draft_quotation_${rfq.name}_${supplierName}`;
+    const rawDraft = sessionStorage.getItem(draftKey);
+    let usedDraftItems = false;
+    if (rawDraft) {
+      try {
+        const draft = JSON.parse(rawDraft) as {
+          items?: QuoteLine[];
+          payment_terms?: string;
+          valid_till?: string;
+          notes?: string;
+          legal_documents?: {
+            terms_conditions_pdf?: string | null;
+            terms_conditions_note?: string;
+            terms_conditions_name?: string;
+            warranty_certificate_pdf?: string | null;
+            warranty_certificate_note?: string;
+            warranty_certificate_name?: string;
+            insurance_certificate_pdf?: string | null;
+            insurance_certificate_note?: string;
+            insurance_certificate_name?: string;
           };
-
-          if (draft.items?.length) {
-            const engByItem = new Map(
-              (rfq.items ?? []).map((it) => [it.item_code, engFor(it)]),
-            );
-            const targetByItem = new Map(
-              (rfq.items ?? []).map((it) => {
-                const show = isItemTargetPriceVisibleToSupplier(it, rfq);
-                return [
-                  it.item_code,
-                  show ? getItemTargetPrice(it) : null,
-                ] as const;
-              }),
-            );
-            setLines(
-              draft.items.map((line) => ({
-                ...line,
-                ...engByItem.get(line.item_code),
-                /* Always re-bind Target Price from live RFQ (never trust draft). */
-                target_price: targetByItem.get(line.item_code) ?? null,
-              })),
-            );
-            if (draft.payment_terms) setPaymentTerms(draft.payment_terms);
-            if (draft.valid_till) setValidityDate(draft.valid_till);
-            if (draft.notes != null) setNotes(draft.notes);
-            if (draft.legal_documents) {
-              const ld = draft.legal_documents;
-              setLegalDraft({
-                terms_file_url: ld.terms_conditions_pdf ?? "",
-                terms_file_name: ld.terms_conditions_name ?? "",
-                terms_note: ld.terms_conditions_note ?? "",
-                warranty_file_url: ld.warranty_certificate_pdf ?? "",
-                warranty_file_name: ld.warranty_certificate_name ?? "",
-                warranty_note: ld.warranty_certificate_note ?? "",
-                insurance_file_url: ld.insurance_certificate_pdf ?? "",
-                insurance_file_name: ld.insurance_certificate_name ?? "",
-                insurance_note: ld.insurance_certificate_note ?? "",
-              });
-            }
-            if (draft.saved_at) setDraftSavedAt(draft.saved_at);
-            return;
+          saved_at?: string;
+        };
+        if (draft.items?.length) {
+          const targetByItem = new Map(
+            items.map((it) => {
+              const show = isItemTargetPriceVisibleToSupplier(it, rfq);
+              return [
+                it.item_code,
+                show ? getItemTargetPrice(it) : null,
+              ] as const;
+            }),
+          );
+          setLines(
+            draft.items.map((line) => ({
+              ...line,
+              target_price: targetByItem.get(line.item_code) ?? null,
+            })),
+          );
+          usedDraftItems = true;
+          if (draft.payment_terms) setPaymentTerms(draft.payment_terms);
+          if (draft.valid_till) setValidityDate(draft.valid_till);
+          if (draft.notes != null) setNotes(draft.notes);
+          if (draft.legal_documents) {
+            const ld = draft.legal_documents;
+            setLegalDraft({
+              terms_file_url: ld.terms_conditions_pdf ?? "",
+              terms_file_name: ld.terms_conditions_name ?? "",
+              terms_note: ld.terms_conditions_note ?? "",
+              warranty_file_url: ld.warranty_certificate_pdf ?? "",
+              warranty_file_name: ld.warranty_certificate_name ?? "",
+              warranty_note: ld.warranty_certificate_note ?? "",
+              insurance_file_url: ld.insurance_certificate_pdf ?? "",
+              insurance_file_name: ld.insurance_certificate_name ?? "",
+              insurance_note: ld.insurance_certificate_note ?? "",
+            });
           }
-        } catch {
-          /* fall through to RFQ defaults */
+          if (draft.saved_at) setDraftSavedAt(draft.saved_at);
         }
+      } catch {
+        /* fall through to RFQ defaults */
       }
+    }
 
-      setLines(
-        rfq.items.map<QuoteLine>((it: RFQItem) => ({
-          item_code: it.item_code,
-          item_name: it.item_name ?? it.item_code,
-          description: it.description ?? "",
-          qty: it.qty,
-          uom: it.uom ?? "Nos",
-          unit_price: 0,
-          delivery_days: 7,
-          notes: "",
-          target_price: isItemTargetPriceVisibleToSupplier(it, rfq)
-            ? getItemTargetPrice(it)
-            : null,
-          ...engFor(it),
-        })),
-      );
+    if (!usedDraftItems) {
+      setLines(items.map((it) => quoteLineFromItem(it)));
+    }
+
+    // eslint-disable-next-line no-console
+    console.info("[SupplierRFQPage] Line items seeded", {
+      rfqId: rfq.name,
+      itemCount: items.length,
+      usedDraftItems,
+    });
+
+    if (items.length === 0) {
+      setEngByCode(new Map());
+      return;
+    }
+
+    void (async () => {
+      try {
+        const engMap = await resolveItemEngineeringDocsBatch(
+          items.map((it) => ({
+            item_code: it.item_code,
+            material_request: it.material_request,
+            material_request_item: it.material_request_item,
+            custom_part_name: it.custom_part_name,
+            custom_2d_drawing: it.custom_2d_drawing,
+            custom_engineering_attachments: it.custom_engineering_attachments,
+            rfq_name: rfq.name,
+          })),
+        );
+        if (cancelled) return;
+
+        const engFor = (it: RFQItem): EngineeringDocs => {
+          const raw =
+            engMap.get(`${rfq.name}::${it.item_code}`) ||
+            engMap.get(String(it.material_request_item || "").trim()) ||
+            engMap.get(it.item_code) ||
+            pickEngineeringDocs(it);
+          const visible = filterSupplierVisibleAttachments(raw.attachments);
+          return {
+            ...raw,
+            attachments: visible,
+            drawing_2d_url: visible[0]?.fileUrl || raw.drawing_2d_url,
+          };
+        };
+
+        const byCode = new Map<string, EngineeringDocs>();
+        for (const it of items) {
+          byCode.set(it.item_code, engFor(it));
+        }
+        setEngByCode(byCode);
+
+        setLines((prev) => {
+          if (prev.length === 0) {
+            return items.map((it) => quoteLineFromItem(it, engFor(it)));
+          }
+          return prev.map((line) => {
+            const eng = byCode.get(line.item_code);
+            if (!eng) return line;
+            return {
+              ...line,
+              ...eng,
+              /* Keep prices/notes the supplier already entered. */
+              unit_price: line.unit_price,
+              delivery_days: line.delivery_days,
+              notes: line.notes,
+              target_price: line.target_price,
+            };
+          });
+        });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[SupplierRFQPage] Engineering docs enrichment failed — keeping line items",
+          err,
+        );
+      }
     })();
 
     return () => {
@@ -874,6 +1049,7 @@ export default function SupplierRFQPage() {
         supplier: supplierName,
         rfq_no: rfq.name,
         rfq_supplier_name: rfqSupplierRow?.name,
+        rfq_round: rfq.custom_active_rfq_round,
         items: lines.map((l) => {
           const rfqItem = (rfq.items ?? []).find(
             (it) => it.item_code === l.item_code
@@ -995,6 +1171,18 @@ export default function SupplierRFQPage() {
   }
 
   /* ─────────────── Render ─────────────── */
+
+  const quotationFormActive =
+    !!session &&
+    !submittedQuote &&
+    !rfqLoading &&
+    !checkingStatus &&
+    !declined &&
+    !alreadySubmitted &&
+    !!rfq &&
+    !rfqQuery.isError;
+
+  const footerVisible = useQuotationFooterVisibility(quotationFormActive);
 
   if (!session) {
     return (
@@ -1287,6 +1475,13 @@ export default function SupplierRFQPage() {
           </div>
         </div>
 
+        <div className="mt-6">
+          <SupplierRfqDocumentsSection
+            rfqName={rfq.name}
+            erpSupplierId={supplierName}
+          />
+        </div>
+
         {/* Submitted items (read-only) */}
         {hasItems && (
           <div className="mt-6 card">
@@ -1303,11 +1498,6 @@ export default function SupplierRFQPage() {
             {/* Mobile stacked cards */}
             <div className="divide-y divide-neutral-200 md:hidden">
               {subData.items.map((line) => {
-                const eng =
-                  engByCode.get(line.item_code) ||
-                  pickEngineeringDocs(
-                    (rfq.items ?? []).find((i) => i.item_code === line.item_code),
-                  );
                 const rfqItem = (rfq.items ?? []).find(
                   (i) => i.item_code === line.item_code,
                 );
@@ -1323,15 +1513,10 @@ export default function SupplierRFQPage() {
                     <p className="font-medium text-neutral-900">{line.item_name}</p>
                     <p className="text-xs text-neutral-500">{line.item_code}</p>
                   </div>
-                  <EngineeringDocumentsPanel
-                    partName={eng.part_name}
-                    drawing2dUrl={eng.drawing_2d_url}
-                    attachments={eng.attachments}
-                  />
                   {target != null ? <SupplierTargetPriceBadge price={target} /> : null}
                   <div className="grid grid-cols-2 gap-2 text-sm">
                     <div>
-                      <p className="text-[10px] font-medium uppercase text-neutral-500">Quantity</p>
+                      <p className="text-[10px] font-medium uppercase text-neutral-500">Quantity to Quote</p>
                       <p className="font-medium tabular-nums">{line.qty} {line.uom}</p>
                     </div>
                     <div>
@@ -1350,6 +1535,11 @@ export default function SupplierRFQPage() {
                   {line.notes && (
                     <p className="text-xs text-neutral-500">Note: {line.notes}</p>
                   )}
+                  <SupplierItemAttachmentsPanel
+                    rfqName={rfq.name}
+                    itemCode={line.item_code}
+                    erpSupplierId={supplierName}
+                  />
                 </div>
               );
               })}
@@ -1367,7 +1557,7 @@ export default function SupplierRFQPage() {
                     <th className="px-4 py-2">Item</th>
                     <th className="px-4 py-2">Part Name</th>
                     <th className="px-4 py-2">Attachments</th>
-                    <th className="px-4 py-2 text-right">Qty</th>
+                    <th className="px-4 py-2 text-right">Quantity to Quote</th>
                     <th className="px-4 py-2">UOM</th>
                     {isTargetPriceVisibleToSupplier(rfq) ? (
                       <th className="px-4 py-2 text-right">Target Price</th>
@@ -1380,13 +1570,6 @@ export default function SupplierRFQPage() {
                 </thead>
                 <tbody className="divide-y divide-neutral-200">
                   {subData.items.map((line) => {
-                    const eng =
-                      engByCode.get(line.item_code) ||
-                      pickEngineeringDocs(
-                        (rfq.items ?? []).find(
-                          (i) => i.item_code === line.item_code,
-                        ),
-                      );
                     const rfqItem = (rfq.items ?? []).find(
                       (i) => i.item_code === line.item_code,
                     );
@@ -1396,6 +1579,9 @@ export default function SupplierRFQPage() {
                     )
                       ? getItemTargetPrice(rfqItem ?? {})
                       : null;
+                    const eng =
+                      engByCode.get(line.item_code) ||
+                      pickEngineeringDocs(rfqItem);
                     return (
                     <tr key={line.item_code} className="bg-neutral-50/40">
                       <td className="px-4 py-2 align-top">
@@ -1406,9 +1592,11 @@ export default function SupplierRFQPage() {
                         <PartNameCell value={eng.part_name} />
                       </td>
                       <td className="px-4 py-2 align-top">
-                        <Drawing2dCell
-                          url={eng.drawing_2d_url}
-                          attachments={eng.attachments}
+                        <SupplierItemAttachmentsPanel
+                          rfqName={rfq.name}
+                          itemCode={line.item_code}
+                          erpSupplierId={supplierName}
+                          compact
                         />
                       </td>
                       <td className="px-4 py-2 text-right tabular-nums text-neutral-700">{line.qty}</td>
@@ -1486,47 +1674,50 @@ export default function SupplierRFQPage() {
 
   return (
     <>
-      {/* Content scrolls above a sticky footer so Submit is never clipped */}
-      <div className="-mb-8 flex h-[calc(100dvh-7.5rem)] flex-col overflow-hidden sm:h-[calc(100dvh-4rem)] lg:h-[calc(100dvh-3.75rem)]">
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          <div className="flex w-full flex-col gap-6 pb-3">
+      <div className={`${QUOTE_PAGE_SHELL} flex flex-col gap-6 pb-[88px]`}>
         <BackToDashboard />
 
-        {/* Compact RFQ header */}
-        <div className="rounded-xl border border-neutral-200 bg-white p-3.5 shadow-sm transition-shadow hover:shadow-md">
+        {/* RFQ header */}
+        <div className={`${ENT_CARD} ${ENT_CARD_PAD}`}>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-primary-600">
+              <p className="text-[13px] font-medium text-[#1F3A6D]">
                 Request for Quotation
               </p>
-              <h1 className="mt-0.5 text-lg font-bold text-neutral-900 sm:text-xl">
+              <h1 className="mt-1 text-[28px] font-bold leading-tight text-[#0F172A]">
                 {parsedMessage.title || rfq.name}
               </h1>
-              <p className="mt-0.5 text-xs font-medium text-neutral-500">{rfq.name}</p>
+              <p className="mt-0.5 text-[15px] text-[#64748B]">{rfq.name}</p>
             </div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center rounded-full bg-amber-50 px-3 py-1 text-[13px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200">
                 Draft
               </span>
               {validTillDisplay && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2.5 py-1 text-[10px] font-semibold text-neutral-700 ring-1 ring-inset ring-neutral-200">
-                  <Calendar className="h-3 w-3" />
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-[#F1F5F9] px-3 py-1 text-[13px] font-semibold text-[#475569] ring-1 ring-inset ring-[#E2E8F0]">
+                  <Calendar className="h-3.5 w-3.5" />
                   Due {formatDate(validTillDisplay)}
                 </span>
               )}
               {draftSavedAt && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200">
-                  <CheckCircle2 className="h-3 w-3" />
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-[13px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
                   Auto Saved
                 </span>
               )}
-              <span className="inline-flex items-center rounded-full bg-primary-50 px-2.5 py-1 text-[10px] font-semibold text-primary-700 ring-1 ring-inset ring-primary-200">
+              <span className="inline-flex items-center rounded-full bg-[#EEF3FA] px-3 py-1 text-[13px] font-semibold text-[#1F3A6D] ring-1 ring-inset ring-[#D6E2F5]">
                 {rfqStatusLabel}
               </span>
             </div>
           </div>
-          <div className="mt-2.5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-5">
             <HeaderMeta label="RFQ Number" value={rfq.name} />
+            {rfq.custom_current_round_number ? (
+              <HeaderMeta
+                label="Quote Round"
+                value={formatRfqRoundLabel(rfq.custom_current_round_number)}
+              />
+            ) : null}
             <HeaderMeta label="Buyer" value={rfq.company || "Netlink"} />
             <HeaderMeta label="Issue Date" value={formatDate(rfq.transaction_date)} />
             <HeaderMeta
@@ -1535,18 +1726,14 @@ export default function SupplierRFQPage() {
             />
           </div>
           {parsedMessage.body && (
-            <div className="mt-2.5 rounded-lg border border-neutral-100 bg-neutral-50/80 px-3 py-2 text-sm leading-relaxed text-neutral-700">
-              <p className="mb-1 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-neutral-500">
-                <FileText className="h-3 w-3" />
+            <div className="mt-4 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3 text-[15px] leading-relaxed text-[#334155]">
+              <p className="mb-1.5 flex items-center gap-1.5 text-[13px] font-medium text-[#64748B]">
+                <FileText className="h-3.5 w-3.5" />
                 Buyer Notes
               </p>
               <p className="whitespace-pre-line">{parsedMessage.body}</p>
             </div>
           )}
-        </div>
-
-        <div className="mt-2.5 flex items-center justify-end">
-          <p className="text-xs font-semibold text-primary-700">{completionPct}% complete</p>
         </div>
 
         <WorkflowProgress
@@ -1555,36 +1742,59 @@ export default function SupplierRFQPage() {
           onStepClick={scrollToSection}
         />
 
-        <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start">
-          <div className="space-y-3">
+        <SupplierRfqDocumentsSection
+          rfqName={rfq.name}
+          erpSupplierId={supplierName}
+        />
+
+        <div className={QUOTE_MAIN_GRID}>
+          <div className="min-w-0 space-y-6 lg:space-y-6">
             {/* Pricing — item cards */}
             <section
               id="section-pricing"
-              className="scroll-mt-24 rounded-xl border border-neutral-200 bg-white shadow-sm transition-shadow hover:shadow-md"
+              className={`scroll-mt-24 ${ENT_CARD}`}
             >
-              <div className="flex items-center justify-between border-b border-neutral-100 px-3.5 py-2.5">
+              <div className={`flex items-center justify-between ${ENT_SECTION_HEAD}`}>
                 <div className="flex items-center gap-2">
-                  <Package className="h-4 w-4 text-primary-600" />
+                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#EEF3FA] text-[#1F3A6D]">
+                    <Package className="h-3.5 w-3.5" />
+                  </div>
                   <div>
-                    <h2 className="text-sm font-semibold text-neutral-900">Line Items & Pricing</h2>
-                    <p className="text-[11px] text-neutral-500">
-                      Enter unit price, delivery, and notes for each item
+                    <h2 className="text-[15px] font-semibold leading-tight text-[#0F172A]">Line Items & Pricing</h2>
+                    <p className="text-[12px] font-medium text-[#64748B]">
+                      Enter unit price, delivery, and notes
                     </p>
                   </div>
                 </div>
-                <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-semibold text-neutral-600">
+                <span className="rounded-full bg-[#F1F5F9] px-2 py-0.5 text-[12px] font-semibold text-[#475569]">
                   {lines.length} items
                 </span>
               </div>
-              <div className="space-y-2 p-2.5">
-                {lines.map((line, idx) => (
-                  <QuoteItemCard
-                    key={line.item_code}
-                    line={line}
-                    index={idx}
-                    onPatch={patchLine}
-                  />
-                ))}
+              <div className="divide-y divide-[#E2E8F0] px-4 pb-4 pt-2">
+                {lines.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-[#CBD5E1] bg-[#F8FAFC] px-4 py-6 text-center text-[13px] font-medium text-[#64748B]">
+                    {(rfq.items?.length ?? 0) > 0
+                      ? "Line items are still loading. Please wait a moment…"
+                      : "This RFQ has no line items yet. Contact procurement if this looks incorrect."}
+                  </div>
+                ) : (
+                  lines.map((line, idx) => {
+                    const rfqItem = (rfq.items ?? []).find(
+                      (it) => it.item_code === line.item_code,
+                    );
+                    return (
+                      <QuoteItemCard
+                        key={line.item_code}
+                        line={line}
+                        index={idx}
+                        rfqName={rfq.name}
+                        erpSupplierId={supplierName}
+                        rfqItem={rfqItem}
+                        onPatch={patchLine}
+                      />
+                    );
+                  })
+                )}
               </div>
             </section>
 
@@ -1609,12 +1819,12 @@ export default function SupplierRFQPage() {
             {/* Additional information — collapsible */}
             <section
               id="section-additional"
-              className="scroll-mt-24 overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm transition-shadow hover:shadow-md"
+              className={`scroll-mt-24 overflow-hidden ${ENT_CARD}`}
             >
               <button
                 type="button"
                 onClick={() => setAdditionalOpen((v) => !v)}
-                className="flex w-full items-center justify-between border-none bg-transparent px-3.5 py-2.5 text-left hover:bg-neutral-50/80"
+                className="flex w-full items-center justify-between border-none bg-transparent px-4 py-2.5 text-left transition hover:bg-[#F8FAFC]"
               >
                 <div className="flex items-center gap-2">
                   <FileText className="h-4 w-4 text-primary-600" />
@@ -1634,12 +1844,9 @@ export default function SupplierRFQPage() {
                 )}
               </button>
               {additionalOpen && (
-                <div className="grid gap-2.5 border-t border-neutral-100 p-3 sm:grid-cols-2">
+                <div className="grid gap-3 border-t border-[#E2E8F0] p-4 sm:grid-cols-2">
                   <div>
-                    <label
-                      htmlFor="payment-terms"
-                      className="mb-1 block text-xs font-medium text-neutral-700"
-                    >
+                    <label htmlFor="payment-terms" className={ENT_LABEL}>
                       Payment Terms
                     </label>
                     <input
@@ -1651,10 +1858,7 @@ export default function SupplierRFQPage() {
                     />
                   </div>
                   <div>
-                    <label
-                      htmlFor="quote-validity"
-                      className="mb-1 block text-xs font-medium text-neutral-700"
-                    >
+                    <label htmlFor="quote-validity" className={ENT_LABEL}>
                       Validity of Quote
                     </label>
                     <input
@@ -1667,10 +1871,7 @@ export default function SupplierRFQPage() {
                     />
                   </div>
                   <div className="sm:col-span-2">
-                    <label
-                      htmlFor="quote-notes"
-                      className="mb-1 block text-xs font-medium text-neutral-700"
-                    >
+                    <label htmlFor="quote-notes" className={ENT_LABEL}>
                       General Notes
                     </label>
                     <textarea
@@ -1689,12 +1890,12 @@ export default function SupplierRFQPage() {
             {/* Legal documents — accordion */}
             <section
               id="section-documents"
-              className="scroll-mt-24 overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm transition-shadow hover:shadow-md"
+              className={`scroll-mt-24 overflow-hidden ${ENT_CARD}`}
             >
               <button
                 type="button"
                 onClick={() => setLegalDocsOpen((v) => !v)}
-                className="flex w-full items-center justify-between border-none bg-transparent px-3.5 py-2.5 text-left hover:bg-neutral-50/80"
+                className="flex w-full items-center justify-between border-none bg-transparent px-4 py-2.5 text-left transition hover:bg-[#F8FAFC]"
               >
                 <div className="flex items-center gap-2">
                   <Shield className="h-4 w-4 text-primary-600" />
@@ -1768,17 +1969,17 @@ export default function SupplierRFQPage() {
             {/* Review */}
             <section
               id="section-review"
-              className="scroll-mt-24 rounded-xl border border-neutral-200 bg-white p-3 shadow-sm transition-shadow hover:shadow-md"
+              className={`scroll-mt-24 ${ENT_CARD_PAD} ${ENT_CARD}`}
             >
-              <h2 className="text-sm font-semibold text-neutral-900">Review &amp; Submit</h2>
-              <p className="mt-0.5 text-[11px] text-neutral-500">
-                Confirm terms before submitting your quotation to the buyer
+              <h2 className="text-[15px] font-semibold text-[#0F172A]">Review &amp; Submit</h2>
+              <p className="mt-0.5 text-[13px] font-medium text-[#64748B]">
+                Confirm terms before submitting your quotation
               </p>
               <label
-                className={`mt-2.5 flex cursor-pointer items-start gap-2.5 rounded-lg border p-2.5 text-sm transition ${
+                className={`mt-4 flex cursor-pointer items-start gap-3 rounded-2xl border p-4 text-[15px] transition ${
                   !acceptedTerms
-                    ? "border-red-300 bg-red-50/50 text-neutral-800 ring-1 ring-inset ring-red-200"
-                    : "border-neutral-100 bg-neutral-50/60 text-neutral-700 hover:border-primary-200 hover:bg-primary-50/30"
+                    ? "border-red-200 bg-red-50/50 text-[#334155] ring-1 ring-inset ring-red-100"
+                    : "border-[#E2E8F0] bg-[#F8FAFC] text-[#334155] hover:border-[#1F3A6D]/30 hover:bg-[#EEF3FA]/40"
                 }`}
               >
                 <input
@@ -1811,7 +2012,7 @@ export default function SupplierRFQPage() {
           </div>
 
           {/* Sticky quote summary — desktop */}
-          <aside className="hidden lg:sticky lg:top-20 lg:block lg:max-h-[calc(100vh-6rem)] lg:self-start">
+          <aside className="hidden min-w-0 lg:sticky lg:top-[4.75rem] lg:block lg:self-start">
             <QuoteSummaryPanel
               itemCount={lines.length}
               grandTotal={grandTotal}
@@ -1822,8 +2023,8 @@ export default function SupplierRFQPage() {
           </aside>
         </div>
 
-        {/* Mobile summary — sticky while scrolling */}
-        <div className="sticky top-0 z-10 mt-3 lg:hidden">
+        {/* Mobile / tablet summary */}
+        <div className="lg:hidden">
           <QuoteSummaryPanel
             itemCount={lines.length}
             grandTotal={grandTotal}
@@ -1832,73 +2033,22 @@ export default function SupplierRFQPage() {
             completionPct={completionPct}
           />
         </div>
-          </div>
-        </div>
+      </div>
 
-      {/* Sticky bottom action bar — Quote Total + actions in one footer */}
-      <div className="sticky bottom-0 z-40 shrink-0 border-t border-neutral-200 bg-white/95 shadow-[0_-6px_24px_rgba(15,23,42,0.08)] backdrop-blur-md supports-[backdrop-filter]:bg-white/90">
-        <div className="flex w-full flex-col gap-2 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
-          <div className="flex flex-col gap-2.5 md:flex-row md:items-center md:justify-between md:gap-4">
-            <div className="min-w-0 shrink-0">
-              <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
-                Quote Total
-              </p>
-              <p className="text-xl font-bold tabular-nums text-primary-600 sm:text-2xl">
-                {formatCurrency(grandTotal)}
-              </p>
-              {draftSavedAt && (
-                <p className="mt-0.5 flex items-center gap-1 text-[11px] text-neutral-500">
-                  <Clock className="h-3 w-3" />
-                  Auto saved {formatDateTime(draftSavedAt)}
-                </p>
-              )}
-            </div>
-            <div className="flex w-full flex-wrap items-center gap-2 md:w-auto md:justify-end">
-              <button
-                type="button"
-                onClick={handleSaveDraft}
-                disabled={submitting}
-                className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm font-semibold text-neutral-700 shadow-sm transition hover:border-primary-300 hover:bg-neutral-50 hover:shadow disabled:opacity-60 sm:flex-none sm:px-4"
-              >
-                <Save className="h-4 w-4 shrink-0" />
-                <span className="whitespace-nowrap">Save Draft</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setNoQuoteOpen(true)}
-                disabled={submitting}
-                className="inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg border border-warning-300 bg-warning-50 px-3 py-2 text-sm font-semibold text-warning-700 shadow-sm transition hover:border-warning-400 hover:bg-warning-100 disabled:opacity-60 sm:flex-none sm:px-4"
-              >
-                <Ban className="h-4 w-4 shrink-0" />
-                <span className="whitespace-nowrap">No Quote</span>
-              </button>
-              {/* Wrapper so tooltip works while the button is disabled */}
-              <span
-                className="inline-flex min-w-0 flex-[1.2] sm:flex-none"
-                title={submitDisabledTitle}
-              >
-                <button
-                  type="button"
-                  onClick={handleSubmit}
-                  disabled={!canSubmit}
-                  aria-disabled={!canSubmit}
-                  className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-md transition hover:bg-primary-700 hover:shadow-lg disabled:cursor-not-allowed disabled:bg-neutral-300 disabled:text-neutral-500 disabled:shadow-none sm:min-w-[11.5rem] sm:px-5"
-                >
-                  {submitting ? (
-                    <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-                  ) : (
-                    <Send className="h-4 w-4 shrink-0" />
-                  )}
-                  <span className="whitespace-nowrap">
-                    {submitting ? "Submitting…" : "Submit Quotation"}
-                  </span>
-                </button>
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-      </div>
+      <QuotationFloatingFooter
+        visible={footerVisible}
+        grandTotal={grandTotal}
+        itemCount={lines.length}
+        avgDeliveryDays={avgDeliveryDays}
+        uploadedDocsCount={uploadedDocsCount}
+        draftSavedAt={draftSavedAt}
+        submitting={submitting}
+        canSubmit={canSubmit}
+        submitDisabledTitle={submitDisabledTitle}
+        onSaveDraft={handleSaveDraft}
+        onNoQuote={() => setNoQuoteOpen(true)}
+        onSubmit={handleSubmit}
+      />
 
       <NoQuoteDialog
         open={noQuoteOpen}
@@ -1915,13 +2065,115 @@ export default function SupplierRFQPage() {
  * UI helpers — quotation form
  * ========================================================================== */
 
+function QuotationFloatingFooter({
+  visible,
+  grandTotal,
+  itemCount,
+  avgDeliveryDays,
+  uploadedDocsCount,
+  draftSavedAt,
+  submitting,
+  canSubmit,
+  submitDisabledTitle,
+  onSaveDraft,
+  onNoQuote,
+  onSubmit,
+}: {
+  visible: boolean;
+  grandTotal: number;
+  itemCount: number;
+  avgDeliveryDays: number;
+  uploadedDocsCount: number;
+  draftSavedAt: string | null;
+  submitting: boolean;
+  canSubmit: boolean;
+  submitDisabledTitle?: string;
+  onSaveDraft: () => void;
+  onNoQuote: () => void;
+  onSubmit: () => void;
+}) {
+  const metadataParts = [
+    `${itemCount} Item${itemCount === 1 ? "" : "s"}`,
+    itemCount
+      ? `Avg Delivery ${avgDeliveryDays} Day${avgDeliveryDays === 1 ? "" : "s"}`
+      : "Avg Delivery —",
+    `Docs ${uploadedDocsCount}/3`,
+    draftSavedAt ? `Auto Saved ${formatRelativeSavedAt(draftSavedAt)}` : null,
+  ].filter(Boolean);
+
+  return (
+    <div
+      role="region"
+      aria-label="Quotation actions"
+      aria-hidden={!visible}
+      className={`supplier-rfq-command-bar transition-transform duration-300 ease-out ${
+        visible
+          ? "pointer-events-auto translate-y-0"
+          : "pointer-events-none translate-y-full"
+      }`}
+    >
+      <div className="mx-auto flex w-full max-w-[1680px] flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] font-medium leading-none text-[#64748B]">
+            Quote Total
+          </p>
+          <p className="mt-0.5 text-2xl font-bold tabular-nums leading-none tracking-tight text-[#1F3A6D]">
+            {formatCurrency(grandTotal)}
+          </p>
+          <p className="mt-1 truncate text-[11px] leading-snug text-[#64748B]">
+            {metadataParts.join(" • ")}
+          </p>
+        </div>
+
+        <div className="flex w-full shrink-0 flex-wrap items-center gap-3 sm:w-auto sm:justify-end">
+          <button
+            type="button"
+            onClick={onSaveDraft}
+            disabled={submitting}
+            className={`${CMD_BAR_BTN_OUTLINE} w-full sm:w-auto`}
+          >
+            Save Draft
+          </button>
+          <button
+            type="button"
+            onClick={onNoQuote}
+            disabled={submitting}
+            className={`${CMD_BAR_BTN_DANGER} w-full sm:w-auto`}
+          >
+            No Quote
+          </button>
+          <span
+            className="inline-flex w-full min-w-0 sm:w-auto"
+            title={submitDisabledTitle}
+          >
+            <button
+              type="button"
+              onClick={onSubmit}
+              disabled={!canSubmit}
+              aria-disabled={!canSubmit}
+              className={`${CMD_BAR_BTN_PRIMARY} w-full sm:min-w-[10.5rem]`}
+            >
+              {submitting ? (
+                <>
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                  Submitting…
+                </>
+              ) : (
+                "Submit Quotation"
+              )}
+            </button>
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function HeaderMeta({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-neutral-100 bg-neutral-50/80 px-2.5 py-2">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400">
-        {label}
-      </p>
-      <p className="mt-0.5 truncate text-xs font-semibold text-neutral-800">{value}</p>
+    <div className="rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-2">
+      <p className="text-[12px] font-medium text-[#64748B]">{label}</p>
+      <p className="mt-1 truncate text-[14px] font-semibold text-[#0F172A]">{value}</p>
     </div>
   );
 }
@@ -1949,13 +2201,11 @@ function SupplierTargetPriceBadge({
     );
   }
   return (
-    <div className="rounded-lg border border-neutral-200 bg-white px-3 py-2.5 shadow-sm">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
-        Target Price
-      </p>
-      <p className="mt-0.5 text-base font-semibold tabular-nums text-neutral-900">
+    <div className="rounded-xl border border-[#1F3A6D]/15 bg-[#EEF3FA]/60 px-3 py-2">
+      <p className="text-[13px] font-medium text-[#64748B]">Target Price</p>
+      <p className="mt-0.5 text-[15px] font-semibold tabular-nums text-[#0F172A]">
         {formatCurrency(price)}{" "}
-        <span className="text-sm font-medium text-neutral-500">/ Unit</span>
+        <span className="text-[13px] font-medium text-[#64748B]">/ Unit</span>
       </p>
     </div>
   );
@@ -1971,49 +2221,43 @@ function WorkflowProgress({
   onStepClick: (id: string) => void;
 }) {
   return (
-    <div className="mt-2.5 overflow-x-auto rounded-xl border border-neutral-200 bg-white p-2.5 shadow-sm transition-shadow hover:shadow-md">
-      <div className="flex min-w-max items-center gap-1 sm:min-w-0 sm:flex-wrap">
+    <div className={`${ENT_CARD} px-4 py-2`}>
+      <div className="flex h-12 max-h-[52px] min-h-[48px] items-center gap-1 overflow-x-auto sm:flex-wrap sm:overflow-visible">
         {steps.map((step, idx) => {
           const isActive = step.id === activeStepId && !step.complete;
           const isCurrent = step.id === activeStepId;
           return (
-            <div key={step.id} className="flex items-center gap-1">
+            <div key={step.id} className="flex shrink-0 items-center gap-0.5">
               <button
                 type="button"
                 onClick={() => onStepClick(step.id)}
-                className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition-all duration-200 hover:shadow-sm ${
+                className={`inline-flex h-9 max-h-9 items-center gap-1.5 rounded-lg px-2.5 text-[12px] font-semibold leading-none transition ${
                   step.complete
                     ? "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200 hover:bg-emerald-100"
                     : isActive
-                      ? "bg-primary-50 text-primary-800 ring-2 ring-inset ring-primary-400 shadow-sm"
+                      ? "bg-[#EEF3FA] text-[#1F3A6D] ring-2 ring-inset ring-[#1F3A6D]/30"
                       : isCurrent
-                        ? "bg-primary-50/80 text-primary-700 ring-1 ring-inset ring-primary-300"
-                        : "bg-neutral-50 text-neutral-600 ring-1 ring-inset ring-neutral-200 hover:bg-primary-50 hover:text-primary-700"
+                        ? "bg-[#EEF3FA]/80 text-[#1F3A6D] ring-1 ring-inset ring-[#D6E2F5]"
+                        : "bg-[#F8FAFC] text-[#64748B] ring-1 ring-inset ring-[#E2E8F0] hover:bg-[#EEF3FA] hover:text-[#1F3A6D]"
                 }`}
               >
                 {step.complete ? (
-                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
                 ) : (
                   <span
-                    className={`flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold ${
+                    className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-bold ${
                       isActive
-                        ? "bg-primary-600 text-white"
-                        : "bg-neutral-200 text-neutral-600"
+                        ? "bg-[#1F3A6D] text-white"
+                        : "bg-[#E2E8F0] text-[#64748B]"
                     }`}
                   >
                     {idx + 1}
                   </span>
                 )}
-                {step.label}
-                {isActive && (
-                  <span className="relative flex h-1.5 w-1.5">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary-400 opacity-75" />
-                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-primary-500" />
-                  </span>
-                )}
+                <span className="whitespace-nowrap">{step.label}</span>
               </button>
               {idx < steps.length - 1 && (
-                <ChevronRight className="hidden h-3.5 w-3.5 text-neutral-300 sm:block" />
+                <ChevronRight className="hidden h-3 w-3 shrink-0 text-[#CBD5E1] sm:block" />
               )}
             </div>
           );
@@ -2047,11 +2291,9 @@ function DeliveryDaysField({
 
   return (
     <div>
-      <label className="mb-0.5 block text-[10px] font-medium text-neutral-600">
-        Delivery Days
-      </label>
+      <label className={ENT_LABEL}>Delivery Days</label>
       <Select value={selectValue} onValueChange={handleSelect}>
-        <SelectTrigger className="tabular-nums py-1.5 text-sm">
+        <SelectTrigger className={`${ENT_INPUT} tabular-nums`}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -2064,17 +2306,15 @@ function DeliveryDaysField({
         </SelectContent>
       </Select>
       {isCustom && (
-        <div className="mt-1.5">
-          <label className="mb-0.5 block text-[10px] font-medium text-neutral-600">
-            Custom Days
-          </label>
+        <div className="mt-2">
+          <label className={ENT_LABEL}>Custom Days</label>
           <input
             type="number"
             min={0}
             value={value || ""}
             onChange={(e) => onChange(Number(e.target.value))}
-            placeholder="Enter number of days"
-            className="input-field tabular-nums py-1.5 text-sm"
+            placeholder="Enter days"
+            className={`${ENT_INPUT} tabular-nums`}
             autoFocus
           />
         </div>
@@ -2086,39 +2326,46 @@ function DeliveryDaysField({
 function QuoteItemCard({
   line,
   index,
+  rfqName,
+  erpSupplierId,
+  rfqItem,
   onPatch,
 }: {
   line: QuoteLine;
   index: number;
+  rfqName: string;
+  erpSupplierId: string;
+  rfqItem?: RFQItem;
   onPatch: (idx: number, patch: Partial<QuoteLine>) => void;
 }) {
   const lineTotal = line.unit_price * line.qty;
   const priced = line.unit_price > 0;
+  const hasShortage = rfqItemHasWarehouseShortage(rfqItem);
+
   return (
-    <div className="rounded-lg border border-neutral-200 bg-neutral-50/40 p-2.5 transition-all duration-200 hover:border-primary-200 hover:shadow-sm">
-      <div className="flex flex-wrap items-start justify-between gap-1.5">
+    <div className="py-3 first:pt-1 last:pb-1">
+      {/* Header */}
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-neutral-900">{line.item_name}</p>
-          <p className="text-[11px] text-neutral-500">{line.item_code}</p>
+          <h3 className="text-[17px] font-semibold leading-snug text-[#0F172A]">
+            {line.item_name}
+          </h3>
+          <p className="mt-0.5 text-[13px] font-medium text-[#64748B]">{line.item_code}</p>
           {line.description ? (
-            <p className="mt-0.5 text-[10px] leading-snug text-neutral-500">{line.description}</p>
+            <p className="mt-1 text-[13px] leading-snug text-[#64748B]">{line.description}</p>
           ) : null}
         </div>
-        <div className="text-right">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400">
-            Qty
-          </p>
-          <p className="text-sm font-semibold tabular-nums text-neutral-800">
-            {line.qty} {line.uom}
-          </p>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {hasShortage ? (
+            <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[12px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200">
+              Warehouse Shortage
+            </span>
+          ) : null}
+          <span className="inline-flex items-center rounded-full bg-[#EEF3FA] px-2.5 py-0.5 text-[12px] font-semibold tabular-nums text-[#1F3A6D] ring-1 ring-inset ring-[#D6E2F5]">
+            Qty {line.qty} {line.uom}
+          </span>
         </div>
       </div>
-
-      <EngineeringDocumentsPanel
-        partName={line.part_name}
-        drawing2dUrl={line.drawing_2d_url}
-        attachments={line.attachments}
-      />
 
       {line.target_price != null && Number.isFinite(line.target_price) ? (
         <div className="mt-2">
@@ -2126,11 +2373,10 @@ function QuoteItemCard({
         </div>
       ) : null}
 
-      <div className="mt-2 grid gap-1.5 sm:grid-cols-3">
+      {/* Pricing row */}
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div>
-          <label className="mb-0.5 block text-[10px] font-medium text-neutral-600">
-            Unit Price
-          </label>
+          <label className={ENT_LABEL}>Unit Price</label>
           <input
             type="number"
             min={0}
@@ -2138,7 +2384,7 @@ function QuoteItemCard({
             value={line.unit_price || ""}
             onChange={(e) => onPatch(index, { unit_price: Number(e.target.value) })}
             placeholder="0.00"
-            className={`input-field tabular-nums py-1.5 text-sm ${!priced ? "border-amber-200 bg-amber-50/30" : ""}`}
+            className={`${ENT_INPUT} tabular-nums ${!priced ? "border-amber-200 bg-amber-50/40" : ""}`}
           />
         </div>
         <DeliveryDaysField
@@ -2146,23 +2392,32 @@ function QuoteItemCard({
           onChange={(days) => onPatch(index, { delivery_days: days })}
         />
         <div>
-          <label className="mb-0.5 block text-[10px] font-medium text-neutral-600">
-            Line Total
-          </label>
-          <div className="flex h-[34px] items-center rounded-lg border border-neutral-200 bg-white px-2.5 text-sm font-bold tabular-nums text-primary-600">
-            {formatCurrency(lineTotal)}
+          <label className={ENT_LABEL}>Line Total</label>
+          <div className="flex h-11 items-center rounded-2xl bg-[#EEF3FA] px-3 ring-1 ring-inset ring-[#D6E2F5]">
+            <span className="text-[15px] font-bold tabular-nums text-[#1F3A6D]">
+              {formatCurrency(lineTotal)}
+            </span>
           </div>
         </div>
       </div>
-      <div className="mt-1.5">
-        <label className="mb-0.5 block text-[10px] font-medium text-neutral-600">Notes</label>
-        <input
+
+      {/* Notes */}
+      <div className="mt-3">
+        <label className={ENT_LABEL}>Notes</label>
+        <textarea
           value={line.notes}
           onChange={(e) => onPatch(index, { notes: e.target.value })}
           placeholder="Optional line notes"
-          className="input-field py-1.5 text-sm"
+          rows={3}
+          className={`${ENT_INPUT} min-h-[70px] resize-y py-2.5`}
         />
       </div>
+
+      <SupplierItemAttachmentsPanel
+        rfqName={rfqName}
+        itemCode={line.item_code}
+        erpSupplierId={erpSupplierId}
+      />
     </div>
   );
 }
@@ -2180,38 +2435,57 @@ function QuoteSummaryPanel({
   uploadedDocsCount: number;
   completionPct: number;
 }) {
+  const readyToSubmit = completionPct >= 100;
+
   return (
-    <div className="rounded-xl border border-primary-100 bg-gradient-to-b from-primary-50/80 to-white p-3.5 shadow-md ring-1 ring-primary-100/80 transition-shadow hover:shadow-lg">
-      <h3 className="text-xs font-bold uppercase tracking-wider text-primary-700">
+    <div className={`${ENT_CARD} ${ENT_CARD_PAD}`}>
+      <h3 className="text-[12px] font-semibold uppercase tracking-wide text-[#64748B]">
         Quote Summary
       </h3>
-      <div className="mt-2.5 rounded-lg border border-primary-100/80 bg-white/70 px-3 py-2.5">
-        <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">
-          Grand Total
-        </p>
-        <p className="mt-0.5 text-2xl font-bold tabular-nums leading-none text-primary-600">
+
+      <div className="mt-3 rounded-xl border border-[#D6E2F5] bg-[#EEF3FA] px-3 py-2.5">
+        <p className="text-[12px] font-medium text-[#64748B]">Grand Total</p>
+        <p className="mt-0.5 text-[28px] font-bold tabular-nums leading-none text-[#1F3A6D]">
           {formatCurrency(grandTotal)}
         </p>
       </div>
-      <div className="mt-2.5 space-y-2">
+
+      <div className="mt-3 divide-y divide-[#E2E8F0]">
         <SummaryRow label="Number of Items" value={String(itemCount)} />
         <SummaryRow
-          label="Avg. Delivery Days"
+          label="Average Delivery"
           value={itemCount ? `${avgDeliveryDays} days` : "—"}
         />
-        <SummaryRow label="Documents Uploaded" value={`${uploadedDocsCount} / 3`} />
+        <SummaryRow
+          label="Uploaded Documents"
+          value={`${uploadedDocsCount} / 3`}
+        />
+        <SummaryRow label="Currency" value="INR" />
+        <SummaryRow label="Estimated Rank" value="—" muted />
+        <SummaryRow label="Budget Difference" value="—" muted />
       </div>
-      <div className="mt-3">
-        <div className="mb-1 flex justify-between text-[11px] font-medium text-neutral-600">
-          <span>Completion</span>
-          <span className="font-bold text-primary-700">{completionPct}%</span>
-        </div>
-        <div className="h-2 overflow-hidden rounded-full bg-neutral-200">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-primary-400 to-primary-600 transition-all duration-500 ease-out"
-            style={{ width: `${completionPct}%` }}
-          />
-        </div>
+
+      <div className="mt-3 border-t border-[#E2E8F0] pt-3">
+        <p className="text-[12px] font-medium text-[#64748B]">Completion Status</p>
+        {readyToSubmit ? (
+          <p className="mt-1.5 inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[13px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Ready to Submit
+          </p>
+        ) : (
+          <>
+            <div className="mt-1.5 flex items-center justify-between text-[12px] font-medium text-[#64748B]">
+              <span>In progress</span>
+              <span className="font-semibold text-[#1F3A6D]">{completionPct}%</span>
+            </div>
+            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[#E2E8F0]">
+              <div
+                className="h-full rounded-full bg-[#1F3A6D] transition-all duration-300"
+                style={{ width: `${completionPct}%` }}
+              />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -2221,21 +2495,27 @@ function SummaryRow({
   label,
   value,
   highlight,
+  muted,
 }: {
   label: string;
   value: string;
   highlight?: boolean;
+  muted?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 text-sm">
-      <span className="text-neutral-500">{label}</span>
-      <span
-        className={`font-semibold tabular-nums ${
-          highlight ? "text-primary-700" : "text-neutral-900"
+    <div className="flex items-center justify-between gap-2 py-2">
+      <dt className="text-[13px] font-medium text-[#64748B]">{label}</dt>
+      <dd
+        className={`text-[14px] tabular-nums ${
+          highlight
+            ? "font-bold text-[#1F3A6D]"
+            : muted
+              ? "font-medium text-[#94A3B8]"
+              : "font-semibold text-[#0F172A]"
         }`}
       >
         {value}
-      </span>
+      </dd>
     </div>
   );
 }

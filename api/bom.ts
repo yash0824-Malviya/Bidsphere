@@ -10,11 +10,24 @@ import {
   type BomRowStatus,
   type CreateBomRfqInput,
 } from "./bomCore.js";
-import { RbacError, requireInternalAuth, requireRoles, BOM_ROLES } from "./rbacAuth.js";
+import { submitDepartmentBom, type SubmitDepartmentBomInput } from "./departmentBomCore.js";
+import {
+  approveTemporaryItem,
+  listTemporaryItems,
+  rejectTemporaryItem,
+} from "./temporaryItemStoreCore.js";
+import {
+  RbacError,
+  requireInternalAuth,
+  requireRoles,
+  DEPARTMENT_BOM_ROLES,
+  MASTER_DATA_BOM_ROLES,
+  BOM_RFQ_LEGACY_ROLES,
+} from "./rbacAuth.js";
 
 /**
- * Procurement BOM Reader API
- * Requires signed BidSphere access token + procurement/manufacturing/admin.
+ * Department BOM API — upload, validate, Material Request, Temporary Item Store.
+ * Procurement RFQ-from-BOM is deprecated (admin-only legacy).
  */
 
 export const config = {
@@ -35,7 +48,6 @@ function readAction(req: VercelRequest): string {
   const q = req.query.action;
   if (Array.isArray(q)) return q[0] ?? "";
   if (typeof q === "string" && q) return q;
-  // Fallback: path suffix when rewrite didn't set action
   const url = req.url ?? "";
   const m = /\/api\/bom\/([^/?]+)/.exec(url);
   return m?.[1] ?? "";
@@ -112,7 +124,6 @@ function parseBomParsedRow(raw: unknown, index: number): BomParsedRow {
   };
 }
 
-/** Validate JSON body and build a typed CreateBomRfqInput (no unsafe casts). */
 function parseCreateBomRfqInput(body: Record<string, unknown>): CreateBomRfqInput {
   if (!Array.isArray(body.rows)) {
     throw new BomError("Missing required field: rows.");
@@ -157,6 +168,25 @@ function parseCreateBomRfqInput(body: Record<string, unknown>): CreateBomRfqInpu
   return input;
 }
 
+function parseSubmitDepartmentInput(body: Record<string, unknown>): SubmitDepartmentBomInput {
+  if (!Array.isArray(body.rows)) {
+    throw new BomError("Missing required field: rows.");
+  }
+  const rows = body.rows.map((row, index) => parseBomParsedRow(row, index));
+  const input: SubmitDepartmentBomInput = { rows };
+  if (typeof body.uploaded_by === "string") input.uploaded_by = body.uploaded_by;
+  if (typeof body.department === "string") input.department = body.department;
+  if (typeof body.project === "string") input.project = body.project;
+  if (typeof body.program === "string") input.program = body.program;
+  if (typeof body.bom_version === "string") input.bom_version = body.bom_version;
+  if (typeof body.remarks === "string") input.remarks = body.remarks;
+  if (typeof body.company === "string") input.company = body.company;
+  if (typeof body.file_name === "string") input.file_name = body.file_name;
+  if (typeof body.file_base64 === "string") input.file_base64 = body.file_base64;
+  if (typeof body.file_mime === "string") input.file_mime = body.file_mime;
+  return input;
+}
+
 export default async function handler(
   req: VercelRequest,
   res: VercelResponse,
@@ -169,16 +199,9 @@ export default async function handler(
   const action = readAction(req);
 
   try {
-    // Sample template is public-ish for UX; still require auth so keys aren't open
-    if (action !== "sample") {
-      const principal = requireInternalAuth(req.headers as Record<string, unknown>);
-      requireRoles(principal, BOM_ROLES);
-    } else {
-      // sample download: any authenticated internal user
-      requireInternalAuth(req.headers as Record<string, unknown>);
-    }
-
     if (action === "sample" && (req.method === "GET" || req.method === "POST")) {
+      const principal = requireInternalAuth(req.headers as Record<string, unknown>);
+      requireRoles(principal, DEPARTMENT_BOM_ROLES);
       const buf = buildSampleBomWorkbook();
       res.setHeader(
         "Content-Type",
@@ -186,19 +209,51 @@ export default async function handler(
       );
       res.setHeader(
         "Content-Disposition",
-        'attachment; filename="BidSphere_BOM_Sample_Template.xlsx"',
+        'attachment; filename="BidSphere_Department_BOM_Template.xlsx"',
       );
       res.status(200).send(buf);
       return;
     }
 
+    const principal = requireInternalAuth(req.headers as Record<string, unknown>);
+
     if (action === "history" && req.method === "GET") {
+      requireRoles(principal, DEPARTMENT_BOM_ROLES);
       const history = await getBomHistory();
       res.status(200).json({ success: true, history });
       return;
     }
 
+    if (action === "temporary-items" && req.method === "GET") {
+      requireRoles(principal, DEPARTMENT_BOM_ROLES);
+      const items = await listTemporaryItems();
+      res.status(200).json({ success: true, items });
+      return;
+    }
+
+    if (action === "temporary-items-approve" && req.method === "POST") {
+      requireRoles(principal, MASTER_DATA_BOM_ROLES);
+      const body = await readJsonBody(req);
+      const name = String(body.name ?? "").trim();
+      if (!name) throw new BomError("Temporary item name is required.");
+      const item = await approveTemporaryItem(name);
+      res.status(200).json({ success: true, item });
+      return;
+    }
+
+    if (action === "temporary-items-reject" && req.method === "POST") {
+      requireRoles(principal, MASTER_DATA_BOM_ROLES);
+      const body = await readJsonBody(req);
+      const name = String(body.name ?? "").trim();
+      if (!name) throw new BomError("Temporary item name is required.");
+      const reason = typeof body.reason === "string" ? body.reason : undefined;
+      const item = await rejectTemporaryItem(name, reason);
+      res.status(200).json({ success: true, item });
+      return;
+    }
+
     if (action === "upload" && req.method === "POST") {
+      requireRoles(principal, DEPARTMENT_BOM_ROLES);
       const { files } = await parseMultipart(req);
       const fileList = files.file ?? files.bom ?? files.upload ?? [];
       const file = fileList[0];
@@ -209,7 +264,6 @@ export default async function handler(
       const buffer = await fs.readFile(file.path);
       const fileName = file.originalFilename || file.path.split(/[/\\]/).pop() || "bom.xlsx";
       const result = await processBomUpload(buffer, fileName);
-      // cleanup temp
       try {
         await fs.unlink(file.path);
       } catch {
@@ -219,7 +273,17 @@ export default async function handler(
       return;
     }
 
+    if (action === "submit-department" && req.method === "POST") {
+      requireRoles(principal, DEPARTMENT_BOM_ROLES);
+      const body = await readJsonBody(req);
+      const input = parseSubmitDepartmentInput(body);
+      const result = await submitDepartmentBom(input);
+      res.status(200).json(result);
+      return;
+    }
+
     if (action === "create-rfq" && req.method === "POST") {
+      requireRoles(principal, BOM_RFQ_LEGACY_ROLES);
       const body = await readJsonBody(req);
       const input = parseCreateBomRfqInput(body);
       const result = await createRfqFromBom(input);

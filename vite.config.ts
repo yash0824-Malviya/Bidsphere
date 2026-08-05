@@ -392,6 +392,187 @@ function supplierVoucherDevMiddleware(): Plugin {
 }
 
 /**
+ * Dev-server parity for `api/supplier-rfq-documents.ts`.
+ */
+function supplierRfqDocumentsDevMiddleware(): Plugin {
+  return {
+    name: "supplier-rfq-documents-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+        const url = (req.url ?? "").split("?")[0];
+        if (
+          url !== "/api/supplier-rfq-documents" ||
+          (req.method !== "POST" && req.method !== "OPTIONS")
+        ) {
+          next();
+          return;
+        }
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(chunk as Buffer);
+          const raw = Buffer.concat(chunks).toString("utf8");
+          const body = raw ? JSON.parse(raw) : {};
+
+          const rbac = await server.ssrLoadModule("/api/rbacAuth.ts");
+          const core = await server.ssrLoadModule(
+            "/api/supplierRfqDocumentsCore.ts",
+          );
+          const principal = rbac.requireSupplierAuth(
+            req.headers as Record<string, unknown>,
+            body as Record<string, unknown>,
+          );
+          const supplierId = String(
+            body.erp_supplier_id || principal.supplier || principal.sub || "",
+          ).trim();
+          const supplierCandidates = core.buildSupplierAccessCandidates({
+            explicitSupplierId: body.erp_supplier_id,
+            jwtSupplier: principal.supplier,
+            jwtSub: principal.sub,
+          });
+          const rfqName = String(body.rfq_name || body.rfqName || "").trim();
+          const itemCode = String(body.item_code || body.itemCode || "").trim();
+          const documents = await core.listSupplierRfqDocuments({
+            rfqName,
+            supplierId,
+            supplierCandidates,
+            itemCode: itemCode || undefined,
+          });
+          console.info("[supplier-rfq-documents-dev]", {
+            rfqId: rfqName,
+            supplierId,
+            itemCode: itemCode || null,
+            documentCount: documents.length,
+          });
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(
+            JSON.stringify({
+              success: true,
+              documents,
+              rfq_id: rfqName,
+              document_count: documents.length,
+            }),
+          );
+        } catch (err) {
+          const status =
+            err && typeof err === "object" && "status" in err
+              ? Number((err as { status?: number }).status) || 500
+              : 500;
+          const message =
+            err instanceof Error
+              ? err.message
+              : "Unable to load RFQ documents.";
+          console.error("[supplier-rfq-documents-dev] FAILED:", err);
+          res.statusCode = status >= 400 && status < 600 ? status : 500;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ success: false, error: message }));
+        }
+      });
+    },
+  };
+}
+
+/**
+ * Dev-server parity for `api/erp-server-date.ts`.
+ * Intercepts GET /api/erp-server-date BEFORE Vite's /api proxy.
+ */
+function erpServerDateDevMiddleware(): Plugin {
+  return {
+    name: "erp-server-date-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+        const pathOnly = (req.url ?? "").split("?")[0] || "";
+        if (pathOnly !== "/api/erp-server-date") {
+          next();
+          return;
+        }
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== "GET") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "application/json");
+          res.end(
+            JSON.stringify({
+              success: false,
+              message: "Method Not Allowed. Use GET /api/erp-server-date.",
+            }),
+          );
+          return;
+        }
+        try {
+          const core = (await server.ssrLoadModule(
+            "/api/erpServerDateCore.ts",
+          )) as {
+            resolveErpServerDate: (opts: {
+              baseUrl: string;
+              apiKey: string;
+              apiSecret: string;
+              defaultTimeZone?: string;
+            }) => Promise<{
+              today: string;
+              time_zone: string;
+              source: string;
+              utc_today: string;
+              http_date: string | null;
+              system_settings_time_zone: string | null;
+            }>;
+            DEFAULT_ERP_TIME_ZONE: string;
+          };
+          const baseUrl = (
+            process.env.ERPNEXT_URL ||
+            process.env.VITE_ERPNEXT_URL ||
+            process.env.VITE_PROXY_TARGET ||
+            ""
+          ).replace(/\/$/, "");
+          const apiKey =
+            process.env.ERP_API_KEY || process.env.VITE_API_KEY || "";
+          const apiSecret =
+            process.env.ERP_API_SECRET || process.env.VITE_API_SECRET || "";
+          const result = await core.resolveErpServerDate({
+            baseUrl,
+            apiKey,
+            apiSecret,
+            defaultTimeZone:
+              process.env.ERP_TIME_ZONE ||
+              process.env.VITE_ERP_TIME_ZONE ||
+              core.DEFAULT_ERP_TIME_ZONE,
+          });
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(
+            JSON.stringify({
+              success: true,
+              message: result,
+              today: result.today,
+              time_zone: result.time_zone,
+              utc_today: result.utc_today,
+              source: result.source,
+              system_settings_time_zone: result.system_settings_time_zone,
+              http_date: result.http_date,
+            }),
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error("[erp-server-date-dev] FAILED:", message);
+          res.statusCode = 502;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ success: false, message }));
+        }
+      });
+    },
+  };
+}
+
+/**
  * Dev-server parity for `api/stock-check.ts` / `api/stockCheckCore.ts`.
  * Intercepts POST /api/stock-check BEFORE Vite's /api proxy.
  */
@@ -516,6 +697,598 @@ function stockCheckDevMiddleware(): Plugin {
               ...(code ? { code } : {}),
             }),
           );
+        }
+      });
+    },
+  };
+}
+
+function recommendSuppliersDevMiddleware(): Plugin {
+  return {
+    name: "recommend-suppliers-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+        const url = req.url ?? "";
+        const pathOnly = url.split("?")[0] || "";
+        if (pathOnly !== "/api/recommend-suppliers") {
+          next();
+          return;
+        }
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "application/json");
+          res.end(
+            JSON.stringify({
+              success: false,
+              message: "Method Not Allowed. Use POST /api/recommend-suppliers.",
+            }),
+          );
+          return;
+        }
+
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(chunk as Buffer);
+          const raw = Buffer.concat(chunks).toString("utf8");
+          const body = raw ? JSON.parse(raw) : {};
+
+          const rbac = (await server.ssrLoadModule("/api/rbacAuth.ts")) as {
+            requireInternalAuth: (
+              headers: Record<string, unknown>,
+            ) => { email?: string; role: string };
+            requireRoles: (
+              principal: { role: string },
+              roles: string[],
+            ) => void;
+            canBypassSupplierCategoryFilter?: (role: string) => boolean;
+          };
+          const core = (await server.ssrLoadModule(
+            "/api/recommendSuppliersCore.ts",
+          )) as typeof import("./api/recommendSuppliersCore");
+
+          const headers: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(req.headers)) headers[k] = v;
+          const principal = rbac.requireInternalAuth(headers);
+          rbac.requireRoles(principal, [
+            "admin",
+            "procurement",
+            "procurement_team",
+          ]);
+
+          const showAllRequested = body.show_all === true;
+          if (
+            showAllRequested &&
+            core.canBypassSupplierCategoryFilter &&
+            !core.canBypassSupplierCategoryFilter(principal.role)
+          ) {
+            throw new core.RecommendSuppliersError(
+              "Only Procurement Manager or Admin may show all suppliers.",
+              403,
+              "permission",
+            );
+          }
+
+          const itemGroupsRaw = Array.isArray(body.item_groups)
+            ? body.item_groups
+            : [];
+          const result = await core.runRecommendSuppliers({
+            procurement_category: String(body.procurement_category ?? "").trim(),
+            commodity: String(body.commodity ?? "").trim(),
+            item_groups: itemGroupsRaw
+              .map((g: unknown) => String(g ?? "").trim())
+              .filter(Boolean),
+            search: String(body.search ?? "").trim(),
+            show_all: showAllRequested,
+            limit: Number(body.limit) || 100,
+          });
+
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify(result));
+        } catch (err) {
+          const status =
+            err &&
+            typeof err === "object" &&
+            "status" in err &&
+            Number.isInteger((err as { status?: number }).status)
+              ? (err as { status: number }).status
+              : 500;
+          const message =
+            err instanceof Error
+              ? err.message
+              : "Supplier recommendation failed.";
+          console.error("[recommend-suppliers-dev] FAILED:", message);
+          res.statusCode = status >= 400 && status < 600 ? status : 500;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ success: false, message }));
+        }
+      });
+    },
+  };
+}
+
+function rfqSupplierInviteDevMiddleware(): Plugin {
+  return {
+    name: "rfq-supplier-invite-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+        const url = req.url ?? "";
+        const pathOnly = url.split("?")[0] || "";
+        if (pathOnly !== "/api/rfq-supplier-invite") {
+          next();
+          return;
+        }
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "application/json");
+          res.end(
+            JSON.stringify({
+              success: false,
+              message: "Method Not Allowed. Use POST /api/rfq-supplier-invite.",
+            }),
+          );
+          return;
+        }
+
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(chunk as Buffer);
+          const raw = Buffer.concat(chunks).toString("utf8");
+          const body = raw ? JSON.parse(raw) : {};
+
+          const rbac = (await server.ssrLoadModule("/api/rbacAuth.ts")) as {
+            requireInternalAuth: (
+              headers: Record<string, unknown>,
+            ) => { email?: string; role: string };
+            requireRoles: (
+              principal: { role: string },
+              roles: string[],
+            ) => void;
+            RbacError: new (message: string, status?: number) => Error & {
+              status: number;
+            };
+          };
+          const core = (await server.ssrLoadModule(
+            "/api/rfqSupplierInviteCore.ts",
+          )) as {
+            inviteSuppliersToRfqCore: (input: {
+              rfqName: string;
+              suppliers: Array<{
+                supplier: string;
+                supplier_name?: string;
+                email_id?: string;
+              }>;
+            }) => Promise<{ rfq: unknown; invited: unknown[] }>;
+            RfqSupplierInviteError: new (
+              message: string,
+              status?: number,
+              code?: string,
+            ) => Error & { status: number; code?: string };
+          };
+
+          const headers: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(req.headers)) {
+            headers[k] = v;
+          }
+          const principal = rbac.requireInternalAuth(headers);
+          rbac.requireRoles(principal, ["procurement", "procurement_team", "admin"]);
+
+          const rfqName = String(body.rfq_name ?? body.rfqName ?? "").trim();
+          const suppliersRaw = Array.isArray(body.suppliers) ? body.suppliers : [];
+          const suppliers = suppliersRaw
+            .map((row: Record<string, unknown>) => ({
+              supplier: String(row?.supplier ?? "").trim(),
+              supplier_name:
+                String(row?.supplier_name ?? row?.supplierName ?? "").trim() ||
+                undefined,
+              email_id:
+                String(row?.email_id ?? row?.emailId ?? "").trim() || undefined,
+            }))
+            .filter((s: { supplier: string }) => s.supplier);
+
+          const result = await core.inviteSuppliersToRfqCore({
+            rfqName,
+            suppliers,
+          });
+
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(
+            JSON.stringify({
+              success: true,
+              rfq: result.rfq,
+              invited: result.invited,
+            }),
+          );
+        } catch (err) {
+          const status =
+            err &&
+            typeof err === "object" &&
+            "status" in err &&
+            Number.isInteger((err as { status?: number }).status)
+              ? (err as { status: number }).status
+              : 500;
+          const message =
+            err instanceof Error
+              ? err.message
+              : "Could not invite suppliers to this RFQ.";
+          const code =
+            err && typeof err === "object" && "code" in err
+              ? (err as { code?: string }).code
+              : undefined;
+          console.error("[rfq-supplier-invite-dev] FAILED:", message);
+          if (err instanceof Error && err.stack) {
+            console.error(err.stack);
+          }
+          res.statusCode = status >= 400 && status < 600 ? status : 500;
+          res.setHeader("Content-Type", "application/json");
+          res.end(
+            JSON.stringify({
+              success: false,
+              message,
+              ...(code ? { code } : {}),
+            }),
+          );
+        }
+      });
+    },
+  };
+}
+
+function rfqQuoteRoundDevMiddleware(): Plugin {
+  return {
+    name: "rfq-quote-round-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+        const url = req.url ?? "";
+        const pathOnly = url.split("?")[0] || "";
+        if (pathOnly !== "/api/rfq-quote-round") {
+          next();
+          return;
+        }
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+
+        try {
+          const rbac = (await server.ssrLoadModule("/api/rbacAuth.ts")) as {
+            requireInternalAuth: (
+              headers: Record<string, unknown>,
+            ) => { email?: string; role: string };
+            requireRoles: (
+              principal: { role: string },
+              roles: string[],
+            ) => void;
+          };
+          const core = (await server.ssrLoadModule(
+            "/api/rfqQuoteRoundCore.ts",
+          )) as typeof import("./api/rfqQuoteRoundCore");
+
+          const headers: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(req.headers)) headers[k] = v;
+          const principal = rbac.requireInternalAuth(headers);
+          rbac.requireRoles(principal, ["procurement", "procurement_team", "admin"]);
+
+          const query = new URL(url, "http://local");
+          const action =
+            query.searchParams.get("action")?.trim() ||
+            String(
+              (req.method === "POST"
+                ? undefined
+                : query.searchParams.get("action")) ?? "",
+            ).trim();
+
+          if (req.method === "GET") {
+            const rfqName = query.searchParams.get("rfq")?.trim() ?? "";
+            const roundName = query.searchParams.get("name")?.trim() ?? "";
+            if (action === "get" && roundName) {
+              const round = await core.getRfqRoundCore(roundName);
+              res.statusCode = 200;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ success: true, round }));
+              return;
+            }
+            if (action === "active" && rfqName) {
+              const round = await core.getActiveRfqRoundCore(rfqName);
+              res.statusCode = 200;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ success: true, round }));
+              return;
+            }
+            if (rfqName) {
+              const rounds = await core.listRfqRoundsCore(rfqName);
+              res.statusCode = 200;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ success: true, rounds }));
+              return;
+            }
+            throw new core.RfqQuoteRoundError("Missing rfq query parameter.", 400);
+          }
+
+          if (req.method !== "POST") {
+            res.statusCode = 405;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ success: false, message: "Method Not Allowed." }));
+            return;
+          }
+
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(chunk as Buffer);
+          const raw = Buffer.concat(chunks).toString("utf8");
+          const body = raw ? JSON.parse(raw) : {};
+          const postAction = query.searchParams.get("action")?.trim() || action;
+          const rfqName = String(body.rfq_name ?? body.rfqName ?? "").trim();
+          const createdBy = String(
+            body.created_by ?? body.createdBy ?? principal.email ?? "Procurement",
+          ).trim();
+
+          if (postAction === "ensure-initial") {
+            const result = await core.ensureInitialRfqRoundCore({ rfqName, createdBy });
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ success: true, ...result }));
+            return;
+          }
+          if (postAction === "create-next") {
+            const rawSuppliers = body.associate_suppliers ?? body.associateSuppliers;
+            const rawInvite =
+              body.invite_suppliers ?? body.inviteSuppliers ?? rawSuppliers;
+            const mapSuppliers = (rows: unknown) =>
+              Array.isArray(rows)
+                ? rows
+                    .map((row: Record<string, unknown>) => {
+                      const supplier = String(row.supplier ?? "").trim();
+                      if (!supplier) return null;
+                      return {
+                        supplier,
+                        supplier_name: String(
+                          row.supplier_name ?? row.supplierName ?? supplier,
+                        ),
+                        email_id:
+                          String(row.email_id ?? row.emailId ?? "") || undefined,
+                      };
+                    })
+                    .filter(Boolean)
+                : undefined;
+            const result = await core.createNextRfqRoundCore({
+              rfqName,
+              reasonCode: String(body.reason_code ?? body.reasonCode ?? ""),
+              remarks: String(body.remarks ?? ""),
+              createdBy,
+              associateSuppliers: mapSuppliers(rawSuppliers),
+              inviteSuppliers: mapSuppliers(rawInvite),
+            });
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ success: true, ...result }));
+            return;
+          }
+          if (postAction === "activate") {
+            const round = await core.activateRfqRoundCore({
+              roundName: String(body.round_name ?? body.roundName ?? "").trim(),
+              createdBy,
+            });
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ success: true, round }));
+            return;
+          }
+
+          throw new core.RfqQuoteRoundError(`Unknown action: ${postAction}`, 400);
+        } catch (err) {
+          const status =
+            err && typeof err === "object" && "status" in err
+              ? Number((err as { status?: number }).status) || 500
+              : 500;
+          const message =
+            err instanceof Error ? err.message : "RFQ quote round request failed.";
+          console.error("[rfq-quote-round-dev]", message);
+          res.statusCode = status >= 400 && status < 600 ? status : 500;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ success: false, message }));
+        }
+      });
+    },
+  };
+}
+
+function reverseBiddingNamingDevMiddleware(): Plugin {
+  return {
+    name: "reverse-bidding-naming-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+        const url = req.url ?? "";
+        const pathOnly = url.split("?")[0] || "";
+        if (pathOnly !== "/api/reverse-bidding-naming") {
+          next();
+          return;
+        }
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "application/json");
+          res.end(
+            JSON.stringify({
+              success: false,
+              message: "Method Not Allowed. Use POST /api/reverse-bidding-naming.",
+            }),
+          );
+          return;
+        }
+
+        try {
+          const rbac = (await server.ssrLoadModule("/api/rbacAuth.ts")) as {
+            requireInternalAuth: (
+              headers: Record<string, unknown>,
+            ) => { email?: string; role: string };
+            requireRoles: (
+              principal: { role: string },
+              roles: string[],
+            ) => void;
+            RbacError: new (message: string, status?: number) => Error & {
+              status: number;
+            };
+          };
+          const core = (await server.ssrLoadModule(
+            "/api/reverseBiddingNamingCore.ts",
+          )) as {
+            ensureReverseBiddingChildNaming: () => Promise<unknown>;
+            ReverseBiddingNamingError: new (
+              message: string,
+              status?: number,
+            ) => Error & { status: number };
+          };
+
+          const headers: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(req.headers)) {
+            headers[k] = v;
+          }
+          const principal = rbac.requireInternalAuth(headers);
+          rbac.requireRoles(principal, ["procurement", "procurement_team", "admin"]);
+
+          const result = await core.ensureReverseBiddingChildNaming();
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify(result));
+        } catch (err) {
+          const status =
+            err &&
+            typeof err === "object" &&
+            "status" in err &&
+            Number.isInteger((err as { status?: number }).status)
+              ? (err as { status: number }).status
+              : 500;
+          const message =
+            err instanceof Error
+              ? err.message
+              : "Could not configure Reverse Bidding child naming.";
+          console.error("[reverse-bidding-naming-dev] FAILED:", message);
+          res.statusCode = status >= 400 && status < 600 ? status : 500;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ success: false, message }));
+        }
+      });
+    },
+  };
+}
+
+function reverseBiddingSubmitDevMiddleware(): Plugin {
+  return {
+    name: "reverse-bidding-submit-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+        const url = req.url ?? "";
+        const pathOnly = url.split("?")[0] || "";
+        if (pathOnly !== "/api/reverse-bidding-submit-item-bids") {
+          next();
+          return;
+        }
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "application/json");
+          res.end(
+            JSON.stringify({
+              success: false,
+              message:
+                "Method Not Allowed. Use POST /api/reverse-bidding-submit-item-bids.",
+            }),
+          );
+          return;
+        }
+
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(chunk as Buffer);
+          const raw = Buffer.concat(chunks).toString("utf8");
+          const body = raw ? JSON.parse(raw) : {};
+
+          const rbac = (await server.ssrLoadModule("/api/rbacAuth.ts")) as {
+            requireSupplierAuth: (
+              headers: Record<string, unknown>,
+            ) => { sub: string; supplier: string };
+            RbacError: new (message: string, status?: number) => Error & {
+              status: number;
+            };
+          };
+          const core = (await server.ssrLoadModule(
+            "/api/reverseBiddingSubmitCore.ts",
+          )) as {
+            submitItemBidsCore: (input: {
+              auctionName: string;
+              supplier: string;
+              items: Array<{ item_code: string; rate: number }>;
+            }) => Promise<unknown>;
+            ReverseBiddingSubmitError: new (
+              message: string,
+              status?: number,
+            ) => Error & { status: number };
+          };
+
+          const headers: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(req.headers)) {
+            headers[k] = v;
+          }
+          const principal = rbac.requireSupplierAuth(headers);
+          const auctionName = String(
+            body.auction_name ?? body.auctionName ?? "",
+          ).trim();
+          const itemsRaw = Array.isArray(body.items) ? body.items : [];
+          const items = itemsRaw
+            .map((row: Record<string, unknown>) => ({
+              item_code: String(row?.item_code ?? "").trim(),
+              rate: Number(row?.rate),
+            }))
+            .filter((i: { item_code: string; rate: number }) =>
+              i.item_code && Number.isFinite(i.rate),
+            );
+          const supplier = String(
+            principal.supplier || principal.sub,
+          ).trim();
+
+          const auction = await core.submitItemBidsCore({
+            auctionName,
+            supplier,
+            items,
+          });
+
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ success: true, auction }));
+        } catch (err) {
+          const status =
+            err &&
+            typeof err === "object" &&
+            "status" in err &&
+            Number.isInteger((err as { status?: number }).status)
+              ? (err as { status: number }).status
+              : 500;
+          const message =
+            err instanceof Error ? err.message : "Could not submit item bids.";
+          console.error("[reverse-bidding-submit-dev] FAILED:", message);
+          res.statusCode = status >= 400 && status < 600 ? status : 500;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ success: false, message }));
         }
       });
     },
@@ -695,6 +1468,60 @@ function bomDevMiddleware(): Plugin {
             res.statusCode = 200;
             res.setHeader("Content-Type", "application/json");
             res.end(JSON.stringify(result));
+            return;
+          }
+
+          if (action === "submit-department" && req.method === "POST") {
+            const deptCore = await server.ssrLoadModule("/api/departmentBomCore.ts");
+            const chunks: Buffer[] = [];
+            for await (const chunk of req) chunks.push(chunk as Buffer);
+            const raw = Buffer.concat(chunks).toString("utf8");
+            const body = raw ? JSON.parse(raw) : {};
+            const result = await (
+              deptCore.submitDepartmentBom as (b: unknown) => Promise<unknown>
+            )(body);
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify(result));
+            return;
+          }
+
+          if (action === "temporary-items" && req.method === "GET") {
+            const tempCore = await server.ssrLoadModule("/api/temporaryItemStoreCore.ts");
+            const items = await (
+              tempCore.listTemporaryItems as () => Promise<unknown>
+            )();
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ success: true, items }));
+            return;
+          }
+
+          if (
+            (action === "temporary-items-approve" || action === "temporary-items-reject") &&
+            req.method === "POST"
+          ) {
+            const tempCore = await server.ssrLoadModule("/api/temporaryItemStoreCore.ts");
+            const chunks: Buffer[] = [];
+            for await (const chunk of req) chunks.push(chunk as Buffer);
+            const raw = Buffer.concat(chunks).toString("utf8");
+            const body = raw ? JSON.parse(raw) : {};
+            const name = String(body.name ?? "").trim();
+            if (!name) {
+              res.statusCode = 400;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ success: false, error: "Temporary item name is required." }));
+              return;
+            }
+            const item =
+              action === "temporary-items-approve"
+                ? await (tempCore.approveTemporaryItem as (n: string) => Promise<unknown>)(name)
+                : await (
+                    tempCore.rejectTemporaryItem as (n: string, r?: string) => Promise<unknown>
+                  )(name, typeof body.reason === "string" ? body.reason : undefined);
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ success: true, item }));
             return;
           }
 
@@ -1173,11 +2000,65 @@ function fileProxyDevMiddleware(
             queryObj[k] = v;
           });
           try {
-            rbac.requireAnyAuth(
+            const principal = rbac.requireAnyAuth(
               req.headers as Record<string, unknown>,
               undefined,
               queryObj,
-            );
+            ) as { typ?: string; supplier?: string; sub?: string };
+            if (principal?.typ === "supplier") {
+              const rfqName = query.get("rfq")?.trim() || "";
+              if (rfqName && filePath) {
+                const docsCore = (await server.ssrLoadModule(
+                  "/api/supplierRfqDocumentsCore.ts",
+                )) as {
+                  assertSupplierMayDownloadRfqFile: (input: {
+                    rfqName: string;
+                    supplierId: string;
+                    supplierCandidates?: string[];
+                    filePath: string;
+                  }) => Promise<void>;
+                  buildSupplierAccessCandidates: (input: {
+                    explicitSupplierId?: string | null;
+                    jwtSupplier?: string | null;
+                    jwtSub?: string | null;
+                  }) => string[];
+                };
+                const supplierCandidates = docsCore.buildSupplierAccessCandidates({
+                  explicitSupplierId: query.get("erp_supplier_id"),
+                  jwtSupplier: principal.supplier,
+                  jwtSub: principal.sub,
+                });
+                try {
+                  await docsCore.assertSupplierMayDownloadRfqFile({
+                    rfqName,
+                    supplierId: supplierCandidates[0] || "",
+                    supplierCandidates,
+                    filePath,
+                  });
+                } catch (aclErr) {
+                  const status =
+                    aclErr &&
+                    typeof aclErr === "object" &&
+                    "status" in aclErr
+                      ? Number((aclErr as { status?: number }).status) || 403
+                      : 403;
+                  res.statusCode =
+                    status >= 400 && status < 600 ? status : 403;
+                  res.setHeader("Content-Type", "application/json");
+                  res.end(
+                    JSON.stringify({
+                      success: false,
+                      message:
+                        aclErr instanceof Error
+                          ? aclErr.message
+                          : "You do not have permission to view this document.",
+                      status: res.statusCode,
+                    }),
+                  );
+                  return;
+                }
+              }
+            }
           } catch (authErr) {
             const status =
               authErr && typeof authErr === "object" && "status" in authErr
@@ -1368,13 +2249,24 @@ function payablesRbacDevMiddleware(): Plugin {
 }
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), "");
-  const proxyTarget =
+  const loaded = loadEnv(mode, process.cwd(), "");
+  // PowerShell `Set-Content -Encoding utf8` writes a UTF-8 BOM that turns the
+  // first key into "\uFEFFVITE_…" — normalize so proxy/auth still resolve.
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(loaded)) {
+    env[key.replace(/^\uFEFF/, "")] = value;
+  }
+  const proxyTarget = (
     env.VITE_PROXY_TARGET ||
     env.VITE_ERPNEXT_URL ||
-    "http://localhost:8081";
+    env.ERPNEXT_URL ||
+    "http://localhost:8081"
+  ).replace(/\/+$/, "");
   const erpApiKey = env.ERP_API_KEY || env.VITE_API_KEY || "";
   const erpApiSecret = env.ERP_API_SECRET || env.VITE_API_SECRET || "";
+
+  // eslint-disable-next-line no-console
+  console.log(`[vite] ERP proxy target → ${proxyTarget}`);
 
   // `api/legalReviewCore.ts` reads credentials from `process.env` (matching
   // how Vercel injects real environment variables in production) — mirror
@@ -1415,8 +2307,15 @@ export default defineConfig(({ mode }) => {
       legalReviewDevMiddleware(),
       bomDevMiddleware(),
       poShipmentDevMiddleware(),
+      erpServerDateDevMiddleware(),
       stockCheckDevMiddleware(),
+      recommendSuppliersDevMiddleware(),
+      rfqSupplierInviteDevMiddleware(),
+      rfqQuoteRoundDevMiddleware(),
+      reverseBiddingNamingDevMiddleware(),
+      reverseBiddingSubmitDevMiddleware(),
       supplierVoucherDevMiddleware(),
+      supplierRfqDocumentsDevMiddleware(),
       supplierOnboardingDevMiddleware(),
       fileProxyDevMiddleware(proxyTarget, erpApiKey, erpApiSecret),
     ],
@@ -1534,8 +2433,32 @@ export default defineConfig(({ mode }) => {
                 });
               }
             });
-            proxy.on("error", (err) => {
-              console.log("[proxy error]", err.message);
+            proxy.on("error", (err, _req, res) => {
+              console.error("[vite-erp-proxy] upstream unreachable", {
+                target: proxyTarget,
+                message: err.message,
+              });
+              const nodeRes = res as {
+                headersSent?: boolean;
+                writeHead?: (code: number, headers: Record<string, string>) => void;
+                end?: (body?: string) => void;
+              };
+              if (
+                nodeRes &&
+                typeof nodeRes.writeHead === "function" &&
+                !nodeRes.headersSent
+              ) {
+                nodeRes.writeHead(502, {
+                  "Content-Type": "application/json",
+                });
+                nodeRes.end?.(
+                  JSON.stringify({
+                    error:
+                      "Unable to reach the application server. Please try again in a few seconds.",
+                    exc_type: "ProxyUpstreamError",
+                  }),
+                );
+              }
             });
           },
         },

@@ -11,11 +11,16 @@ import { Toaster } from "react-hot-toast";
 
 import { queryClient } from "./queryClient";
 import { useVoucherSyncStore } from "./store/voucherSyncStore";
+import { useAuthStore } from "./store/authStore";
+import { authLog, purgeStaleAuthStorage } from "./store/authStorage";
+import { getRFQSchema } from "./api/rfqSchema";
 
 import ErrorBoundary from "./components/ErrorBoundary";
 import MainLayout from "./components/layout/MainLayout";
 import Placeholder from "./components/Placeholder";
 import ProtectedRoute from "./components/ProtectedRoute";
+import DepartmentBomUploadPage from "./pages/department/DepartmentBomUploadPage";
+import TemporaryItemStorePage from "./pages/department/TemporaryItemStorePage";
 import SupplierPortalGuard from "./components/SupplierPortalGuard";
 import SlaEngine from "./components/sla/SlaEngine";
 import SupplierPortalLayout from "./pages/supplier-portal/SupplierPortalLayout";
@@ -139,7 +144,6 @@ const SupplierLockedPage = lazy(
 const NewRFQPage = lazy(() => import("./pages/sourcing/NewRFQPage"));
 const RFQDetailPage = lazy(() => import("./pages/sourcing/RFQDetailPage"));
 const RFQTemplatesPage = lazy(() => import("./pages/sourcing/RFQTemplatesPage"));
-const UploadBomPage = lazy(() => import("./pages/sourcing/UploadBomPage"));
 const RFIListPage = lazy(() => import("./pages/sourcing/RFIListPage"));
 const NewRFIPage = lazy(() => import("./pages/sourcing/NewRFIPage"));
 const RFIDetailPage = lazy(() => import("./pages/sourcing/RFIDetailPage"));
@@ -322,6 +326,12 @@ const WarehouseStockOverviewPage = lazy(
 const WarehouseItemMasterPage = lazy(
   () => import("./pages/warehouse/WarehouseItemMasterPage")
 );
+const ItemMasterDetailPage = lazy(
+  () => import("./pages/warehouse/item-master/ItemMasterDetailPage")
+);
+const ItemMasterFormPage = lazy(
+  () => import("./pages/warehouse/item-master/ItemMasterFormPage")
+);
 const WarehouseReportsPage = lazy(
   () => import("./pages/warehouse/WarehouseReportsPage")
 );
@@ -347,9 +357,6 @@ const BudgetRequestsPage = lazy(() => import("./pages/budget/BudgetRequestsPage"
 const BudgetHistoryPage = lazy(() => import("./pages/budget/BudgetHistoryPage"));
 const BudgetDetailPage = lazy(() => import("./pages/budget/BudgetDetailPage"));
 const NotificationCenterPage = lazy(() => import("./pages/notifications/NotificationCenterPage"));
-import { useAuthStore } from "./store/authStore";
-import { authLog, purgeStaleAuthStorage } from "./store/authStorage";
-import { getRFQSchema } from "./api/rfqSchema";
 
 /** Lightweight fallback shown while a lazily-loaded route chunk downloads. */
 function RouteFallback() {
@@ -537,13 +544,8 @@ function App() {
             </Route>
           </Route>
 
-          <Route
-            element={
-              <ProtectedRoute>
-                <MainLayout />
-              </ProtectedRoute>
-            }
-          >
+          <Route element={<ProtectedRoute />}>
+            <Route element={<MainLayout />}>
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<DashboardPage />} />
 
@@ -618,6 +620,21 @@ function App() {
             <Route
               path="/department/issued-items/receipts/:name"
               element={<DepartmentMaterialIssueConfirmPage />}
+            />
+            {/* Department BOM workflow */}
+            <Route
+              path="/department"
+              element={<Navigate to="/material-requests/new" replace />}
+            />
+            <Route path="/department/upload-bom" element={<DepartmentBomUploadPage />} />
+            <Route path="/department/temporary-items" element={<TemporaryItemStorePage />} />
+            <Route
+              path="/department/projects"
+              element={<Navigate to="/department/upload-bom" replace />}
+            />
+            <Route
+              path="/department/programs"
+              element={<Navigate to="/department/upload-bom" replace />}
             />
             {/* Legacy Issued Items / receipt paths → department module */}
             <Route
@@ -768,10 +785,10 @@ function App() {
               element={<RFPResponseDetailPage />}
             />
             <Route path="/sourcing/rfp/:id" element={<RFPDetailPage />} />
-            <Route path="/upload-bom" element={<UploadBomPage />} />
+            <Route path="/upload-bom" element={<Navigate to="/department/upload-bom" replace />} />
             <Route
               path="/sourcing/upload-bom"
-              element={<Navigate to="/upload-bom" replace />}
+              element={<Navigate to="/department/upload-bom" replace />}
             />
             <Route
               path="/sourcing/reverse-bidding"
@@ -882,6 +899,18 @@ function App() {
               path="/warehouse/inventory/items"
               element={<WarehouseItemMasterPage />}
             />
+            <Route
+              path="/warehouse/inventory/items/new"
+              element={<ItemMasterFormPage />}
+            />
+            <Route
+              path="/warehouse/inventory/items/:code/edit"
+              element={<ItemMasterFormPage />}
+            />
+            <Route
+              path="/warehouse/inventory/items/:code"
+              element={<ItemMasterDetailPage />}
+            />
             <Route path="/warehouse/reports" element={<WarehouseReportsPage />} />
 
             {/* Admin */}
@@ -977,6 +1006,7 @@ function App() {
                 />
               }
             />
+            </Route>
           </Route>
         </Routes>
         </Suspense>

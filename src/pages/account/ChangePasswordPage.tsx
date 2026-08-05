@@ -33,7 +33,7 @@ export default function ChangePasswordPage() {
     setPwd({ current: "", next: "", confirm: "" });
     setSubmitting(false);
     toast.success(
-      "Password changes are managed in ERPNext. No local auth changes were made.",
+      "Password changes are managed by your administrator. No local auth changes were made.",
       { duration: 5000 },
     );
   };

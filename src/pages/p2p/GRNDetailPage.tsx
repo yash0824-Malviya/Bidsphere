@@ -24,10 +24,14 @@ import { createVoucher, getAllVouchers } from "../../api/vouchers";
 import { useVoucherSyncStore } from "../../store/voucherSyncStore";
 import type { Voucher, VoucherItem } from "../../types/voucher";
 import {
+  getGRNsForPO,
+  getPurchaseOrder,
   getPurchaseReceipt,
   submitPurchaseReceipt,
 } from "../../api/purchasing";
 import { reconcileProcurementReadyToIssue } from "../../api/materialRequestWorkflow";
+import { advancePoWorkflowAfterGrnSubmit } from "../../api/poDeliveryWorkflow";
+import { getInvoicesForPO } from "../../api/accounts";
 import { invalidateWarehouseStock } from "../../api/warehouseStock";
 import { invalidateFinanceDashboardMetrics } from "../../api/financeWorkflow";
 import {
@@ -496,9 +500,8 @@ export default function GRNDetailPage() {
       }
       return submitted;
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.success(`${name} submitted — goods received recorded.`);
-      // Refresh live-stock, inventory, GRN and procurement views immediately.
       invalidateWarehouseStock(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["grns-awaiting-invoice"] });
       invalidateFinanceDashboardMetrics(queryClient);
@@ -506,12 +509,45 @@ export default function GRNDetailPage() {
         primaryPOFromReceipt(grn!) ??
         (grn!.items ?? []).find((it) => it.purchase_order)?.purchase_order;
       if (linkedPO) {
-        void queryClient.invalidateQueries({
-          queryKey: ["purchase-order", linkedPO],
-        });
-        void queryClient.invalidateQueries({
-          queryKey: ["po-grns", linkedPO],
-        });
+        try {
+          const [freshPo, freshGrns, freshInvoices] = await Promise.all([
+            queryClient.fetchQuery({
+              queryKey: ["purchase-order", linkedPO],
+              queryFn: () => getPurchaseOrder(linkedPO),
+            }),
+            queryClient.fetchQuery({
+              queryKey: ["po-grns", linkedPO],
+              queryFn: () => getGRNsForPO(linkedPO),
+            }),
+            queryClient.fetchQuery({
+              queryKey: ["po-invoices", linkedPO],
+              queryFn: () => getInvoicesForPO(linkedPO),
+            }),
+          ]);
+          const submittedGrnCount = freshGrns.filter((g) => g.docstatus === 1).length;
+          const primaryInvoice =
+            freshInvoices.find((inv) => inv.docstatus === 1) ?? freshInvoices[0];
+          await advancePoWorkflowAfterGrnSubmit(linkedPO, {
+            perReceived: freshPo.per_received ?? 0,
+            perBilled: freshPo.per_billed ?? 0,
+            submittedGrnCount,
+            hasSubmittedInvoice: freshInvoices.some((inv) => inv.docstatus === 1),
+            invoiceOutstanding: primaryInvoice?.outstanding_amount,
+            invoiceGrandTotal: primaryInvoice?.grand_total,
+          });
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn("[GRN submit] PO workflow sync failed:", err);
+          void queryClient.invalidateQueries({
+            queryKey: ["purchase-order", linkedPO],
+          });
+          void queryClient.invalidateQueries({
+            queryKey: ["po-grns", linkedPO],
+          });
+          void queryClient.invalidateQueries({
+            queryKey: ["po-shipment", linkedPO],
+          });
+        }
       }
     },
     onError: (err) => {

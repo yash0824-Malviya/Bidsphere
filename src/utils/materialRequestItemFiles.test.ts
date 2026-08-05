@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildItemAttachmentMeta,
   parseEngineeringAttachments,
   pickEngineeringDocs,
   resolveEngineeringAttachments,
   serializeEngineeringAttachments,
   validateMrItemDrawing,
+  filterSupplierVisibleAttachments,
+  isSupplierVisibleAttachment,
 } from "./materialRequestItemFiles";
+import {
+  inferDocumentTypeFromFileName,
+  normalizeAttachmentVisibility,
+  supplierMayAccessAttachmentPath,
+} from "./rfqAttachmentVisibility";
 
 describe("materialRequestItemFiles multi-attachment", () => {
   it("validates supported and unsupported extensions", () => {
@@ -37,6 +45,7 @@ describe("materialRequestItemFiles multi-attachment", () => {
       },
     ]);
     expect(parseEngineeringAttachments(json)).toHaveLength(1);
+    expect(parseEngineeringAttachments(json)[0].visibility).toBe("supplier");
 
     const legacy = resolveEngineeringAttachments({
       custom_2d_drawing: "/private/files/legacy.dwg",
@@ -71,5 +80,74 @@ describe("materialRequestItemFiles multi-attachment", () => {
     expect(docs.part_name).toBe("Handle Rev A");
     expect(docs.attachments).toHaveLength(2);
     expect(docs.drawing_2d_url).toContain("one.pdf");
+  });
+
+  it("buildItemAttachmentMeta exposes file_name, file_url, and count", () => {
+    const meta = buildItemAttachmentMeta([
+      {
+        id: "1",
+        fileName: "drawing.pdf",
+        fileUrl: "/private/files/drawing.pdf",
+        fileType: "pdf",
+        fileSize: 100,
+        uploadedAt: "",
+      },
+    ]);
+    expect(meta.attachment_count).toBe(1);
+    expect(meta.file_name).toBe("drawing.pdf");
+    expect(meta.file_url).toContain("drawing.pdf");
+  });
+
+  it("defaults missing visibility to supplier and filters internal", () => {
+    expect(normalizeAttachmentVisibility(undefined)).toBe("supplier");
+    expect(normalizeAttachmentVisibility("internal")).toBe("internal");
+    expect(isSupplierVisibleAttachment({ visibility: undefined })).toBe(true);
+    expect(isSupplierVisibleAttachment({ visibility: "internal" })).toBe(false);
+
+    const filtered = filterSupplierVisibleAttachments([
+      {
+        id: "1",
+        fileName: "spec.pdf",
+        fileUrl: "/private/files/spec.pdf",
+        fileType: "pdf",
+        fileSize: 1,
+        uploadedAt: "",
+        visibility: "supplier",
+      },
+      {
+        id: "2",
+        fileName: "cost.xlsx",
+        fileUrl: "/private/files/cost.xlsx",
+        fileType: "xlsx",
+        fileSize: 1,
+        uploadedAt: "",
+        visibility: "internal",
+      },
+    ]);
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].fileName).toBe("spec.pdf");
+  });
+
+  it("infers document types and enforces path ACL", () => {
+    expect(inferDocumentTypeFromFileName("RFQ_Specification.pdf")).toBe(
+      "RFQ Specification",
+    );
+    expect(inferDocumentTypeFromFileName("part_2d.dwg")).toBe("2D Drawing");
+    expect(
+      supplierMayAccessAttachmentPath("/private/files/cost.xlsx", [
+        {
+          fileUrl: "/private/files/cost.xlsx",
+          visibility: "internal",
+        },
+      ]),
+    ).toBe(false);
+    expect(
+      supplierMayAccessAttachmentPath("/private/files/spec.pdf", [
+        {
+          fileUrl: "/private/files/spec.pdf",
+          visibility: "supplier",
+        },
+      ]),
+    ).toBe(true);
   });
 });

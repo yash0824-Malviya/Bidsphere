@@ -67,7 +67,7 @@ export default function WarehouseMaterialIssueDetailPage() {
         </Link>
         <ErrorState
           title="Material Issue not found"
-          description="This Stock Entry could not be loaded from ERPNext."
+          description="This stock movement could not be loaded."
           onRetry={() => void refetch()}
         />
       </div>

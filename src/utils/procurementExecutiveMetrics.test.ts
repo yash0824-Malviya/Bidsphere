@@ -6,6 +6,7 @@ import {
   computeEnterpriseRfqPipeline,
   computeMonthlyPoSpend,
   computePoYtdSpend,
+  resolveActiveRfqPipelineStages,
 } from "./procurementExecutiveMetrics";
 
 describe("computePoYtdSpend", () => {
@@ -29,8 +30,28 @@ describe("computePoYtdSpend", () => {
   });
 });
 
+describe("resolveActiveRfqPipelineStages", () => {
+  it("hides Technical / Commercial Review by default", () => {
+    const stages = resolveActiveRfqPipelineStages({ workflowStages: [] });
+    expect(stages).toEqual([...ENTERPRISE_RFQ_STAGES]);
+    expect(stages).not.toContain("Technical Review");
+    expect(stages).not.toContain("Commercial Review");
+  });
+
+  it("shows optional stages when enabled in workflow config", () => {
+    const stages = resolveActiveRfqPipelineStages({
+      workflowStages: [
+        { name: "technical_review", enabled: true },
+        { name: "commercial_review", enabled: true },
+      ],
+    });
+    expect(stages).toContain("Technical Review");
+    expect(stages).toContain("Commercial Review");
+  });
+});
+
 describe("computeEnterpriseRfqPipeline", () => {
-  it("returns all enterprise stages once", () => {
+  it("returns only active workflow stages", () => {
     const stages = computeEnterpriseRfqPipeline({
       rfqs: [
         { name: "RFQ-1", status: "Draft" },
@@ -39,11 +60,26 @@ describe("computeEnterpriseRfqPipeline", () => {
       ],
       openRfqsCount: 1,
       quoteCounts: new Map([["RFQ-2", 0]]),
+      supplierCounts: new Map([["RFQ-2", 2]]),
+      workflowStages: [],
     });
-    expect(stages).toHaveLength(ENTERPRISE_RFQ_STAGES.length);
     expect(stages.map((s) => s.stage)).toEqual([...ENTERPRISE_RFQ_STAGES]);
+    expect(stages.find((s) => s.stage === "Technical Review")).toBeUndefined();
     expect(stages.find((s) => s.stage === "Draft")?.count).toBe(1);
+    expect(stages.find((s) => s.stage === "Invited")?.count).toBe(1);
     expect(stages.find((s) => s.stage === "Closed")?.count).toBe(1);
+  });
+
+  it("buckets Quoted when quote counts exist", () => {
+    const stages = computeEnterpriseRfqPipeline({
+      rfqs: [{ name: "RFQ-Q", status: "Open" }],
+      openRfqsCount: 1,
+      quoteCounts: new Map([["RFQ-Q", 3]]),
+      supplierCounts: new Map([["RFQ-Q", 4]]),
+      workflowStages: [],
+    });
+    expect(stages.find((s) => s.stage === "Quoted")?.count).toBe(1);
+    expect(stages.find((s) => s.stage === "Invited")?.count).toBe(0);
   });
 });
 

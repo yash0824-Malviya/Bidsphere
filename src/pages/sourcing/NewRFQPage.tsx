@@ -6,11 +6,13 @@ import {
   ArrowLeft,
   ArrowRight,
   Boxes,
+  Briefcase,
   Building2,
   Check,
   ChevronDown,
   ClipboardCheck,
   FileText,
+  Factory,
   Layers,
   LayoutTemplate,
   Loader2,
@@ -35,7 +37,10 @@ import {
   buildRFQPrefillFromMaterialRequest,
   createRFQFromMaterialRequest,
 } from "../../api/createRFQFromMaterialRequest";
-import { fetchMaterialRequestWorkflow } from "../../api/materialRequestWorkflow";
+import {
+  ensureItemsExistForNewMode,
+  fetchMaterialRequestWorkflow,
+} from "../../api/materialRequestWorkflow";
 import { findActiveRfqForMaterialRequest } from "../../api/mrRfqAction";
 import { getRFQTemplates, getRFQTemplate } from "../../api/rfqTemplates";
 import { incrementLocalTemplateUsage } from "../../api/rfqTemplateStorage";
@@ -58,8 +63,23 @@ import StatusBadge from "../../components/StatusBadge";
 import { ErpNextDatePicker } from "../../components/ui";
 import { useDebounce } from "../../hooks/useDebounce";
 import { formatRfqOwnerLabel } from "../../config/roles";
+import {
+  procurementCategoriesForType,
+  procurementCategoryBelongsToType,
+} from "../../config/procurementCategory";
 import { useAuthStore } from "../../store/authStore";
 import type { Supplier } from "../../types/erpnext";
+import {
+  type MaterialRequestMode,
+  type MaterialRequestProcurementType,
+} from "../../types/materialRequestWorkflow";
+import {
+  canBypassSupplierCategoryFilter,
+  fetchRecommendedSuppliers,
+  type RecommendedSupplier,
+} from "../../api/recommendSuppliers";
+import { isInheritedMrRfqLine } from "../../utils/rfqItemEditRules";
+import { hasItemMasterUom } from "../../utils/itemMasterUom";
 import { isoDateOffset, todayIso, formatCurrency } from "../../utils/format";
 import { assertERPNextDate } from "../../utils/erpNextDate";
 import { generateId } from "../../utils/id";
@@ -69,6 +89,30 @@ type ItemRow = RFQItemLine;
 
 interface SupplierWithMeta extends Supplier {
   po_count?: number;
+  ai_match_pct?: number;
+  score?: number;
+  preferred?: boolean;
+  tier?: "recommended" | "other";
+}
+
+function mapRecommendedToSupplier(row: RecommendedSupplier): SupplierWithMeta {
+  return {
+    name: row.name,
+    supplier_name: row.supplier_name,
+    supplier_group: row.supplier_group,
+    country: row.country,
+    email_id: row.email_id,
+    po_count: row.past_po_count,
+    ai_match_pct: row.ai_match_pct,
+    score: row.score,
+    preferred: row.preferred,
+    tier: row.tier,
+  };
+}
+
+function aiMatchStars(pct: number): string {
+  const stars = Math.max(1, Math.min(5, Math.round(pct / 20)));
+  return "★".repeat(stars) + "☆".repeat(5 - stars);
 }
 
 const STEPS = [
@@ -139,6 +183,19 @@ export default function NewRFQPage() {
   const [internalNotes, setInternalNotes] = useState("");
   // Read-only Material Request context (only when created from an MR).
   const [mrContext, setMrContext] = useState<MrContext | null>(null);
+  const [procurementType, setProcurementType] =
+    useState<MaterialRequestProcurementType>("Direct");
+  const [procurementCategory, setProcurementCategory] = useState("");
+  const [requestMode, setRequestMode] = useState<MaterialRequestMode>("Existing");
+  const [showAllSuppliers, setShowAllSuppliers] = useState(false);
+
+  const isFromMaterialRequest = Boolean(mrContext || mrParam);
+  const isDirectRfq = !isFromMaterialRequest;
+  const directProcurementReady =
+    !!procurementType &&
+    !!procurementCategory.trim() &&
+    !!requestMode;
+  const canShowAllSuppliers = canBypassSupplierCategoryFilter(user?.role);
 
   // Step 2
   const [items, setItems] = useState<ItemRow[]>([newItemRow()]);
@@ -313,6 +370,8 @@ export default function NewRFQPage() {
           procurement_owner: formatRfqOwnerLabel(user?.email ?? user?.name),
           warehouse_remarks: prefill.warehouse_remarks?.trim() || "",
         });
+        setProcurementType(prefill.procurement_type ?? "Direct");
+        setProcurementCategory(prefill.procurement_category?.trim() || "");
         if (prefill.items.length > 0) {
           setItems(
             prefill.items.map((row) => {
@@ -332,6 +391,9 @@ export default function NewRFQPage() {
                 target_price: null,
                 show_to_supplier: false,
                 required_by: validTill || "",
+                inherited_from_mr: true,
+                material_request: row.material_request ?? prefill.material_request,
+                material_request_item: row.material_request_item,
                 part_name: docs.part_name ?? row.custom_part_name,
                 drawing_2d_url: docs.drawing_2d_url ?? row.custom_2d_drawing,
                 attachments: docs.attachments,
@@ -398,11 +460,46 @@ export default function NewRFQPage() {
 
   /* ---------- Validation ---------- */
 
-  const step1Valid = title.trim().length > 0 && !!validTill;
+  function lineUomValid(row: ItemRow): boolean {
+    if (
+      isDirectRfq &&
+      requestMode === "New" &&
+      !isInheritedMrRfqLine(row)
+    ) {
+      return !!String(row.uom || "").trim();
+    }
+    return hasItemMasterUom(row.uom);
+  }
+
+  function lineNameValid(row: ItemRow): boolean {
+    if (
+      isDirectRfq &&
+      requestMode === "New" &&
+      !isInheritedMrRfqLine(row)
+    ) {
+      return !!String(row.item_name || "").trim();
+    }
+    return true;
+  }
+
+  const step1Valid =
+    title.trim().length > 0 &&
+    !!validTill &&
+    (isFromMaterialRequest || directProcurementReady);
   const step2Valid =
+    (isFromMaterialRequest || directProcurementReady) &&
     items.length > 0 &&
-    items.every((i) => i.item_group && i.item_code && i.qty > 0);
-  const step3Valid = selectedSuppliers.length >= 2;
+    items.every(
+      (i) =>
+        i.item_group &&
+        i.item_code &&
+        i.qty > 0 &&
+        lineUomValid(i) &&
+        lineNameValid(i),
+    );
+  const step3Valid =
+    selectedSuppliers.length >= 2 &&
+    (isFromMaterialRequest || directProcurementReady);
 
   // Compact RFQ summary figures (live, derived from the current form state).
   const totalItems = items.filter((i) => i.item_code).length || items.length;
@@ -410,84 +507,97 @@ export default function NewRFQPage() {
 
   /* ---------- Step 3 data ---------- */
 
-  const suppliersQuery = useQuery<Supplier[]>({
-    queryKey: ["rfq-supplier-search", debouncedSearch],
-    enabled: step === 3,
-    staleTime: 30_000,
-    queryFn: () => {
-      const filters: Array<[string, string, string | number]> = [
-        ["disabled", "=", 0],
-      ];
-      if (debouncedSearch.trim()) {
-        filters.push(["supplier_name", "like", `%${debouncedSearch.trim()}%`]);
-      }
-      return apiGet<Supplier[]>("/api/resource/Supplier", {
-        params: {
-          filters: JSON.stringify(filters),
-          fields: JSON.stringify([
-            "name",
-            "supplier_name",
-            "supplier_group",
-            "country",
-            "disabled",
-          ]),
-          limit_page_length: 20,
-          order_by: "supplier_name asc",
-        },
-      });
-    },
-  });
-
-  const supplierNames = useMemo(
-    () => (suppliersQuery.data ?? []).map((s) => s.name),
-    [suppliersQuery.data]
+  const itemGroupsForMatch = useMemo(
+    () =>
+      Array.from(
+        new Set(items.map((i) => i.item_group?.trim()).filter(Boolean) as string[]),
+      ),
+    [items],
   );
 
-  // Aggregate PO counts for the visible suppliers in one round-trip.
-  const poCountQuery = useQuery({
-    queryKey: ["rfq-supplier-po-count", supplierNames],
-    enabled: step === 3 && supplierNames.length > 0,
-    staleTime: 60_000,
-    retry: 0,
-    queryFn: async () => {
-      const rows = await apiGet<Array<{ supplier: string; name: string }>>(
-        "/api/resource/Purchase Order",
-        {
-          params: {
-            filters: JSON.stringify([["supplier", "in", supplierNames]]),
-            fields: JSON.stringify(["name", "supplier"]),
-            limit_page_length: 500,
-          },
-        }
-      );
-      const counts = new Map<string, number>();
-      for (const r of rows) {
-        if (!r.supplier) continue;
-        counts.set(r.supplier, (counts.get(r.supplier) ?? 0) + 1);
-      }
-      return counts;
-    },
+  const commodityForMatch = itemGroupsForMatch[0] ?? "";
+
+  const recommendQuery = useQuery({
+    queryKey: [
+      "rfq-recommend-suppliers",
+      procurementType,
+      procurementCategory,
+      commodityForMatch,
+      itemGroupsForMatch.join("|"),
+      debouncedSearch,
+      showAllSuppliers,
+    ],
+    enabled: step === 3 && (isFromMaterialRequest || directProcurementReady),
+    staleTime: 30_000,
+    queryFn: () =>
+      fetchRecommendedSuppliers({
+        procurement_type: procurementType,
+        procurement_category: procurementCategory || undefined,
+        commodity: commodityForMatch || undefined,
+        item_groups: itemGroupsForMatch,
+        search: debouncedSearch.trim() || undefined,
+        show_all: showAllSuppliers,
+        limit: 100,
+      }),
   });
 
-  const visibleSuppliers: SupplierWithMeta[] = useMemo(
+  const recommendedSuppliers: SupplierWithMeta[] = useMemo(
     () =>
-      (suppliersQuery.data ?? []).map((s) => ({
-        ...s,
-        po_count: poCountQuery.data?.get(s.name),
-      })),
-    [suppliersQuery.data, poCountQuery.data]
+      (recommendQuery.data?.recommended ?? []).map(mapRecommendedToSupplier),
+    [recommendQuery.data?.recommended],
+  );
+
+  const otherMatchingSuppliers: SupplierWithMeta[] = useMemo(
+    () =>
+      (recommendQuery.data?.other_matching ?? []).map(mapRecommendedToSupplier),
+    [recommendQuery.data?.other_matching],
+  );
+
+  const visibleSuppliers: SupplierWithMeta[] = useMemo(
+    () => [...recommendedSuppliers, ...otherMatchingSuppliers],
+    [recommendedSuppliers, otherMatchingSuppliers],
   );
 
   /* ---------- Handlers ---------- */
+
+  function handleProcurementTypeChange(
+    next: MaterialRequestProcurementType,
+  ) {
+    setProcurementType(next);
+    if (
+      procurementCategory &&
+      !procurementCategoryBelongsToType(procurementCategory, next)
+    ) {
+      setProcurementCategory("");
+    }
+    if (isDirectRfq) setItems([newItemRow(validTill)]);
+  }
+
+  function handleProcurementCategoryChange(value: string) {
+    setProcurementCategory(value);
+    if (isDirectRfq) setItems([newItemRow(validTill)]);
+  }
+
+  function handleRequestModeChange(next: MaterialRequestMode) {
+    setRequestMode(next);
+    if (isDirectRfq) setItems([newItemRow(validTill)]);
+  }
 
   function addItemRow() {
     setItems((rows) => [...rows, newItemRow(validTill)]);
   }
 
   function removeItemRow(id: string) {
-    setItems((rows) =>
-      rows.length === 1 ? rows : rows.filter((r) => r.id !== id)
-    );
+    setItems((rows) => {
+      const target = rows.find((r) => r.id === id);
+      if (target && isInheritedMrRfqLine(target)) {
+        toast.error(
+          "Items forwarded from the Material Request cannot be removed.",
+        );
+        return rows;
+      }
+      return rows.length === 1 ? rows : rows.filter((r) => r.id !== id);
+    });
   }
 
   function updateItemRow(id: string, patch: Partial<ItemRow>) {
@@ -517,6 +627,22 @@ export default function NewRFQPage() {
 
     setSubmitting(true);
     try {
+      if (isDirectRfq && requestMode === "New") {
+        await ensureItemsExistForNewMode(
+          items
+            .filter((r) => r.item_code)
+            .map((r) => ({
+              item_code: r.item_code,
+              item_name: r.item_name,
+              item_group: r.item_group,
+              description: r.description,
+              uom: r.uom,
+              qty: r.qty,
+            })),
+          procurementType,
+        );
+      }
+
       // ERPNext's standard RFQ schema doesn't have `valid_till` or `title`,
       // so we embed them at the top of message_for_supplier where the
       // supplier's quotation form will display them. The detail page
@@ -595,7 +721,12 @@ export default function NewRFQPage() {
             // never to the supplier message.
             procurement_remarks: internalNotes.trim() || undefined,
           })
-        : await createRFQ(rfqPayload);
+        : await createRFQ({
+            ...rfqPayload,
+            custom_procurement_type: procurementType,
+            custom_procurement_category: procurementCategory || undefined,
+            custom_request_mode: requestMode,
+          });
 
       const creationMeta = appliedTemplate
         ? buildMetaFromTemplate(appliedTemplate)
@@ -892,6 +1023,13 @@ export default function NewRFQPage() {
             internalNotes={internalNotes}
             setInternalNotes={setInternalNotes}
             warehouseRemarks={mrContext?.warehouse_remarks ?? ""}
+            isFromMaterialRequest={isFromMaterialRequest}
+            procurementType={procurementType}
+            onProcurementTypeChange={handleProcurementTypeChange}
+            procurementCategory={procurementCategory}
+            onProcurementCategoryChange={handleProcurementCategoryChange}
+            requestMode={requestMode}
+            onRequestModeChange={handleRequestModeChange}
             requireCostBreakdown={requireCostBreakdown}
             setRequireCostBreakdown={setRequireCostBreakdown}
           />
@@ -901,6 +1039,12 @@ export default function NewRFQPage() {
           <Step2
             items={items}
             showErrors={showItemErrors}
+            fromMaterialRequest={isFromMaterialRequest}
+            isDirectRfq={isDirectRfq}
+            directProcurementReady={directProcurementReady}
+            procurementType={isDirectRfq ? procurementType : undefined}
+            procurementCategory={isDirectRfq ? procurementCategory : undefined}
+            requestMode={isDirectRfq ? requestMode : undefined}
             addItemRow={addItemRow}
             removeItemRow={removeItemRow}
             updateItemRow={updateItemRow}
@@ -911,11 +1055,24 @@ export default function NewRFQPage() {
           <Step3
             search={supplierSearch}
             setSearch={setSupplierSearch}
-            isLoading={suppliersQuery.isLoading || suppliersQuery.isFetching}
+            procurementType={procurementType}
+            procurementCategory={procurementCategory}
+            isFromMaterialRequest={isFromMaterialRequest}
+            isLoading={recommendQuery.isLoading || recommendQuery.isFetching}
+            loadError={
+              recommendQuery.error instanceof Error
+                ? recommendQuery.error.message
+                : null
+            }
+            recommendedSuppliers={recommendedSuppliers}
+            otherMatchingSuppliers={otherMatchingSuppliers}
             visibleSuppliers={visibleSuppliers}
             selectedSuppliers={selectedSuppliers}
             toggleSupplier={toggleSupplier}
             removeSelected={removeSelected}
+            canShowAllSuppliers={canShowAllSuppliers}
+            showAllSuppliers={showAllSuppliers}
+            onShowAllSuppliersChange={setShowAllSuppliers}
           />
         )}
 
@@ -949,17 +1106,37 @@ export default function NewRFQPage() {
               type="button"
               onClick={() => {
                 if (step === 1 && !step1Valid) {
-                  toast.error("Title and Valid Till are required.");
+                  if (!title.trim() || !validTill) {
+                    toast.error("Title and Valid Till are required.");
+                  } else if (isDirectRfq && !directProcurementReady) {
+                    toast.error(
+                      "Procurement Type, Category, and Request Mode are required.",
+                    );
+                  }
                   return;
                 }
                 if (step === 2 && !step2Valid) {
                   setShowItemErrors(true);
+                  if (isDirectRfq && !directProcurementReady) {
+                    toast.error(
+                      "Complete Procurement Type and Category on Step 1 before adding items.",
+                    );
+                    return;
+                  }
                   toast.error(
-                    "Each line needs Item Group, Item, and Quantity greater than 0."
+                    requestMode === "New" && isDirectRfq
+                      ? "Each line needs Item Group, Code, Name, Quantity > 0, and UOM."
+                      : "Each line needs Item Group, Item, Quantity > 0, and a valid UOM.",
                   );
                   return;
                 }
                 if (step === 3 && !step3Valid) {
+                  if (isDirectRfq && !directProcurementReady) {
+                    toast.error(
+                      "Complete Procurement Type and Category on Step 1 before selecting suppliers.",
+                    );
+                    return;
+                  }
                   toast.error("Select at least 2 suppliers to continue.");
                   return;
                 }
@@ -1048,6 +1225,13 @@ interface Step1Props {
   internalNotes: string;
   setInternalNotes: (v: string) => void;
   warehouseRemarks: string;
+  isFromMaterialRequest: boolean;
+  procurementType: MaterialRequestProcurementType;
+  onProcurementTypeChange: (v: MaterialRequestProcurementType) => void;
+  procurementCategory: string;
+  onProcurementCategoryChange: (v: string) => void;
+  requestMode: MaterialRequestMode;
+  onRequestModeChange: (v: MaterialRequestMode) => void;
   requireCostBreakdown: boolean;
   setRequireCostBreakdown: (v: boolean) => void;
 }
@@ -1065,9 +1249,18 @@ function Step1({
   internalNotes,
   setInternalNotes,
   warehouseRemarks,
+  isFromMaterialRequest,
+  procurementType,
+  onProcurementTypeChange,
+  procurementCategory,
+  onProcurementCategoryChange,
+  requestMode,
+  onRequestModeChange,
   requireCostBreakdown,
   setRequireCostBreakdown,
 }: Step1Props) {
+  const categoryOptions = procurementCategoriesForType(procurementType);
+
   return (
     <div className="space-y-5 p-5">
       {/* Responsive two-column grid for the core fields */}
@@ -1105,6 +1298,82 @@ function Step1({
             Defaults to 7 days from today. Adjust if needed.
           </p>
         </div>
+
+        {isFromMaterialRequest ? (
+          <>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-neutral-700">
+                Procurement Type
+                <span className="ml-2 text-xs font-normal text-neutral-400">
+                  (inherited from Material Request)
+                </span>
+              </label>
+              <input
+                readOnly
+                value={procurementType}
+                className="w-full rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-700"
+              />
+            </div>
+            {procurementCategory ? (
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-neutral-700">
+                  Procurement Category
+                  <span className="ml-2 text-xs font-normal text-neutral-400">
+                    (inherited from Material Request)
+                  </span>
+                </label>
+                <input
+                  readOnly
+                  value={procurementCategory}
+                  className="w-full rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-700"
+                />
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-neutral-700">
+                Procurement Type <span className="text-danger-600">*</span>
+              </label>
+              <RfqProcurementTypePicker
+                value={procurementType}
+                onChange={onProcurementTypeChange}
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-neutral-700">
+                Procurement Category <span className="text-danger-600">*</span>
+              </label>
+              <select
+                value={procurementCategory}
+                onChange={(e) => onProcurementCategoryChange(e.target.value)}
+                className={FIELD_CLASS}
+              >
+                <option value="">Select category…</option>
+                {categoryOptions.map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="sm:col-span-2">
+              <label className="mb-1.5 block text-sm font-medium text-neutral-700">
+                Request Mode <span className="text-danger-600">*</span>
+              </label>
+              <RfqRequestModePicker
+                value={requestMode}
+                onChange={onRequestModeChange}
+              />
+              <p className="mt-1 text-xs text-neutral-500">
+                {requestMode === "Existing"
+                  ? "Pick items from Item Master filtered by category."
+                  : "Enter new items manually — stubs are created on submit."}
+              </p>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Warehouse Remarks — read-only context from the Material Request */}
@@ -1265,6 +1534,12 @@ function RfqSummaryCard({
 interface Step2Props {
   items: ItemRow[];
   showErrors: boolean;
+  fromMaterialRequest: boolean;
+  isDirectRfq: boolean;
+  directProcurementReady: boolean;
+  procurementType?: MaterialRequestProcurementType;
+  procurementCategory?: string;
+  requestMode?: MaterialRequestMode;
   addItemRow: () => void;
   removeItemRow: (id: string) => void;
   updateItemRow: (id: string, patch: Partial<ItemRow>) => void;
@@ -1273,6 +1548,12 @@ interface Step2Props {
 function Step2({
   items,
   showErrors,
+  fromMaterialRequest,
+  isDirectRfq,
+  directProcurementReady,
+  procurementType,
+  procurementCategory,
+  requestMode,
   addItemRow,
   removeItemRow,
   updateItemRow,
@@ -1295,36 +1576,55 @@ function Step2({
           </p>
           <p className="mt-0.5 text-xs text-neutral-600">
             Set Target Price and Show-to-Supplier per line during creation.
-            AI Analysis later uses these values read-only for variance and
-            savings.
+            {fromMaterialRequest
+              ? " Forwarded Material Request lines are locked."
+              : requestMode === "New"
+                ? " New mode: enter proposed items manually."
+                : " Existing mode: items are filtered by procurement category."}
           </p>
         </div>
       </div>
 
+      {isDirectRfq && !directProcurementReady ? (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Complete Procurement Type, Category, and Request Mode on Step 1 before
+          adding items.
+        </div>
+      ) : null}
+
       <div className="overflow-hidden rounded-xl border border-neutral-200 shadow-sm">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1280px] text-sm">
+          <table className="rfq-line-items-table w-full min-w-[1180px] table-fixed text-sm">
+            <colgroup>
+              <col style={{ width: 44 }} />
+              <col style={{ width: 150 }} />
+              <col style={{ width: 200 }} />
+              <col style={{ width: 80 }} />
+              <col style={{ width: 90 }} />
+              <col style={{ width: 140 }} />
+              <col style={{ width: 120 }} />
+              <col style={{ width: 110 }} />
+              <col style={{ width: 140 }} />
+              <col style={{ width: 88 }} />
+            </colgroup>
             <thead>
               <tr className="border-b border-neutral-200 bg-neutral-50/90 text-left text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
-                <th className="px-3 py-3 w-12">#</th>
-                <th className="px-3 py-3 min-w-[140px]">
+                <th className="px-2 py-3 text-center">#</th>
+                <th className="px-2 py-3">
                   Item Group <span className="text-danger-500">*</span>
                 </th>
-                <th className="px-3 py-3 min-w-[180px]">
+                <th className="px-2 py-3">
                   Item <span className="text-danger-500">*</span>
                 </th>
-                <th className="px-3 py-3 w-[90px] text-right">
+                <th className="px-2 py-3 text-right">
                   Qty <span className="text-danger-500">*</span>
                 </th>
-                <th className="px-3 py-3 w-[80px] text-center">UOM</th>
-                <th className="px-3 py-3 w-[120px] text-right">Target Price</th>
-                <th className="px-3 py-3 w-[120px] text-center">
-                  Show to Supplier
-                </th>
-                <th className="px-3 py-3 w-[140px]">Required By</th>
-                <th className="px-3 py-3 min-w-[120px]">Part Name</th>
-                <th className="px-3 py-3 min-w-[100px]">Attachments</th>
-                <th className="px-3 py-3 w-12" />
+                <th className="px-2 py-3 text-center">UOM</th>
+                <th className="px-2 py-3">Required By</th>
+                <th className="px-2 py-3 text-right">Target Price</th>
+                <th className="px-2 py-3 text-center">Show to Supplier</th>
+                <th className="px-2 py-3">Part Name</th>
+                <th className="px-2 py-3 text-center">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -1336,7 +1636,12 @@ function Step2({
                   itemGroups={itemGroups}
                   groupsLoading={groupsQuery.isLoading}
                   showErrors={showErrors}
-                  canRemove={items.length > 1}
+                  canRemove={
+                    !isInheritedMrRfqLine(row) && items.length > 1
+                  }
+                  procurementType={procurementType}
+                  procurementCategory={procurementCategory}
+                  requestMode={requestMode}
                   onChange={(patch) => updateItemRow(row.id, patch)}
                   onRemove={() => removeItemRow(row.id)}
                 />
@@ -1350,7 +1655,8 @@ function Step2({
         <button
           type="button"
           onClick={addItemRow}
-          className="inline-flex items-center gap-2 rounded-lg border border-dashed border-primary-300 bg-white px-4 py-2 text-sm font-semibold text-primary-700 shadow-sm transition hover:border-primary-400 hover:bg-primary-50"
+          disabled={isDirectRfq && !directProcurementReady}
+          className="inline-flex items-center gap-2 rounded-lg border border-dashed border-primary-300 bg-white px-4 py-2 text-sm font-semibold text-primary-700 shadow-sm transition hover:border-primary-400 hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Plus className="h-4 w-4" />
           Add Line Item
@@ -1371,24 +1677,72 @@ function Step2({
 interface Step3Props {
   search: string;
   setSearch: (v: string) => void;
+  procurementType: MaterialRequestProcurementType;
+  procurementCategory: string;
+  isFromMaterialRequest: boolean;
   isLoading: boolean;
+  loadError: string | null;
+  recommendedSuppliers: SupplierWithMeta[];
+  otherMatchingSuppliers: SupplierWithMeta[];
   visibleSuppliers: SupplierWithMeta[];
   selectedSuppliers: SupplierWithMeta[];
   toggleSupplier: (s: SupplierWithMeta) => void;
   removeSelected: (name: string) => void;
+  canShowAllSuppliers: boolean;
+  showAllSuppliers: boolean;
+  onShowAllSuppliersChange: (v: boolean) => void;
 }
 
 function Step3({
   search,
   setSearch,
+  procurementType,
+  procurementCategory,
+  isFromMaterialRequest,
   isLoading,
+  loadError,
+  recommendedSuppliers,
+  otherMatchingSuppliers,
   visibleSuppliers,
   selectedSuppliers,
   toggleSupplier,
   removeSelected,
+  canShowAllSuppliers,
+  showAllSuppliers,
+  onShowAllSuppliersChange,
 }: Step3Props) {
   return (
     <div className="p-5">
+      {procurementCategory ? (
+        <div className="mb-4 rounded-lg border border-primary-100 bg-primary-50/50 px-4 py-3 text-sm text-primary-900">
+          AI supplier recommendations use{" "}
+          <span className="font-semibold">{procurementType}</span> procurement,{" "}
+          category{" "}
+          <span className="font-semibold">{procurementCategory}</span>, plus item
+          group and commodity signals from your RFQ lines
+          {isFromMaterialRequest
+            ? " (inherited from the Material Request)."
+            : "."}
+        </div>
+      ) : null}
+
+      {canShowAllSuppliers ? (
+        <label className="mb-4 flex items-center gap-2 text-sm text-neutral-700">
+          <input
+            type="checkbox"
+            checked={showAllSuppliers}
+            onChange={(e) => onShowAllSuppliersChange(e.target.checked)}
+            className="rounded border-neutral-300"
+          />
+          Show All Suppliers
+        </label>
+      ) : null}
+
+      {loadError ? (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {loadError}
+        </div>
+      ) : null}
       {selectedSuppliers.length > 0 && (
         <div className="mb-4 flex flex-wrap gap-2 rounded-lg bg-accent-50/60 p-3 ring-1 ring-inset ring-accent-200">
           <span className="self-center text-xs font-medium uppercase tracking-wide text-accent-700">
@@ -1440,51 +1794,108 @@ function Step3({
         ) : visibleSuppliers.length === 0 ? (
           <div className="col-span-full flex flex-col items-center gap-1 py-8 text-center text-sm text-neutral-500">
             <Users className="h-5 w-5 text-neutral-400" />
-            <span>No suppliers match.</span>
+            <span>No suppliers match your procurement filters.</span>
           </div>
         ) : (
-          visibleSuppliers.map((s) => {
-            const isSelected = selectedSuppliers.some((x) => x.name === s.name);
-            return (
-              <button
-                key={s.name}
-                type="button"
-                onClick={() => toggleSupplier(s)}
-                className={`flex flex-col items-start gap-1.5 rounded-xl border p-3 text-left transition-colors ${
-                  isSelected
-                    ? "border-accent-500 bg-accent-50 ring-1 ring-accent-300"
-                    : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-neutral-50"
-                }`}
-              >
-                <div className="flex w-full items-start justify-between gap-2">
-                  <span className="truncate text-sm font-semibold text-neutral-900">
-                    {s.supplier_name}
-                  </span>
-                  {isSelected && (
-                    <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-accent-500 text-white">
-                      <Check className="h-3 w-3" />
-                    </span>
-                  )}
+          <>
+            {recommendedSuppliers.length > 0 ? (
+              <div className="col-span-full">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary-700">
+                  Recommended
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {recommendedSuppliers.map((s) => (
+                    <SupplierPickCard
+                      key={s.name}
+                      supplier={s}
+                      isSelected={selectedSuppliers.some((x) => x.name === s.name)}
+                      onToggle={() => toggleSupplier(s)}
+                    />
+                  ))}
                 </div>
-                <div className="text-xs text-neutral-500">
-                  {s.supplier_group ?? "—"}
-                  {s.country && <> &middot; {s.country}</>}
+              </div>
+            ) : null}
+            {otherMatchingSuppliers.length > 0 ? (
+              <div className="col-span-full mt-2">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+                  Other matching
+                </p>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {otherMatchingSuppliers.map((s) => (
+                    <SupplierPickCard
+                      key={s.name}
+                      supplier={s}
+                      isSelected={selectedSuppliers.some((x) => x.name === s.name)}
+                      onToggle={() => toggleSupplier(s)}
+                    />
+                  ))}
                 </div>
-                <div className="flex items-center gap-2 text-xs">
-                  <span className="text-neutral-500">
-                    Past POs:{" "}
-                    <span className="font-medium text-neutral-700">
-                      {s.po_count ?? 0}
-                    </span>
-                  </span>
-                  {s.disabled === 1 && <StatusBadge status="Disabled" tone="danger" />}
-                </div>
-              </button>
-            );
-          })
+              </div>
+            ) : null}
+          </>
         )}
       </div>
     </div>
+  );
+}
+
+function SupplierPickCard({
+  supplier,
+  isSelected,
+  onToggle,
+}: {
+  supplier: SupplierWithMeta;
+  isSelected: boolean;
+  onToggle: () => void;
+}) {
+  const matchPct = supplier.ai_match_pct ?? supplier.score ?? 0;
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className={`flex flex-col items-start gap-1.5 rounded-xl border p-3 text-left transition-colors ${
+        isSelected
+          ? "border-accent-500 bg-accent-50 ring-1 ring-accent-300"
+          : "border-neutral-200 bg-white hover:border-primary-300 hover:bg-neutral-50"
+      }`}
+    >
+      <div className="flex w-full items-start justify-between gap-2">
+        <span className="truncate text-sm font-semibold text-neutral-900">
+          {supplier.supplier_name}
+        </span>
+        {isSelected && (
+          <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-accent-500 text-white">
+            <Check className="h-3 w-3" />
+          </span>
+        )}
+      </div>
+      {matchPct > 0 ? (
+        <div className="text-xs font-medium text-primary-700">
+          <span className="text-amber-500">{aiMatchStars(matchPct)}</span>
+          <span className="ml-2">AI Match {matchPct}%</span>
+        </div>
+      ) : null}
+      <div className="text-xs text-neutral-500">
+        {supplier.supplier_group ?? "—"}
+        {supplier.country && <> &middot; {supplier.country}</>}
+      </div>
+      <div className="flex items-center gap-2 text-xs">
+        <span className="text-neutral-500">
+          Past POs:{" "}
+          <span className="font-medium text-neutral-700">
+            {supplier.po_count ?? 0}
+          </span>
+        </span>
+        {supplier.preferred ? (
+          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+            Preferred
+          </span>
+        ) : null}
+        {supplier.disabled === 1 && (
+          <StatusBadge status="Disabled" tone="danger" />
+        )}
+      </div>
+    </button>
   );
 }
 
@@ -1690,5 +2101,104 @@ function TemplateBadge({ type }: { type?: string }) {
     >
       {label}
     </span>
+  );
+}
+
+function RfqProcurementTypePicker({
+  value,
+  onChange,
+}: {
+  value: MaterialRequestProcurementType;
+  onChange: (next: MaterialRequestProcurementType) => void;
+}) {
+  const options: Array<{
+    key: MaterialRequestProcurementType;
+    label: string;
+    Icon: typeof Factory;
+    active: string;
+  }> = [
+    {
+      key: "Direct",
+      label: "Direct",
+      Icon: Factory,
+      active: "border-blue-500 bg-blue-50 text-blue-700",
+    },
+    {
+      key: "Indirect",
+      label: "Indirect",
+      Icon: Briefcase,
+      active: "border-orange-500 bg-orange-50 text-orange-700",
+    },
+  ];
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {options.map((opt) => {
+        const active = value === opt.key;
+        const { Icon } = opt;
+        return (
+          <button
+            key={opt.key}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(opt.key)}
+            className={`inline-flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs font-semibold transition-colors ${
+              active
+                ? opt.active
+                : "border-neutral-200 bg-white text-neutral-500 hover:border-neutral-300"
+            }`}
+          >
+            <Icon className="h-3.5 w-3.5" />
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function RfqRequestModePicker({
+  value,
+  onChange,
+}: {
+  value: MaterialRequestMode;
+  onChange: (next: MaterialRequestMode) => void;
+}) {
+  const options: Array<{
+    key: MaterialRequestMode;
+    label: string;
+    active: string;
+  }> = [
+    {
+      key: "Existing",
+      label: "Existing",
+      active: "border-emerald-500 bg-emerald-50 text-emerald-700",
+    },
+    {
+      key: "New",
+      label: "New",
+      active: "border-amber-500 bg-amber-50 text-amber-700",
+    },
+  ];
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {options.map((opt) => {
+        const active = value === opt.key;
+        return (
+          <button
+            key={opt.key}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(opt.key)}
+            className={`rounded-lg border px-2 py-2 text-xs font-semibold transition-colors ${
+              active
+                ? opt.active
+                : "border-neutral-200 bg-white text-neutral-500 hover:border-neutral-300"
+            }`}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }

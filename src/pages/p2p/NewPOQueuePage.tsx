@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
+  CheckCircle2,
   Package,
   ShieldCheck,
   Wallet,

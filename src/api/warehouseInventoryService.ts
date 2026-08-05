@@ -29,7 +29,7 @@ import {
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_BINS = 5000;
 
-export type InventoryStockStatus = "In Stock" | "Low Stock" | "Out of Stock";
+export type InventoryStockStatus = "In Stock" | "Reorder Required" | "Out of Stock";
 
 export interface InventoryStockRow {
   item_code: string;
@@ -54,7 +54,9 @@ export interface InventorySnapshot {
   total: number;
   kpis: {
     totalAvailableQty: number;
+    /** Items with status Reorder Required (at/below reorder, still > 0). */
     lowStockCount: number;
+    reorderRequiredCount: number;
     outOfStockCount: number;
   };
   diagnostics: {
@@ -145,6 +147,8 @@ type RawBin = {
 export async function fetchInventoryBins(opts?: {
   warehouse?: string;
   itemCode?: string;
+  /** Batch filter — preferred over repeated single-item Bin queries. */
+  itemCodes?: string[];
   warehouses?: string[];
 }): Promise<RawBin[]> {
   const filters: Filter[] = [];
@@ -165,7 +169,9 @@ export async function fetchInventoryBins(opts?: {
     }
   }
 
-  if (opts?.itemCode) {
+  if (opts?.itemCodes && opts.itemCodes.length > 0) {
+    filters.push(["item_code", "in", opts.itemCodes]);
+  } else if (opts?.itemCode) {
     filters.push(["item_code", "=", opts.itemCode]);
   }
 
@@ -385,6 +391,76 @@ async function listWarehousesForCompany(company: string): Promise<string[]> {
   return names;
 }
 
+/**
+ * Batch available-qty lookup for many items in one Bin query.
+ * Avoids N+1 getItemStockAcrossWarehouses calls on dashboard loads.
+ */
+export async function getItemsAvailableQtyBatch(
+  itemCodes: string[],
+  opts?: { company?: string; warehouses?: string[] },
+): Promise<Map<string, { available_qty: number; warehouse: string }>> {
+  const result = new Map<string, { available_qty: number; warehouse: string }>();
+  const unique = Array.from(
+    new Set(itemCodes.map((c) => c.trim()).filter(Boolean)),
+  );
+  if (unique.length === 0) return result;
+
+  const company = (opts?.company?.trim() || COMPANY).trim() || COMPANY;
+  const warehouses =
+    opts?.warehouses && opts.warehouses.length > 0
+      ? opts.warehouses
+      : await listWarehousesForCompany(company);
+
+  // eslint-disable-next-line no-console
+  console.info("[DashboardLoad] getItemsAvailableQtyBatch", {
+    itemCount: unique.length,
+    warehouseCount: warehouses.length,
+    company,
+  });
+
+  if (warehouses.length === 0) {
+    for (const code of unique) result.set(code, { available_qty: 0, warehouse: "—" });
+    return result;
+  }
+
+  // Chunk to keep ERP `in` filters bounded.
+  const CHUNK = 80;
+  for (let i = 0; i < unique.length; i += CHUNK) {
+    const chunk = unique.slice(i, i + CHUNK);
+    const bins = await fetchInventoryBins({
+      itemCodes: chunk,
+      warehouses,
+    });
+    const best = new Map<
+      string,
+      { available_qty: number; warehouse: string }
+    >();
+    for (const b of bins) {
+      const code = String(b.item_code || "").trim();
+      if (!code) continue;
+      const { availableQty } = computeBinAvailability(
+        b.actual_qty,
+        b.reserved_qty,
+      );
+      const prev = best.get(code);
+      if (!prev || availableQty > prev.available_qty) {
+        best.set(code, {
+          available_qty: availableQty,
+          warehouse: String(b.warehouse || "—"),
+        });
+      }
+    }
+    for (const code of chunk) {
+      result.set(
+        code,
+        best.get(code) ?? { available_qty: 0, warehouse: "—" },
+      );
+    }
+  }
+
+  return result;
+}
+
 export async function getItemStockAcrossWarehouses(
   itemCode: string,
   opts?: {
@@ -534,6 +610,7 @@ async function fetchItemsByCode(
           "description",
           "item_group",
           "stock_uom",
+          "safety_stock",
           "disabled",
         ],
         filters: [
@@ -590,7 +667,8 @@ export async function fetchInventorySnapshot(opts?: {
         reserved_qty: reservedQty,
         available_qty: availableQty,
         reorder_level: reorder,
-        status: resolveInventoryStockStatus(availableQty, reorder),
+        // Status uses Current Stock (on-hand), not reserved-adjusted available.
+        status: resolveInventoryStockStatus(currentStock, reorder),
         raw_actual_qty: rawActualQty,
         source: "bin" as const,
       };
@@ -626,7 +704,9 @@ export async function fetchInventorySnapshot(opts?: {
     total: rows.length,
     kpis: {
       totalAvailableQty,
-      lowStockCount: rows.filter((r) => r.status === "Low Stock").length,
+      lowStockCount: rows.filter((r) => r.status === "Reorder Required").length,
+      reorderRequiredCount: rows.filter((r) => r.status === "Reorder Required")
+        .length,
       outOfStockCount: rows.filter((r) => r.status === "Out of Stock").length,
     },
     diagnostics: {

@@ -13,20 +13,86 @@ import type { AnalyticsKpi } from "../api/procurementAnalytics";
 import type { ExecutiveInsight, RfqPipelineStage } from "./dashboardUtils";
 import { formatCurrencyCompact } from "./format";
 
-export const ENTERPRISE_RFQ_STAGES = [
-  "Draft",
-  "Invited",
-  "Awaiting Quote",
-  "Quoted",
-  "Technical Review",
-  "Commercial Review",
-  "Legal Review",
-  "Finance Approval",
-  "Awarded",
-  "Closed",
+/**
+ * RFQ Status Pipeline stage registry.
+ *
+ * `implemented: true`  → always shown (matches live BidSphere workflow).
+ * `implemented: false` → hidden until enabled via workflow / optional flags
+ *                        (e.g. future Technical / Commercial Review).
+ */
+export const RFQ_PIPELINE_STAGE_DEFS = [
+  { id: "Draft", implemented: true },
+  { id: "Invited", implemented: true },
+  { id: "Awaiting Quote", implemented: true },
+  { id: "Quoted", implemented: true },
+  { id: "Technical Review", implemented: false },
+  { id: "Commercial Review", implemented: false },
+  { id: "Legal Review", implemented: true },
+  { id: "Finance Approval", implemented: true },
+  { id: "Awarded", implemented: true },
+  { id: "Closed", implemented: true },
 ] as const;
 
-export type EnterpriseRfqStage = (typeof ENTERPRISE_RFQ_STAGES)[number];
+export type EnterpriseRfqStage = (typeof RFQ_PIPELINE_STAGE_DEFS)[number]["id"];
+
+/** @deprecated Prefer {@link resolveActiveRfqPipelineStages}. Kept for callers. */
+export const ENTERPRISE_RFQ_STAGES: readonly EnterpriseRfqStage[] =
+  RFQ_PIPELINE_STAGE_DEFS.filter((s) => s.implemented).map((s) => s.id);
+
+/** Workflow-config stage names → pipeline labels (optional future stages). */
+const WORKFLOW_OPTIONAL_PIPELINE_MAP: Record<string, EnterpriseRfqStage> = {
+  technical_review: "Technical Review",
+  commercial_review: "Commercial Review",
+};
+
+/**
+ * Active pipeline stages for the dashboard.
+ * Optional stages appear only when enabled in workflow config (or overrides).
+ */
+export function resolveActiveRfqPipelineStages(opts?: {
+  /** Explicit enables for optional stages (tests / future feature flags). */
+  enableOptional?: Partial<Record<EnterpriseRfqStage, boolean>>;
+  /** Raw workflow stages from admin config (`name` + `enabled`). */
+  workflowStages?: Array<{ name: string; enabled: boolean; label?: string }>;
+}): EnterpriseRfqStage[] {
+  const optionalOn = new Set<EnterpriseRfqStage>();
+
+  for (const [wfName, pipelineId] of Object.entries(
+    WORKFLOW_OPTIONAL_PIPELINE_MAP,
+  )) {
+    const wf = opts?.workflowStages?.find((s) => s.name === wfName);
+    if (wf?.enabled) optionalOn.add(pipelineId);
+  }
+
+  for (const [stage, on] of Object.entries(opts?.enableOptional ?? {})) {
+    if (on) optionalOn.add(stage as EnterpriseRfqStage);
+  }
+
+  // Also honor persisted admin workflow config when available in the browser.
+  if (typeof localStorage !== "undefined" && !opts?.workflowStages) {
+    try {
+      const raw = localStorage.getItem("bidsphere_workflow_config");
+      if (raw) {
+        const stored = JSON.parse(raw) as Array<{
+          name?: string;
+          enabled?: boolean;
+        }>;
+        for (const row of stored) {
+          const mapped = row.name
+            ? WORKFLOW_OPTIONAL_PIPELINE_MAP[row.name]
+            : undefined;
+          if (mapped && row.enabled) optionalOn.add(mapped);
+        }
+      }
+    } catch {
+      /* ignore corrupt config */
+    }
+  }
+
+  return RFQ_PIPELINE_STAGE_DEFS.filter(
+    (s) => s.implemented || optionalOn.has(s.id),
+  ).map((s) => s.id);
+}
 
 export const ENTERPRISE_SPEND_CATEGORIES = [
   "Raw Material",
@@ -50,6 +116,136 @@ export interface CategoryDonutPoint {
   pct: number;
   /** Distinct purchase orders contributing to this category. */
   orderCount: number;
+}
+
+/** Fixed procurement dashboard spend buckets (Spend by Category widget). */
+export const PROCUREMENT_SPEND_CATEGORIES = [
+  "Raw Material",
+  "Auto Parts",
+  "Consumables",
+  "Tools",
+  "Electrical",
+  "Packaging",
+  "Services",
+  "Miscellaneous",
+] as const;
+
+export type ProcurementSpendCategory =
+  (typeof PROCUREMENT_SPEND_CATEGORIES)[number];
+
+export const PROCUREMENT_SPEND_CATEGORY_COLORS: Record<
+  ProcurementSpendCategory,
+  string
+> = {
+  "Raw Material": "#1F3A6D",
+  "Auto Parts": "#3B6BA5",
+  Consumables: "#0E7C6E",
+  Tools: "#A66418",
+  Electrical: "#D97706",
+  Packaging: "#10B981",
+  Services: "#8B5CF6",
+  Miscellaneous: "#64748B",
+};
+
+export type SpendCategoryPeriod = "month" | "3m" | "6m" | "ytd";
+
+export function spendPeriodDateRange(period: SpendCategoryPeriod): {
+  fromDate: string;
+  toDate: string;
+} {
+  const now = new Date();
+  const toDate = now.toISOString().slice(0, 10);
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  switch (period) {
+    case "month":
+      start.setDate(1);
+      break;
+    case "3m":
+      start.setMonth(start.getMonth() - 3);
+      break;
+    case "6m":
+      start.setMonth(start.getMonth() - 6);
+      break;
+    case "ytd":
+      start.setMonth(0);
+      start.setDate(1);
+      break;
+  }
+  return { fromDate: start.toISOString().slice(0, 10), toDate };
+}
+
+/** Map ERP Item Group → fixed procurement spend category bucket. */
+export function bucketProcurementSpendCategory(
+  itemGroup?: string,
+): ProcurementSpendCategory {
+  const g = (itemGroup ?? "").trim().toLowerCase();
+  if (!g) return "Miscellaneous";
+  if (/raw\s*material|steel|plastic|resin|metal|fabric|chemical|sheet|alloy/.test(g)) {
+    return "Raw Material";
+  }
+  if (
+    /auto|automotive|vehicle|oem|aftermarket|\bpart|component|assembly|bearing|gear|fastener/.test(
+      g,
+    )
+  ) {
+    return "Auto Parts";
+  }
+  if (/consumable|mro|maintenance|lubricant|cleaning|stationery|adhesive/.test(g)) {
+    return "Consumables";
+  }
+  if (/\btool|wrench|drill|cutter|fixture|gauge|calibrat/.test(g)) {
+    return "Tools";
+  }
+  if (/electr|wiring|cable|circuit|motor|battery|electronic|sensor|switch/.test(g)) {
+    return "Electrical";
+  }
+  if (/pack|carton|box|crate|pallet|wrap|label|packaging/.test(g)) {
+    return "Packaging";
+  }
+  if (
+    /service|consult|labor|labour|software|license|support|logistic|freight|transport/.test(
+      g,
+    )
+  ) {
+    return "Services";
+  }
+  return "Miscellaneous";
+}
+
+/** Aggregate PO/PI lines into fixed category buckets for the Spend by Category chart. */
+export function buildBucketedCategorySpend(
+  items: DashboardPoItemLite[],
+): CategoryDonutPoint[] {
+  const totals = new Map<string, number>();
+  const orders = new Map<string, Set<string>>();
+
+  for (const row of items) {
+    const amt = Number(row.base_amount ?? row.amount ?? 0);
+    if (!(amt > 0)) continue;
+    const category = bucketProcurementSpendCategory(row.item_group);
+    totals.set(category, (totals.get(category) ?? 0) + amt);
+    if (row.parent) {
+      let set = orders.get(category);
+      if (!set) {
+        set = new Set();
+        orders.set(category, set);
+      }
+      set.add(row.parent);
+    }
+  }
+
+  const grand = Array.from(totals.values()).reduce((s, v) => s + v, 0);
+  if (!(grand > 0)) return [];
+
+  return PROCUREMENT_SPEND_CATEGORIES.map((category) => {
+    const spend = totals.get(category) ?? 0;
+    return {
+      category,
+      spend,
+      pct: spend > 0 ? (spend / grand) * 100 : 0,
+      orderCount: orders.get(category)?.size ?? 0,
+    };
+  }).filter((row) => row.spend > 0);
 }
 
 export interface SupplierOverviewMetrics {
@@ -306,46 +502,69 @@ export function computeAverageSupplierScore(
 }
 
 /**
- * Enterprise RFQ pipeline. Stages without a resolvable ERP signal stay at 0
- * (Technical / Commercial Review).
+ * Enterprise RFQ pipeline — only active (implemented / config-enabled) stages.
+ * Counts use valid workflow signals only; unimplemented stages are omitted.
  */
 export function computeEnterpriseRfqPipeline(opts: {
   rfqs: DashboardRfqLite[];
   openRfqsCount: number;
   quoteCounts?: Map<string, number>;
+  /** Invited supplier counts from Request for Quotation Supplier. */
+  supplierCounts?: Map<string, number>;
   rfqsWithPo?: Set<string>;
   legalPending?: number;
   financePending?: number;
+  enableOptional?: Partial<Record<EnterpriseRfqStage, boolean>>;
+  workflowStages?: Array<{ name: string; enabled: boolean; label?: string }>;
 }): RfqPipelineStage[] {
   const {
     rfqs,
     openRfqsCount,
     quoteCounts,
+    supplierCounts,
     rfqsWithPo,
     legalPending = 0,
     financePending = 0,
   } = opts;
 
-  const buckets: Record<EnterpriseRfqStage, number> = {
-    Draft: 0,
-    Invited: 0,
-    "Awaiting Quote": 0,
-    Quoted: 0,
-    "Technical Review": 0,
-    "Commercial Review": 0,
-    "Legal Review": 0,
-    "Finance Approval": 0,
-    Awarded: 0,
-    Closed: 0,
+  const activeStages = resolveActiveRfqPipelineStages({
+    enableOptional: opts.enableOptional,
+    workflowStages: opts.workflowStages,
+  });
+
+  const buckets = Object.fromEntries(
+    activeStages.map((s) => [s, 0]),
+  ) as Record<EnterpriseRfqStage, number>;
+
+  const ensure = (stage: EnterpriseRfqStage) => {
+    if (!(stage in buckets)) buckets[stage] = 0;
   };
+  for (const s of [
+    "Draft",
+    "Invited",
+    "Awaiting Quote",
+    "Quoted",
+    "Awarded",
+    "Closed",
+    "Legal Review",
+    "Finance Approval",
+  ] as const) {
+    ensure(s);
+  }
 
   for (const rfq of rfqs) {
     const status = (rfq.status ?? "").toLowerCase();
     const quotes = quoteCounts?.get(rfq.name) ?? 0;
+    const suppliers = supplierCounts?.get(rfq.name) ?? 0;
     const hasPo = rfqsWithPo?.has(rfq.name) ?? false;
 
     if (status === "cancelled") continue;
-    if (hasPo || status === "ordered" || status === "awarded" || status.includes("partially")) {
+    if (
+      hasPo ||
+      status === "ordered" ||
+      status === "awarded" ||
+      status.includes("partially")
+    ) {
       buckets.Awarded += 1;
       continue;
     }
@@ -361,8 +580,9 @@ export function computeEnterpriseRfqPipeline(opts: {
       buckets.Quoted += 1;
       continue;
     }
-    if (status === "submitted" || status === "open" || status === "replied") {
-      buckets["Awaiting Quote"] += 1;
+    // Open / submitted without quotes → Invited when suppliers exist, else waiting.
+    if (suppliers > 0) {
+      buckets.Invited += 1;
       continue;
     }
     buckets["Awaiting Quote"] += 1;
@@ -377,13 +597,15 @@ export function computeEnterpriseRfqPipeline(opts: {
     buckets["Awaiting Quote"] += openRfqsCount - sampledOpen;
   }
 
-  // Legal / Finance approvals are workflow queues (may overlap RFQ sample).
-  buckets["Legal Review"] = legalPending;
-  buckets["Finance Approval"] = financePending;
+  // Legal / Finance are live workflow queues (not inferred from ERP RFQ status).
+  if ("Legal Review" in buckets) buckets["Legal Review"] = legalPending;
+  if ("Finance Approval" in buckets) {
+    buckets["Finance Approval"] = financePending;
+  }
 
-  return ENTERPRISE_RFQ_STAGES.map((stage) => ({
+  return activeStages.map((stage) => ({
     stage,
-    count: buckets[stage],
+    count: buckets[stage] ?? 0,
   }));
 }
 

@@ -15,8 +15,8 @@ export function canReviewMaterialRequest(role: AppRole | undefined): boolean {
 }
 
 /**
- * Admin Manager reviews INDIRECT material requests (approve / reject) before
- * they reach Procurement. Only the admin role holds this gate.
+ * @deprecated Admin approval gate removed — both Direct and Indirect MRs route
+ * to Warehouse. Retained for legacy admin pages that may still list old records.
  */
 export function canReviewIndirectMaterialRequest(
   role: AppRole | undefined,

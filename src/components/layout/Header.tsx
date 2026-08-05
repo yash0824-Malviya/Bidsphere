@@ -26,7 +26,7 @@ export default function Header() {
   } = useLayout();
 
   return (
-    <header className="app-topbar sticky top-0 z-30 border-b bg-white">
+    <header className="app-topbar z-30 shrink-0 border-b bg-white">
       <div className="flex h-[52px] min-w-0 items-center gap-2 px-4 sm:gap-3 sm:px-5 lg:px-6">
         {sidebarMode === "drawer" && (
           <button

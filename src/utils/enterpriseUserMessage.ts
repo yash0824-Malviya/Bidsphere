@@ -4,6 +4,11 @@
  * — except ERPNext *validation* messages, which must reach the user unchanged.
  */
 
+import {
+  classifyApiError,
+  userMessageForApiCategory,
+} from "./apiReliability";
+
 const TECHNICAL_PATTERNS: RegExp[] = [
   /ERPNext/i,
   /\bDocType\b/i,
@@ -179,8 +184,12 @@ function looksTechnical(message: string): boolean {
 /** Safe one-line message for toasts and inline copy. */
 export function toEnterpriseUserMessage(
   error: unknown,
-  fallback = "Something went wrong. Please try again.",
+  fallback?: string,
 ): string {
+  const apiCategory = classifyApiError(error);
+  const resolvedFallback =
+    fallback ?? userMessageForApiCategory(apiCategory);
+
   const kind = classifyEnterpriseError(error);
   const raw = extractRawErrorMessage(error);
 
@@ -203,6 +212,26 @@ export function toEnterpriseUserMessage(
       : "This document has already been submitted and cannot be changed.";
   }
 
+  // Reverse-auction bid validation — always show the server/client reason verbatim.
+  if (
+    raw &&
+    /submitted bid|latest lowest bid|must be lower|auction is not live|bid sheet|at least .+ below the current lowest|Rate must be greater than zero|not invited to this reverse auction|Enter at least one lower|auction has been updated/i.test(
+      raw,
+    )
+  ) {
+    return raw.length <= 320 ? raw : `${raw.slice(0, 317)}…`;
+  }
+
+  // RFQ quote round — preserve backend validation messages.
+  if (
+    raw &&
+    /quote round r\d+|already exists|failed to copy rfq|failed to copy terms|failed to send invitations|supplier already invited|was not found|remarks are required|invalid reason/i.test(
+      raw,
+    )
+  ) {
+    return raw.length <= 320 ? raw : `${raw.slice(0, 317)}…`;
+  }
+
   // ── ERPNext validation — NEVER replace with the generic fallback ──
   if (isErpValidationUserMessage(raw)) {
     const cleaned = stripFrappeExceptionNoise(raw);
@@ -216,6 +245,24 @@ export function toEnterpriseUserMessage(
   }
   if (kind === "timeout") {
     return "This request is taking longer than expected. Please wait a moment and try again.";
+  }
+
+  // Preserve HTTP status codes instead of collapsing to a generic toast.
+  const statusMatch = raw.match(/status code\s*(\d{3})/i) || raw.match(/HTTP\s*(\d{3})/i);
+  if (statusMatch) {
+    const code = statusMatch[1];
+    if (code === "417" || code === "424") {
+      const field = raw.match(FIELD_QUERY_PATTERN)?.[1];
+      return field
+        ? `A list query used an invalid field (${field}). Please refresh or contact support.`
+        : "A server validation error occurred while loading data. Please try again.";
+    }
+    if (code === "500" || code === "502" || code === "503" || code === "504") {
+      return `The server returned an error (${code}). Please try again in a moment.`;
+    }
+    if (code === "401" || code === "403") {
+      return "You may not have permission to access this information.";
+    }
   }
   if (kind === "empty") {
     // Keep actionable bid-history naming errors instead of the generic empty copy.
@@ -277,7 +324,7 @@ export function toEnterpriseUserMessage(
     return cleaned;
   }
 
-  if (!raw || looksTechnical(raw)) return fallback;
+  if (!raw || looksTechnical(raw)) return resolvedFallback;
 
   // Allow short, already-friendly validation messages (no infra leakage).
   return raw;

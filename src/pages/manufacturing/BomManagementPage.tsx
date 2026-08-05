@@ -129,7 +129,7 @@ export default function BomManagementPage() {
           <div>
             <h1 className="text-base font-bold text-neutral-900">BOM Management</h1>
             <p className="text-xs text-neutral-500">
-              Create, version and maintain Bills of Materials from live ERPNext data.
+              Create, version and maintain Bills of Materials from live data.
             </p>
           </div>
         </div>
@@ -204,7 +204,7 @@ export default function BomManagementPage() {
               ) : bomsQuery.isError ? (
                 <tr>
                   <td colSpan={8} className="px-4 py-12 text-center text-sm text-danger-600">
-                    Couldn&apos;t load BOMs from ERPNext. Please try again.
+                    Couldn&apos;t load BOMs. Please try again.
                   </td>
                 </tr>
               ) : rows.length === 0 ? (

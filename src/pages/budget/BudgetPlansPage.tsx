@@ -110,7 +110,7 @@ export default function BudgetPlansPage() {
     setCancelling(true);
     try {
       await cancelBudget(cancelId);
-      toast.success("Budget cancelled in ERPNext");
+      toast.success("Budget cancelled successfully");
       await queryClient.invalidateQueries({ queryKey: ["budget-plans"] });
       setCancelId(null);
     } catch (err) {
@@ -124,7 +124,7 @@ export default function BudgetPlansPage() {
     <div>
       <PageHeader
         title="Budget Plans"
-        description={`All ERPNext budgets · ${plans.length} records`}
+        description={`All budgets · ${plans.length} records`}
         actions={
           <div className="flex gap-2">
             <button

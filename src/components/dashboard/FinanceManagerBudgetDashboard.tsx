@@ -54,7 +54,7 @@ export default function FinanceManagerBudgetDashboard() {
           </div>
           <div>
             <p className="text-xs text-neutral-500">
-              ERPNext budget workflow · Approvals · Utilization · Monitoring
+              Budget workflow · Approvals · Utilization · Monitoring
             </p>
           </div>
         </div>
@@ -123,7 +123,7 @@ export default function FinanceManagerBudgetDashboard() {
 
             <ChartCard title="Monthly Budget Consumption (PO)" icon={PieChart}>
               {(data?.monthlyConsumption.length ?? 0) === 0 ? (
-                <EmptyChart message="No PO consumption data from ERPNext" />
+                <EmptyChart message="No PO consumption data available" />
               ) : (
                 <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={data!.monthlyConsumption}>
@@ -138,7 +138,7 @@ export default function FinanceManagerBudgetDashboard() {
 
             <ChartCard title="Budget Status Distribution" icon={PieChart}>
               {(data?.statusDistribution.length ?? 0) === 0 ? (
-                <EmptyChart message="No budgets in ERPNext" />
+                <EmptyChart message="No budgets available" />
               ) : (
                 <ResponsiveContainer width="100%" height={200}>
                   <RechartsPie>
@@ -206,7 +206,7 @@ export default function FinanceManagerBudgetDashboard() {
               <div className="divide-y divide-neutral-100">
                 <QuickLink to="/budget/approvals" label="Budget Approval" desc={`${kpis.pendingApprovals} pending submission(s)`} />
                 <QuickLink to="/budget/monitoring" label="Budget Monitoring" desc="Active budget utilization" />
-                <QuickLink to="/budget/plans" label="Budget Plans" desc="All ERPNext budgets" />
+                <QuickLink to="/budget/plans" label="Budget Plans" desc="All budgets" />
                 <QuickLink to="/budget/history" label="Budget History" desc="Workflow audit trail" />
                 <QuickLink to="/budget/pending-reviews" label="RFQ Financial Review" desc="RFQ budget validation" />
               </div>

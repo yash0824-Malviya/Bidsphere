@@ -57,7 +57,7 @@ export default function FinancePendingQueue() {
         </div>
       ) : isError ? (
         <p className="px-4 py-6 text-center text-sm text-neutral-500">
-          Could not load finance queue from ERPNext.
+          Could not load finance queue.
         </p>
       ) : pending.length === 0 ? (
         <p className="px-4 py-6 text-center text-sm text-neutral-500">

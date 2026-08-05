@@ -41,6 +41,16 @@ import { useAuthStore } from "../../store/authStore";
 import { logMrWorkflowStage } from "../../utils/mrWorkflowDebug";
 import { engineeringCustomFieldsForErp } from "../../utils/materialRequestItemFiles";
 import { nonNegativeQty } from "../../utils/inventoryStock";
+import { WAREHOUSE_POLICY } from "../../config/warehousePolicy";
+import {
+  assertCanIssueQuantity,
+  buildWarehouseReviewAuditLines,
+  computeIssueAndForwardQty,
+  isIssueAction,
+  resolveLineActionPlan,
+  validateWarehouseLineAction,
+  warehouseActionLabel,
+} from "../../utils/warehouseStockActionRules";
 import {
   assertMaterialRequestIsWarehouseCompany,
   assertNetlinkWarehouse,
@@ -220,7 +230,7 @@ async function createAndSubmitStockEntry(
   const seName = saved?.name;
   if (!seName) {
     throw new Error(
-      "Stock Entry creation failed — ERPNext did not return a document name.",
+      "Stock Entry creation failed — the server did not return a document name.",
     );
   }
 
@@ -267,6 +277,7 @@ function RecommendationBadge({
   recommendation?:
     | "Issue Material"
     | "Stock available in another warehouse"
+    | "Issue Partial Stock"
     | "Forward to Procurement";
   bestWarehouse?: string;
   localAvailableQty?: number;
@@ -276,19 +287,34 @@ function RecommendationBadge({
   const requested = Math.max(0, Number(requestedQty) || 0);
   const local = Math.max(0, Number(localAvailableQty) || 0);
   const shortage = Math.max(0, requested - available);
+  const plan = resolveLineActionPlan(
+    available,
+    requested,
+    WAREHOUSE_POLICY.partialIssuePolicy,
+  );
   const stockElsewhere =
     recommendation === "Stock available in another warehouse" ||
     (shortage === 0 && local < requested && available >= requested);
+  const noInventory = plan.stockCase === "none";
+  const partialStock = plan.stockCase === "partial";
 
   return (
     <span className="inline-flex flex-col items-start gap-0.5">
-      {shortage === 0 && !stockElsewhere ? (
+      {noInventory ? (
+        <span className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2 py-0.5 text-[12px] font-semibold text-rose-800">
+          ⚠ No inventory available
+        </span>
+      ) : shortage === 0 && !stockElsewhere ? (
         <span className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[12px] font-semibold text-emerald-700">
           ✅ Recommended: Ready to Issue
         </span>
       ) : stockElsewhere ? (
         <span className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-[12px] font-semibold text-sky-800">
           📦 Stock available in another warehouse
+        </span>
+      ) : partialStock ? (
+        <span className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-[12px] font-semibold text-amber-800">
+          ⚠ Partial stock — issue available / forward remaining
         </span>
       ) : (
         <span className="inline-flex items-center gap-1 rounded-md border border-orange-200 bg-orange-50 px-2 py-0.5 text-[12px] font-semibold text-orange-800">
@@ -307,7 +333,17 @@ function RecommendationBadge({
             Best source: {bestWarehouse}
           </span>
         ) : null}
-        {shortage > 0 ? (
+        {noInventory ? (
+          <span className="block font-medium text-rose-700">
+            This request must be forwarded to Procurement.
+          </span>
+        ) : null}
+        {partialStock ? (
+          <span className="block font-medium text-amber-700">
+            Issue {plan.issueQty} {uom} · Forward {plan.forwardQty} {uom}
+          </span>
+        ) : null}
+        {shortage > 0 && !noInventory && !partialStock ? (
           <span className="block font-medium text-orange-700">
             Shortage: {shortage} {uom}
           </span>
@@ -384,37 +420,55 @@ function WorkflowStatusBadge({
   );
 }
 
-/** Action control bound to the line's selected action (not recommendation). */
+/** Action control — only valid inventory actions are offered. */
 function LineActionPicker({
   selected,
+  allowedActions,
   disabled,
   menuOpen,
   fullWidth,
   onToggleMenu,
-  onSelectIssue,
-  onSelectForward,
+  onSelect,
 }: {
   selected: StockDecisionAction;
+  allowedActions: StockDecisionAction[];
   disabled?: boolean;
   menuOpen: boolean;
   fullWidth?: boolean;
   onToggleMenu: () => void;
-  onSelectIssue: () => void;
-  onSelectForward: () => void;
+  onSelect: (action: StockDecisionAction) => void;
 }) {
-  const isIssue = selected === "issue";
+  const actions =
+    allowedActions.length > 0 ? allowedActions : (["forward"] as const);
+  const active = actions.includes(selected) ? selected : actions[0]!;
+  const isIssue = isIssueAction(active);
   const primaryClass = isIssue
     ? "bg-primary-600 hover:bg-primary-700 border-primary-500"
     : "bg-orange-500 hover:bg-orange-600 border-orange-400";
+  const singleAction = actions.length === 1;
+
+  if (singleAction) {
+    return (
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => onSelect(actions[0]!)}
+        className={`inline-flex h-9 items-center justify-center rounded-lg px-3 text-[13px] font-semibold text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${primaryClass} ${fullWidth ? "w-full" : ""}`}
+      >
+        {warehouseActionLabel(actions[0]!)}
+      </button>
+    );
+  }
+
   return (
     <div className={`relative inline-flex ${fullWidth ? "w-full" : ""}`}>
       <button
         type="button"
         disabled={disabled}
-        onClick={isIssue ? onSelectIssue : onSelectForward}
+        onClick={() => onSelect(active)}
         className={`inline-flex h-9 items-center justify-center rounded-l-lg px-3 text-[13px] font-semibold text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${primaryClass} ${fullWidth ? "flex-1" : ""}`}
       >
-        {isIssue ? "Issue Material" : "Forward to Procurement"}
+        {warehouseActionLabel(active)}
       </button>
       <button
         type="button"
@@ -427,25 +481,30 @@ function LineActionPicker({
         <ChevronDown className="h-3.5 w-3.5" />
       </button>
       {menuOpen ? (
-        <div className="absolute left-0 top-full z-20 mt-1 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
-          <button
-            type="button"
-            className={`flex w-full px-3 py-2 text-left text-[13px] font-medium hover:bg-slate-50 ${
-              isIssue ? "bg-emerald-50 text-emerald-800" : "text-slate-700"
-            }`}
-            onClick={onSelectIssue}
-          >
-            Issue Material
-          </button>
-          <button
-            type="button"
-            className={`flex w-full px-3 py-2 text-left text-[13px] font-medium hover:bg-orange-50 ${
-              !isIssue ? "bg-orange-50 text-orange-800" : "text-orange-700"
-            }`}
-            onClick={onSelectForward}
-          >
-            Forward to Procurement
-          </button>
+        <div className="absolute left-0 top-full z-20 mt-1 w-64 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+          {actions.map((action) => {
+            const issueLike = isIssueAction(action);
+            return (
+              <button
+                key={action}
+                type="button"
+                className={`flex w-full px-3 py-2 text-left text-[13px] font-medium hover:bg-slate-50 ${
+                  active === action
+                    ? issueLike
+                      ? "bg-emerald-50 text-emerald-800"
+                      : "bg-orange-50 text-orange-800"
+                    : issueLike
+                      ? "text-slate-700"
+                      : "text-orange-700"
+                }`}
+                onClick={() => onSelect(action)}
+              >
+                {action === "forward" && actions.includes("issue_partial")
+                  ? "Forward Entire Request"
+                  : warehouseActionLabel(action)}
+              </button>
+            );
+          })}
         </div>
       ) : null}
     </div>
@@ -696,11 +755,13 @@ export default function WarehouseReviewDetailPage() {
                 ? "issue_transfer"
                 : "forward_procurement",
           };
-          // Never auto-select Forward when stock exists in another warehouse.
-          const recommended: StockDecisionAction =
-            line.recommendation === "Forward to Procurement"
-              ? "forward"
-              : "issue";
+          // Business rules: issue / issue_partial / forward based on availability.
+          const plan = resolveLineActionPlan(
+            available,
+            requested,
+            WAREHOUSE_POLICY.partialIssuePolicy,
+          );
+          const recommended: StockDecisionAction = plan.defaultAction;
           selections[line.item_code] = {
             action: recommended,
             recommended,
@@ -753,37 +814,50 @@ export default function WarehouseReviewDetailPage() {
 
   // ── Derived state ────────────────────────────────────────────────────────────
 
+  const getLinePlan = (itemCode: string, requestedQty: number) => {
+    const d = itemDecisions[itemCode];
+    const available = Math.max(0, d?.totalQty ?? 0);
+    return resolveLineActionPlan(
+      available,
+      requestedQty,
+      WAREHOUSE_POLICY.partialIssuePolicy,
+    );
+  };
+
   const getRecommendedAction = (
     itemCode: string,
     requestedQty: number,
-  ): StockDecisionAction => {
-    const d = itemDecisions[itemCode];
-    if (!d) return "forward";
-    const available = Math.max(0, d.totalQty);
-    const shortage = Math.max(0, requestedQty - available);
-    return shortage === 0 ? "issue" : "forward";
-  };
+  ): StockDecisionAction => getLinePlan(itemCode, requestedQty).defaultAction;
 
   const getSelectedAction = (
     itemCode: string,
     requestedQty: number,
-  ): StockDecisionAction =>
-    itemSelections[itemCode]?.action ??
-    getRecommendedAction(itemCode, requestedQty);
+  ): StockDecisionAction => {
+    const plan = getLinePlan(itemCode, requestedQty);
+    const selected =
+      itemSelections[itemCode]?.action ?? getRecommendedAction(itemCode, requestedQty);
+    return plan.allowedActions.includes(selected)
+      ? selected
+      : plan.defaultAction;
+  };
 
   /**
    * Maps the user's selected action to an ERP processing path.
-   * Selected "issue" NEVER remaps to forward — even if stock flags are stale.
+   * Issue actions with zero availability are forced to forward.
    */
   const getFinalDecision = (itemCode: string): ItemDecisionType => {
     const item = mrItems.find((i) => i.item_code === itemCode);
     const requestedQty = item?.required_qty ?? 0;
     const selected = getSelectedAction(itemCode, requestedQty);
-    if (selected === "forward") return "forward_procurement";
     const d = itemDecisions[itemCode];
-    if (d?.canIssueLocally) return "issue_local";
-    // Issue from another warehouse (transfer) or best available source.
-    return "issue_transfer";
+    const available = Math.max(0, d?.totalQty ?? 0);
+    if (selected === "forward" || available <= 0) return "forward_procurement";
+    if (d?.canIssueLocally || selected === "issue_partial") {
+      // Partial issues from aggregate stock use the best available source path.
+      return d?.canIssueLocally ? "issue_local" : "issue_transfer";
+    }
+    // Full issue from another warehouse (transfer) or best available source.
+    return d?.canIssueWithTransfer ? "issue_transfer" : "issue_local";
   };
 
   const getLineProcessResult = (
@@ -805,7 +879,7 @@ export default function WarehouseReviewDetailPage() {
     const selected = getSelectedAction(itemCode, requestedQty);
     if (processedResult) {
       // Fallback if lineResults missing — never mark failed forward as Issued.
-      if (selected === "issue") return "issued";
+      if (isIssueAction(selected)) return "issued";
       return "forward_failed";
     }
     if (mr?.status === "Material Issued" || mr?.status === "Completed") {
@@ -813,7 +887,7 @@ export default function WarehouseReviewDetailPage() {
     }
     // Per-line workflow follows the current selected action (not MR-level status),
     // so mixed Issue + Forward selections display correctly before Process.
-    return selected === "issue" ? "ready_to_issue" : "sent_to_procurement";
+    return isIssueAction(selected) ? "ready_to_issue" : "sent_to_procurement";
   };
 
   const buildAuditRows = (
@@ -847,6 +921,18 @@ export default function WarehouseReviewDetailPage() {
   ) => {
     const item = mrItems.find((i) => i.item_code === itemCode);
     const requestedQty = item?.required_qty ?? 0;
+    const available = Math.max(0, itemDecisions[itemCode]?.totalQty ?? 0);
+    const validationError = validateWarehouseLineAction(
+      available,
+      requestedQty,
+      action,
+      WAREHOUSE_POLICY.partialIssuePolicy,
+    );
+    if (validationError) {
+      toast.error(validationError);
+      setActionMenuOpen(null);
+      return;
+    }
     const recommended = getRecommendedAction(itemCode, requestedQty);
     const actor =
       currentUser?.full_name ||
@@ -870,12 +956,22 @@ export default function WarehouseReviewDetailPage() {
   };
 
   const requestForwardSelection = (itemCode: string, requestedQty: number) => {
-    const hasAvailableStock =
-      getRecommendedAction(itemCode, requestedQty) === "issue";
-    if (hasAvailableStock) {
-      setForwardReason(itemSelections[itemCode]?.reason ?? "");
-      setForwardDialog({ itemCode, hasAvailableStock: true });
+    const plan = getLinePlan(itemCode, requestedQty);
+    // Asking for a reason only when overriding full-stock Issue → Forward.
+    if (
+      plan.stockCase === "full" &&
+      plan.allowedActions.includes("forward") === false
+    ) {
+      // Case 1: Forward is hidden — do not allow override.
+      toast.error(
+        "Stock is fully available. Use Issue Material for this line.",
+      );
       setActionMenuOpen(null);
+      return;
+    }
+    if (plan.stockCase === "partial" && plan.defaultAction === "issue_partial") {
+      // Option A: forwarding entire request is allowed without override reason.
+      applyItemSelection(itemCode, "forward");
       return;
     }
     applyItemSelection(itemCode, "forward");
@@ -901,14 +997,20 @@ export default function WarehouseReviewDetailPage() {
     mrItems.length > 0 &&
     Object.keys(itemDecisions).length >= mrItems.length;
 
-  // Footer + Process Selected group by the user's selected action only
-  // (never remap via stock flags — that caused Issue:0 / Forward:2 bugs).
-  const issueSelectedItems = mrItems.filter(
-    (i) => getSelectedAction(i.item_code, i.required_qty) === "issue",
+  // Footer + Process Selected group by validated selected actions.
+  const issueSelectedItems = mrItems.filter((i) =>
+    isIssueAction(getSelectedAction(i.item_code, i.required_qty)),
   );
-  const procurementItems = mrItems.filter(
-    (i) => getSelectedAction(i.item_code, i.required_qty) === "forward",
-  );
+  const procurementItems = mrItems.filter((i) => {
+    const action = getSelectedAction(i.item_code, i.required_qty);
+    const available = Math.max(0, itemDecisions[i.item_code]?.totalQty ?? 0);
+    const { forwardQty } = computeIssueAndForwardQty(
+      available,
+      i.required_qty,
+      action,
+    );
+    return forwardQty > 0;
+  });
   const issueLocalItems = issueSelectedItems.filter(
     (i) => getFinalDecision(i.item_code) === "issue_local",
   );
@@ -1007,6 +1109,34 @@ export default function WarehouseReviewDetailPage() {
     if (!mrNumber || !mr) return;
     // Never process the same Material Request twice.
     if (processing || processedResult) return;
+
+    // Pre-validate every line against live decision qty before any ERP write.
+    for (const item of mrItems) {
+      const available = Math.max(0, itemDecisions[item.item_code]?.totalQty ?? 0);
+      const selected = getSelectedAction(item.item_code, item.required_qty);
+      const validationError = validateWarehouseLineAction(
+        available,
+        item.required_qty,
+        selected,
+        WAREHOUSE_POLICY.partialIssuePolicy,
+      );
+      if (validationError) {
+        toast.error(`${item.item_code}: ${validationError}`);
+        return;
+      }
+      const { issueQty } = computeIssueAndForwardQty(
+        available,
+        item.required_qty,
+        selected,
+      );
+      try {
+        assertCanIssueQuantity(item.item_code, available, issueQty);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : String(err));
+        return;
+      }
+    }
+
     setProcessing(true);
 
     const today = new Date().toISOString().split("T")[0];
@@ -1016,27 +1146,40 @@ export default function WarehouseReviewDetailPage() {
     let issuedOk = false;
     let forwardedOk = false;
 
+    const qtyFor = (itemCode: string, requested: number) => {
+      const available = Math.max(0, itemDecisions[itemCode]?.totalQty ?? 0);
+      const selected = getSelectedAction(itemCode, requested);
+      return computeIssueAndForwardQty(available, requested, selected);
+    };
+
     // Snapshot groups from current selections (do not re-read mid-process).
-    const localIssue = [...issueLocalItems];
-    const transferIssue = [...issueTransferItems];
-    const forwardLines = [...procurementItems];
+    // Drop any issue selection that resolved to zero qty (defensive).
+    const localIssue = issueLocalItems.filter(
+      (i) => qtyFor(i.item_code, i.required_qty).issueQty > 0,
+    );
+    const transferIssue = issueTransferItems.filter(
+      (i) => qtyFor(i.item_code, i.required_qty).issueQty > 0,
+    );
+    const forwardLines = procurementItems.filter(
+      (i) => qtyFor(i.item_code, i.required_qty).forwardQty > 0,
+    );
 
     const processPayload = mrItems.map((item) => {
       const d = itemDecisions[item.item_code];
       const selected = getSelectedAction(item.item_code, item.required_qty);
       const available = Math.max(0, d?.totalQty ?? 0);
+      const { issueQty, forwardQty } = qtyFor(item.item_code, item.required_qty);
       const shortage = Math.max(0, (Number(item.required_qty) || 0) - available);
-      const recommendation = d?.canIssueLocally
-        ? "Issue Material"
-        : d?.canIssueWithTransfer
-          ? "Stock available in another warehouse"
-          : "Forward to Procurement";
+      const recommendation = warehouseActionLabel(
+        getRecommendedAction(item.item_code, item.required_qty),
+      );
       return {
         item_code: item.item_code,
-        selected_action:
-          selected === "issue" ? "Issue Material" : "Forward to Procurement",
+        selected_action: warehouseActionLabel(selected),
         available_qty: available,
         shortage_qty: shortage,
+        issue_qty: issueQty,
+        forward_qty: forwardQty,
         recommendation,
         process_path: getFinalDecision(item.item_code),
       };
@@ -1088,12 +1231,14 @@ export default function WarehouseReviewDetailPage() {
       }
 
       // Pre-resolve Netlink source warehouses (Finished Goods preferred when stocked).
+      // Use planned issue qty (not full requested) so partial stock can resolve.
       const sourceByItem = new Map<string, string>();
       for (const item of [...localIssue, ...transferIssue]) {
         try {
+          const issueQty = qtyFor(item.item_code, item.required_qty).issueQty;
           const sourceWh = await resolveNetlinkIssueSourceWarehouse(
             item.item_code,
-            item.required_qty,
+            issueQty,
           );
           sourceByItem.set(item.item_code, sourceWh);
           await assertNetlinkWarehouse(sourceWh, "Source");
@@ -1129,10 +1274,16 @@ export default function WarehouseReviewDetailPage() {
             items: localIssueReady.map((item) => {
               const sourceWh =
                 sourceByItem.get(item.item_code) || preferredWarehouse;
+              const issueQty = qtyFor(item.item_code, item.required_qty).issueQty;
+              assertCanIssueQuantity(
+                item.item_code,
+                itemDecisions[item.item_code]?.totalQty ?? 0,
+                issueQty,
+              );
               return {
                 doctype: "Stock Entry Detail",
                 item_code: item.item_code,
-                qty: item.required_qty,
+                qty: issueQty,
                 s_warehouse: sourceWh,
                 uom: item.uom || "Nos",
                 stock_uom: item.uom || "Nos",
@@ -1152,9 +1303,21 @@ export default function WarehouseReviewDetailPage() {
           });
           createdStockEntries.push(seName);
           issuedOk = true;
+          const localAudit = buildWarehouseReviewAuditLines(
+            localIssueReady.map((item) => ({
+              item_code: item.item_code,
+              available_qty: Math.max(
+                0,
+                itemDecisions[item.item_code]?.totalQty ?? 0,
+              ),
+              requested_qty: item.required_qty,
+              action: getSelectedAction(item.item_code, item.required_qty),
+              uom: item.uom || "Nos",
+            })),
+          );
           await addMRComment(
             mrNumber,
-            `Issued ${localIssueReady.length} item(s) directly from Stores. Stock Entry: ${seName}`,
+            `${localAudit.join(" ")} Stock Entry: ${seName}`,
           );
           toast.success(
             `✅ ${localIssueReady.length} item(s) issued (${seName})`,
@@ -1191,10 +1354,16 @@ export default function WarehouseReviewDetailPage() {
             items: transferIssueReady.map((item) => {
               const sourceWh =
                 sourceByItem.get(item.item_code) || preferredWarehouse;
+              const issueQty = qtyFor(item.item_code, item.required_qty).issueQty;
+              assertCanIssueQuantity(
+                item.item_code,
+                itemDecisions[item.item_code]?.totalQty ?? 0,
+                issueQty,
+              );
               return {
                 doctype: "Stock Entry Detail",
                 item_code: item.item_code,
-                qty: item.required_qty,
+                qty: issueQty,
                 s_warehouse: sourceWh,
                 t_warehouse: storesWarehouse,
                 uom: item.uom || "Nos",
@@ -1222,15 +1391,18 @@ export default function WarehouseReviewDetailPage() {
             purpose: "Material Issue",
             company: mrCompany,
             posting_date: today,
-            items: transferIssueReady.map((item) => ({
-              doctype: "Stock Entry Detail",
-              item_code: item.item_code,
-              qty: item.required_qty,
-              s_warehouse: storesWarehouse,
-              uom: item.uom || "Nos",
-              stock_uom: item.uom || "Nos",
-              conversion_factor: 1,
-            })),
+            items: transferIssueReady.map((item) => {
+              const issueQty = qtyFor(item.item_code, item.required_qty).issueQty;
+              return {
+                doctype: "Stock Entry Detail",
+                item_code: item.item_code,
+                qty: issueQty,
+                s_warehouse: storesWarehouse,
+                uom: item.uom || "Nos",
+                stock_uom: item.uom || "Nos",
+                conversion_factor: 1,
+              };
+            }),
           };
 
           // eslint-disable-next-line no-console
@@ -1327,13 +1499,14 @@ export default function WarehouseReviewDetailPage() {
                 drawing_2d_url: item.drawing_2d_url,
                 attachments: item.attachments,
               });
+              const { forwardQty } = qtyFor(item.item_code, item.required_qty);
               return {
                 doctype: "Material Request Item",
                 idx: idx + 1,
                 item_code: item.item_code,
                 item_name: item.description || item.item_code,
                 description: `${item.description || item.item_code} [Shortfall from ${mrNumber}]`,
-                qty: item.required_qty,
+                qty: forwardQty,
                 uom: item.uom || "Nos",
                 stock_uom: item.uom || "Nos",
                 conversion_factor: 1,
@@ -1424,17 +1597,40 @@ export default function WarehouseReviewDetailPage() {
         // Single final step: forward to Procurement Queue + history + audit.
         // No intermediate "Procurement Required" / second Send click.
         const forwardingData = JSON.stringify(
+          forwardLines.map((item) => {
+            const d = itemDecisions[item.item_code];
+            const available = Math.max(0, d?.totalQty ?? 0);
+            const requested = Number(item.required_qty) || 0;
+            const { issueQty, forwardQty } = qtyFor(item.item_code, requested);
+            const shortage = Math.max(0, requested - available);
+            return {
+              item_code: item.item_code,
+              item_name: item.description || item.item_code,
+              requested_qty: requested,
+              available_qty: available,
+              shortage_qty: shortage,
+              issued_qty: issueQty,
+              /* Forward remaining shortage (or full qty when zero stock / Option B). */
+              forward_qty: forwardQty,
+              uom: item.uom || "Nos",
+              warehouse: item.warehouse || forwardWarehouse || "",
+              warehouse_remark: itemRemarks[item.item_code]?.trim() || undefined,
+            };
+          }),
+        );
+        const forwardAudit = buildWarehouseReviewAuditLines(
           forwardLines.map((item) => ({
             item_code: item.item_code,
-            item_name: item.description || item.item_code,
+            available_qty: Math.max(
+              0,
+              itemDecisions[item.item_code]?.totalQty ?? 0,
+            ),
             requested_qty: item.required_qty,
-            issued_qty: 0,
-            forward_qty: item.required_qty,
+            action: getSelectedAction(item.item_code, item.required_qty),
             uom: item.uom || "Nos",
-            warehouse: item.warehouse || forwardWarehouse || "",
-            warehouse_remark: itemRemarks[item.item_code]?.trim() || undefined,
           })),
         );
+        await addMRComment(mrNumber, forwardAudit.join(" "));
         const auditRows = buildAuditRows();
         const remarksLines = [
           composeItemRemarks(),
@@ -1459,15 +1655,24 @@ export default function WarehouseReviewDetailPage() {
                     (i) =>
                       !failedItems.some((f) => f.item_code === i.item_code),
                   )
-                  .reduce((sum, i) => sum + i.required_qty, 0) +
+                  .reduce(
+                    (sum, i) =>
+                      sum + qtyFor(i.item_code, i.required_qty).issueQty,
+                    0,
+                  ) +
                 transferIssue
                   .filter(
                     (i) =>
                       !failedItems.some((f) => f.item_code === i.item_code),
                   )
-                  .reduce((sum, i) => sum + i.required_qty, 0),
+                  .reduce(
+                    (sum, i) =>
+                      sum + qtyFor(i.item_code, i.required_qty).issueQty,
+                    0,
+                  ),
               forwarded_qty: forwardLines.reduce(
-                (sum, i) => sum + i.required_qty,
+                (sum, i) =>
+                  sum + qtyFor(i.item_code, i.required_qty).forwardQty,
                 0,
               ),
               warehouse_user: forwardedBy,
@@ -1524,7 +1729,7 @@ export default function WarehouseReviewDetailPage() {
           (i) => !failedItems.some((f) => f.item_code === i.item_code),
         );
         const issuedQty = issuedItems.reduce(
-          (sum, i) => sum + i.required_qty,
+          (sum, i) => sum + qtyFor(i.item_code, i.required_qty).issueQty,
           0,
         );
         // Prefer the last Material Issue Stock Entry (not the transfer).
@@ -2078,7 +2283,12 @@ export default function WarehouseReviewDetailPage() {
                                     ? "Issue Material"
                                     : d.canIssueWithTransfer
                                       ? "Stock available in another warehouse"
-                                      : "Forward to Procurement"
+                                      : getLinePlan(
+                                            item.item_code,
+                                            item.required_qty,
+                                          ).stockCase === "partial"
+                                        ? "Issue Partial Stock"
+                                        : "Forward to Procurement"
                                 }
                               />
                             ) : (
@@ -2089,27 +2299,40 @@ export default function WarehouseReviewDetailPage() {
                           </td>
                           <td className="px-3 py-2">
                             {isPendingReview ? (
-                              <LineActionPicker
-                                selected={selected}
-                                disabled={processing || !decisionsReady}
-                                menuOpen={menuOpen}
-                                onToggleMenu={() =>
-                                  setActionMenuOpen((prev) =>
-                                    prev === item.item_code
-                                      ? null
-                                      : item.item_code,
-                                  )
-                                }
-                                onSelectIssue={() =>
-                                  applyItemSelection(item.item_code, "issue")
-                                }
-                                onSelectForward={() =>
-                                  requestForwardSelection(
+                              <div className="space-y-1.5">
+                                <LineActionPicker
+                                  selected={selected}
+                                  allowedActions={getLinePlan(
                                     item.item_code,
                                     item.required_qty,
-                                  )
-                                }
-                              />
+                                  ).allowedActions}
+                                  disabled={processing || !decisionsReady}
+                                  menuOpen={menuOpen}
+                                  onToggleMenu={() =>
+                                    setActionMenuOpen((prev) =>
+                                      prev === item.item_code
+                                        ? null
+                                        : item.item_code,
+                                    )
+                                  }
+                                  onSelect={(action) => {
+                                    if (action === "forward") {
+                                      requestForwardSelection(
+                                        item.item_code,
+                                        item.required_qty,
+                                      );
+                                      return;
+                                    }
+                                    applyItemSelection(item.item_code, action);
+                                  }}
+                                />
+                                {availableQty <= 0 ? (
+                                  <p className="text-[11px] font-medium text-rose-700">
+                                    ⚠ No inventory available. This request must
+                                    be forwarded to Procurement.
+                                  </p>
+                                ) : null}
+                              </div>
                             ) : (
                               <span className="text-[12px] text-slate-400">—</span>
                             )}
@@ -2139,11 +2362,7 @@ export default function WarehouseReviewDetailPage() {
                                 />
                                 <DetailField
                                   label="Selected Action"
-                                  value={
-                                    selected === "issue"
-                                      ? "Issue Material"
-                                      : "Forward to Procurement"
-                                  }
+                                  value={warehouseActionLabel(selected)}
                                 />
                                 <DetailField
                                   label="Override Reason"
@@ -2206,10 +2425,7 @@ export default function WarehouseReviewDetailPage() {
                                         : "Procurement Required"}
                                     </li>
                                     <li>
-                                      Selected:{" "}
-                                      {selected === "issue"
-                                        ? "Issue Material"
-                                        : "Forward to Procurement"}
+                                      Selected: {warehouseActionLabel(selected)}
                                       {selection?.selectedBy
                                         ? ` by ${selection.selectedBy}`
                                         : ""}
@@ -2358,7 +2574,12 @@ export default function WarehouseReviewDetailPage() {
                               ? "Issue Material"
                               : d.canIssueWithTransfer
                                 ? "Stock available in another warehouse"
-                                : "Forward to Procurement"
+                                : getLinePlan(
+                                      item.item_code,
+                                      item.required_qty,
+                                    ).stockCase === "partial"
+                                  ? "Issue Partial Stock"
+                                  : "Forward to Procurement"
                           }
                         />
                       ) : (
@@ -2384,6 +2605,10 @@ export default function WarehouseReviewDetailPage() {
                       <div className="relative mt-3 space-y-2">
                         <LineActionPicker
                           selected={selected}
+                          allowedActions={getLinePlan(
+                            item.item_code,
+                            item.required_qty,
+                          ).allowedActions}
                           disabled={processing || !decisionsReady}
                           menuOpen={menuOpen}
                           fullWidth
@@ -2392,21 +2617,25 @@ export default function WarehouseReviewDetailPage() {
                               prev === item.item_code ? null : item.item_code,
                             )
                           }
-                          onSelectIssue={() =>
-                            applyItemSelection(item.item_code, "issue")
-                          }
-                          onSelectForward={() =>
-                            requestForwardSelection(
-                              item.item_code,
-                              item.required_qty,
-                            )
-                          }
+                          onSelect={(action) => {
+                            if (action === "forward") {
+                              requestForwardSelection(
+                                item.item_code,
+                                item.required_qty,
+                              );
+                              return;
+                            }
+                            applyItemSelection(item.item_code, action);
+                          }}
                         />
+                        {availableQty <= 0 ? (
+                          <p className="text-[11px] font-medium text-rose-700">
+                            ⚠ No inventory available. This request must be
+                            forwarded to Procurement.
+                          </p>
+                        ) : null}
                         <p className="text-[11px] text-slate-500">
-                          Selected:{" "}
-                          {selected === "issue"
-                            ? "Issue Material"
-                            : "Forward to Procurement"}
+                          Selected: {warehouseActionLabel(selected)}
                         </p>
                       </div>
                     )}
@@ -2424,11 +2653,7 @@ export default function WarehouseReviewDetailPage() {
                         <DetailField label="Best Source" value={bestSource} />
                         <DetailField
                           label="Selected Action"
-                          value={
-                            selected === "issue"
-                              ? "Issue Material"
-                              : "Forward to Procurement"
-                          }
+                          value={warehouseActionLabel(selected)}
                         />
                         <div>
                           <label
@@ -2461,14 +2686,13 @@ export default function WarehouseReviewDetailPage() {
                           </p>
                           <p className="mt-1 text-[13px] text-slate-600">
                             Recommended:{" "}
-                            {stockEnough
-                              ? "Issue from Warehouse"
-                              : "Procurement Required"}
-                            . Selected:{" "}
-                            {selected === "issue"
-                              ? "Issue Material"
-                              : "Forward to Procurement"}
-                            .
+                            {warehouseActionLabel(
+                              getRecommendedAction(
+                                item.item_code,
+                                item.required_qty,
+                              ),
+                            )}
+                            . Selected: {warehouseActionLabel(selected)}.
                           </p>
                         </div>
                       </div>
@@ -2557,10 +2781,10 @@ export default function WarehouseReviewDetailPage() {
                   Selected Items: {mrItems.length}
                 </span>
                 <span className="tabular-nums text-emerald-700">
-                  Issue Material: {issueSelectedItems.length}
+                  Issue / Partial: {issueSelectedItems.length}
                 </span>
                 <span className="tabular-nums text-orange-700">
-                  Forward to Procurement: {procurementItems.length}
+                  Forward: {procurementItems.length}
                 </span>
                 {import.meta.env.DEV ? (
                   <span className="hidden text-[10px] text-slate-400 lg:inline">
@@ -2868,7 +3092,7 @@ export default function WarehouseReviewDetailPage() {
               <div>
                 <h3 className="font-bold text-slate-800">Material Issued</h3>
                 <p className="mt-1 text-sm text-slate-500">
-                  Stock Entries were submitted in ERPNext and inventory was
+                  Stock entries were submitted and inventory was
                   deducted.
                 </p>
               </div>

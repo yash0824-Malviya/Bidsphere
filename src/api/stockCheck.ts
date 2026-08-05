@@ -13,6 +13,7 @@ export type StockCheckWarehouseQty = {
 export type StockCheckRecommendation =
   | "Issue Material"
   | "Stock available in another warehouse"
+  | "Issue Partial Stock"
   | "Forward to Procurement";
 
 export type StockCheckLine = {

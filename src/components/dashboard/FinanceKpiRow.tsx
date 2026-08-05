@@ -10,11 +10,8 @@ import {
 } from "lucide-react";
 
 import type { FinanceWorkflowKpis } from "../../api/financeWorkflow";
-import { formatCurrency } from "../../utils/format";
-import DashboardKpiCard, {
-  DashboardKpiGrid,
-  DashboardKpiSkeleton,
-} from "./DashboardKpiCard";
+import { formatCurrencyCompact } from "../../utils/format";
+import DashboardKpiCard from "./DashboardKpiCard";
 
 interface KpiDef {
   label: string;
@@ -33,7 +30,17 @@ interface Props {
 
 function FinanceKpiRow({ kpis, loading }: Props) {
   if (loading || !kpis) {
-    return <DashboardKpiSkeleton count={6} />;
+    return (
+      <div className="kpi-grid finance-kpi-grid">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="kpi-card" aria-hidden>
+            <div className="kpi-card-title-slot" />
+            <div className="kpi-card-value-slot" />
+            <div className="kpi-card-caption-slot" />
+          </div>
+        ))}
+      </div>
+    );
   }
 
   const cards: KpiDef[] = [
@@ -65,7 +72,7 @@ function FinanceKpiRow({ kpis, loading }: Props) {
     },
     {
       label: "Outstanding Payables",
-      value: formatCurrency(kpis.outstandingPayables),
+      value: formatCurrencyCompact(kpis.outstandingPayables),
       hint: "Unpaid invoice balance",
       icon: Wallet,
       to: "/p2p/payments",
@@ -81,9 +88,9 @@ function FinanceKpiRow({ kpis, loading }: Props) {
       highlight: kpis.grnsAwaitingVoucher > 0,
     },
     {
-      label: "Total Financial Exposure",
-      value: formatCurrency(kpis.totalFinancialExposure),
-      hint: "Open POs + payables + unbilled GRNs + approved commitments",
+      label: "Financial Exposure",
+      value: formatCurrencyCompact(kpis.totalFinancialExposure),
+      hint: "Open POs, payables and commitments",
       icon: CheckCircle2,
       to: "/budget",
       accent: "text-violet-600 bg-violet-50",
@@ -91,7 +98,8 @@ function FinanceKpiRow({ kpis, loading }: Props) {
   ];
 
   return (
-    <DashboardKpiGrid>
+    /* Column template owned by `.finance-kpi-grid` (auto-fit minmax 240px). */
+    <div className="kpi-grid finance-kpi-grid">
       {cards.map((c) => (
         <DashboardKpiCard
           key={c.label}
@@ -104,7 +112,7 @@ function FinanceKpiRow({ kpis, loading }: Props) {
           className={c.highlight ? "border-amber-200" : undefined}
         />
       ))}
-    </DashboardKpiGrid>
+    </div>
   );
 }
 

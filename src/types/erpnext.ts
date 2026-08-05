@@ -47,6 +47,8 @@ export interface Supplier extends ErpDoc {
   custom_sourcing_type?: string;
   /** Custom: Link → Supplier Category */
   custom_supplier_category?: string;
+  /** JSON array of Procurement Categories (multi-select). */
+  custom_procurement_categories?: string;
   country?: string;
   default_currency?: string;
   accounts?: PartyAccount[];
@@ -136,10 +138,30 @@ export interface MaterialRequestItem extends ErpDoc {
   expense_account?: string;
   /** Optional engineering part label (not Item Master). */
   custom_part_name?: string;
+  /** Item group snapshot at request time. */
+  item_group?: string;
   /** Attach — primary drawing file URL (legacy / first attachment). */
   custom_2d_drawing?: string;
   /** Long Text JSON array of EngineeringAttachment objects. */
   custom_engineering_attachments?: string;
+  /**
+   * Original Department requested quantity (snapshot).
+   * Provisioned by scripts/setup-rfq-procurement-qty.mjs.
+   */
+  custom_department_requested_qty?: number | null;
+  /**
+   * Warehouse available qty at review/forward time.
+   * Provisioned by scripts/setup-rfq-procurement-qty.mjs.
+   */
+  custom_warehouse_available_qty?: number | null;
+  /**
+   * Hydrated at read time from JSON + File DocType (not stored on ERP row).
+   * See `hydrateMaterialRequestItemsWithAttachments`.
+   */
+  attachments?: import("../utils/materialRequestItemFiles").EngineeringAttachment[];
+  attachment_count?: number;
+  attachment_file_name?: string;
+  attachment_file_url?: string;
 }
 
 /** ERPNext "Material Request" doctype. */
@@ -165,6 +187,8 @@ export interface MaterialRequest extends ErpDoc {
   custom_procurement_remarks?: string;
   custom_linked_rfq?: string;
   custom_requested_by?: string;
+  /** Single source of truth for item + supplier filtering (see setup script). */
+  custom_procurement_category?: string;
   /** Computed field surfaced by some Inteva customisations. */
   total?: number;
   total_qty?: number;
@@ -197,6 +221,8 @@ export interface RFQItem extends ErpDoc {
   description?: string;
   qty: number;
   uom?: string;
+  stock_uom?: string;
+  conversion_factor?: number;
   warehouse?: string;
   schedule_date?: string;
   purchase_requisition?: string;
@@ -217,6 +243,22 @@ export interface RFQItem extends ErpDoc {
    * Falls back to RFQ.custom_show_target_price_to_supplier for older RFQs.
    */
   custom_show_target_price_to_supplier?: 0 | 1 | boolean;
+  /**
+   * Original Department requested quantity (internal only).
+   * Provisioned by scripts/setup-rfq-procurement-qty.mjs.
+   */
+  custom_department_requested_qty?: number | null;
+  /**
+   * Warehouse available qty at forward time (internal only).
+   */
+  custom_warehouse_available_qty?: number | null;
+  /**
+   * Final sourcing quantity set by Procurement. RFQ Item.qty mirrors this
+   * for suppliers, AI Analysis, PO, GRN, Invoice, and Payment.
+   */
+  custom_procurement_final_qty?: number | null;
+  /** Reason when Procurement Final Qty differs from Department Requested. */
+  custom_qty_change_reason?: string | null;
   /**
    * Convenience aliases for the primary attachment URL ref
    * (same File as custom_2d_drawing / first JSON entry — not a new File).
@@ -252,6 +294,12 @@ export interface RequestForQuotation extends ErpDoc {
    * scripts/setup-rfq-target-price.mjs.
    */
   custom_show_target_price_to_supplier?: 0 | 1 | boolean;
+  /** Active enterprise quote round (Link: RFQ Round). */
+  custom_active_rfq_round?: string;
+  /** Inherited from Material Request — read-only in RFQ UI. */
+  custom_procurement_category?: string;
+  /** Current round number (1-based). */
+  custom_current_round_number?: number;
   suppliers: RFQSupplierRow[];
   items: RFQItem[];
 }
@@ -259,6 +307,22 @@ export interface RequestForQuotation extends ErpDoc {
 /** Friendly aliases used by the Smart RFQ module. */
 export type RFQ = RequestForQuotation;
 export type RFQSupplier = RFQSupplierRow;
+
+export interface RfqQuoteRoundDoc extends ErpDoc {
+  rfq: string;
+  round_number: number;
+  tracking_id: string;
+  previous_round?: string;
+  reason_code: string;
+  remarks: string;
+  status: "Draft" | "Active" | "Closed" | "Cancelled";
+  created_by_user?: string;
+  message_for_supplier?: string;
+  terms?: string;
+  valid_till?: string;
+  items?: RFQItem[];
+  suppliers?: RFQSupplierRow[];
+}
 
 /* -------------------------------------------------------------------------- */
 /*  RFQ Template                                                              */
@@ -384,6 +448,8 @@ export interface SupplierQuotation extends ErpDoc {
    * (`rfq_no`, Link → Request for Quotation) if it isn't already.
    */
   rfq_no?: string;
+  /** Enterprise RFQ Quote Round link (custom_rfq_round). */
+  custom_rfq_round?: string;
   items: SQItem[];
   total?: number;
   grand_total?: number;
@@ -813,9 +879,14 @@ export interface Item extends ErpDoc {
   has_serial_no?: 0 | 1;
   disabled?: 0 | 1;
   safety_stock?: number;
+  min_order_qty?: number;
   weight_per_unit?: number;
   weight_uom?: string;
   default_warehouse?: string;
+  custom_procurement_type?: string;
+  custom_procurement_category?: string;
+  custom_bidsphere_item_status?: string;
+  custom_max_stock?: number;
 }
 
 /* -------------------------------------------------------------------------- */

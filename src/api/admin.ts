@@ -404,20 +404,24 @@ const PROCUREMENT_WORKFLOW_STAGES: WorkflowStage[] = [
   { name: "rfq_creation", label: "RFQ Creation", enabled: true, order: 1 },
   { name: "supplier_quotation", label: "Supplier Quotation", enabled: true, order: 2 },
   { name: "ai_analysis", label: "AI Analysis", enabled: true, order: 3 },
-  { name: "legal_review", label: "Legal Review", enabled: true, order: 4 },
-  { name: "finance_review", label: "Finance Review", enabled: true, order: 5 },
-  { name: "po_created", label: "Purchase Order Created", enabled: true, order: 6 },
-  { name: "supplier_confirmation", label: "Supplier Confirmation", enabled: true, order: 7 },
-  { name: "in_transit", label: "In Transit", enabled: true, order: 8 },
-  { name: "grn_received", label: "GRN Received", enabled: true, order: 9 },
-  { name: "invoice_generated", label: "Invoice Generated", enabled: true, order: 10 },
+  // Optional RFQ pipeline stages — disabled until the feature is implemented.
+  // When enabled here, Procurement Dashboard RFQ Status Pipeline shows them.
+  { name: "technical_review", label: "Technical Review", enabled: false, order: 4 },
+  { name: "commercial_review", label: "Commercial Review", enabled: false, order: 5 },
+  { name: "legal_review", label: "Legal Review", enabled: true, order: 6 },
+  { name: "finance_review", label: "Finance Review", enabled: true, order: 7 },
+  { name: "po_created", label: "Purchase Order Created", enabled: true, order: 8 },
+  { name: "supplier_confirmation", label: "Supplier Confirmation", enabled: true, order: 9 },
+  { name: "in_transit", label: "In Transit", enabled: true, order: 10 },
+  { name: "grn_received", label: "GRN Received", enabled: true, order: 11 },
+  { name: "invoice_generated", label: "Invoice Generated", enabled: true, order: 12 },
   {
     name: "supplier_payment_confirmation",
     label: "Supplier Payment Confirmation",
     enabled: true,
-    order: 11,
+    order: 13,
   },
-  { name: "payment_completed", label: "Payment Completed", enabled: true, order: 12 },
+  { name: "payment_completed", label: "Payment Completed", enabled: true, order: 14 },
 ];
 
 const LEGACY_STAGE_NAME_MAP: Record<string, string> = {

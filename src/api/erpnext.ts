@@ -8,6 +8,13 @@ import toast from "react-hot-toast";
 
 import { handleSessionExpired } from "../store/sessionExpiry";
 import { readErpProxyAccessToken } from "../utils/accessToken";
+import {
+  API_TIMEOUT_MS,
+  isRetryableNetworkError,
+  logFailedApiRequest,
+  MAX_NETWORK_RETRIES,
+  sleep,
+} from "../utils/apiReliability";
 
 import { COMPANY_NAME } from "../config/branding";
 
@@ -42,7 +49,7 @@ const API_SECRET = import.meta.env.VITE_API_SECRET as string | undefined;
  */
 export const erpnext = axios.create({
   baseURL: "",
-  timeout: 20_000,
+  timeout: API_TIMEOUT_MS,
   withCredentials: false,
   headers: {
     "Content-Type": "application/json",
@@ -52,6 +59,10 @@ export const erpnext = axios.create({
 
 /** Alias for modules that prefer the `erpnextClient` naming convention. */
 export const erpnextClient = erpnext;
+
+type RetryableAxiosConfig = InternalAxiosRequestConfig & {
+  __retryCount?: number;
+};
 
 /**
  * Per-request escape hatch: pass `{ _silent: true }` in the axios config to
@@ -263,7 +274,25 @@ erpnext.interceptors.response.use(
 
     return payload;
   },
-  (error: AxiosError<ErpNextErrorPayload>) => {
+  async (error: AxiosError<ErpNextErrorPayload>) => {
+    const config = error.config as RetryableAxiosConfig | undefined;
+
+    if (config && isRetryableNetworkError(error)) {
+      const attempt = config.__retryCount ?? 0;
+      if (attempt < MAX_NETWORK_RETRIES) {
+        config.__retryCount = attempt + 1;
+        // eslint-disable-next-line no-console
+        console.warn("[API Retry]", {
+          url: `${config.baseURL ?? ""}${config.url ?? ""}`,
+          attempt: config.__retryCount,
+          max: MAX_NETWORK_RETRIES,
+          reason: error.code ?? error.message,
+        });
+        await sleep(1000 * config.__retryCount);
+        return erpnext(config);
+      }
+    }
+
     const silentFromConfig =
       (error.config as (typeof error.config & SilentRequestConfig) | undefined)
         ?._silent === true;
@@ -484,6 +513,14 @@ erpnext.interceptors.response.use(
     // Frappe message via `error.message` for `react-query` and `await`
     // consumers that only read that property.
     error.message = String(message);
+
+    if (!silent) {
+      logFailedApiRequest(error, {
+        context: "erpnext.interceptor",
+        retryCount: config?.__retryCount,
+      });
+    }
+
     return Promise.reject(error);
   }
 );
@@ -646,18 +683,128 @@ export async function apiDelete<T = unknown>(
 
 const SERVER_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** Netlink / BidSphere business default — matches ERP System Settings target. */
+const DEFAULT_ERP_TIME_ZONE =
+  (import.meta.env.VITE_ERP_TIME_ZONE as string | undefined)?.trim() ||
+  "Asia/Kolkata";
+
+/** Format an instant as YYYY-MM-DD in an IANA timezone (ERP System Settings). */
+function ymdInTimeZone(date: Date, timeZone: string): string | null {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(date);
+    const y = parts.find((p) => p.type === "year")?.value;
+    const m = parts.find((p) => p.type === "month")?.value;
+    const d = parts.find((p) => p.type === "day")?.value;
+    if (!y || !m || !d) return null;
+    const iso = `${y}-${m}-${d}`;
+    return SERVER_DATE_RE.test(iso) ? iso : null;
+  } catch {
+    return null;
+  }
+}
+
+export type ErpServerDateInfo = {
+  today: string;
+  timeZone: string;
+  utcToday: string | null;
+  source: string;
+  systemSettingsTimeZone: string | null;
+};
+
 /**
- * Optional UI hint for a calendar date (`YYYY-MM-DD`).
- *
- * Regression (commit 2893d0e): the HTTP `Date` header was converted with
- * `getUTCFullYear/Month/Date`, which shifts the business day backward for
- * IST (and other UTC+ timezones) — UI/payload could show 2026-07-20 while
- * the resolved "server" day was 2026-07-19.
- *
- * Use local calendar components of that instant (same basis as `todayIso()`),
- * never UTC getters / `toISOString().slice(0, 10)`.
+ * Full ERP calendar-date probe (for GRN debug logs).
+ * Prefer `/api/erp-server-date` which resolves today in System Settings TZ
+ * (not UTC). Falls back to direct ERP calls from the browser.
  */
-export async function fetchServerDate(): Promise<string | null> {
+export async function fetchErpServerDateInfo(): Promise<ErpServerDateInfo | null> {
+  // 1) BidSphere backend — uses ERP System Settings TZ (or Asia/Kolkata default)
+  try {
+    const res = await axios.get("/api/erp-server-date", {
+      timeout: 8_000,
+      headers: {
+        Accept: "application/json",
+        ...(readErpProxyAccessToken()
+          ? { "X-Bidsphere-Access-Token": readErpProxyAccessToken()! }
+          : {}),
+      },
+      validateStatus: (s) => s < 500,
+    });
+    const body = res.data as {
+      today?: string;
+      time_zone?: string;
+      utc_today?: string;
+      source?: string;
+      system_settings_time_zone?: string | null;
+      message?: {
+        today?: string;
+        time_zone?: string;
+        utc_today?: string;
+        source?: string;
+        system_settings_time_zone?: string | null;
+      };
+    };
+    const today = (body.today ?? body.message?.today)?.trim();
+    if (today && SERVER_DATE_RE.test(today)) {
+      const info: ErpServerDateInfo = {
+        today,
+        timeZone:
+          body.time_zone ??
+          body.message?.time_zone ??
+          DEFAULT_ERP_TIME_ZONE,
+        utcToday: body.utc_today ?? body.message?.utc_today ?? null,
+        source: body.source ?? body.message?.source ?? "erp-server-date",
+        systemSettingsTimeZone:
+          body.system_settings_time_zone ??
+          body.message?.system_settings_time_zone ??
+          null,
+      };
+      // eslint-disable-next-line no-console
+      console.log("[fetchErpServerDateInfo]", {
+        BrowserDate: ymdInTimeZone(new Date(), Intl.DateTimeFormat().resolvedOptions().timeZone),
+        ServerDate: info.today,
+        ERPToday: info.today,
+        UTCToday: info.utcToday,
+        TimeZone: info.timeZone,
+        SystemSettingsTimeZone: info.systemSettingsTimeZone,
+        Source: info.source,
+      });
+      return info;
+    }
+  } catch {
+    /* fall through */
+  }
+
+  // 2) Exact nowdate() when Server Scripts are enabled
+  try {
+    const res = (await erpnext.get("/api/method/bidsphere_server_date", {
+      _silent: true,
+      timeout: 5_000,
+    } as AxiosRequestConfig & SilentRequestConfig)) as unknown;
+    const today =
+      typeof res === "string"
+        ? res
+        : typeof res === "object" && res && "today" in res
+          ? (res as { today?: string }).today
+          : undefined;
+    if (typeof today === "string" && SERVER_DATE_RE.test(today.trim())) {
+      return {
+        today: today.trim(),
+        timeZone: DEFAULT_ERP_TIME_ZONE,
+        utcToday: ymdInTimeZone(new Date(), "UTC"),
+        source: "bidsphere_server_date",
+        systemSettingsTimeZone: null,
+      };
+    }
+  } catch {
+    /* fall through */
+  }
+
+  // 3) Browser-side: HTTP Date → System Settings TZ (never prefer bare UTC day)
   try {
     const res = (await erpnext.get("/api/method/frappe.auth.get_logged_user", {
       _preserveResponse: true,
@@ -666,21 +813,71 @@ export async function fetchServerDate(): Promise<string | null> {
     } as AxiosRequestConfig & SilentRequestConfig)) as unknown as AxiosResponse;
 
     const header = res?.headers?.["date"] ?? res?.headers?.["Date"];
-    if (typeof header === "string") {
-      const parsed = new Date(header);
-      if (!Number.isNaN(parsed.getTime())) {
-        // Local calendar day — NOT getUTC* (that caused the 20 → 19 GRN regression).
-        const y = parsed.getFullYear();
-        const m = String(parsed.getMonth() + 1).padStart(2, "0");
-        const d = String(parsed.getDate()).padStart(2, "0");
-        const iso = `${y}-${m}-${d}`;
-        return SERVER_DATE_RE.test(iso) ? iso : null;
-      }
+    if (typeof header !== "string") return null;
+    const parsed = new Date(header);
+    if (Number.isNaN(parsed.getTime())) return null;
+
+    let settingsTz: string | null = null;
+    try {
+      const viaGetValue = (await erpnext.get(
+        "/api/method/frappe.client.get_value",
+        {
+          params: {
+            doctype: "System Settings",
+            fieldname: "time_zone",
+          },
+          _silent: true,
+          timeout: 5_000,
+        } as AxiosRequestConfig & SilentRequestConfig,
+      )) as unknown;
+      const tz =
+        typeof viaGetValue === "object" && viaGetValue
+          ? (viaGetValue as { time_zone?: string }).time_zone
+          : undefined;
+      if (typeof tz === "string" && tz.trim()) settingsTz = tz.trim();
+    } catch {
+      /* optional */
     }
+
+    let effectiveTz = settingsTz || DEFAULT_ERP_TIME_ZONE;
+    // If ERP Settings still say UTC, use business default for calendar today
+    // (run `node scripts/setup-erp-timezone.mjs` so nowdate() matches).
+    if (
+      settingsTz &&
+      /^(UTC|Etc\/UTC|GMT|Etc\/GMT)$/i.test(settingsTz) &&
+      !/^(UTC|Etc\/UTC|GMT|Etc\/GMT)$/i.test(DEFAULT_ERP_TIME_ZONE)
+    ) {
+      effectiveTz = DEFAULT_ERP_TIME_ZONE;
+    }
+
+    const today = ymdInTimeZone(parsed, effectiveTz);
+    if (!today) return null;
+
+    const info: ErpServerDateInfo = {
+      today,
+      timeZone: effectiveTz,
+      utcToday: ymdInTimeZone(parsed, "UTC"),
+      source: `HTTP Date → ${effectiveTz}`,
+      systemSettingsTimeZone: settingsTz,
+    };
+    // eslint-disable-next-line no-console
+    console.log("[fetchErpServerDateInfo] fallback", info);
+    return info;
   } catch {
-    // Silent — GRN create does not depend on this hint.
+    return null;
   }
-  return null;
+}
+
+/**
+ * ERPNext site calendar "today" as `YYYY-MM-DD` — same basis as
+ * `frappe.utils.nowdate()` after System Settings.time_zone is correct.
+ *
+ * Never use bare `toISOString().slice(0, 10)` (UTC) — that made
+ * 2026-07-31 (IST) look like 2026-07-30 and blocked same-day GRNs.
+ */
+export async function fetchServerDate(): Promise<string | null> {
+  const info = await fetchErpServerDateInfo();
+  return info?.today ?? null;
 }
 
 /**
@@ -885,9 +1082,9 @@ function friendlyLinkValidationMessage(
       .replace(/^['"]|['"]$/g, "")
       .replace(/[,;:]+$/g, "");
     if (/hsn|sac/i.test(label)) {
-      return `HSN Code ${value} does not exist in ERPNext. Please create it first.`;
+      return `HSN Code ${value} does not exist. Please create it first.`;
     }
-    return `${label} "${value}" does not exist in ERPNext. Please create it first.`;
+    return `${label} "${value}" does not exist. Please create it first.`;
   }
 
   if (/LinkValidationError/i.test(raw)) {
@@ -945,35 +1142,60 @@ function friendlyErrorMessage(
   // "bench", URLs, ports, or status codes). Developers still get the technical
   // wording in dev builds to aid debugging.
   const GENERIC_UNAVAILABLE =
-    "Unable to load data at the moment. Please check your connection and try again.";
+    "Unable to reach the application server. Please try again in a few seconds.";
   const devOr = (devMessage: string) =>
     import.meta.env.DEV ? devMessage : GENERIC_UNAVAILABLE;
+
+  // Prefer server-provided application error bodies over a generic
+  // "connection" toast (e.g. 417 Field not permitted, validation).
+  const data = error.response?.data;
+  const serverBodyMessage =
+    data && typeof data === "object"
+      ? (() => {
+          const d = data as ErpNextErrorPayload & { error?: unknown };
+          if (typeof d.error === "string" && d.error.trim()) return d.error.trim();
+          if (typeof d.message === "string" && d.message.trim())
+            return d.message.trim();
+          if (typeof d.exception === "string" && d.exception.trim())
+            return stripHtml(d.exception);
+          return null;
+        })()
+      : null;
 
   // Client-side timeout (axios aborts after the configured `timeout`).
   if (
     error.code === "ECONNABORTED" ||
     (error.message ?? "").toLowerCase().includes("timeout")
   ) {
-    return devOr("ERPNext connection timed out. Is localhost:8081 running?");
+    return devOr("Connection timed out. Is the backend proxy target running?");
   }
 
   // Network is offline / DNS failed / connection refused.
   if (error.code === "ERR_NETWORK" || error.message === "Network Error") {
-    return devOr("Could not reach ERPNext. Check that the backend is running.");
+    return devOr("Could not reach the backend. Check that the server is running.");
   }
 
   const status = error.response?.status;
   if (status === 504) {
-    return devOr("ERPNext server not responding (504). Please start ERPNext.");
+    return serverBodyMessage || devOr("Server not responding (504).");
   }
   if (status === 502) {
-    return devOr("ERPNext server unavailable (502).");
+    // Proxy upstream down — keep actionable copy, never invent a browser-offline story.
+    return (
+      serverBodyMessage ||
+      "Unable to reach the application server. Please try again in a few seconds."
+    );
   }
   if (status === 503) {
-    return devOr("ERPNext is temporarily unavailable (503).");
+    return serverBodyMessage || devOr("Server is temporarily unavailable (503).");
   }
 
-  const data = error.response?.data;
+  // Application errors (417, 403, 409, …) — never remap to a connection message.
+  if (status && status >= 400 && status < 500 && serverBodyMessage) {
+    if (/Field not permitted in query/i.test(serverBodyMessage)) {
+      return serverBodyMessage;
+    }
+  }
 
   // 1a. CSRFTokenError on token auth means the caller hit a method
   //     endpoint that needs a session (e.g. `frappe.client.insert`).
@@ -1023,7 +1245,7 @@ function friendlyErrorMessage(
   }
 
   if (error.message) return error.message;
-  return "An unexpected error occurred while contacting ERPNext.";
+  return "An unexpected error occurred while contacting the server.";
 }
 
 /**

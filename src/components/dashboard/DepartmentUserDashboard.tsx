@@ -2,15 +2,15 @@ import { useMemo, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   Bell,
   CheckCircle2,
   ClipboardList,
-  Clock,
   Eye,
   FileText,
   PackageCheck,
-  Percent,
   Plus,
+  RefreshCw,
   Send,
   TrendingUp,
   Truck,
@@ -35,6 +35,7 @@ import {
   listMaterialRequestsWorkflow,
   type MaterialRequestWorkflowRecord,
 } from "../../api/materialRequestWorkflow";
+import { getUploadedBomHistory } from "../../api/uploadedBom";
 import {
   countDepartmentPendingAcceptance,
   listDepartmentPendingAcceptanceLocal,
@@ -42,6 +43,7 @@ import {
 import { getDashboardConfig } from "../../config/dashboardRoles";
 import type { MaterialRequestWorkflowStatus } from "../../types/materialRequestWorkflow";
 import { formatDate, formatDateTime } from "../../utils/format";
+import { toEnterpriseUserMessage } from "../../utils/enterpriseUserMessage";
 import StatusBadge from "../StatusBadge";
 import ProcurementTypeBadge from "../ProcurementTypeBadge";
 import { Skeleton } from "../Skeleton";
@@ -50,6 +52,7 @@ import DashboardKpiCard, {
   DashboardKpiGrid,
   DashboardKpiSkeleton,
 } from "./DashboardKpiCard";
+import DepartmentPerformanceKpis from "./DepartmentPerformanceKpis";
 
 interface Props {
   greetingName: string;
@@ -122,7 +125,9 @@ function isCompletedRequest(status: string, workflow: string) {
 /** KPI: actively under warehouse review (not yet issued / procurement). */
 function isUnderWarehouseReview(workflow: string) {
   return (
-    workflow === "Under Warehouse Review" || workflow === "Stock Available"
+    workflow === "Under Warehouse Review" ||
+    workflow === "Stock Available" ||
+    workflow === "Admin Review"
   );
 }
 
@@ -130,6 +135,7 @@ function isUnderWarehouseReview(workflow: string) {
 function isWarehouseStage(workflow: string) {
   return (
     isUnderWarehouseReview(workflow) ||
+    workflow === "Admin Review" ||
     workflow === "Material Issued" ||
     workflow === "Pending Department Acceptance" ||
     workflow === "Partially Issued"
@@ -140,8 +146,7 @@ function isSentToProcurement(workflow: string) {
   return (
     workflow === "Procurement Required" ||
     workflow === "Forwarded to Procurement" ||
-    workflow === "RFQ Created" ||
-    workflow === "Admin Review"
+    workflow === "RFQ Created"
   );
 }
 
@@ -231,12 +236,6 @@ function avg(values: number[]): number | null {
   return values.reduce((s, v) => s + v, 0) / values.length;
 }
 
-function formatDays(value: number | null): string {
-  if (value == null) return "—";
-  if (value < 1) return "<1d";
-  return `${value.toFixed(1)}d`;
-}
-
 function monthKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
@@ -292,9 +291,16 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
         ),
       );
     },
+    retry: 1,
   });
 
   const rows = rowsQuery.data ?? EMPTY_ROWS;
+  const rowsErrorMessage = rowsQuery.isError
+    ? toEnterpriseUserMessage(
+        rowsQuery.error,
+        "Unable to load Material Requests right now. Please try again.",
+      )
+    : null;
 
   const pendingAcceptanceQuery = useQuery({
     queryKey: ["department-issued-items", "kpi", "pending"],
@@ -305,6 +311,12 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
   });
   const pendingAcceptance = pendingAcceptanceQuery.data ?? 0;
   const pendingReceipts = listDepartmentPendingAcceptanceLocal();
+
+  const bomHistoryQuery = useQuery({
+    queryKey: ["uploaded-bom-history", "department-dashboard"],
+    queryFn: getUploadedBomHistory,
+    staleTime: 60_000,
+  });
 
   const analytics = useMemo(() => {
     const now = new Date();
@@ -329,6 +341,7 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
     let medium = 0;
     let low = 0;
     let thisMonthCount = 0;
+    let todayCount = 0;
     let clarification = 0;
     let rejected = 0;
 
@@ -342,6 +355,12 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
       monthBuckets.push({ key, label: monthLabel(key), count: 0 });
     }
     const monthIndex = new Map(monthBuckets.map((m, i) => [m.key, i]));
+
+    const todayStart = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+    ).getTime();
 
     for (const mr of rows) {
       const workflow = getMaterialRequestWorkflowStatus(mr);
@@ -373,6 +392,7 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
         const idx = monthIndex.get(key);
         if (idx != null) monthBuckets[idx].count += 1;
         if (key === thisMonth) thisMonthCount += 1;
+        if (created >= todayStart) todayCount += 1;
       }
 
       const remarks = `${mr.custom_warehouse_remarks ?? ""} ${mr.remarks ?? ""} ${mr.custom_purpose ?? ""}`.toLowerCase();
@@ -414,6 +434,7 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
       medium,
       low,
       thisMonthCount,
+      todayCount,
       clarification,
       rejected,
       monthBuckets,
@@ -422,6 +443,25 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
       completionRate,
     };
   }, [rows]);
+
+  const performanceMetrics = useMemo(() => {
+    const now = new Date();
+    const thisMonth = monthKey(now);
+    const bomRows = bomHistoryQuery.data ?? [];
+    const bomUploadedMonth = bomRows.filter((row) => {
+      const d = row.upload_date?.slice(0, 7);
+      return d === thisMonth;
+    }).length;
+
+    return {
+      pendingRequests:
+        analytics.draftCount + analytics.submittedCount + analytics.warehouseReview,
+      pendingToday: analytics.todayCount,
+      bomUploadedMonth,
+      approvalRate: analytics.completionRate,
+      materialRequestsTotal: analytics.total,
+    };
+  }, [analytics, bomHistoryQuery.data]);
 
   const recentRows = useMemo(() => rows.slice(0, 6), [rows]);
 
@@ -571,8 +611,22 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
       {rowsQuery.isLoading ? (
         <DashboardKpiSkeleton count={6} columns={6} />
       ) : rowsQuery.isError ? (
-        <div className="rounded-card border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          Failed to load Material Requests from ERPNext.
+        <div className="flex flex-wrap items-start justify-between gap-3 rounded-card border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <div className="flex min-w-0 items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+            <div className="min-w-0">
+              <p className="font-semibold">Unable to load Material Requests</p>
+              <p className="mt-0.5 text-amber-800/90">{rowsErrorMessage}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void rowsQuery.refetch()}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Retry
+          </button>
         </div>
       ) : (
         <DashboardKpiGrid columns={6}>
@@ -630,6 +684,10 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
       <Panel title="Request Status Overview" bodyClassName="py-4">
         {rowsQuery.isLoading ? (
           <Skeleton className="h-16 w-full" />
+        ) : rowsQuery.isError ? (
+          <p className="text-sm text-neutral-500">
+            Charts will appear once Material Requests load successfully.
+          </p>
         ) : analytics.total === 0 ? (
           <p className="text-sm text-neutral-500">No requests to visualize yet.</p>
         ) : (
@@ -691,6 +749,18 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
                 {[1, 2, 3, 4].map((i) => (
                   <Skeleton key={i} className="h-10 w-full" />
                 ))}
+              </div>
+            ) : rowsQuery.isError ? (
+              <div className="flex flex-col items-center gap-3 px-5 py-10 text-center">
+                <p className="text-sm text-neutral-600">{rowsErrorMessage}</p>
+                <button
+                  type="button"
+                  onClick={() => void rowsQuery.refetch()}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs font-semibold text-neutral-800 hover:bg-neutral-50"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Retry
+                </button>
               </div>
             ) : recentRows.length === 0 ? (
               <div className="px-5 py-10 text-center text-sm text-neutral-500">
@@ -937,9 +1007,17 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
         </div>
       </div>
 
-      {/* 9 + 10 + 11. Activity / Performance / Quick Access */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-12 xl:gap-5">
-        <div className="xl:col-span-4">
+      {/* Department Performance — compact executive KPIs (full width) */}
+      <Panel title="Department Performance" bodyClassName="!py-5 !pb-5">
+        <DepartmentPerformanceKpis
+          loading={rowsQuery.isLoading || bomHistoryQuery.isLoading}
+          metrics={performanceMetrics}
+        />
+      </Panel>
+
+      {/* Activity + Quick Access */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:gap-5">
+        <div>
           <Panel title="Activity Timeline" bodyClassName="max-h-[260px] space-y-0 overflow-y-auto p-0">
             {rowsQuery.isLoading ? (
               <div className="space-y-2 p-4">
@@ -979,39 +1057,8 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
           </Panel>
         </div>
 
-        <div className="xl:col-span-4">
-          <Panel title="Department Performance">
-            <DashboardKpiGrid columns={4}>
-              <DashboardKpiCard
-                icon={Clock}
-                label="Avg Approval Time"
-                value={formatDays(analytics.avgApproval)}
-                iconClassName="bg-amber-50 text-amber-600"
-              />
-              <DashboardKpiCard
-                icon={Truck}
-                label="Avg Issue Time"
-                value={formatDays(analytics.avgIssue)}
-                iconClassName="bg-[var(--color-primary-light)] text-[var(--color-primary)]"
-              />
-              <DashboardKpiCard
-                icon={Percent}
-                label="Completion Rate"
-                value={`${analytics.completionRate.toFixed(0)}%`}
-                iconClassName="bg-emerald-50 text-emerald-600"
-              />
-              <DashboardKpiCard
-                icon={ClipboardList}
-                label="Requests This Month"
-                value={String(analytics.thisMonthCount)}
-                iconClassName="bg-neutral-100 text-neutral-500"
-              />
-            </DashboardKpiGrid>
-          </Panel>
-        </div>
-
-        <div className="xl:col-span-4">
-          <Panel title="Quick Access" bodyClassName="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-2">
+        <div>
+          <Panel title="Quick Access" bodyClassName="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-2">
             {quickAccess.map((item) => {
               const Icon = item.icon;
               return (

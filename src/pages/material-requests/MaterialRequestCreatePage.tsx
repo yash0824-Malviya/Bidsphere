@@ -33,11 +33,17 @@ import {
 } from "../../api/purchasing";
 import {
   MR_PROCUREMENT_TYPE_FIELD,
+  MR_PROCUREMENT_CATEGORY_FIELD,
   MR_REQUEST_MODE_FIELD,
   MR_WORKFLOW_FIELD,
   usesItemMasterDropdowns,
 } from "../../types/materialRequestWorkflow";
 import { defaultProcurementTypeForDepartment } from "../../config/procurementType";
+import {
+  procurementCategoriesForType,
+  procurementCategoryBelongsToType,
+  type ProcurementCategory,
+} from "../../config/procurementCategory";
 
 import type {
   MaterialRequestMode,
@@ -106,6 +112,7 @@ function validateMaterialRequestForm(
   items: MaterialRequestDraftLine[],
   requestType: MaterialRequestProcurementType,
   requestMode: MaterialRequestMode,
+  procurementCategory: string,
 ): string | null {
   if (!purpose) {
     return "Purpose is required.";
@@ -113,6 +120,14 @@ function validateMaterialRequestForm(
 
   if (!department.trim()) {
     return "Department is required.";
+  }
+
+  if (!procurementCategory.trim()) {
+    return "Procurement Category is required.";
+  }
+
+  if (!procurementCategoryBelongsToType(procurementCategory, requestType)) {
+    return "Select a Procurement Category that matches the Request Type.";
   }
 
   const activeLines = items.filter(
@@ -180,6 +195,10 @@ export default function MaterialRequestCreatePage() {
   const [procurementType, setProcurementType] =
     useState<MaterialRequestProcurementType>("Direct");
   const [procurementTypeTouched, setProcurementTypeTouched] = useState(false);
+  const [procurementCategory, setProcurementCategory] =
+    useState<ProcurementCategory | "">("");
+  const [procurementCategoryTouched, setProcurementCategoryTouched] =
+    useState(false);
   const [requestMode, setRequestMode] = useState<MaterialRequestMode>("Existing");
   const [requestModeTouched, setRequestModeTouched] = useState(false);
 
@@ -244,6 +263,10 @@ export default function MaterialRequestCreatePage() {
         doc[MR_PROCUREMENT_TYPE_FIELD] === "Indirect" ? "Indirect" : "Direct",
       );
       setProcurementTypeTouched(true);
+    }
+    if (doc[MR_PROCUREMENT_CATEGORY_FIELD]) {
+      setProcurementCategory(doc[MR_PROCUREMENT_CATEGORY_FIELD] as ProcurementCategory);
+      setProcurementCategoryTouched(true);
     }
     if (doc[MR_REQUEST_MODE_FIELD]) {
       setRequestMode(
@@ -314,6 +337,18 @@ export default function MaterialRequestCreatePage() {
     ? requestMode
     : "Existing";
 
+  const categoryOptions = useMemo(
+    () => procurementCategoriesForType(resolvedProcurementType),
+    [resolvedProcurementType],
+  );
+
+  const resolvedProcurementCategory: ProcurementCategory | "" =
+    procurementCategoryTouched
+      ? procurementCategory
+      : categoryOptions.length === 1
+        ? categoryOptions[0]
+        : procurementCategory;
+
   const usedItemCodes = useMemo(() => {
     const set = new Set<string>();
 
@@ -343,6 +378,7 @@ export default function MaterialRequestCreatePage() {
         items,
         resolvedProcurementType,
         resolvedRequestMode,
+        resolvedProcurementCategory,
       );
 
       if (validationError) throw new Error(validationError);
@@ -381,7 +417,9 @@ export default function MaterialRequestCreatePage() {
           item_code: line.item_code,
           item_name: line.item_name,
           description: line.description,
+          item_group: line.item_group,
           qty: line.qty,
+          custom_department_requested_qty: Number(line.qty) || 1,
           uom: line.uom || "Nos",
           schedule_date: line.schedule_date
             ? assertERPNextDate(line.schedule_date, "schedule_date")
@@ -418,7 +456,7 @@ export default function MaterialRequestCreatePage() {
           // Custom fields may not be provisioned yet — don't block MR save.
           if (/Custom Field|Unknown column|not found/i.test(msg)) {
             toast.error(
-              "Item saved, but engineering file fields are not set up in ERPNext yet. Run the Material Request setup script.",
+              "Item saved, but engineering file fields are not set up yet. Contact your administrator.",
             );
             return;
           }
@@ -444,6 +482,7 @@ export default function MaterialRequestCreatePage() {
           schedule_date: scheduleIso,
           custom_department: resolvedDepartment,
           [MR_PROCUREMENT_TYPE_FIELD]: resolvedProcurementType,
+          [MR_PROCUREMENT_CATEGORY_FIELD]: resolvedProcurementCategory,
           [MR_REQUEST_MODE_FIELD]: resolvedRequestMode,
           custom_priority: priority,
           custom_purpose: purpose,
@@ -474,6 +513,8 @@ export default function MaterialRequestCreatePage() {
         department: resolvedDepartment,
 
         procurement_type: resolvedProcurementType,
+
+        procurement_category: resolvedProcurementCategory,
 
         request_mode: resolvedRequestMode,
 
@@ -557,6 +598,8 @@ export default function MaterialRequestCreatePage() {
   function handleProcurementTypeChange(next: MaterialRequestProcurementType) {
     setProcurementTypeTouched(true);
     setProcurementType(next);
+    setProcurementCategory("");
+    setProcurementCategoryTouched(false);
     setItems([newDraftItem(requiredDate)]);
   }
 
@@ -590,6 +633,7 @@ export default function MaterialRequestCreatePage() {
       items,
       resolvedProcurementType,
       resolvedRequestMode,
+      resolvedProcurementCategory,
     );
 
     if (validationError) {
@@ -739,9 +783,30 @@ export default function MaterialRequestCreatePage() {
                 t={t}
               />
               <p className="mt-1 text-[11px] text-neutral-500">
-                {resolvedProcurementType === "Direct"
-                  ? t("procurementType.helpDirect")
-                  : t("procurementType.helpIndirect")}
+                {t("procurementType.helpWarehouse")}
+              </p>
+            </Field>
+
+            <Field label="Procurement Category" required>
+              <select
+                value={resolvedProcurementCategory}
+                onChange={(e) => {
+                  setProcurementCategoryTouched(true);
+                  setProcurementCategory(e.target.value as ProcurementCategory);
+                  setItems([newDraftItem(requiredDate)]);
+                }}
+                disabled={busy}
+                className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm"
+              >
+                <option value="">Select category…</option>
+                {categoryOptions.map((cat) => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-[11px] text-neutral-500">
+                Items and suppliers are filtered automatically from this category.
               </p>
             </Field>
 
@@ -971,6 +1036,8 @@ export default function MaterialRequestCreatePage() {
 
                     procurementType={resolvedProcurementType}
 
+                    procurementCategory={resolvedProcurementCategory}
+
                     requestMode={resolvedRequestMode}
 
                     canRemove={items.length > 1}
@@ -1064,11 +1131,9 @@ export default function MaterialRequestCreatePage() {
                 Submitting — please wait…
               </>
             ) : isEditMode ? (
-              "Save & Submit for Review"
-            ) : resolvedProcurementType === "Indirect" ? (
-              "Submit for Admin Approval"
+              "Save & Submit Material Request"
             ) : (
-              "Submit for Warehouse Review"
+              "Submit Material Request"
             )}
           </button>
 

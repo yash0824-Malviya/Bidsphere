@@ -543,7 +543,7 @@ export default function SupplierQuotationsPage() {
             <EmptyState
               icon={AlertTriangle}
               title="Couldn't load your quotations"
-              description="We hit an error reaching ERPNext. This is NOT the same as having no quotations — please retry."
+              description="We hit an error loading quotations. This is NOT the same as having no quotations — please retry."
               action={
                 <button
                   type="button"

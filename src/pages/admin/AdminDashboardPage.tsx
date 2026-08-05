@@ -1,4 +1,12 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
@@ -45,6 +53,8 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -73,7 +83,6 @@ import { getFinanceReviews } from "../../api/financeReviews";
 import { getApprovedRFQsAwaitingPO } from "../../api/purchasing";
 import { getSupplierPerformance } from "../../api/supplierPerformance";
 import { listPendingIndirectApprovals } from "../../api/adminApprovals";
-import { getAllNotifications } from "../../api/notifications";
 import { getCount } from "../../api/erpnext";
 import { buildTopSuppliersWithTrend, computeMonthlySpendTrend } from "../../utils/dashboardUtils";
 import { Skeleton } from "../../components/Skeleton";
@@ -245,13 +254,17 @@ export default function AdminDashboardPage() {
       .slice(0, 5);
   }, [slaTimersQ.data, now]);
 
-  const notifications = useMemo(
-    () =>
-      [...getAllNotifications()]
-        .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""))
-        .slice(0, 6),
-    [],
-  );
+  const inventoryStatusChart = useMemo(() => {
+    const total = warehouseQ.data?.total ?? 0;
+    const low = warehouseQ.data?.kpis.lowStockCount ?? 0;
+    const out = warehouseQ.data?.kpis.outOfStockCount ?? 0;
+    const inStock = Math.max(0, total - low - out);
+    return [
+      { key: "in", name: t("adminDashboard.inventory.inStock"), value: inStock, color: "#10b981" },
+      { key: "low", name: t("adminDashboard.inventory.lowStock"), value: low, color: "#f59e0b" },
+      { key: "out", name: t("adminDashboard.inventory.outOfStock"), value: out, color: "#ef4444" },
+    ];
+  }, [warehouseQ.data, t]);
 
   const highPriorityApprovals = useMemo(
     () => (pendingApprQ.data ?? []).filter((r) => /high|urgent|critical/i.test(r.priority ?? "")).length,
@@ -318,24 +331,24 @@ export default function AdminDashboardPage() {
   const financeDash = financeDashQ.data;
 
   return (
-    <div className="-mt-1 space-y-3 pb-4">
-      {/* ── Header + Quick Actions (Section 12) ─────────────────────────────── */}
-      <header className="flex flex-col gap-2.5 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-primary-700 shadow-sm">
-            <ShieldCheck className="h-4.5 w-4.5 text-white" />
+    <div className="admin-enterprise-dash -mt-1 pb-5">
+      {/* ── Header + Quick Actions ─────────────────────────────────────────── */}
+      <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 shadow-md">
+            <ShieldCheck className="h-5 w-5 text-white" />
           </div>
           <div>
-            <h1 className="text-base font-bold leading-tight text-neutral-900">{t("adminDashboard.title")}</h1>
-            <p className="text-[11px] text-neutral-500">{t("adminDashboard.subtitle")}</p>
+            <h1 className="text-xl font-bold leading-tight text-neutral-900">{t("adminDashboard.title")}</h1>
+            <p className="text-sm text-neutral-500">{t("adminDashboard.subtitle")}</p>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
           {quickActions.map((qa) => (
             <Link
               key={qa.to + qa.label}
               to={qa.to}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-neutral-700 no-underline shadow-sm transition hover:-translate-y-0.5 hover:border-primary-300 hover:text-primary-700 hover:shadow-md"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 no-underline shadow-sm transition hover:-translate-y-0.5 hover:border-primary-300 hover:text-primary-700 hover:shadow-md"
             >
               <qa.icon className="h-3.5 w-3.5 text-primary-500" />
               {qa.label}
@@ -346,15 +359,24 @@ export default function AdminDashboardPage() {
 
       {/* ── Section 1: Executive KPI Cards ──────────────────────────────────── */}
       <section>
-        <SectionHeader icon={Gauge} title={t("adminDashboard.sections.executiveOverview")} />
+        <SectionHeader
+          icon={Gauge}
+          title={t("adminDashboard.sections.executiveOverview")}
+          action={
+            <Link to="/admin/reports" className="admin-section-link">
+              {t("adminDashboard.common.viewAll")}
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Link>
+          }
+        />
         {coreLoading ? (
-          <DashboardKpiGrid columns={5}>
+          <DashboardKpiGrid columns={5} className="admin-primary-kpis">
             {Array.from({ length: 10 }).map((_, i) => (
-              <Skeleton key={i} className="h-[86px] rounded-xl" />
+              <Skeleton key={i} className="h-[176px] rounded-2xl" />
             ))}
           </DashboardKpiGrid>
         ) : (
-          <DashboardKpiGrid columns={5}>
+          <DashboardKpiGrid columns={5} className="admin-primary-kpis">
             <DashboardKpiCard icon={Users} iconClassName={toneIconClass("blue")} label={t("adminDashboard.kpi.totalUsers")} value={kpisQ.data?.totalUsers ?? 0} to="/admin/users" />
             <DashboardKpiCard icon={Truck} iconClassName={toneIconClass("violet")} label={t("adminDashboard.kpi.activeSuppliers")} value={counts?.activeSuppliers ?? kpisQ.data?.totalSuppliers ?? 0} to="/admin/suppliers" />
             <DashboardKpiCard icon={FileText} iconClassName={toneIconClass("cyan")} label={t("adminDashboard.kpi.openRfqs")} value={counts?.openRfqs ?? kpisQ.data?.totalRFQs ?? 0} to="/admin/procurement" />
@@ -383,47 +405,128 @@ export default function AdminDashboardPage() {
       </section>
 
       {/* ── Section 2: Procurement Pipeline ─────────────────────────────────── */}
-      <Panel icon={Workflow} title={t("adminDashboard.sections.procurementPipeline")}>
-        <div className="flex items-stretch gap-1 overflow-x-auto pb-1 scrollbar-hidden">
+      <Panel
+        icon={Workflow}
+        title={t("adminDashboard.sections.procurementPipeline")}
+        action={
+          <Link to="/material-requests/list" className="admin-section-link">
+            {t("adminDashboard.common.viewAll")}
+            <ChevronRight className="h-3.5 w-3.5" />
+          </Link>
+        }
+      >
+        <div className="admin-pipeline">
           {pipeline.map((stage, idx) => {
-            const tone = STATUS_STYLE[backlogTone(stage.count) === "slate" ? "neutral" : backlogTone(stage.count) === "emerald" ? "healthy" : backlogTone(stage.count) === "amber" ? "warning" : "offline"];
+            const bt = backlogTone(stage.count);
+            const tone =
+              STATUS_STYLE[
+                bt === "slate"
+                  ? "neutral"
+                  : bt === "emerald"
+                    ? "healthy"
+                    : bt === "amber"
+                      ? "warning"
+                      : "offline"
+              ];
             return (
-              <div key={stage.label} className="flex items-center">
-                <Link
-                  to={stage.to}
-                  className="group flex min-w-[92px] flex-col items-center rounded-lg border border-neutral-200 bg-white px-2 py-2 text-center no-underline shadow-sm transition hover:-translate-y-0.5 hover:border-primary-300 hover:shadow-md"
-                >
-                  <span className="text-lg font-bold leading-none tabular-nums text-neutral-900">{stage.count}</span>
-                  <span className="mt-1 text-[9px] font-medium leading-tight text-neutral-500">{stage.label}</span>
-                  <span className={`mt-1 h-1.5 w-1.5 rounded-full ${tone.dot}`} />
+              <div key={stage.label} className="admin-pipeline-item">
+                <Link to={stage.to} className="admin-pipeline-stage">
+                  <span className="admin-pipeline-count">{stage.count}</span>
+                  <span className="admin-pipeline-label">{stage.label}</span>
+                  <span className={`admin-pipeline-dot ${tone.dot}`} />
                 </Link>
-                {idx < pipeline.length - 1 && <ChevronRight className="mx-0.5 h-3.5 w-3.5 shrink-0 text-neutral-300" />}
+                {idx < pipeline.length - 1 ? (
+                  <span className="admin-pipeline-connector" aria-hidden>
+                    <ChevronRight className="h-3 w-3" />
+                  </span>
+                ) : null}
               </div>
             );
           })}
         </div>
       </Panel>
 
-      {/* ── Section 3: Approval Center ──────────────────────────────────────── */}
+      {/* ── Section 3: Approval Center (compact KPI row) ─────────────────────── */}
       <section>
-        <SectionHeader icon={ShieldCheck} title={t("adminDashboard.sections.approvalCenter")} />
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
-          <ApprovalCard icon={Clock} tone="rose" label={t("adminDashboard.approval.pendingApprovals")} count={pendingApprQ.data?.length ?? 0} highPriority={highPriorityApprovals} to="/admin/approvals/pending" loading={pendingApprQ.isLoading} />
-          <ApprovalCard icon={Wallet} tone="emerald" label={t("adminDashboard.approval.budgetApproval")} count={budgetQ.data?.pendingApprovals ?? 0} to="/admin/budget" loading={budgetQ.isLoading} />
-          <ApprovalCard icon={Scale} tone="violet" label={t("adminDashboard.approval.legalReview")} count={legalPendingQ.data?.length ?? 0} to="/legal/reviews" loading={legalPendingQ.isLoading} />
-          <ApprovalCard icon={Landmark} tone="cyan" label={t("adminDashboard.approval.financeReview")} count={financePendingQ.data?.items.length ?? 0} to="/budget/pending-reviews" loading={financePendingQ.isLoading} />
-          <ApprovalCard icon={ShoppingCart} tone="amber" label={t("adminDashboard.approval.poApproval")} count={poQueueQ.data?.length ?? 0} to="/p2p/purchase-orders" loading={poQueueQ.isLoading} />
-          <ApprovalCard icon={Warehouse} tone="teal" label={t("adminDashboard.approval.warehouseReview")} count={mrCounts?.pendingWarehouseReview ?? 0} to="/warehouse/material-requests/pending" loading={mrCountsQ.isLoading} />
+        <SectionHeader
+          icon={ShieldCheck}
+          title={t("adminDashboard.sections.approvalCenter")}
+          action={
+            <Link to="/admin/approvals/pending" className="admin-section-link">
+              {t("adminDashboard.common.viewAll")}
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Link>
+          }
+        />
+        <div className="admin-approval-row">
+          <ApprovalKpi
+            icon={Clock}
+            tone="rose"
+            label={t("adminDashboard.approval.pendingApprovals")}
+            count={pendingApprQ.data?.length ?? 0}
+            highPriority={highPriorityApprovals}
+            to="/admin/approvals/pending"
+            loading={pendingApprQ.isLoading}
+          />
+          <ApprovalKpi
+            icon={Wallet}
+            tone="emerald"
+            label={t("adminDashboard.approval.budgetApproval")}
+            count={budgetQ.data?.pendingApprovals ?? 0}
+            to="/admin/budget"
+            loading={budgetQ.isLoading}
+          />
+          <ApprovalKpi
+            icon={Scale}
+            tone="violet"
+            label={t("adminDashboard.approval.legalReview")}
+            count={legalPendingQ.data?.length ?? 0}
+            to="/legal/reviews"
+            loading={legalPendingQ.isLoading}
+          />
+          <ApprovalKpi
+            icon={Landmark}
+            tone="cyan"
+            label={t("adminDashboard.approval.financeReview")}
+            count={financePendingQ.data?.items.length ?? 0}
+            to="/budget/pending-reviews"
+            loading={financePendingQ.isLoading}
+          />
+          <ApprovalKpi
+            icon={ShoppingCart}
+            tone="amber"
+            label={t("adminDashboard.approval.poApproval")}
+            count={poQueueQ.data?.length ?? 0}
+            to="/p2p/purchase-orders"
+            loading={poQueueQ.isLoading}
+          />
+          <ApprovalKpi
+            icon={Warehouse}
+            tone="teal"
+            label={t("adminDashboard.approval.warehouseReview")}
+            count={mrCounts?.pendingWarehouseReview ?? 0}
+            to="/warehouse/material-requests/pending"
+            loading={mrCountsQ.isLoading}
+          />
         </div>
       </section>
 
       {/* ── Section 4: Spend Analytics ──────────────────────────────────────── */}
       <section>
-        <SectionHeader icon={BarChart3} title={t("adminDashboard.sections.spendAnalytics")} />
+        <SectionHeader
+          icon={BarChart3}
+          title={t("adminDashboard.sections.spendAnalytics")}
+          action={
+            <Link to="/admin/reports" className="admin-section-link">
+              {t("adminDashboard.common.viewAll")}
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Link>
+          }
+        />
         <Suspense fallback={<Skeleton className="h-[260px] rounded-xl" />}>
           <AdminSpendCharts monthlySpend={monthlySpend} loading={analyticsQ.isLoading} />
         </Suspense>
-        <div className="mt-2.5 grid gap-2.5 lg:grid-cols-2">
+        <div className="admin-spend-charts mt-3 grid gap-3 lg:grid-cols-2">
           <Panel icon={Building2} title={t("adminDashboard.charts.departmentSpend")}>
             <DepartmentSpendChart
               data={(financeDash?.departmentUtilization ?? []).slice(0, 8).map((d) => ({ label: d.department, allocated: d.allocated, consumed: d.consumed }))}
@@ -445,12 +548,74 @@ export default function AdminDashboardPage() {
         </div>
       </section>
 
-      {/* ── Two-column: monitors (left) + insights sidebar (right) ──────────── */}
-      <div className="grid gap-2.5 xl:grid-cols-[1fr_330px]">
+      {/* ── Section 5: Supplier Analytics ───────────────────────────────────── */}
+      <section>
+        <SectionHeader
+          icon={Truck}
+          title={t("adminDashboard.sections.supplierAnalytics")}
+          action={
+            <Link to="/admin/suppliers" className="admin-section-link">
+              {t("adminDashboard.common.viewAll")}
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Link>
+          }
+        />
+        <DashboardKpiGrid columns={4} className="admin-supplier-grid">
+          <DashboardKpiCard
+            icon={Star}
+            iconClassName={toneIconClass("amber")}
+            label={t("adminDashboard.supplier.topSupplier")}
+            value={topSuppliers[0]?.supplier ?? "—"}
+            valueVariant="text"
+            subtitle={topSuppliers[0] ? formatCurrencyCompact(topSuppliers[0].spend) : undefined}
+            to="/admin/suppliers"
+          />
+          <DashboardKpiCard
+            icon={Award}
+            iconClassName={toneIconClass("emerald")}
+            label={t("adminDashboard.supplier.highestRated")}
+            value={bestSupplier(topSuppliers, "high")?.supplier ?? "—"}
+            valueVariant="text"
+            subtitle={bestSupplier(topSuppliers, "high") ? `${Math.round(bestSupplier(topSuppliers, "high")!.performanceScore)}%` : undefined}
+            to="/admin/suppliers"
+          />
+          <DashboardKpiCard
+            icon={AlertTriangle}
+            iconClassName={toneIconClass("rose")}
+            label={t("adminDashboard.supplier.lowestRated")}
+            value={bestSupplier(topSuppliers, "low")?.supplier ?? "—"}
+            valueVariant="text"
+            subtitle={bestSupplier(topSuppliers, "low") ? `${Math.round(bestSupplier(topSuppliers, "low")!.performanceScore)}%` : undefined}
+            to="/admin/suppliers"
+          />
+          <DashboardKpiCard icon={ShieldCheck} iconClassName={toneIconClass("violet")} label={t("adminDashboard.supplier.performanceScore")} value={topSuppliers.length ? `${Math.round(topSuppliers.reduce((s, x) => s + x.performanceScore, 0) / topSuppliers.length)}%` : "—"} to="/admin/suppliers" />
+          <DashboardKpiCard icon={Truck} iconClassName={toneIconClass("blue")} label={t("adminDashboard.supplier.activeSuppliers")} value={counts?.activeSuppliers ?? 0} to="/admin/suppliers" />
+          <DashboardKpiCard icon={XCircle} iconClassName={toneIconClass("slate")} label={t("adminDashboard.supplier.blocked")} value={blockedQ.data ?? 0} to="/admin/suppliers" />
+          <DashboardKpiCard icon={CheckCircle2} iconClassName={toneIconClass("teal")} label={t("adminDashboard.supplier.onTime")} value={perfAgg?.onTimePct != null ? `${Math.round(perfAgg.onTimePct)}%` : "—"} to="/admin/suppliers" />
+          <DashboardKpiCard icon={Clock} iconClassName={toneIconClass("orange")} label={t("adminDashboard.supplier.avgDelivery")} value={perfAgg?.avgDelay != null ? t("adminDashboard.supplier.days", { count: Math.round(perfAgg.avgDelay) }) : "—"} to="/admin/suppliers" />
+        </DashboardKpiGrid>
+      </section>
+
+      {/* ── Section 6: Operational Health ───────────────────────────────────── */}
+      <section>
+        <SectionHeader
+          icon={Activity}
+          title={t("adminDashboard.sections.operationalHealth")}
+        />
+      <div className="admin-main-grid">
         {/* Left column */}
-        <div className="space-y-2.5">
-          {/* Section 5: Reverse Auction Monitor */}
-          <Panel icon={Gavel} title={t("adminDashboard.sections.auctionMonitor")}>
+        <div className="flex flex-col gap-[var(--admin-section-gap)]">
+          {/* Reverse Auction Monitor */}
+          <Panel
+            icon={Gavel}
+            title={t("adminDashboard.sections.auctionMonitor")}
+            action={
+              <Link to="/sourcing/reverse-bidding" className="admin-section-link">
+                {t("adminDashboard.common.viewAll")}
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Link>
+            }
+          >
             {auctionsQ.isLoading ? (
               <Skeleton className="h-28 rounded-lg" />
             ) : monitorAuctions.length === 0 ? (
@@ -504,7 +669,16 @@ export default function AdminDashboardPage() {
           </Panel>
 
           {/* Section 6: SLA Monitor */}
-          <Panel icon={Timer} title={t("adminDashboard.sections.slaMonitor")}>
+          <Panel
+            icon={Timer}
+            title={t("adminDashboard.sections.slaMonitor")}
+            action={
+              <Link to="/admin/sla-reports" className="admin-section-link">
+                {t("adminDashboard.common.viewAll")}
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Link>
+            }
+          >
             {slaQ.isLoading ? (
               <Skeleton className="h-24 rounded-lg" />
             ) : (
@@ -553,46 +727,130 @@ export default function AdminDashboardPage() {
             )}
           </Panel>
 
-          {/* Section 7: Supplier Analytics */}
-          <section>
-            <SectionHeader icon={Truck} title={t("adminDashboard.sections.supplierAnalytics")} />
-            <DashboardKpiGrid columns={4}>
-              <DashboardKpiCard icon={Star} iconClassName={toneIconClass("amber")} label={t("adminDashboard.supplier.topSupplier")} value={topSuppliers[0]?.supplier ?? "—"} subtitle={topSuppliers[0] ? formatCurrencyCompact(topSuppliers[0].spend) : undefined} />
-              <DashboardKpiCard icon={Award} iconClassName={toneIconClass("emerald")} label={t("adminDashboard.supplier.highestRated")} value={bestSupplier(topSuppliers, "high")?.supplier ?? "—"} subtitle={bestSupplier(topSuppliers, "high") ? `${Math.round(bestSupplier(topSuppliers, "high")!.performanceScore)}%` : undefined} />
-              <DashboardKpiCard icon={AlertTriangle} iconClassName={toneIconClass("rose")} label={t("adminDashboard.supplier.lowestRated")} value={bestSupplier(topSuppliers, "low")?.supplier ?? "—"} subtitle={bestSupplier(topSuppliers, "low") ? `${Math.round(bestSupplier(topSuppliers, "low")!.performanceScore)}%` : undefined} />
-              <DashboardKpiCard icon={ShieldCheck} iconClassName={toneIconClass("violet")} label={t("adminDashboard.supplier.performanceScore")} value={topSuppliers.length ? `${Math.round(topSuppliers.reduce((s, x) => s + x.performanceScore, 0) / topSuppliers.length)}%` : "—"} />
-              <DashboardKpiCard icon={Truck} iconClassName={toneIconClass("blue")} label={t("adminDashboard.supplier.activeSuppliers")} value={counts?.activeSuppliers ?? 0} />
-              <DashboardKpiCard icon={XCircle} iconClassName={toneIconClass("slate")} label={t("adminDashboard.supplier.blocked")} value={blockedQ.data ?? 0} />
-              <DashboardKpiCard icon={CheckCircle2} iconClassName={toneIconClass("teal")} label={t("adminDashboard.supplier.onTime")} value={perfAgg?.onTimePct != null ? `${Math.round(perfAgg.onTimePct)}%` : "—"} />
-              <DashboardKpiCard icon={Clock} iconClassName={toneIconClass("orange")} label={t("adminDashboard.supplier.avgDelivery")} value={perfAgg?.avgDelay != null ? t("adminDashboard.supplier.days", { count: Math.round(perfAgg.avgDelay) }) : "—"} />
-            </DashboardKpiGrid>
-          </section>
-
-          {/* Section 8: Inventory Snapshot */}
-          <section>
-            <SectionHeader icon={Boxes} title={t("adminDashboard.sections.inventorySnapshot")} />
-            <DashboardKpiGrid columns={6}>
-              <DashboardKpiCard icon={AlertTriangle} iconClassName={toneIconClass("amber")} label={t("adminDashboard.inventory.lowStock")} value={warehouseQ.data?.kpis.lowStockCount ?? 0} to="/warehouse/inventory/stock" />
-              <DashboardKpiCard icon={XCircle} iconClassName={toneIconClass("rose")} label={t("adminDashboard.inventory.outOfStock")} value={warehouseQ.data?.kpis.outOfStockCount ?? 0} to="/warehouse/inventory/stock" />
-              <DashboardKpiCard icon={PackageCheck} iconClassName={toneIconClass("emerald")} label={t("adminDashboard.inventory.readyToIssue")} value={readyToIssue} to="/warehouse/material-requests/pending" loading={readyIssueQ.isLoading} />
-              <DashboardKpiCard icon={ShoppingCart} iconClassName={toneIconClass("cyan")} label={t("adminDashboard.inventory.procurementRequired")} value={mrCounts?.pendingProcurement ?? 0} to="/material-requests/procurement" />
-              <DashboardKpiCard icon={Package} iconClassName={toneIconClass("violet")} label={t("adminDashboard.inventory.grnPending")} value={counts?.pendingGrns ?? 0} to="/p2p/grn" />
-              <DashboardKpiCard icon={ClipboardCheck} iconClassName={toneIconClass("slate")} label={t("adminDashboard.inventory.awaitingInspection")} value="—" />
-            </DashboardKpiGrid>
-          </section>
+          {/* Inventory Snapshot */}
+          <Panel
+            icon={Boxes}
+            title={t("adminDashboard.sections.inventorySnapshot")}
+            action={
+              <Link to="/warehouse/inventory/stock" className="admin-section-link">
+                {t("adminDashboard.common.openInventory")}
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Link>
+            }
+          >
+            <div className="admin-inventory-grid">
+              <div className="admin-inv-status-card">
+                <p className="text-sm font-semibold text-neutral-700">
+                  {t("adminDashboard.inventory.statusBreakdown")}
+                </p>
+                {warehouseQ.isLoading ? (
+                  <Skeleton className="h-[160px] rounded-xl" />
+                ) : (
+                  <>
+                    <div className="h-[140px] w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={inventoryStatusChart}
+                            dataKey="value"
+                            nameKey="name"
+                            innerRadius={42}
+                            outerRadius={62}
+                            paddingAngle={2}
+                            stroke="#fff"
+                            strokeWidth={2}
+                          >
+                            {inventoryStatusChart.map((slice) => (
+                              <Cell key={slice.key} fill={slice.color} />
+                            ))}
+                          </Pie>
+                          <Tooltip
+                            formatter={(v) => [Number(v), ""]}
+                            contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                    <div className="space-y-1.5">
+                      {inventoryStatusChart.map((slice) => (
+                        <div key={slice.key} className="admin-inv-status-row">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <span
+                              className="admin-inv-dot"
+                              style={{ background: slice.color }}
+                            />
+                            <span className="truncate text-sm text-neutral-600">
+                              {slice.name}
+                            </span>
+                          </div>
+                          <span className="text-sm font-bold tabular-nums text-neutral-900">
+                            {slice.value}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <InventoryTile
+                  icon={AlertTriangle}
+                  tone="amber"
+                  label={t("adminDashboard.inventory.lowStock")}
+                  value={warehouseQ.data?.kpis.lowStockCount ?? 0}
+                  to="/warehouse/inventory/stock"
+                />
+                <InventoryTile
+                  icon={XCircle}
+                  tone="rose"
+                  label={t("adminDashboard.inventory.outOfStock")}
+                  value={warehouseQ.data?.kpis.outOfStockCount ?? 0}
+                  to="/warehouse/inventory/stock"
+                />
+                <InventoryTile
+                  icon={PackageCheck}
+                  tone="emerald"
+                  label={t("adminDashboard.inventory.readyToIssue")}
+                  value={readyToIssue}
+                  to="/warehouse/material-requests/pending"
+                  loading={readyIssueQ.isLoading}
+                />
+                <InventoryTile
+                  icon={ShoppingCart}
+                  tone="cyan"
+                  label={t("adminDashboard.inventory.procurementRequired")}
+                  value={mrCounts?.pendingProcurement ?? 0}
+                  to="/material-requests/procurement"
+                />
+                <InventoryTile
+                  icon={Package}
+                  tone="violet"
+                  label={t("adminDashboard.inventory.grnPending")}
+                  value={counts?.pendingGrns ?? 0}
+                  to="/p2p/grn"
+                />
+                <InventoryTile
+                  icon={ClipboardCheck}
+                  tone="slate"
+                  label={t("adminDashboard.inventory.awaitingInspection")}
+                  value="—"
+                  to="/warehouse/inventory/stock"
+                />
+              </div>
+            </div>
+          </Panel>
         </div>
 
-        {/* Right column: insights sidebar */}
-        <div className="space-y-2.5">
-          {/* Section 9: AI Insights */}
+        {/* Right column: AI + Activity + System Health (notifications → header bell) */}
+        <aside className="admin-sidebar">
           <Panel icon={Sparkles} title={t("adminDashboard.sections.aiInsights")}>
             {insights.length === 0 ? (
-              <div className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-2 text-emerald-800">
-                <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                <p className="text-[11px] leading-snug">{t("adminDashboard.ai.allClear")}</p>
+              <div className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-emerald-800">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                <p className="text-sm leading-snug">{t("adminDashboard.ai.allClear")}</p>
               </div>
             ) : (
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 {insights.map((ins) => (
                   <InsightCard key={ins.id} level={ins.level} text={ins.text} />
                 ))}
@@ -600,56 +858,34 @@ export default function AdminDashboardPage() {
             )}
           </Panel>
 
-          {/* Section 10: Notifications */}
-          <Panel
-            icon={Bell}
-            title={t("adminDashboard.sections.notifications")}
-            action={
-              <Link to="/notifications" className="text-[10px] font-semibold text-primary-600 no-underline hover:text-primary-700">
-                {t("adminDashboard.common.viewAll")}
-              </Link>
-            }
-          >
-            {notifications.length === 0 ? (
-              <EmptyRow icon={Bell} label={t("adminDashboard.common.noNotifications")} />
-            ) : (
-              <div className="space-y-1.5">
-                {notifications.map((n) => (
-                  <Link key={n.id} to={n.route_path || "/notifications"} className="flex items-start gap-2 rounded-lg px-1 py-1 no-underline transition hover:bg-neutral-50">
-                    <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${n.read_status ? "bg-neutral-300" : "bg-primary-500"}`} />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-[11px] font-semibold text-neutral-800">{n.title}</p>
-                      <p className="truncate text-[10px] text-neutral-500">{n.description}</p>
-                      <p className="text-[9px] tabular-nums text-neutral-400">{formatDateTime(n.created_at)}</p>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </Panel>
-
-          {/* Section 11: Recent Activity (compact) */}
           <Panel
             icon={Activity}
             title={t("adminDashboard.sections.recentActivity")}
             action={
-              <Link to="/admin/audit-trail" className="text-[10px] font-semibold text-primary-600 no-underline hover:text-primary-700">
-                {t("adminDashboard.common.viewFullAuditTrail")}
+              <Link to="/admin/audit-trail" className="admin-section-link">
+                {t("adminDashboard.common.viewAll")}
+                <ChevronRight className="h-3.5 w-3.5" />
               </Link>
             }
           >
             {(auditQ.data?.entries ?? []).length === 0 ? (
               <EmptyRow icon={Activity} label={t("adminDashboard.common.noActivity")} />
             ) : (
-              <div className="space-y-1">
-                {(auditQ.data?.entries ?? []).slice(0, 5).map((entry) => (
-                  <div key={entry.name} className="flex items-start gap-2 rounded-lg px-1 py-1">
+              <div className="space-y-1.5">
+                {(auditQ.data?.entries ?? []).slice(0, 6).map((entry) => (
+                  <div key={entry.name} className="flex items-start gap-2 rounded-lg px-1 py-1.5">
                     <ActivityDot action={entry.action} />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-[11px] leading-snug text-neutral-800">
-                        <span className="font-semibold">{entry.fullName}</span> <span className="text-neutral-500">{entry.action}</span>
+                      <p
+                        className="line-clamp-2 text-sm leading-snug text-neutral-800"
+                        title={`${entry.fullName} ${entry.action}`}
+                      >
+                        <span className="font-semibold">{entry.fullName}</span>{" "}
+                        <span className="text-neutral-500">{entry.action}</span>
                       </p>
-                      <p className="text-[9px] tabular-nums text-neutral-400">{formatDateTime(entry.timestamp)}</p>
+                      <p className="text-xs tabular-nums text-neutral-400">
+                        {formatDateTime(entry.timestamp)}
+                      </p>
                     </div>
                   </div>
                 ))}
@@ -657,7 +893,6 @@ export default function AdminDashboardPage() {
             )}
           </Panel>
 
-          {/* System Health */}
           <Panel icon={Server} title={t("adminDashboard.sections.systemHealth")}>
             <div className="space-y-1">
               <HealthRow icon={Server} label={t("adminDashboard.health.backend")} state={coreState} t={t} />
@@ -668,8 +903,9 @@ export default function AdminDashboardPage() {
               <HealthRow icon={Bell} label={t("adminDashboard.health.notifications")} state="healthy" t={t} />
             </div>
           </Panel>
-        </div>
+        </aside>
       </div>
+      </section>
     </div>
   );
 }
@@ -684,31 +920,103 @@ function bestSupplier<T extends { performanceScore: number }>(rows: T[], which: 
 
 /* ─── Sub-components ──────────────────────────────────────────────────────── */
 
-function SectionHeader({ icon: Icon, title }: { icon: LucideIcon; title: string }) {
+function SectionHeader({
+  icon: Icon,
+  title,
+  action,
+}: {
+  icon: LucideIcon;
+  title: string;
+  action?: ReactNode;
+}) {
   return (
-    <h2 className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-neutral-400">
-      <Icon className="h-3 w-3" />
-      {title}
-    </h2>
-  );
-}
-
-function Panel({ icon: Icon, title, action, children }: { icon: LucideIcon; title: string; action?: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <div className="rounded-xl border border-neutral-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between border-b border-neutral-100 px-3 py-2">
-        <div className="flex items-center gap-1.5">
-          <Icon className="h-3.5 w-3.5 text-neutral-400" />
-          <h2 className="text-xs font-semibold text-neutral-700">{title}</h2>
-        </div>
-        {action}
-      </div>
-      <div className="p-3">{children}</div>
+    <div className="admin-section-header">
+      <h2>
+        <Icon className="h-3.5 w-3.5" />
+        {title}
+      </h2>
+      {action}
     </div>
   );
 }
 
-function ApprovalCard({
+function Panel({
+  icon: Icon,
+  title,
+  action,
+  children,
+}: {
+  icon: LucideIcon;
+  title: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="admin-panel">
+      <div className="admin-panel-head">
+        <h2>
+          <Icon className="h-4 w-4 text-neutral-400" />
+          {title}
+        </h2>
+        {action}
+      </div>
+      <div className="admin-panel-body">{children}</div>
+    </div>
+  );
+}
+
+function InventoryTile({
+  icon: Icon,
+  tone,
+  label,
+  value,
+  to,
+  loading,
+}: {
+  icon: LucideIcon;
+  tone: Tone;
+  label: string;
+  value: string | number;
+  to: string;
+  loading?: boolean;
+}) {
+  const c = TONE[tone];
+  if (loading) return <Skeleton className="h-[112px] rounded-xl" />;
+  return (
+    <Link to={to} className="admin-inv-kpi-tile">
+      <div className="flex items-start justify-between gap-2">
+        <span
+          className={`flex h-8 w-8 items-center justify-center rounded-lg ${c.iconBg}`}
+        >
+          <Icon className={`h-[18px] w-[18px] ${c.icon}`} />
+        </span>
+        <span
+          className="admin-inv-dot mt-1"
+          style={{
+            background:
+              tone === "rose"
+                ? "#ef4444"
+                : tone === "amber"
+                  ? "#f59e0b"
+                  : tone === "emerald"
+                    ? "#10b981"
+                    : "#94a3b8",
+          }}
+        />
+      </div>
+      <div>
+        <p className="text-2xl font-bold tabular-nums leading-none text-neutral-900">
+          {value}
+        </p>
+        <p className="mt-1.5 line-clamp-2 text-sm font-medium text-neutral-500" title={label}>
+          {label}
+        </p>
+      </div>
+    </Link>
+  );
+}
+
+function ApprovalKpi({
   icon: Icon,
   tone,
   label,
@@ -727,30 +1035,36 @@ function ApprovalCard({
 }) {
   const { t } = useTranslation();
   const c = TONE[tone];
-  if (loading) return <Skeleton className="h-[92px] rounded-xl" />;
+  const statusDot =
+    count <= 0
+      ? "bg-neutral-300"
+      : count <= 5
+        ? "bg-emerald-500"
+        : count <= 15
+          ? "bg-amber-500"
+          : "bg-rose-500";
+  if (loading) return <Skeleton className="admin-approval-kpi admin-approval-kpi--skeleton" />;
   return (
-    <div className="flex h-full flex-col rounded-xl border border-neutral-200 bg-white px-3 py-2.5 shadow-sm transition hover:shadow-md">
-      <div className="flex items-center gap-2">
-        <div className={`flex h-7 w-7 items-center justify-center rounded-lg ${c.iconBg}`}>
-          <Icon className={`h-3.5 w-3.5 ${c.icon}`} />
-        </div>
-        <div className="min-w-0">
-          <p className="text-lg font-bold leading-none tabular-nums text-neutral-900">{count}</p>
-          <p className="text-[9px] text-neutral-400">{t("adminDashboard.approval.pending")}</p>
-        </div>
+    <Link to={to} className="admin-approval-kpi" title={label}>
+      <div className="admin-approval-kpi-top">
+        <span className={`admin-approval-kpi-icon ${c.iconBg}`}>
+          <Icon className={`h-[18px] w-[18px] ${c.icon}`} />
+        </span>
+        <span className={`admin-approval-kpi-status ${statusDot}`} />
       </div>
-      <p className="mt-1.5 truncate text-[10px] font-semibold text-neutral-600">{label}</p>
-      <div className="mt-auto flex items-center justify-between pt-1.5">
+      <p className="admin-approval-kpi-count">{count}</p>
+      <p className="admin-approval-kpi-label">{label}</p>
+      <div className="admin-approval-kpi-meta">
+        <span className="admin-approval-kpi-badge">
+          {t("adminDashboard.approval.pendingBadge", { count })}
+        </span>
         {highPriority && highPriority > 0 ? (
-          <span className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[9px] font-semibold text-rose-600">{t("adminDashboard.approval.highPriority", { count: highPriority })}</span>
-        ) : (
-          <span />
-        )}
-        <Link to={to} className="text-[10px] font-semibold text-primary-600 no-underline hover:text-primary-700">
-          {t("adminDashboard.approval.viewAll")}
-        </Link>
+          <span className="admin-approval-kpi-priority">
+            {t("adminDashboard.approval.highPriority", { count: highPriority })}
+          </span>
+        ) : null}
       </div>
-    </div>
+    </Link>
   );
 }
 

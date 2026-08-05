@@ -259,7 +259,7 @@ export default function BomFormPage() {
         <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           <Lock className="mt-0.5 h-4 w-4 flex-shrink-0" />
           <span>
-            This BOM is submitted. Components and quantity are locked by ERPNext —
+            This BOM is submitted. Components and quantity are locked —
             only the Active and Default flags can be changed here.
           </span>
         </div>
@@ -311,7 +311,7 @@ export default function BomFormPage() {
               value={bomName}
               onChange={(e) => setBomName(e.target.value)}
               disabled={busy}
-              placeholder="Auto-assigned by ERPNext on save"
+              placeholder="Auto-assigned on save"
               className="h-10 w-full rounded-lg border border-neutral-300 px-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
             />
           </Field>

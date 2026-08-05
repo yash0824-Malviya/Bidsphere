@@ -244,6 +244,7 @@ export default function WarehouseReportsPage() {
                             <td className="py-3 px-4 text-center">
                               <span
                                 className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold border ${
+                                  item.status === "Reorder Required" ||
                                   item.status === "Low Stock"
                                     ? "bg-amber-50 text-amber-800 border-amber-200"
                                     : "bg-rose-50 text-rose-800 border-rose-200"

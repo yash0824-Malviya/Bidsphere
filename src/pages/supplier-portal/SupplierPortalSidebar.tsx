@@ -144,6 +144,8 @@ interface Props {
   statusBadge?: string;
   className?: string;
   onNavigate?: () => void;
+  /** Pin sidebar to viewport edge (desktop layout shell). */
+  fixed?: boolean;
 }
 
 export default function SupplierPortalSidebar({
@@ -151,31 +153,34 @@ export default function SupplierPortalSidebar({
   unlocked = true,
   className = "",
   onNavigate,
+  fixed = false,
 }: Props) {
   const { pathname } = useLocation();
   const { t } = useTranslation();
 
   return (
     <aside
-      className={`flex h-full w-[252px] shrink-0 flex-col overflow-hidden border-r border-neutral-800 bg-sidebar text-sidebar-text desktop:w-[272px] ${className}`}
+      className={`app-sidebar w-[280px] min-w-[280px] max-w-[280px] border-r border-neutral-800 ${
+        fixed ? "app-sidebar-fixed" : "h-[100vh] min-h-[100vh]"
+      } ${className}`}
     >
-      <div className="border-b border-white/5 px-4 py-5">
+      <div className="flex h-[52px] shrink-0 items-center border-b border-white/5 px-4">
         <Link
           to="/supplier/dashboard"
           onClick={onNavigate}
-          className="flex items-center gap-2.5"
+          className="flex min-w-0 items-center gap-2.5"
         >
           <BrandLogo size="xs" markOnly />
           <div className="min-w-0">
-            <p className="text-sm font-bold text-white">{APP_SUPPLIER_PORTAL}</p>
-            <p className="mt-0.5 truncate text-[10px] uppercase tracking-wider text-slate-500">
+            <p className="truncate text-sm font-bold text-white">{APP_SUPPLIER_PORTAL}</p>
+            <p className="truncate text-[10px] uppercase tracking-wider text-slate-500">
               {supplierName}
             </p>
           </div>
         </Link>
       </div>
 
-      <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain px-3 py-4">
+      <nav className="app-sidebar-nav space-y-1 px-3 py-4">
         {NAV.map((group) => (
           <SidebarGroup
             key={group.labelKey}
@@ -188,7 +193,7 @@ export default function SupplierPortalSidebar({
         ))}
       </nav>
 
-      <div className="border-t border-white/5 px-4 py-3 text-[10px] text-slate-500">
+      <div className="app-sidebar-footer">
         {COMPANY_NAME} · {APP_NAME}
       </div>
     </aside>

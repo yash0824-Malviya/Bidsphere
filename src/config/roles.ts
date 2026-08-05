@@ -199,7 +199,6 @@ const SOURCING_CHILDREN_FULL: NavChild[] = [
   { label: "All RFIs", to: "/sourcing/rfi" },
   { label: "All RFPs", to: "/sourcing/rfp" },
   { label: "All RFQs", to: "/sourcing/rfq" },
-  { label: "Upload BOM", to: "/upload-bom" },
   { label: "RFQ Template Library", to: "/sourcing/rfq-templates" },
   { label: "Legal Reviews", to: "/sourcing/legal-reviews" },
 ];
@@ -209,7 +208,6 @@ const PROCUREMENT_SOURCING_CHILDREN: NavChild[] = [
   { label: "All RFIs", to: "/sourcing/rfi" },
   { label: "All RFPs", to: "/sourcing/rfp" },
   { label: "All RFQs", to: "/sourcing/rfq" },
-  { label: "Upload BOM", to: "/upload-bom" },
   { label: "RFQ Template Library", to: "/sourcing/rfq-templates" },
   { label: "Reverse Bidding", to: "/sourcing/reverse-bidding" },
 ];
@@ -757,7 +755,7 @@ export function getNavGroupsForRole(role: AppRole): NavGroup[] {
     ];
   }
 
-  // Department User — a focused portal: request items and track fulfillment.
+  // Department User — BOM upload, material requests, issued items.
   if (role === "department") {
     return [
       {
@@ -765,12 +763,14 @@ export function getNavGroupsForRole(role: AppRole): NavGroup[] {
         items: [
           { label: "Dashboard", to: "/dashboard", icon: LayoutDashboard },
           {
-            label: "My Requests",
-            to: "/material-requests/list",
+            label: "Department",
+            to: "/material-requests/new",
             icon: ClipboardList,
             children: [
-              { label: "New Request", to: "/material-requests/new" },
-              { label: "Request History", to: "/material-requests/list" },
+              { label: "Material Requests", to: "/material-requests/new" },
+              { label: "My Requests", to: "/material-requests/list" },
+              { label: "Upload BOM", to: "/department/upload-bom" },
+              { label: "Temporary Item Store", to: "/department/temporary-items" },
             ],
           },
           {
@@ -795,8 +795,7 @@ export function getNavGroupsForRole(role: AppRole): NavGroup[] {
     ];
   }
 
-  // Manufacturing / Production Manager — a focused BOM (Bill of Materials)
-  // workspace. Department Users never see this module.
+  // Manufacturing / Production Manager — BOM Management + Master Data review.
   if (role === "manufacturing") {
     return [
       {
@@ -815,6 +814,15 @@ export function getNavGroupsForRole(role: AppRole): NavGroup[] {
                 label: "Finished Products",
                 to: "/manufacturing/finished-products",
               },
+            ],
+          },
+          {
+            label: "Master Data",
+            to: "/department/temporary-items",
+            icon: ClipboardList,
+            children: [
+              { label: "Temporary Item Store", to: "/department/temporary-items" },
+              { label: "Department BOM Upload", to: "/department/upload-bom" },
             ],
           },
           { label: "Notifications", to: "/notifications", icon: Bell },
@@ -885,7 +893,7 @@ function getAccessPrefixesForRole(role: AppRole): string[] {
         break;
       case "sourcing":
         prefixes.add("/sourcing");
-        prefixes.add("/upload-bom");
+        // Upload BOM removed from procurement — lives under /department/upload-bom.
         // NOTE: `/legal` is intentionally NOT granted here. Legal Document
         // Review pages are Legal's domain — the `legal` role has its own
         // dedicated early-return block above with the correct allowlist.
@@ -1073,6 +1081,31 @@ export function canAccessPath(
   if (path === "/manufacturing" || path.startsWith("/manufacturing/")) {
     return role === "manufacturing";
   }
+  if (path === "/department" || path.startsWith("/department/")) {
+    if (path === "/department/projects" || path === "/department/programs") {
+      return role === "department" || role === "manufacturing" || role === "admin";
+    }
+    if (role === "department") {
+      return (
+        path === "/department/upload-bom" ||
+        path === "/department/temporary-items" ||
+        path.startsWith("/department/temporary-items/") ||
+        path === "/department/issued-items" ||
+        path.startsWith("/department/issued-items/")
+      );
+    }
+    if (role === "manufacturing") {
+      return (
+        path === "/department/temporary-items" ||
+        path.startsWith("/department/temporary-items/") ||
+        path === "/department/upload-bom"
+      );
+    }
+    return false;
+  }
+  if (path === "/upload-bom" || path.startsWith("/upload-bom")) {
+    return false;
+  }
   if (path === "/finance" || path.startsWith("/finance/")) {
     return role === "finance";
   }
@@ -1189,10 +1222,17 @@ export function canAccessPath(
     if (path === "/manufacturing" || path.startsWith("/manufacturing/")) {
       return true;
     }
+    if (
+      path === "/department/temporary-items" ||
+      path.startsWith("/department/temporary-items/") ||
+      path === "/department/upload-bom"
+    ) {
+      return true;
+    }
     return false;
   }
 
-  // Department User — dashboard + own material requests + Issued Items.
+  // Department User — dashboard + department portal + material requests.
   if (role === "department") {
     if (
       path.startsWith("/support") ||
@@ -1201,12 +1241,18 @@ export function canAccessPath(
     ) {
       return true;
     }
-    // Issued Items module (Pending Acceptance / Issue Receipts)
     if (path === "/department" || path.startsWith("/department/")) {
+      if (path === "/department/temporary-items" || path.startsWith("/department/temporary-items/")) {
+        return true;
+      }
       return (
+        path === "/department/upload-bom" ||
         path === "/department/issued-items" ||
         path.startsWith("/department/issued-items/")
       );
+    }
+    if (path === "/upload-bom" || path.startsWith("/upload-bom/")) {
+      return false;
     }
     if (path.startsWith("/material-requests")) {
       return canAccessMaterialRequestPath(role, path);

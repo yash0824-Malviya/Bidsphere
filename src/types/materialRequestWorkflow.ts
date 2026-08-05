@@ -8,6 +8,18 @@ export const MR_WORKFLOW_FIELD = "custom_bidsphere_status";
 /** ERPNext custom field storing the procurement classification of an MR. */
 export const MR_PROCUREMENT_TYPE_FIELD = "custom_procurement_type";
 
+/** ERPNext custom field — single source of truth for item + supplier filtering. */
+export const MR_PROCUREMENT_CATEGORY_FIELD = "custom_procurement_category";
+
+/** RFQ inherits MR procurement category (read-only downstream). */
+export const RFQ_PROCUREMENT_CATEGORY_FIELD = "custom_procurement_category";
+
+/** RFQ inherits MR procurement type (Direct / Indirect). */
+export const RFQ_PROCUREMENT_TYPE_FIELD = "custom_procurement_type";
+
+/** Direct RFQ request mode — Existing vs New item entry. */
+export const RFQ_REQUEST_MODE_FIELD = "custom_request_mode";
+
 /**
  * Request Mode — whether the requested item(s) already exist in Item Master.
  * Stored as `custom_request_mode`. Legacy MRs without this field map to Existing.
@@ -16,9 +28,10 @@ export const MR_REQUEST_MODE_FIELD = "custom_request_mode";
 
 /**
  * Every Material Request belongs to exactly one procurement class:
- *   • Direct   — manufacturing / raw materials. Routed through Warehouse first.
- *   • Indirect — office / support items. Routed through Admin approval first.
+ *   • Direct   — manufacturing / raw materials.
+ *   • Indirect — office / support items.
  *
+ * Both types follow the same workflow: Department → Warehouse Review → …
  * UI label: "Request Type" (field remains custom_procurement_type for compat).
  */
 export type MaterialRequestProcurementType = "Direct" | "Indirect";
@@ -39,30 +52,30 @@ export const MATERIAL_REQUEST_MODES: MaterialRequestMode[] = ["Existing", "New"]
 
 /**
  * Whether the create form should use Item Master dropdowns.
- * Only Direct + Existing keeps the classic ERP item pickers.
- * Indirect (any mode) and Direct + New use manual entry.
+ * Existing mode (Direct or Indirect) loads active ERP items filtered by
+ * Procurement Category. New mode uses manual entry / temporary item workflow.
  */
 export function usesItemMasterDropdowns(
-  requestType: MaterialRequestProcurementType,
+  _requestType: MaterialRequestProcurementType,
   requestMode: MaterialRequestMode,
 ): boolean {
-  return requestType === "Direct" && requestMode === "Existing";
+  return requestMode === "Existing";
 }
 /**
  * Canonical Material Request workflow statuses — the ONLY values written to
  * ERPNext (`custom_bidsphere_status`) and rendered in the UI. This is the real
- * ERPNext procurement flow, branched by procurement type:
+ * ERPNext procurement flow (Direct and Indirect share the same path):
  *
  *   Draft (pre-submission only)
- *     ├▶ DIRECT ──▶ Under Warehouse Review
- *     │              ├─ stock ok ─▶ Stock Available ─▶ Material Issued ─▶ Completed
- *     │              └─ no stock ─▶ Procurement Required
- *     │                              └─ Confirm & Process All Decisions
- *     │                                 ─▶ Forwarded to Procurement ─▶ RFQ Created ─▶ Completed
- *     └▶ INDIRECT ─▶ Admin Review
- *                    ├─ approved  ─▶ Forwarded to Procurement ─▶ RFQ Created ─▶ Completed
- *                    └─ rejected  ─▶ Cancelled
+ *     └▶ Under Warehouse Review
+ *           ├─ stock ok ─▶ Stock Available ─▶ Material Issued ─▶ Completed
+ *           └─ no stock ─▶ Procurement Required
+ *                           └─ Confirm & Process All Decisions
+ *                              ─▶ Forwarded to Procurement ─▶ RFQ Created ─▶ Completed
  *   Cancelled (terminal)
+ *
+ * NOTE: "Admin Review" is a legacy status kept for backward compatibility with
+ * older Indirect requests. New submissions always land in Under Warehouse Review.
  *
  * NOTE: "Procurement Required" is a legacy warehouse-owned shortage status.
  * New Confirm & Process runs write "Forwarded to Procurement" directly via
@@ -104,11 +117,19 @@ export const MR_DASHBOARD_STATUSES: MaterialRequestWorkflowStatus[] = [
 ];
 
 /**
- * Statuses that put an Indirect Material Request in the Admin approval queue.
+ * Legacy statuses that put a Material Request in the Admin approval queue.
+ * No new requests enter this state; retained for backward-compatible reads.
  */
 export const ADMIN_REVIEW_STATUSES: MaterialRequestWorkflowStatus[] = [
   "Admin Review",
 ];
+
+/** Map legacy Admin Review to warehouse review for display and queue logic. */
+export function normalizeMrWorkflowStatusForRouting(
+  status: MaterialRequestWorkflowStatus,
+): MaterialRequestWorkflowStatus {
+  return status === "Admin Review" ? "Under Warehouse Review" : status;
+}
 
 /**
  * Legacy → canonical status mapping. Older records (and any not-yet-migrated
@@ -222,6 +243,7 @@ export type MaterialRequestPriority = "Low" | "Medium" | "High" | "Urgent";
 export interface MaterialRequestWorkflowFields {
   [MR_WORKFLOW_FIELD]?: MaterialRequestWorkflowStatus;
   [MR_PROCUREMENT_TYPE_FIELD]?: MaterialRequestProcurementType;
+  [MR_PROCUREMENT_CATEGORY_FIELD]?: string;
   [MR_REQUEST_MODE_FIELD]?: MaterialRequestMode;
   custom_department?: string;
   custom_priority?: MaterialRequestPriority;
@@ -262,6 +284,13 @@ export function resolveRequestMode(
   raw: string | null | undefined,
 ): MaterialRequestMode {
   return (raw ?? "").trim().toLowerCase() === "new" ? "New" : "Existing";
+}
+
+/** Read MR procurement category (empty for legacy records). */
+export function resolveProcurementCategory(
+  raw: string | null | undefined,
+): string {
+  return String(raw ?? "").trim();
 }
 
 export interface MaterialRequestStockLine {

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 
 import {
   FINANCE_DASHBOARD_METRICS_KEY,
@@ -9,14 +10,9 @@ import {
   getDashboardConfig,
   getExecutiveDashboardLayout,
 } from "../../config/dashboardRoles";
-import ActionCenter from "./ActionCenter";
 import DashboardHeader from "./DashboardHeader";
+import FinanceDashboardGrid from "./FinanceDashboardGrid";
 import FinanceKpiRow from "./FinanceKpiRow";
-import ProcurementAnalyticsSection from "./ProcurementAnalyticsSection";
-import SlaCountdownWidget from "../sla/SlaCountdownWidget";
-import FinancePendingQueue from "../finance/FinancePendingQueue";
-import FinanceReviewHistoryTable from "../finance/FinanceReviewHistoryTable";
-import InvoicesAwaitingCreationTable from "../finance/InvoicesAwaitingCreationTable";
 
 interface Props {
   greetingName: string;
@@ -24,7 +20,7 @@ interface Props {
 
 /**
  * Finance Manager dashboard — AP command center with RFQ financial review KPIs,
- * payables metrics, GRN voucher queue, and recent review history.
+ * compact quick actions, and a dense enterprise analytics grid.
  */
 export default function FinanceDashboard({ greetingName }: Props) {
   const config = getDashboardConfig("finance");
@@ -41,30 +37,31 @@ export default function FinanceDashboard({ greetingName }: Props) {
   });
 
   return (
-    <div className="dashboard-stack">
+    <div className="dashboard-stack finance-dashboard">
       <DashboardHeader config={config} greetingName={greetingName} />
-
-      <ActionCenter actions={layout.quickActions} />
 
       <FinanceKpiRow
         kpis={metricsQuery.data ?? null}
         loading={metricsQuery.isLoading}
       />
 
-      <ProcurementAnalyticsSection
-        title="Financial Analytics"
-        subtitle="Budget & savings from ERPNext"
-        kpis={["budgetUtilisation", "costSavings"]}
-        charts={["budgetVsActual", "monthlySpend", "costSavings"]}
-      />
+      {layout.quickActions.length > 0 ? (
+        <section className="finance-quick-actions" aria-label="Quick Actions">
+          <h2 className="finance-quick-actions__title">Quick Actions</h2>
+          <div className="finance-quick-actions__grid">
+            {layout.quickActions.map(({ id, label, to, icon: Icon }) => (
+              <Link key={id} to={to} className="finance-quick-action">
+                <span className="finance-quick-action__icon" aria-hidden>
+                  <Icon className="h-5 w-5" />
+                </span>
+                <span className="finance-quick-action__label">{label}</span>
+              </Link>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
-      <SlaCountdownWidget role="finance" title="Finance SLA Countdown" />
-
-      <FinancePendingQueue />
-
-      <FinanceReviewHistoryTable />
-
-      <InvoicesAwaitingCreationTable limit={8} />
+      <FinanceDashboardGrid />
     </div>
   );
 }

@@ -160,7 +160,7 @@ interface ChecklistItem {
 }
 
 const CHECKLIST_ITEMS: ChecklistItem[] = [
-  { id: "budget_availability", label: "Budget Availability", description: "An active ERPNext Budget governs this cost center and has funds remaining", auto: true },
+  { id: "budget_availability", label: "Budget Availability", description: "An active budget governs this cost center and has funds remaining", auto: true },
   { id: "cost_center", label: "Cost Center", description: "Cost center is resolved and mapped to a GL budget account", auto: true },
   { id: "budget_limit", label: "Budget Limit", description: "This RFQ value stays within the allocated budget limit", auto: true },
   { id: "approval_authority", label: "Approval Authority", description: "Reviewer holds finance approval authority for this decision", auto: true },
@@ -767,7 +767,7 @@ export default function FinanceReviewDetailPage() {
           <div className="mb-3 flex items-center gap-2 rounded-lg bg-neutral-50 px-3 py-2 text-[11px] font-medium text-neutral-500">
             <Info className="h-3.5 w-3.5 flex-shrink-0" />
             Budget Availability, Cost Center, Budget Limit and Approval Authority
-            are verified automatically from ERPNext. Only Financial Compliance and
+            are verified automatically from live data. Only Financial Compliance and
             Final Approval are manual.
           </div>
           <div className="space-y-2">
@@ -1224,7 +1224,7 @@ function NoActiveBudget({
         <p className="text-xs font-semibold uppercase tracking-wider text-neutral-400">Reason</p>
         <p className="mt-1 text-sm text-neutral-700">
           {check?.noBudgetMessage ??
-            "No Approved or Active ERPNext Budget governs this cost center."}
+            "No approved or active budget governs this cost center."}
         </p>
       </div>
 

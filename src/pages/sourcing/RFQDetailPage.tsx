@@ -67,6 +67,24 @@ import {
 } from "../../api/legalDocs";
 import { getApprovalStateFromErp } from "../../api/legalReviews";
 import type { LegalDocumentItemSummary, LegalDocumentSet } from "../../api/legalDocs";
+import {
+  extendRfqDeadline,
+  inviteSuppliersToRfq,
+} from "../../api/rfqSupplierInvite";
+import { getPendingInvitationSupplierIds } from "../../api/rfqSupplierInviteAudit";
+import RfqInviteSuppliersDialog, {
+  type InviteSupplierSelection,
+} from "../../components/sourcing/RfqInviteSuppliersDialog";
+import ExtendRfqDeadlineDialog from "../../components/sourcing/ExtendRfqDeadlineDialog";
+import {
+  detectRfqAiStale,
+  getRfqAiStale,
+  markRfqAiStale,
+  readRfqAiBaseline,
+  saveRfqAiBaseline,
+  type RfqAiStaleSource,
+} from "../../utils/rfqAiBaseline";
+import { parseRfqMessage } from "../../utils/rfqMessage";
 import { deriveRfqProcurementWorkflow } from "../../api/rfqProcurementWorkflow";
 import { invalidateApprovalWorkflow } from "../../api/approvalWorkflow";
 import { ANALYSIS_STEPS } from "../../components/aiAnalysisSteps";
@@ -88,7 +106,7 @@ import {
   getReverseBiddingForRFQ,
 } from "../../api/reverseBidding";
 import type { RFQ, RFQSupplier, SupplierQuotation } from "../../types/erpnext";
-import { formatDate } from "../../utils/format";
+import { formatDate, isoDateOffset } from "../../utils/format";
 import RejectedReviewActions from "../../components/sourcing/RejectedReviewActions";
 import CheckBudgetModal from "../../components/sourcing/CheckBudgetModal";
 import ViewQuotationModal from "../../components/sourcing/ViewQuotationModal";
@@ -96,6 +114,25 @@ import CompareQuotationsModal, {
   type ComparisonQuote,
 } from "../../components/sourcing/CompareQuotationsModal";
 import RFQDetailEnterpriseLayout from "./rfq-detail/RFQDetailEnterpriseLayout";
+import {
+  canCreateRfqQuoteRound,
+  createNextRfqQuoteRound,
+  ensureInitialRfqQuoteRound,
+  listRfqQuoteRounds,
+  RfqQuoteRoundApiError,
+  type RfqQuoteRound,
+  type RfqRoundReasonCode,
+} from "../../api/rfqQuoteRound";
+import CreateRfqRoundDialog from "../../components/sourcing/CreateRfqRoundDialog";
+import RfqQuoteRoundsPanel from "../../components/sourcing/RfqQuoteRoundsPanel";
+import RfqRoundActivityTimeline from "../../components/sourcing/RfqRoundActivityTimeline";
+import {
+  readRfqRoundActivity,
+  readRfqRoundMetaMap,
+  recordQuoteRoundCreated,
+  recordQuoteRoundSupplierInvites,
+} from "../../api/rfqRoundActivity";
+import { formatRfqRoundLabel } from "../../utils/rfqRoundTracking";
 import {
   formatERPNextDate,
   formatUsDisplayDate,
@@ -110,6 +147,11 @@ import {
   printRfqPdf,
   type RfqPdfData,
 } from "../../utils/pdf";
+import {
+  logRfqDetailApiFailure,
+  resolveApiErrorMessage,
+  useRfqBackgroundQueryError,
+} from "../../utils/rfqDetailApiErrors";
 import dayjs from "dayjs";
 
 const HAS_ANTHROPIC_KEY = !!(
@@ -279,67 +321,13 @@ interface SubmittedQuote {
 }
 
 /**
- * The Smart RFQ wizard embeds the title and valid-till hint as the first
- * lines of `message_for_supplier` because those fields are not part of the
- * ERPNext Request for Quotation schema. This helper parses them back out
- * so the detail page can display them.
- *
- * Recognised format:
- *
- *   Title: <free text>
- *   Valid Till: <YYYY-MM-DD or human-readable date>
- *
- *   <body>
+ * The Smart RFQ wizard embeds title/valid-till in `message_for_supplier`.
+ * Parsed via `parseRfqMessage` from `utils/rfqMessage`.
  */
-function parseRfqMessage(message: string | undefined | null): {
-  title?: string;
-  validTill?: string;
-  body: string;
-} {
-  if (!message) return { body: "" };
-
-  const lines = message.split(/\r?\n/);
-  let title: string | undefined;
-  let validTill: string | undefined;
-  let firstBodyLine = 0;
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    const trimmed = line.trim();
-    if (!trimmed) {
-      // blank line — body starts after this
-      firstBodyLine = i + 1;
-      break;
-    }
-    const titleMatch = trimmed.match(/^Title\s*:\s*(.+)$/i);
-    if (titleMatch && !title) {
-      title = titleMatch[1].trim();
-      firstBodyLine = i + 1;
-      continue;
-    }
-    const validMatch = trimmed.match(/^Valid\s*Till\s*:\s*(.+)$/i);
-    if (validMatch && !validTill) {
-      const rawValidTill = validMatch[1].trim();
-      validTill = formatERPNextDate(rawValidTill) ?? rawValidTill;
-      firstBodyLine = i + 1;
-      continue;
-    }
-    // First non-meta line — bail out and treat the rest as body.
-    if (!title && !validTill) {
-      firstBodyLine = i;
-    }
-    break;
-  }
-
-  return {
-    title,
-    validTill,
-    body: lines.slice(firstBodyLine).join("\n").trim(),
-  };
-}
 
 type SupplierQuoteStatus =
   | "Pending"
+  | "Pending Invitation"
   | "Quotation Received"
   | "Declined"
   | "Expired";
@@ -358,7 +346,8 @@ function resolveSupplierStatus(
   row: RFQSupplier,
   hasQuote: boolean,
   validTill?: string,
-  declined?: boolean
+  declined?: boolean,
+  pendingInvitation?: boolean,
 ): SupplierQuoteStatus {
   if (hasQuote || row.quote_status === "Received") return "Quotation Received";
   if (declined || row.quote_status === "No Quote") return "Declined";
@@ -369,12 +358,13 @@ function resolveSupplierStatus(
       if (end.isBefore(dayjs())) return "Expired";
     }
   }
+  if (pendingInvitation) return "Pending Invitation";
   return "Pending";
 }
 
 function supplierStatusTone(
   status: string
-): "warning" | "success" | "danger" | "neutral" {
+): "warning" | "success" | "danger" | "neutral" | "info" {
   switch (status) {
     case "Quotation Received":
       return "success";
@@ -382,6 +372,8 @@ function supplierStatusTone(
       return "danger";
     case "Expired":
       return "neutral";
+    case "Pending Invitation":
+      return "info";
     default:
       return "warning";
   }
@@ -412,12 +404,22 @@ export default function RFQDetailPage() {
   const [checkBudgetOpen, setCheckBudgetOpen] = useState(false);
   const [viewQuotationSq, setViewQuotationSq] = useState<string | null>(null);
   const [compareModalOpen, setCompareModalOpen] = useState(false);
+  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
+  const [extendDeadlineOpen, setExtendDeadlineOpen] = useState(false);
+  const [pendingInviteSuppliers, setPendingInviteSuppliers] = useState<
+    InviteSupplierSelection[]
+  >([]);
+  const [invitingSuppliers, setInvitingSuppliers] = useState(false);
+  const [aiStaleTick, setAiStaleTick] = useState(0);
   const [aiResult, setAiResult] = useState<AIRecommendation | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiLoadingStep, setAiLoadingStep] = useState(0);
   const [aiError, setAiError] = useState<string | null>(null);
   const aiStepIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [creatingPO, setCreatingPO] = useState(false);
+  const [creatingRound, setCreatingRound] = useState(false);
+  const [roundActivityTick, setRoundActivityTick] = useState(0);
+  const [createRoundOpen, setCreateRoundOpen] = useState(false);
   const [startingReverseBidding, setStartingReverseBidding] = useState(false);
   const [savedAnalysis, setSavedAnalysis] = useState<SavedAnalysisRecord | null>(
     () => readSavedAnalysis(rfqName)
@@ -459,11 +461,49 @@ export default function RFQDetailPage() {
     queryFn: () => getRFQ(rfqName),
   });
 
-  const quotesQuery = useQuery<SupplierQuotation[]>({
-    queryKey: ["rfq-quotes", rfqName],
+  const roundsQuery = useQuery<RfqQuoteRound[]>({
+    queryKey: ["rfq-quote-rounds", rfqName],
     enabled: !!rfqName,
-    queryFn: () => getSupplierQuotations(rfqName),
+    queryFn: async () => {
+      const listUrl = `/api/rfq-quote-round?rfq=${encodeURIComponent(rfqName)}`;
+      try {
+        const rounds = await listRfqQuoteRounds(rfqName);
+        if (rounds.length > 0) return rounds;
+
+        try {
+          const { round } = await ensureInitialRfqQuoteRound(
+            rfqName,
+            user?.email || user?.name,
+          );
+          return [round];
+        } catch (ensureErr) {
+          logRfqDetailApiFailure("quote-rounds", ensureErr, {
+            url: "/api/rfq-quote-round?action=ensure-initial",
+            method: "POST",
+            payload: { rfq_name: rfqName },
+          });
+          return [];
+        }
+      } catch (listErr) {
+        logRfqDetailApiFailure("quote-rounds", listErr, {
+          url: listUrl,
+          method: "GET",
+        });
+        throw listErr;
+      }
+    },
+    retry: false,
   });
+
+  const quoteRoundsErrorMessage = useRfqBackgroundQueryError(
+    "quote-rounds",
+    roundsQuery.isError,
+    roundsQuery.error,
+    {
+      url: `/api/rfq-quote-round?rfq=${encodeURIComponent(rfqName)}`,
+      method: "GET",
+    },
+  );
 
   // Explicit supplier "No Quote" declines (first-class responses).
   const declinesQuery = useQuery<SupplierRfqResponse[]>({
@@ -483,9 +523,52 @@ export default function RFQDetailPage() {
   const declinedCount = declineBySupplier.size;
 
   const rfq = rfqQuery.data;
+  const inviteProcurementCategory = rfq?.custom_procurement_category?.trim() ?? "";
+  const inviteItemGroups = useMemo(() => {
+    const groups = new Set<string>();
+    for (const item of rfq?.items ?? []) {
+      const g = (item as { item_group?: string }).item_group;
+      if (g?.trim()) groups.add(g.trim());
+    }
+    return [...groups];
+  }, [rfq?.items]);
+  const inviteCommodity = inviteItemGroups[0] ?? "";
   const parsedMessage = useMemo(
     () => parseRfqMessage(rfq?.message_for_supplier),
     [rfq?.message_for_supplier]
+  );
+
+  const activeQuoteRound = useMemo(() => {
+    const rounds = roundsQuery.data ?? [];
+    return (
+      rounds.find((r) => r.status === "Active") ??
+      rounds.find((r) => r.status === "Draft") ??
+      rounds[rounds.length - 1] ??
+      null
+    );
+  }, [roundsQuery.data]);
+
+  const activeRoundName =
+    activeQuoteRound?.name ?? rfq?.custom_active_rfq_round ?? null;
+
+  const quotesQuery = useQuery<SupplierQuotation[]>({
+    queryKey: ["rfq-quotes", rfqName, activeRoundName],
+    enabled: !!rfqName,
+    queryFn: () =>
+      getSupplierQuotations(rfqName, {
+        activeRoundName,
+      }),
+    retry: false,
+  });
+
+  const supplierQuotesErrorMessage = useRfqBackgroundQueryError(
+    "supplier-quotes",
+    quotesQuery.isError,
+    quotesQuery.error,
+    {
+      url: `Supplier Quotation (RFQ ${rfqName})`,
+      method: "GET",
+    },
   );
 
   /* ─────────────── PO completion state ─────────────── */
@@ -501,7 +584,18 @@ export default function RFQDetailPage() {
     enabled: !!rfqName,
     queryFn: () => getPOsForRFQ(rfqName),
     staleTime: 0,
+    retry: false,
   });
+
+  useRfqBackgroundQueryError(
+    "linked-pos",
+    linkedPOsQuery.isError,
+    linkedPOsQuery.error,
+    {
+      url: `Purchase Order (RFQ ${rfqName})`,
+      method: "GET",
+    },
+  );
   const linkedPOs = linkedPOsQuery.data ?? [];
   const linkedPO = linkedPOs[0] ?? null;
 
@@ -678,6 +772,73 @@ export default function RFQDetailPage() {
     );
   }, [rfq]);
 
+  const quotedSupplierIds = useMemo(
+    () =>
+      Array.from(localQuotes.values())
+        .filter((q) => q.total > 0)
+        .map((q) => (q.supplier ?? q.supplier_name ?? "").trim().toLowerCase())
+        .filter(Boolean),
+    [localQuotes],
+  );
+
+  useEffect(() => {
+    if (!rfqName || !savedAnalysis) return;
+    if (
+      detectRfqAiStale(
+        rfqName,
+        Array.from(invitedSupplierIds),
+        quotedSupplierIds,
+      )
+    ) {
+      const baseline = readRfqAiBaseline(rfqName);
+      let source: RfqAiStaleSource = "quotation";
+      if (baseline) {
+        const baseQuoted = new Set(baseline.quotedSupplierIds);
+        const baseInvited = new Set(baseline.invitedSupplierIds);
+        const hasNewQuote = quotedSupplierIds.some((id) => !baseQuoted.has(id));
+        const hasNewInvite = Array.from(invitedSupplierIds).some(
+          (id) => !baseInvited.has(id),
+        );
+        if (hasNewInvite && !hasNewQuote) source = "invite";
+      }
+      markRfqAiStale(
+        rfqName,
+        source === "invite"
+          ? "Additional suppliers were invited after the last AI analysis."
+          : "A new supplier quotation was received after the last AI analysis.",
+        source,
+      );
+      setAiStaleTick((t) => t + 1);
+    }
+  }, [rfqName, savedAnalysis, invitedSupplierIds, quotedSupplierIds]);
+
+  const aiNeedsRerun = useMemo(() => {
+    void aiStaleTick;
+    return !!savedAnalysis && getRfqAiStale(rfqName).stale;
+  }, [savedAnalysis, rfqName, aiStaleTick]);
+
+  const aiStaleSource = useMemo((): RfqAiStaleSource => {
+    void aiStaleTick;
+    return getRfqAiStale(rfqName).source ?? "quotation";
+  }, [rfqName, aiStaleTick]);
+
+  // Must stay above loading/error early returns — same hook order every render.
+  const newlyAddedByRound = useMemo(() => {
+    void roundActivityTick;
+    if (!rfqName) return {} as Record<string, number>;
+    const map = readRfqRoundMetaMap(rfqName);
+    const out: Record<string, number> = {};
+    for (const [roundName, meta] of Object.entries(map)) {
+      out[roundName] = meta.newly_added_suppliers;
+    }
+    return out;
+  }, [rfqName, roundActivityTick]);
+
+  const roundActivityEntries = useMemo(() => {
+    void roundActivityTick;
+    return rfqName ? readRfqRoundActivity(rfqName) : [];
+  }, [rfqName, roundActivityTick]);
+
   /* ─────────────── Saved AI analysis (localStorage) ─────────────── */
 
   // Re-hydrate the persisted analysis whenever the RFQ changes.
@@ -753,6 +914,14 @@ export default function RFQDetailPage() {
           localStorage.setItem(ANALYSES_LIST_KEY, JSON.stringify(list));
         }
         setSavedAnalysis(record);
+        saveRfqAiBaseline(
+          name,
+          Array.from(invitedSupplierIds),
+          Array.from(localQuotes.values())
+            .filter((q) => q.total > 0)
+            .map((q) => (q.supplier ?? q.supplier_name ?? "").trim())
+            .filter(Boolean),
+        );
       }
     } catch {
       /* ignore storage quota / serialization errors */
@@ -1241,8 +1410,12 @@ export default function RFQDetailPage() {
       } catch (localErr) {
         // eslint-disable-next-line no-console
         console.error("[AI Analysis] Local fallback also failed:", localErr);
-        setAiError(AI_FALLBACK_NOTICE);
-        toast(AI_FALLBACK_NOTICE, { icon: "ℹ️", duration: 6_000 });
+        const fallbackMsg = resolveApiErrorMessage(
+          localErr,
+          AI_FALLBACK_NOTICE,
+        );
+        setAiError(fallbackMsg);
+        toast(AI_FALLBACK_NOTICE, { icon: "ℹ️", duration: 6_000, id: "rfq-ai-fallback" });
       }
     } finally {
       if (aiStepIntervalRef.current) {
@@ -1288,7 +1461,8 @@ export default function RFQDetailPage() {
       setAiModalOpen(false);
     } catch (err) {
       toast.error(
-        `Failed to submit for review: ${err instanceof Error ? err.message : "Unknown error"}`
+        resolveApiErrorMessage(err, "Failed to submit for review."),
+        { id: "rfq-submit-for-review" },
       );
     } finally {
       setSubmittingForReview(false);
@@ -1368,7 +1542,8 @@ export default function RFQDetailPage() {
       setAiModalOpen(false);
     } catch (err) {
       toast.error(
-        `Failed to submit for review: ${err instanceof Error ? err.message : "Unknown error"}`
+        resolveApiErrorMessage(err, "Failed to submit for review."),
+        { id: "rfq-submit-for-review" },
       );
     } finally {
       setSubmittingForReview(false);
@@ -1406,9 +1581,8 @@ export default function RFQDetailPage() {
       navigate(`/sourcing/reverse-bidding/${encodeURIComponent(rb.name)}`);
     } catch (err) {
       toast.error(
-        `Could not start reverse bidding: ${
-          err instanceof Error ? err.message : "Unknown error"
-        }`
+        resolveApiErrorMessage(err, "Could not start reverse bidding."),
+        { id: "rfq-reverse-bidding" },
       );
     } finally {
       setStartingReverseBidding(false);
@@ -1429,10 +1603,10 @@ export default function RFQDetailPage() {
       // Refetch so docstatus + status reflect the new Submitted state.
       void rfqQuery.refetch();
     } catch (err) {
-      toast.error(
-        `Submit failed: ${err instanceof Error ? err.message : "Unknown error"}`,
-        { duration: 8_000 }
-      );
+      toast.error(resolveApiErrorMessage(err, "Submit failed."), {
+        id: "rfq-submit",
+        duration: 8_000,
+      });
     } finally {
       setSubmittingRFQ(false);
     }
@@ -1618,10 +1792,10 @@ export default function RFQDetailPage() {
         navigate(`/p2p/purchase-orders/${encodeURIComponent(po.name)}`);
       }, 1_500);
     } catch (err) {
-      toast.error(
-        `PO creation failed: ${err instanceof Error ? err.message : "Unknown error"}`,
-        { duration: 8_000 }
-      );
+      toast.error(resolveApiErrorMessage(err, "PO creation failed."), {
+        id: "rfq-create-po",
+        duration: 8_000,
+      });
     } finally {
       setCreatingPO(false);
     }
@@ -1667,9 +1841,13 @@ export default function RFQDetailPage() {
           }
           onClose={closeAIModal}
           onRetry={isReadOnly ? () => {} : () => void runAIAnalysis()}
-          onCreatePO={isReadOnly ? () => {} : createPOFromRecommendation}
+          onCreatePO={
+            isReadOnly || aiNeedsRerun ? () => {} : createPOFromRecommendation
+          }
           onSelectSupplier={
-            isReadOnly || hasSelectedSupplier ? undefined : handleSelectAnySupplier
+            isReadOnly || hasSelectedSupplier || aiNeedsRerun
+              ? undefined
+              : handleSelectAnySupplier
           }
           onStartReverseBidding={
             isReadOnly ||
@@ -1748,6 +1926,115 @@ export default function RFQDetailPage() {
   const copilotHasAnalysis = !!savedAnalysis && hasQuotations;
   const canReAnalyze = hasSelectedSupplier && !isCompleted;
 
+  const rfqStatusLower = (rfq.status ?? "").trim().toLowerCase();
+  const inviteBlockedAfterAward =
+    hasSelectedSupplier ||
+    procurementFinalized ||
+    rfqStatusLower === "cancelled" ||
+    rfqStatusLower === "closed" ||
+    rfqStatusLower === "completed" ||
+    rfq.docstatus === 2;
+  const canInviteMoreSuppliers =
+    !isReadOnly && !inviteBlockedAfterAward;
+
+  const alreadyInvitedSupplierIds = new Set(
+    (rfq.suppliers ?? []).map((s) => s.supplier.trim().toLowerCase()),
+  );
+
+  const pendingInvitationSupplierIds = getPendingInvitationSupplierIds(rfq.name);
+
+  const rawValidTill =
+    rfq.valid_till || parsedMessage.validTill || undefined;
+  const isRfqExpired = rawValidTill
+    ? (() => {
+        const deadline = parseERPNextDateInput(rawValidTill);
+        return deadline?.isValid()
+          ? deadline.endOf("day").isBefore(dayjs())
+          : false;
+      })()
+    : false;
+
+  async function executeSupplierInvite(
+    suppliers: InviteSupplierSelection[],
+    extendDeadline: boolean,
+  ) {
+    if (!rfq || suppliers.length === 0) return;
+
+    const newSuppliers = suppliers.filter(
+      (s) => !alreadyInvitedSupplierIds.has(s.supplier.trim().toLowerCase()),
+    );
+    if (newSuppliers.length === 0) {
+      toast.error("This supplier has already been invited to this RFQ.");
+      return;
+    }
+
+    setInvitingSuppliers(true);
+    try {
+      let validTill = rawValidTill;
+      if (extendDeadline) {
+        const extended = isoDateOffset(14);
+        await extendRfqDeadline(rfq.name, extended);
+        validTill = extended;
+      }
+
+      const result = await inviteSuppliersToRfq({
+        rfqName: rfq.name,
+        newSuppliers,
+        invitedBy: user?.email || user?.name || "Procurement",
+        validTill,
+      });
+
+      if (copilotHasAnalysis || savedAnalysis) {
+        markRfqAiStale(
+          rfq.name,
+          "Additional suppliers were invited after the last AI analysis.",
+          "invite",
+        );
+        setAiStaleTick((t) => t + 1);
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ["rfq", rfq.name] });
+      setPendingInviteSuppliers([]);
+      setExtendDeadlineOpen(false);
+
+      const count = result.invited.length;
+      toast.success(
+        `${count} supplier${count === 1 ? "" : "s"} invited successfully.${
+          result.rfq.docstatus !== 1
+            ? " Submit the RFQ to publish invitations to the supplier portal."
+            : ""
+        }`,
+      );
+    } catch (err) {
+      const msg = resolveApiErrorMessage(err, "Could not invite suppliers.");
+      if (/already invited|already participating/i.test(msg)) {
+        toast.error("This supplier has already been invited to this RFQ.", {
+          id: "rfq-invite-suppliers",
+        });
+      } else {
+        toast.error(msg, { id: "rfq-invite-suppliers", duration: 8_000 });
+      }
+    } finally {
+      setInvitingSuppliers(false);
+    }
+  }
+
+  function handleInviteSelection(suppliers: InviteSupplierSelection[]) {
+    const newSuppliers = suppliers.filter(
+      (s) => !alreadyInvitedSupplierIds.has(s.supplier.trim().toLowerCase()),
+    );
+    if (newSuppliers.length === 0) {
+      toast.error("This supplier has already been invited to this RFQ.");
+      return;
+    }
+    setPendingInviteSuppliers(newSuppliers);
+    if (isRfqExpired) {
+      setExtendDeadlineOpen(true);
+      return;
+    }
+    void executeSupplierInvite(newSuppliers, false);
+  }
+
   /**
    * "View Quotation" must stay hidden through RFQ Created → Suppliers
    * Responded → AI Analysis, and only appear once the RFQ workflow has
@@ -1759,6 +2046,124 @@ export default function RFQDetailPage() {
    * against ERPNext (`getPOsForRFQ`) plus the RFQ's own `status` field.
    */
   const canViewQuotations = hasSelectedSupplier || procurementFinalized;
+
+  const canCreateQuoteRound = canCreateRfqQuoteRound({
+    hasSelectedSupplier,
+    procurementFinalized,
+    rfqCancelled:
+      rfqStatusLower === "cancelled" ||
+      rfq.docstatus === 2,
+  });
+
+  const nextRoundNumber =
+    (activeQuoteRound?.round_number ??
+      (roundsQuery.data?.length ?? 0)) + 1;
+
+  async function handleCreateNextRound(input: {
+    reasonCode: RfqRoundReasonCode;
+    remarks: string;
+    newSuppliers?: InviteSupplierSelection[];
+  }) {
+    if (!rfq || !canCreateQuoteRound || creatingRound) return;
+    setCreatingRound(true);
+    const toastId = "rfq-create-quote-round";
+    const actor = user?.email || user?.name || "Procurement";
+    const roundLabel = formatRfqRoundLabel(nextRoundNumber);
+    try {
+      if (input.newSuppliers && input.newSuppliers.length > 0 && isRfqExpired) {
+        const extended = isoDateOffset(14);
+        await extendRfqDeadline(rfq.name, extended);
+      }
+
+      const createResult = await createNextRfqQuoteRound({
+        rfqName: rfq.name,
+        reasonCode: input.reasonCode,
+        remarks: input.remarks,
+        createdBy: actor,
+        associateSuppliers: input.newSuppliers?.map((s) => ({
+          supplier: s.supplier,
+          supplier_name: s.supplier_name,
+        })),
+        inviteSuppliers: input.newSuppliers?.map((s) => ({
+          supplier: s.supplier,
+          supplier_name: s.supplier_name,
+        })),
+      });
+      const { round, invited, inviteWarning, emailWarning } = createResult;
+
+      recordQuoteRoundCreated({
+        rfqName: rfq.name,
+        roundName: round.name,
+        roundNumber: round.round_number || nextRoundNumber,
+        reasonCode: input.reasonCode,
+        remarks: input.remarks,
+        user: actor,
+      });
+
+      const invitedSuppliers = invited ?? [];
+      if (invitedSuppliers.length > 0) {
+        recordQuoteRoundSupplierInvites({
+          rfqName: rfq.name,
+          roundName: round.name,
+          roundNumber: round.round_number || nextRoundNumber,
+          reasonCode: input.reasonCode,
+          user: actor,
+          suppliers: invitedSuppliers.map((s) => ({
+            supplier: s.supplier,
+            supplier_name: s.supplier_name || s.supplier,
+          })),
+          emailStatus:
+            emailWarning
+              ? "failed"
+              : round.status === "Active"
+                ? "sent"
+                : "pending_submit",
+        });
+      }
+
+      if (copilotHasAnalysis || savedAnalysis) {
+        markRfqAiStale(
+          rfq.name,
+          "A new quote round was opened — re-run AI analysis on current quotations.",
+          "quotation",
+        );
+        setAiStaleTick((t) => t + 1);
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["rfq", rfq.name] }),
+        queryClient.invalidateQueries({ queryKey: ["rfq-quote-rounds", rfq.name] }),
+        queryClient.invalidateQueries({ queryKey: ["rfq-quotes", rfq.name] }),
+      ]);
+      setRoundActivityTick((t) => t + 1);
+      setCreateRoundOpen(false);
+
+      const invitedCount = invitedSuppliers.length;
+      toast.success(
+        invitedCount > 0
+          ? `Quote Round ${roundLabel} created successfully. ${invitedCount} supplier${
+              invitedCount === 1 ? "" : "s"
+            } invited.`
+          : `Quote Round ${roundLabel} created successfully.`,
+        { id: toastId },
+      );
+
+      const followUpWarning = inviteWarning || emailWarning;
+      if (followUpWarning) {
+        toast.error(followUpWarning, {
+          id: `${toastId}-invite-warning`,
+          duration: 10000,
+        });
+      }
+    } catch (err) {
+      const message =
+        err instanceof RfqQuoteRoundApiError && err.message.trim()
+          ? err.message.trim()
+          : resolveApiErrorMessage(err, "Could not create quote round.");
+      toast.error(message, { id: toastId, duration: 8000 });
+    } finally {
+      setCreatingRound(false);
+    }
+  }
 
   const handlePerformAnalysis = () => {
     if (isReadOnly) return;
@@ -2121,6 +2526,10 @@ export default function RFQDetailPage() {
       hasAnthropicKey={HAS_ANTHROPIC_KEY}
       canCompareQuotations={canCompareQuotations}
       canViewQuotations={canViewQuotations}
+      canInviteMoreSuppliers={canInviteMoreSuppliers}
+      aiNeedsRerun={aiNeedsRerun}
+      aiStaleSource={aiStaleSource}
+      onRerunAiAnalysis={handlePerformAnalysis}
       showSubmitRFQ={showSubmitRFQ}
       submittingRFQ={submittingRFQ}
       creatingPO={creatingPO}
@@ -2128,6 +2537,7 @@ export default function RFQDetailPage() {
       declineBySupplier={declineBySupplier}
       supplierAnalysisRows={savedAnalysis?.analysis?.supplier_analysis ?? []}
       quotesQueryError={quotesQuery.isError}
+      quotesQueryErrorMessage={supplierQuotesErrorMessage}
       onRetryQuotes={() => void quotesQuery.refetch()}
       onCheckBudget={() => setCheckBudgetOpen(true)}
       onSubmitRFQ={() => void handleSubmitRFQ()}
@@ -2140,16 +2550,42 @@ export default function RFQDetailPage() {
       onCreatePO={() => void handleCreatePO(resolvedSelectedSupplier)}
       onPrint={handlePrintPdf}
       onExportPdf={handleExportPdf}
-      resolveSupplierStatus={(s, hasQuote, validTill, hasDecline) =>
+      onInviteMoreSuppliers={() => setInviteDialogOpen(true)}
+      pendingInvitationSupplierIds={pendingInvitationSupplierIds}
+      resolveSupplierStatus={(s, hasQuote, validTill, hasDecline, pendingInvite) =>
         resolveSupplierStatus(
           s,
           hasQuote,
           validTill || parsedMessage.validTill || undefined,
           hasDecline,
+          pendingInvite,
         )
       }
       supplierStatusTone={supplierStatusTone}
       quoteForSupplier={quoteForSupplier}
+      quoteRoundsSlot={
+        <div className="space-y-4">
+          <RfqQuoteRoundsPanel
+            rounds={roundsQuery.data ?? []}
+            activeRoundName={activeRoundName}
+            loading={roundsQuery.isLoading && !roundsQuery.data}
+            errorMessage={quoteRoundsErrorMessage}
+            onRetry={() => void roundsQuery.refetch()}
+            canCreateRound={canCreateQuoteRound && !isReadOnly}
+            createDisabledReason={
+              hasSelectedSupplier
+                ? "Award completed — new rounds are disabled."
+                : procurementFinalized
+                  ? "Procurement finalized — new rounds are disabled."
+                  : undefined
+            }
+            creatingRound={creatingRound}
+            newlyAddedByRound={newlyAddedByRound}
+            onCreateRound={() => setCreateRoundOpen(true)}
+          />
+          <RfqRoundActivityTimeline entries={roundActivityEntries} />
+        </div>
+      }
       rejectionBanners={
         <>
           {!isReadOnly && legalDoc?.review_status === "Rejected" && (
@@ -2201,7 +2637,7 @@ export default function RFQDetailPage() {
               .filter((r) => r.verdict !== "AVOID")
               .map((r) => r.name)}
             procurementManager={user?.email}
-            allowCreate={!hasSelectedSupplier}
+            allowCreate={!hasSelectedSupplier && !aiNeedsRerun}
           />
         ) : null
       }
@@ -2313,6 +2749,53 @@ export default function RFQDetailPage() {
               onClose={() => setCompareModalOpen(false)}
             />
           )}
+          <RfqInviteSuppliersDialog
+            open={inviteDialogOpen}
+            onClose={() => {
+              if (invitingSuppliers) return;
+              setInviteDialogOpen(false);
+            }}
+            alreadyInvited={alreadyInvitedSupplierIds}
+            alreadyInvitedCount={alreadyInvitedSupplierIds.size}
+            inviting={invitingSuppliers}
+            onInvite={handleInviteSelection}
+            procurementCategory={inviteProcurementCategory}
+            commodity={inviteCommodity}
+            itemGroups={inviteItemGroups}
+          />
+          <ExtendRfqDeadlineDialog
+            open={extendDeadlineOpen}
+            currentValidTill={validTillDisplay}
+            busy={invitingSuppliers}
+            onCancel={() => {
+              if (invitingSuppliers) return;
+              setExtendDeadlineOpen(false);
+              setPendingInviteSuppliers([]);
+            }}
+            onInviteAnyway={() =>
+              void executeSupplierInvite(pendingInviteSuppliers, false)
+            }
+            onExtendAndInvite={() =>
+              void executeSupplierInvite(pendingInviteSuppliers, true)
+            }
+          />
+          <CreateRfqRoundDialog
+            open={createRoundOpen}
+            nextRoundNumber={nextRoundNumber}
+            creating={creatingRound}
+            alreadyInvited={alreadyInvitedSupplierIds}
+            alreadyInvitedCount={alreadyInvitedSupplierIds.size}
+            procurementCategory={inviteProcurementCategory}
+            commodity={inviteCommodity}
+            itemGroups={inviteItemGroups}
+            rfqName={rfq?.name}
+            validTill={validTillDisplay}
+            onClose={() => {
+              if (creatingRound) return;
+              setCreateRoundOpen(false);
+            }}
+            onSubmit={(input) => void handleCreateNextRound(input)}
+          />
         </>
       }
     />
@@ -2380,7 +2863,8 @@ function ReverseBiddingCTA({
     },
     onError: (e: unknown) =>
       toast.error(
-        e instanceof Error ? e.message : "Could not create reverse auction"
+        resolveApiErrorMessage(e, "Could not create reverse auction."),
+        { id: "rfq-reverse-bidding-create" },
       ),
   });
 

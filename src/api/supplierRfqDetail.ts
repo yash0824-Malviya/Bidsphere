@@ -8,7 +8,13 @@
 import { isAxiosError } from "axios";
 
 import { getRFQ } from "./sourcing";
-import type { RFQ } from "../types/erpnext";
+import {
+  apiGet,
+  buildListConfig,
+  buildResourceUrl,
+  withSilent,
+} from "./erpnext";
+import type { RFQ, RFQItem, RfqQuoteRoundDoc } from "../types/erpnext";
 import { sanitizeRfqForSupplier } from "../utils/rfqTargetPrice";
 
 const LOG = "[SupplierRFQ Detail]";
@@ -72,6 +78,125 @@ function httpStatusOf(err: unknown): number | undefined {
 function messageOf(err: unknown): string {
   if (err instanceof Error && err.message.trim()) return err.message.trim();
   return String(err ?? "Unknown error");
+}
+
+function normalizeSupplierKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function isSupplierInvited(rfq: RFQ, supplierId: string): boolean {
+  const key = normalizeSupplierKey(supplierId);
+  if (!key) return false;
+  return (rfq.suppliers ?? []).some((row) => {
+    const supplier = normalizeSupplierKey(String(row.supplier || ""));
+    const supplierName = normalizeSupplierKey(
+      String((row as { supplier_name?: string }).supplier_name || ""),
+    );
+    return supplier === key || (!!supplierName && supplierName === key);
+  });
+}
+
+function mapRoundItemsToRfqItems(roundItems: RFQItem[]): RFQItem[] {
+  return roundItems.map((row) => ({
+    ...row,
+    item_code: row.item_code,
+    item_name: row.item_name ?? row.item_code,
+    description: row.description ?? "",
+    qty: Number(row.qty) || 0,
+    uom: row.uom || "Nos",
+  }));
+}
+
+/**
+ * When the live RFQ child table is empty (or thinner than the active round),
+ * hydrate items/suppliers from the active RFQ Round snapshot.
+ */
+async function enrichFromActiveRound(rfq: RFQ): Promise<RFQ> {
+  const activeRoundName = String(rfq.custom_active_rfq_round || "").trim();
+  const currentItems = rfq.items ?? [];
+  if (!activeRoundName && currentItems.length > 0) return rfq;
+
+  try {
+    let round: RfqQuoteRoundDoc | null = null;
+    if (activeRoundName) {
+      round = await apiGet<RfqQuoteRoundDoc>(
+        buildResourceUrl("RFQ Round", activeRoundName),
+        withSilent({}),
+      );
+    } else {
+      const rows = await apiGet<RfqQuoteRoundDoc[]>(
+        buildResourceUrl("RFQ Round"),
+        withSilent(
+          buildListConfig({
+            fields: ["name"],
+            filters: [
+              ["rfq", "=", rfq.name],
+              ["status", "=", "Active"],
+            ],
+            limit_page_length: 1,
+          }),
+        ),
+      );
+      const name = String(rows?.[0]?.name || "").trim();
+      if (name) {
+        round = await apiGet<RfqQuoteRoundDoc>(
+          buildResourceUrl("RFQ Round", name),
+          withSilent({}),
+        );
+      }
+    }
+
+    if (!round?.name) return rfq;
+
+    const roundItems = Array.isArray(round.items) ? round.items : [];
+    const roundSuppliers = Array.isArray(round.suppliers) ? round.suppliers : [];
+    const shouldReplaceItems =
+      currentItems.length === 0 && roundItems.length > 0;
+
+    // eslint-disable-next-line no-console
+    console.info(LOG, "Active quote round", {
+      rfqId: rfq.name,
+      activeRound: round.name,
+      roundNumber: round.round_number,
+      roundItemCount: roundItems.length,
+      rfqItemCount: currentItems.length,
+      hydratedItems: shouldReplaceItems,
+    });
+
+    if (!shouldReplaceItems && roundSuppliers.length === 0) {
+      return {
+        ...rfq,
+        custom_active_rfq_round: round.name,
+        custom_current_round_number:
+          round.round_number ?? rfq.custom_current_round_number,
+      };
+    }
+
+    return {
+      ...rfq,
+      custom_active_rfq_round: round.name,
+      custom_current_round_number:
+        round.round_number ?? rfq.custom_current_round_number,
+      message_for_supplier:
+        round.message_for_supplier || rfq.message_for_supplier,
+      terms: round.terms || rfq.terms,
+      valid_till: round.valid_till || rfq.valid_till,
+      items: shouldReplaceItems
+        ? mapRoundItemsToRfqItems(roundItems)
+        : currentItems,
+      suppliers:
+        (rfq.suppliers?.length ?? 0) > 0
+          ? rfq.suppliers
+          : (roundSuppliers as RFQ["suppliers"]),
+    };
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(LOG, "Active round enrichment skipped", {
+      rfqId: rfq.name,
+      message: messageOf(err),
+    });
+    return rfq;
+  }
 }
 
 /**
@@ -149,20 +274,34 @@ export async function getSupplierRfqDetail(
     );
   }
 
-  // eslint-disable-next-line no-console
-  console.info(LOG, "API response", {
-    rfqName: rfq?.name,
-    docstatus: rfq?.docstatus,
-    status: rfq?.status,
-    supplierCount: rfq?.suppliers?.length ?? 0,
-    itemCount: rfq?.items?.length ?? 0,
-    suppliers: (rfq?.suppliers ?? []).map((s) => s.supplier),
-    requireCostBreakdown: rfq?.custom_require_cost_breakdown,
-  });
-
   if (!rfq?.name) {
     throw new SupplierRfqAccessError("NOT_FOUND", "RFQ not found");
   }
+
+  // Ensure child tables are always arrays for downstream consumers.
+  rfq = {
+    ...rfq,
+    items: Array.isArray(rfq.items) ? rfq.items : [],
+    suppliers: Array.isArray(rfq.suppliers) ? rfq.suppliers : [],
+  };
+
+  rfq = await enrichFromActiveRound(rfq);
+
+  // eslint-disable-next-line no-console
+  console.info(LOG, "API response", {
+    rfqId: rfq.name,
+    docstatus: rfq.docstatus,
+    status: rfq.status,
+    currency:
+      (rfq as { currency?: string }).currency ||
+      (rfq as { company?: string }).company ||
+      null,
+    itemCount: rfq.items?.length ?? 0,
+    supplierCount: rfq.suppliers?.length ?? 0,
+    activeRound: rfq.custom_active_rfq_round ?? null,
+    roundNumber: rfq.custom_current_round_number ?? null,
+    requireCostBreakdown: rfq.custom_require_cost_breakdown,
+  });
 
   const docstatus = Number((rfq as { docstatus?: number }).docstatus ?? 0);
   if (docstatus === 0) {
@@ -180,13 +319,10 @@ export async function getSupplierRfqDetail(
     throw new SupplierRfqAccessError("CLOSED", "RFQ closed");
   }
 
-  const invited = (rfq.suppliers ?? []).some(
-    (s) => String(s.supplier || "").trim() === supplier,
-  );
-  if (!invited) {
+  if (!isSupplierInvited(rfq, supplier)) {
     // eslint-disable-next-line no-console
     console.warn(LOG, "Supplier not on RFQ", {
-      rfqName: name,
+      rfqId: name,
       supplierId: supplier,
       invitedSuppliers: (rfq.suppliers ?? []).map((s) => s.supplier),
     });
@@ -201,13 +337,22 @@ export async function getSupplierRfqDetail(
 
   // eslint-disable-next-line no-console
   console.info(LOG, "Access granted", {
-    rfqName: name,
+    rfqId: name,
     supplierId: supplier,
+    itemCount: sanitized.items?.length ?? 0,
     show_target_price: sanitized.show_target_price,
     targetPricesReturned: sanitized.show_target_price
       ? sanitized.items.filter((i) => i.target_price != null).length
       : 0,
   });
+
+  if ((sanitized.items?.length ?? 0) === 0) {
+    // eslint-disable-next-line no-console
+    console.warn(LOG, "RFQ has zero line items after load", {
+      rfqId: name,
+      activeRound: sanitized.custom_active_rfq_round ?? null,
+    });
+  }
 
   return sanitized;
 }

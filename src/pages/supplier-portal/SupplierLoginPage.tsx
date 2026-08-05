@@ -1,5 +1,5 @@
-import type { FormEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
+import type { FormEvent, KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import toast from "react-hot-toast";
@@ -11,6 +11,7 @@ import {
   Loader2,
   LogIn,
   Mail,
+  Phone,
   ShieldCheck,
 } from "lucide-react";
 
@@ -38,8 +39,10 @@ import {
   setActivePortal,
   setLoginPortalAffinity,
 } from "../../utils/portalAuth";
+import { NETLINK_LOGO_PATH, COMPANY_NAME } from "../../config/branding";
 
-const SUPPORT_EMAIL = "support@netlink.com";
+const SUPPORT_EMAIL = "support@bidsphere.com";
+const SUPPORT_PHONE = "+91 98765 43210";
 const TAB_STORAGE_KEY = "supplier_login_tab";
 
 type LoginTab = "account" | "pin";
@@ -56,7 +59,7 @@ function readStoredTab(): LoginTab {
   } catch {
     /* ignore */
   }
-  return "account";
+  return "pin";
 }
 
 function postAccountLoginPath(session: {
@@ -68,6 +71,77 @@ function postAccountLoginPath(session: {
   const status = String(session.displayStatus || "");
   if (session.unlocked || status === "Approved") return "/supplier/dashboard";
   return "/supplier/profile";
+}
+
+interface PinInputProps {
+  value: string;
+  onChange: (pin: string) => void;
+  disabled?: boolean;
+}
+
+function PinInput({ value, onChange, disabled }: PinInputProps) {
+  const digits = Array.from({ length: 5 }, (_, i) => value[i] || "");
+  const inputsRef = useRef<(HTMLInputElement | null)[]>([]);
+
+  const handleChange = (index: number, val: string) => {
+    const numericVal = val.replace(/\D/g, "");
+    if (!numericVal) {
+      const nextDigits = [...digits];
+      nextDigits[index] = "";
+      onChange(nextDigits.join(""));
+      return;
+    }
+
+    if (numericVal.length > 1) {
+      const pasted = numericVal.slice(0, 5);
+      onChange(pasted);
+      const nextFocus = Math.min(pasted.length, 4);
+      inputsRef.current[nextFocus]?.focus();
+      return;
+    }
+
+    const nextDigits = [...digits];
+    nextDigits[index] = numericVal;
+    const newPin = nextDigits.join("");
+    onChange(newPin);
+
+    if (index < 4) {
+      inputsRef.current[index + 1]?.focus();
+    }
+  };
+
+  const handleKeyDown = (index: number, e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Backspace" && !digits[index] && index > 0) {
+      inputsRef.current[index - 1]?.focus();
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex h-[48px] w-[44px] shrink-0 items-center justify-center rounded-[10px] border border-[#D0D5DD] bg-[#F9FAFB] text-[#667085] supplier-login-field-icon">
+        <KeyRound className="h-4 w-4" />
+      </div>
+      <div className="flex flex-1 items-center justify-between gap-1 sm:gap-1.5">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <input
+            key={i}
+            ref={(el) => {
+              inputsRef.current[i] = el;
+            }}
+            type="password"
+            inputMode="numeric"
+            maxLength={1}
+            value={digits[i]}
+            disabled={disabled}
+            onChange={(e) => handleChange(i, e.target.value)}
+            onKeyDown={(e) => handleKeyDown(i, e)}
+            className="h-[48px] w-[48px] rounded-[10px] border border-[#D0D5DD] bg-white text-center font-bold text-lg text-[#101828] focus:border-[#146CE8] focus:ring-2 focus:ring-[#146CE8]/20 disabled:bg-[#F2F4F7] outline-none transition-all placeholder:text-[#98A2B3] supplier-login-pin-box"
+            placeholder="•"
+          />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export default function SupplierLoginPage() {
@@ -85,7 +159,7 @@ export default function SupplierLoginPage() {
   const [password, setPassword] = useState("");
   const [accountSubmitting, setAccountSubmitting] = useState(false);
 
-  // Company PIN login (legacy)
+  // Company PIN login
   const [supplierName, setSupplierName] = useState("");
   const [supplierCode, setSupplierCode] = useState("");
   const [pin, setPin] = useState("");
@@ -98,7 +172,6 @@ export default function SupplierLoginPage() {
   useEffect(() => {
     if (!hasHydrated) return;
 
-    // Internal staff sessions must not auto-enter Supplier — replace silently.
     if (isAuthenticated && user) {
       const previousPortal = getActivePortal();
       replacePreviousStaffSession("replace-staff-on-supplier-login");
@@ -139,13 +212,7 @@ export default function SupplierLoginPage() {
       reason: "supplier-session-on-supplier-login",
     });
     navigate(destination, { replace: true });
-  }, [
-    hasHydrated,
-    isAuthenticated,
-    user,
-    navigate,
-    location.pathname,
-  ]);
+  }, [hasHydrated, isAuthenticated, user, navigate, location.pathname]);
 
   function selectTab(next: LoginTab) {
     setTab(next);
@@ -223,7 +290,6 @@ export default function SupplierLoginPage() {
 
     setAccountSubmitting(true);
     try {
-      // Never keep a staff session alongside a supplier session.
       if (useAuthStore.getState().isAuthenticated) {
         replacePreviousStaffSession("replace-staff-before-supplier-login");
       }
@@ -279,8 +345,8 @@ export default function SupplierLoginPage() {
       toast.error("Please select your company or enter a valid supplier code.");
       return;
     }
-    if (!pin || pin.length !== 4) {
-      toast.error("Portal PIN must be 4 digits.");
+    if (!pin || pin.length < 4) {
+      toast.error("Portal PIN must be 4 or 5 digits.");
       return;
     }
 
@@ -332,254 +398,767 @@ export default function SupplierLoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen min-w-0 flex-col overflow-x-clip sm:flex-row">
-      <SupplierLoginHeroPanel />
+    <div
+      className="relative w-full overflow-x-hidden font-sans"
+      style={{ minHeight: "100vh", fontFamily: "Inter, system-ui, sans-serif" }}
+    >
+      {/* Full-screen logistics background */}
+      <img
+        src="/supplier-logistics-bg.jpg"
+        alt="BidSphere Logistics"
+        style={{
+          position: "absolute",
+          inset: 0,
+          height: "100%",
+          width: "100%",
+          objectFit: "cover",
+          objectPosition: "center",
+          zIndex: 0,
+        }}
+      />
 
-      <aside className="relative flex w-full flex-col justify-center bg-white px-4 py-8 sm:w-1/2 sm:min-h-screen sm:px-6 sm:py-10 lg:w-[40%] lg:px-8 desktop:w-[35%] desktop:px-10 desktop:py-12">
-        <div className="relative mx-auto w-full max-w-[420px]">
-          <div className="w-full rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm sm:p-8">
-            <div className="mb-7">
-              <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-[#1F3A6D] text-white shadow-md shadow-[#1F3A6D]/25">
-                <Building2 className="h-5 w-5" />
-              </div>
-              <h2 className="text-2xl font-semibold tracking-tight text-neutral-900">
-                Welcome, Supplier
-              </h2>
-              <p className="mt-1.5 text-sm text-neutral-500">
-                Sign in to access your collaboration portal
-              </p>
-            </div>
+      {/* Subtle global overlay — image remains clearly visible */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background: "rgba(5, 20, 45, 0.18)",
+          zIndex: 1,
+        }}
+      />
 
-            <div className="mb-5 grid grid-cols-2 gap-1 rounded-lg bg-neutral-100 p-1 text-sm">
-              <button
-                type="button"
-                onClick={() => selectTab("account")}
-                className={`rounded-md px-3 py-2 font-medium transition ${
-                  tab === "account"
-                    ? "bg-white text-neutral-900 shadow-sm"
-                    : "text-neutral-600 hover:text-neutral-800"
-                }`}
-              >
-                Account Login
-              </button>
-              <button
-                type="button"
-                onClick={() => selectTab("pin")}
-                className={`rounded-md px-3 py-2 font-medium transition ${
-                  tab === "pin"
-                    ? "bg-white text-neutral-900 shadow-sm"
-                    : "text-neutral-600 hover:text-neutral-800"
-                }`}
-              >
-                Company PIN Login
-              </button>
-            </div>
+      {/* Faint blue radial glow for network depth */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background:
+            "radial-gradient(circle at 32% 48%, rgba(20, 108, 232, 0.18) 0%, rgba(14, 165, 233, 0.08) 45%, transparent 75%)",
+          pointerEvents: "none",
+          zIndex: 1,
+        }}
+      />
 
-            {tab === "account" ? (
-              <form
-                onSubmit={(e) => void handleAccountSubmit(e)}
-                className="space-y-4"
-              >
-                <div>
-                  <label
-                    htmlFor="supplier-email"
-                    className="mb-1.5 block text-sm font-medium text-neutral-700"
-                  >
-                    Email Address
-                  </label>
-                  <div className="relative">
-                    <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-neutral-400">
-                      <Mail className="h-4 w-4" />
-                    </span>
-                    <input
-                      id="supplier-email"
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="supplier@company.com"
-                      autoComplete="username"
-                      required
-                      className="input-field pl-9 text-sm"
-                    />
-                  </div>
-                </div>
+      {/* Digital Supply Chain Network Effect (Subtle, 26% opacity) */}
+      <svg
+        style={{
+          position: "absolute",
+          inset: 0,
+          height: "100%",
+          width: "100%",
+          pointerEvents: "none",
+          zIndex: 2,
+          opacity: 0.26,
+        }}
+        viewBox="0 0 1000 800"
+        preserveAspectRatio="xMidYMid slice"
+      >
+        <defs>
+          <filter id="glow-cyan" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="4" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+        </defs>
 
-                <div>
-                  <div className="mb-1.5 flex items-center justify-between gap-2">
-                    <label
-                      htmlFor="supplier-password"
-                      className="block text-sm font-medium text-neutral-700"
-                    >
-                      Password
-                    </label>
-                    <button
-                      type="button"
-                      onClick={handleForgotPassword}
-                      className="text-xs font-medium text-primary hover:underline"
-                    >
-                      Forgot Password
-                    </button>
-                  </div>
-                  <div className="relative">
-                    <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-neutral-400">
-                      <KeyRound className="h-4 w-4" />
-                    </span>
-                    <input
-                      id="supplier-password"
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Enter your password"
-                      autoComplete="current-password"
-                      required
-                      className="input-field pl-9 text-sm"
-                    />
-                  </div>
-                </div>
+        {/* Curved connection lines connecting logistics hubs */}
+        <path
+          id="path-air-hub"
+          d="M 120 160 Q 220 210 380 260"
+          fill="none"
+          stroke="rgba(56,189,248,0.5)"
+          strokeWidth="1.5"
+          strokeDasharray="4 6"
+        />
+        <path
+          id="path-hub-logistics"
+          d="M 380 260 Q 310 360 260 460"
+          fill="none"
+          stroke="rgba(56,189,248,0.4)"
+          strokeWidth="1.5"
+          strokeDasharray="5 5"
+        />
+        <path
+          id="path-crane-logistics"
+          d="M 80 380 Q 170 410 260 460"
+          fill="none"
+          stroke="rgba(56,189,248,0.45)"
+          strokeWidth="1.5"
+          strokeDasharray="4 6"
+        />
+        <path
+          id="path-ship-truck"
+          d="M 140 590 Q 220 650 320 680"
+          fill="none"
+          stroke="rgba(56,189,248,0.4)"
+          strokeWidth="1.5"
+          strokeDasharray="6 6"
+        />
+        <path
+          id="path-truck-hub2"
+          d="M 320 680 Q 390 620 440 540"
+          fill="none"
+          stroke="rgba(56,189,248,0.35)"
+          strokeWidth="1.5"
+          strokeDasharray="4 6"
+        />
+        <path
+          id="path-logistics-gw2"
+          d="M 260 460 Q 400 480 560 380"
+          fill="none"
+          stroke="rgba(56,189,248,0.45)"
+          strokeWidth="1.5"
+          strokeDasharray="4 6"
+        />
+        <path
+          id="path-air-sky"
+          d="M 120 160 Q 210 130 310 140"
+          fill="none"
+          stroke="rgba(56,189,248,0.35)"
+          strokeWidth="1.5"
+          strokeDasharray="6 6"
+        />
+        <path
+          id="path-gw-reg"
+          d="M 440 540 Q 480 600 510 660"
+          fill="none"
+          stroke="rgba(56,189,248,0.4)"
+          strokeWidth="1.5"
+          strokeDasharray="5 5"
+        />
 
-                <button
-                  type="submit"
-                  disabled={accountSubmitting}
-                  className="supplier-login-submit mt-1 w-full disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {accountSubmitting ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <LogIn className="h-4 w-4" />
-                  )}
-                  {accountSubmitting ? "Signing in…" : "Sign In"}
-                </button>
-              </form>
-            ) : (
-              <form onSubmit={handlePinSubmit} className="space-y-4">
-                <div>
-                  <label
-                    htmlFor="supplier-select"
-                    className="mb-1.5 block text-sm font-medium text-neutral-700"
-                  >
-                    Company
-                  </label>
-                  <div className="relative">
-                    <select
-                      id="supplier-select"
-                      value={supplierName}
-                      onChange={(e) => handleCompanyChange(e.target.value)}
-                      disabled={suppliersQuery.isLoading}
-                      className="input-field appearance-none pr-9"
-                    >
-                      <option value="">
-                        {suppliersQuery.isLoading
-                          ? "Loading companies…"
-                          : "— Select your company —"}
-                      </option>
-                      {suppliers.map((s) => (
-                        <option key={s.name} value={s.name}>
-                          {s.supplier_name || s.name}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
-                    {suppliersQuery.isFetching && !suppliersQuery.isLoading && (
-                      <Loader2 className="absolute right-8 top-1/2 h-3.5 w-3.5 -translate-y-1/2 animate-spin text-neutral-400" />
-                    )}
-                  </div>
-                  {suppliersQuery.isError && (
-                    <p className="mt-1.5 text-xs text-danger-600">
-                      Could not load companies. Refresh or contact support.
-                    </p>
-                  )}
-                </div>
+        {/* Animated glowing particles travelling along paths */}
+        <circle r="3.5" fill="#38bdf8" filter="url(#glow-cyan)">
+          <animateMotion dur="5.5s" repeatCount="indefinite">
+            <mpath href="#path-air-hub" />
+          </animateMotion>
+        </circle>
+        <circle r="3.5" fill="#38bdf8" filter="url(#glow-cyan)">
+          <animateMotion dur="7s" repeatCount="indefinite">
+            <mpath href="#path-logistics-gw2" />
+          </animateMotion>
+        </circle>
+        <circle r="3" fill="#ffffff" filter="url(#glow-cyan)">
+          <animateMotion dur="6.2s" repeatCount="indefinite">
+            <mpath href="#path-ship-truck" />
+          </animateMotion>
+        </circle>
 
-                <div>
-                  <label
-                    htmlFor="supplier-code"
-                    className="mb-1.5 block text-sm font-medium text-neutral-700"
-                  >
-                    Supplier Code
-                  </label>
-                  <div className="relative">
-                    <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-neutral-400">
-                      <Hash className="h-4 w-4" />
-                    </span>
-                    <input
-                      id="supplier-code"
-                      type="text"
-                      value={supplierCode}
-                      onChange={(e) => handleSupplierCodeChange(e.target.value)}
-                      placeholder="e.g. SUP-00001"
-                      autoComplete="organization"
-                      disabled={suppliersQuery.isLoading}
-                      className="input-field pl-9 font-mono text-sm"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="portal-pin"
-                    className="mb-1.5 block text-sm font-medium text-neutral-700"
-                  >
-                    Portal PIN
-                  </label>
-                  <div className="relative">
-                    <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-neutral-400">
-                      <KeyRound className="h-4 w-4" />
-                    </span>
-                    <input
-                      id="portal-pin"
-                      type="password"
-                      inputMode="numeric"
-                      autoComplete="one-time-code"
-                      pattern="[0-9]{4}"
-                      maxLength={4}
-                      value={pin}
-                      onChange={(e) =>
-                        setPin(e.target.value.replace(/\D/g, "").slice(0, 4))
-                      }
-                      placeholder="• • • •"
-                      className="input-field pl-9 text-center font-mono tracking-[0.45em]"
-                    />
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={pinSubmitting || suppliersQuery.isLoading}
-                  className="supplier-login-submit mt-1 w-full disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {pinSubmitting ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <LogIn className="h-4 w-4" />
-                  )}
-                  {pinSubmitting ? "Signing in…" : "Sign In"}
-                </button>
-              </form>
+        {/* 10 Glowing Logistics Nodes */}
+        {[
+          { cx: 120, cy: 160, r: 5.5, pulse: true, speed: "3.2s" }, // Airplane Node
+          { cx: 80, cy: 380, r: 5, pulse: false },                // Crane Node
+          { cx: 140, cy: 590, r: 6, pulse: true, speed: "4.5s" },  // Cargo Ship Node
+          { cx: 320, cy: 680, r: 5.5, pulse: true, speed: "3.8s" },// Freight Truck Node
+          { cx: 260, cy: 460, r: 6.5, pulse: true, speed: "4.0s" },// Central Logistics Hub
+          { cx: 440, cy: 540, r: 5, pulse: false },               // Distribution Hub
+          { cx: 380, cy: 260, r: 6, pulse: true, speed: "3.5s" },  // Data Gateway Node
+          { cx: 560, cy: 380, r: 5.5, pulse: true, speed: "4.8s" },// Supply Network Hub
+          { cx: 310, cy: 140, r: 4.5, pulse: false },              // Sky Freight Node
+          { cx: 510, cy: 660, r: 5, pulse: false },               // Regional Port Node
+        ].map((node, idx) => (
+          <g key={idx}>
+            {node.pulse && (
+              <circle
+                cx={node.cx}
+                cy={node.cy}
+                r={node.r * 2.4}
+                fill="rgba(56,189,248,0.22)"
+                className="animate-ping"
+                style={{ animationDuration: node.speed || "3.5s" }}
+              />
             )}
+            <circle cx={node.cx} cy={node.cy} r={node.r} fill="#38bdf8" filter="url(#glow-cyan)" />
+            <circle cx={node.cx} cy={node.cy} r={node.r * 0.45} fill="#ffffff" />
+          </g>
+        ))}
+      </svg>
 
-            <div className="mt-5 flex items-center justify-center gap-2 rounded-xl border border-primary-100 bg-primary-50/60 px-3 py-2.5">
-              <ShieldCheck className="h-4 w-4 flex-shrink-0 text-primary" />
-              <span className="text-xs font-medium text-primary-700">
-                Secure supplier portal access
-              </span>
-            </div>
+      {/* Top-left Netlink logo — white compact box */}
+      <div
+        style={{
+          position: "absolute",
+          top: "28px",
+          left: "44px",
+          zIndex: 20,
+        }}
+      >
+        <div
+          style={{
+            background: "#FFFFFF",
+            borderRadius: "14px",
+            padding: "8px 14px",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.14)",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <img
+            src={NETLINK_LOGO_PATH}
+            alt={`${COMPANY_NAME} Logo`}
+            style={{ height: "38px", width: "auto", objectFit: "contain" }}
+          />
+        </div>
+      </div>
 
-            <div className="mt-6 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-3.5">
-              <p className="text-xs font-semibold text-neutral-800">Contact Support</p>
-              <p className="mt-1 text-xs leading-relaxed text-neutral-500">
-                Need help with access, quotations, or payments?
-              </p>
+      {/* Main layout — hero left (60%), login card right (40%) */}
+      <div
+        style={{
+          position: "relative",
+          zIndex: 10,
+          minHeight: "100vh",
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          paddingLeft: "64px",
+          paddingRight: "68px",
+          paddingTop: "40px",
+          paddingBottom: "28px",
+          boxSizing: "border-box",
+        }}
+        className="supplier-login-layout"
+      >
+        {/* Left hero content (60% visual space) */}
+        <section
+          className="supplier-login-hero"
+          style={{ display: "flex", flexShrink: 1, flex: "0 1 60%", maxWidth: "580px" }}
+        >
+          <SupplierLoginHeroPanel />
+        </section>
+
+        {/* Solid white refined enterprise login card - 410px width, 26px padding */}
+        <aside
+          className="supplier-login-card"
+          style={{
+            width: "410px",
+            maxWidth: "420px",
+            height: "auto",
+            background: "#FFFFFF",
+            opacity: 1,
+            backdropFilter: "none",
+            WebkitBackdropFilter: "none",
+            borderRadius: "22px",
+            border: "1px solid #E5E7EB",
+            boxShadow: "0 18px 60px rgba(0,0,0,0.16)",
+            padding: "26px",
+            overflow: "visible",
+            flexShrink: 0,
+            boxSizing: "border-box",
+            display: "flex",
+            flexDirection: "column",
+            marginTop: "12px",
+          }}
+        >
+          {/* Card header */}
+          <div className="supplier-login-card-header" style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", marginBottom: "18px" }}>
+            <img
+              src={NETLINK_LOGO_PATH}
+              alt={`${COMPANY_NAME} Logo`}
+              className="supplier-login-card-logo"
+              style={{ height: "36px", width: "auto", objectFit: "contain", marginBottom: "14px" }}
+            />
+            <h2
+              className="supplier-login-card-title"
+              style={{
+                fontSize: "23px",
+                fontWeight: 700,
+                color: "#101828",
+                marginBottom: "6px",
+                lineHeight: 1.2,
+                margin: 0,
+              }}
+            >
+              Welcome, Supplier
+            </h2>
+            <p
+              className="supplier-login-card-subtitle"
+              style={{
+                fontSize: "14px",
+                fontWeight: 400,
+                color: "#667085",
+                marginTop: "0px",
+                marginBottom: 0,
+              }}
+            >
+              Sign in to access your collaboration portal
+            </p>
+          </div>
+
+          {/* Tab switcher - 46px height */}
+          <div
+            className="supplier-login-tab-switcher"
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "4px",
+              borderRadius: "12px",
+              background: "#F1F5F9",
+              padding: "4px",
+              height: "46px",
+              marginBottom: "18px",
+              boxSizing: "border-box",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => selectTab("account")}
+              style={{
+                borderRadius: "9px",
+                fontSize: "13px",
+                fontWeight: 600,
+                border: "none",
+                cursor: "pointer",
+                transition: "all 150ms ease",
+                background: tab === "account" ? "#146CE8" : "transparent",
+                color: tab === "account" ? "#FFFFFF" : "#667085",
+              }}
+            >
+              Account Login
+            </button>
+            <button
+              type="button"
+              onClick={() => selectTab("pin")}
+              style={{
+                borderRadius: "9px",
+                fontSize: "13px",
+                fontWeight: 600,
+                border: "none",
+                cursor: "pointer",
+                transition: "all 150ms ease",
+                background: tab === "pin" ? "#146CE8" : "transparent",
+                color: tab === "pin" ? "#FFFFFF" : "#667085",
+              }}
+            >
+              Company PIN Login
+            </button>
+          </div>
+
+          {tab === "account" ? (
+            /* ── Account Login Form ── */
+            <form onSubmit={(e) => void handleAccountSubmit(e)}>
+              {/* Email */}
+              <div className="supplier-login-form-group" style={{ marginBottom: "14px" }}>
+                <label
+                  htmlFor="supplier-email"
+                  style={{
+                    display: "block",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    letterSpacing: "0.04em",
+                    color: "#344054",
+                    marginBottom: "6px",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  Email Address
+                </label>
+                <div style={{ display: "flex", alignItems: "stretch" }}>
+                  <div
+                    className="supplier-login-field-icon"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      height: "48px",
+                      width: "44px",
+                      flexShrink: 0,
+                      borderRadius: "10px 0 0 10px",
+                      border: "1px solid #D0D5DD",
+                      borderRight: "1px solid #E4E7EC",
+                      background: "#F9FAFB",
+                      color: "#667085",
+                    }}
+                  >
+                    <Mail className="h-4 w-4" />
+                  </div>
+                  <input
+                    id="supplier-email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="supplier@company.com"
+                    autoComplete="username"
+                    required
+                    style={{
+                      height: "48px",
+                      flex: 1,
+                      borderRadius: "0 10px 10px 0",
+                      border: "1px solid #D0D5DD",
+                      borderLeft: "none",
+                      background: "#FFFFFF",
+                      padding: "0 14px",
+                      fontSize: "14px",
+                      color: "#101828",
+                      outline: "none",
+                    }}
+                    className="supplier-login-field-input placeholder:text-[#98A2B3] focus:border-[#146CE8] focus:ring-2 focus:ring-[#146CE8]/20"
+                  />
+                </div>
+              </div>
+
+              {/* Password */}
+              <div className="supplier-login-form-group" style={{ marginBottom: "18px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+                  <label
+                    htmlFor="supplier-password"
+                    style={{
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      letterSpacing: "0.04em",
+                      color: "#344054",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Password
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleForgotPassword}
+                    style={{
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      color: "#146CE8",
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      padding: 0,
+                    }}
+                    className="hover:underline"
+                  >
+                    Forgot Password?
+                  </button>
+                </div>
+                <div style={{ display: "flex", alignItems: "stretch" }}>
+                  <div
+                    className="supplier-login-field-icon"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      height: "48px",
+                      width: "44px",
+                      flexShrink: 0,
+                      borderRadius: "10px 0 0 10px",
+                      border: "1px solid #D0D5DD",
+                      borderRight: "1px solid #E4E7EC",
+                      background: "#F9FAFB",
+                      color: "#667085",
+                    }}
+                  >
+                    <KeyRound className="h-4 w-4" />
+                  </div>
+                  <input
+                    id="supplier-password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Enter your password"
+                    autoComplete="current-password"
+                    required
+                    style={{
+                      height: "48px",
+                      flex: 1,
+                      borderRadius: "0 10px 10px 0",
+                      border: "1px solid #D0D5DD",
+                      borderLeft: "none",
+                      background: "#FFFFFF",
+                      padding: "0 14px",
+                      fontSize: "14px",
+                      color: "#101828",
+                      outline: "none",
+                    }}
+                    className="supplier-login-field-input placeholder:text-[#98A2B3] focus:border-[#146CE8] focus:ring-2 focus:ring-[#146CE8]/20"
+                  />
+                </div>
+              </div>
+
+              {/* Sign In - 48px height */}
+              <button
+                type="submit"
+                disabled={accountSubmitting}
+                style={{
+                  width: "100%",
+                  height: "48px",
+                  background: "#146CE8",
+                  borderRadius: "10px",
+                  color: "#FFFFFF",
+                  fontWeight: 600,
+                  fontSize: "14px",
+                  border: "none",
+                  cursor: accountSubmitting ? "not-allowed" : "pointer",
+                  opacity: accountSubmitting ? 0.6 : 1,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "8px",
+                  transition: "all 180ms ease",
+                  marginBottom: "12px",
+                }}
+                className="supplier-login-btn hover:-translate-y-px hover:shadow-[0_8px_20px_rgba(20,108,232,0.22)] active:translate-y-0"
+              >
+                {accountSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogIn className="h-5 w-5" />}
+                <span>{accountSubmitting ? "Signing in…" : "Sign In"}</span>
+              </button>
+            </form>
+          ) : (
+            /* ── Company PIN Login Form ── */
+            <form onSubmit={handlePinSubmit}>
+              {/* Company */}
+              <div className="supplier-login-form-group" style={{ marginBottom: "14px" }}>
+                <label
+                  htmlFor="supplier-select"
+                  style={{
+                    display: "block",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    letterSpacing: "0.04em",
+                    color: "#344054",
+                    marginBottom: "6px",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  Company
+                </label>
+                <div style={{ position: "relative", display: "flex", alignItems: "stretch" }}>
+                  <div
+                    className="supplier-login-field-icon"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      height: "48px",
+                      width: "44px",
+                      flexShrink: 0,
+                      borderRadius: "10px 0 0 10px",
+                      border: "1px solid #D0D5DD",
+                      borderRight: "1px solid #E4E7EC",
+                      background: "#F9FAFB",
+                      color: "#667085",
+                    }}
+                  >
+                    <Building2 className="h-4 w-4" />
+                  </div>
+                  <select
+                    id="supplier-select"
+                    value={supplierName}
+                    onChange={(e) => handleCompanyChange(e.target.value)}
+                    disabled={suppliersQuery.isLoading}
+                    style={{
+                      height: "48px",
+                      flex: 1,
+                      borderRadius: "0 10px 10px 0",
+                      border: "1px solid #D0D5DD",
+                      borderLeft: "none",
+                      background: "#FFFFFF",
+                      padding: "0 36px 0 14px",
+                      fontSize: "14px",
+                      color: "#101828",
+                      outline: "none",
+                      appearance: "none",
+                    }}
+                    className="supplier-login-field-input focus:border-[#146CE8] focus:ring-2 focus:ring-[#146CE8]/20 disabled:bg-[#F9FAFB]"
+                  >
+                    <option value="">
+                      {suppliersQuery.isLoading ? "Loading companies…" : "Select your company"}
+                    </option>
+                    {suppliers.map((s) => (
+                      <option key={s.name} value={s.name}>
+                        {s.supplier_name || s.name}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-3.5 h-4 w-4 text-[#667085]" style={{ top: "50%", transform: "translateY(-50%)" }} />
+                </div>
+              </div>
+
+              {/* Supplier Code */}
+              <div className="supplier-login-form-group" style={{ marginBottom: "14px" }}>
+                <label
+                  htmlFor="supplier-code"
+                  style={{
+                    display: "block",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    letterSpacing: "0.04em",
+                    color: "#344054",
+                    marginBottom: "6px",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  Supplier Code
+                </label>
+                <div style={{ display: "flex", alignItems: "stretch" }}>
+                  <div
+                    className="supplier-login-field-icon"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      height: "48px",
+                      width: "44px",
+                      flexShrink: 0,
+                      borderRadius: "10px 0 0 10px",
+                      border: "1px solid #D0D5DD",
+                      borderRight: "1px solid #E4E7EC",
+                      background: "#F9FAFB",
+                      color: "#667085",
+                    }}
+                  >
+                    <Hash className="h-4 w-4" />
+                  </div>
+                  <input
+                    id="supplier-code"
+                    type="text"
+                    value={supplierCode}
+                    onChange={(e) => handleSupplierCodeChange(e.target.value)}
+                    placeholder="e.g. SUP-00001"
+                    autoComplete="organization"
+                    disabled={suppliersQuery.isLoading}
+                    style={{
+                      height: "48px",
+                      flex: 1,
+                      borderRadius: "0 10px 10px 0",
+                      border: "1px solid #D0D5DD",
+                      borderLeft: "none",
+                      background: "#FFFFFF",
+                      padding: "0 14px",
+                      fontSize: "14px",
+                      fontFamily: "monospace",
+                      color: "#101828",
+                      outline: "none",
+                    }}
+                    className="supplier-login-field-input placeholder:text-[#98A2B3] focus:border-[#146CE8] focus:ring-2 focus:ring-[#146CE8]/20 disabled:bg-[#F9FAFB]"
+                  />
+                </div>
+              </div>
+
+              {/* Portal PIN */}
+              <div className="supplier-login-form-group" style={{ marginBottom: "18px" }}>
+                <label
+                  style={{
+                    display: "block",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    letterSpacing: "0.04em",
+                    color: "#344054",
+                    marginBottom: "6px",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  Portal PIN
+                </label>
+                <PinInput value={pin} onChange={setPin} disabled={pinSubmitting} />
+              </div>
+
+              {/* Sign In - 48px height */}
+              <button
+                type="submit"
+                disabled={pinSubmitting || suppliersQuery.isLoading}
+                style={{
+                  width: "100%",
+                  height: "48px",
+                  background: "#146CE8",
+                  borderRadius: "10px",
+                  color: "#FFFFFF",
+                  fontWeight: 600,
+                  fontSize: "14px",
+                  border: "none",
+                  cursor: pinSubmitting || suppliersQuery.isLoading ? "not-allowed" : "pointer",
+                  opacity: pinSubmitting || suppliersQuery.isLoading ? 0.6 : 1,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "8px",
+                  transition: "all 180ms ease",
+                  marginBottom: "12px",
+                }}
+                className="supplier-login-btn hover:-translate-y-px hover:shadow-[0_8px_20px_rgba(20,108,232,0.22)] active:translate-y-0"
+              >
+                {pinSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <LogIn className="h-5 w-5" />}
+                <span>{pinSubmitting ? "Signing in…" : "Sign In"}</span>
+              </button>
+            </form>
+          )}
+
+          {/* Secure access bar - 38px height */}
+          <div
+            className="supplier-login-secure-bar"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "6px",
+              height: "38px",
+              background: "#F8FAFC",
+              border: "1px solid #E2E8F0",
+              borderRadius: "10px",
+              color: "#146CE8",
+              fontSize: "12px",
+              fontWeight: 600,
+              marginBottom: "14px",
+            }}
+          >
+            <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
+            <span>Secure supplier portal access</span>
+          </div>
+
+          {/* Support footer */}
+          <div style={{ textAlign: "center" }}>
+            <p style={{ fontSize: "11px", color: "#98A2B3", marginBottom: "4px", marginTop: 0 }}>Need Help?</p>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }}>
               <a
                 href={`mailto:${SUPPORT_EMAIL}`}
-                className="mt-2 inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+                style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11px", color: "#475467", textDecoration: "none" }}
+                className="hover:text-[#146CE8] transition-colors"
               >
-                <Mail className="h-3.5 w-3.5" />
-                {SUPPORT_EMAIL}
+                <Mail className="h-3 w-3" style={{ color: "#98A2B3" }} />
+                <span>{SUPPORT_EMAIL}</span>
+              </a>
+              <span style={{ color: "#D0D5DD" }}>|</span>
+              <a
+                href={`tel:${SUPPORT_PHONE.replace(/\s+/g, "")}`}
+                style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11px", color: "#475467", textDecoration: "none" }}
+                className="hover:text-[#146CE8] transition-colors"
+              >
+                <Phone className="h-3 w-3" style={{ color: "#98A2B3" }} />
+                <span>{SUPPORT_PHONE}</span>
               </a>
             </div>
           </div>
-        </div>
-      </aside>
+        </aside>
+      </div>
+
+      {/* Responsive overrides */}
+      <style>{`
+        @media (max-width: 1279px) {
+          .supplier-login-hero h1 { font-size: 48px !important; }
+          .supplier-login-card { width: 400px !important; }
+          .supplier-login-layout { padding-left: 40px !important; padding-right: 40px !important; }
+        }
+        @media (max-width: 767px) {
+          .supplier-login-hero { display: none !important; }
+          .supplier-login-layout {
+            justify-content: center !important;
+            padding-left: 16px !important;
+            padding-right: 16px !important;
+          }
+          .supplier-login-card {
+            width: calc(100% - 32px) !important;
+            margin: 16px auto !important;
+          }
+        }
+        @media (max-height: 850px) {
+          .supplier-login-layout {
+            padding-top: 24px !important;
+            padding-bottom: 16px !important;
+          }
+          .supplier-login-card {
+            padding: 24px !important;
+            margin-top: 10px !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }

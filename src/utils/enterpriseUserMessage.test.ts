@@ -51,7 +51,7 @@ describe("toEnterpriseUserMessage", () => {
     const msg = toEnterpriseUserMessage(
       "Traceback (most recent call last):\n  File frappe.py",
     );
-    expect(msg).toBe("Something went wrong. Please try again.");
+    expect(msg).toBe("We couldn't complete this action. Please try again.");
   });
 
   it("does not treat Field not permitted as a permission denial", () => {

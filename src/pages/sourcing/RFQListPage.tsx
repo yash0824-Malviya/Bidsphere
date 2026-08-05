@@ -138,23 +138,50 @@ export default function RFQListPage() {
     queryKey: ["rfq-list-kpis"],
     queryFn: fetchRfqListKpis,
     staleTime: LIST_STALE_TIME,
+    retry: 1,
+    retryDelay: 1_200,
   });
 
   useEffect(() => {
     if (kpisQuery.data) warnIfRfqKpisInconsistent(kpisQuery.data);
   }, [kpisQuery.data]);
 
+  useEffect(() => {
+    if (!kpisQuery.isError || !kpisQuery.error) return;
+    // TEMP debug — remove once RFQ list KPI load is stable.
+    // eslint-disable-next-line no-console
+    console.error("[DashboardLoad] RFQ list KPIs failed", kpisQuery.error);
+  }, [kpisQuery.isError, kpisQuery.error]);
+
   const rfqsQuery = useQuery({
     queryKey: ["rfqs", filterKey, page, pageSize],
-    queryFn: () =>
-      getRFQsPaged({
-        page,
-        pageSize,
-        order_by,
-        filters: built.filters.length ? built.filters : undefined,
-        or_filters: built.or_filters.length ? built.or_filters : undefined,
-      }),
+    queryFn: async () => {
+      // TEMP debug
+      // eslint-disable-next-line no-console
+      console.info("[DashboardLoad] getRFQsPaged START", { page, pageSize });
+      try {
+        const result = await getRFQsPaged({
+          page,
+          pageSize,
+          order_by,
+          filters: built.filters.length ? built.filters : undefined,
+          or_filters: built.or_filters.length ? built.or_filters : undefined,
+        });
+        // eslint-disable-next-line no-console
+        console.info("[DashboardLoad] getRFQsPaged DONE", {
+          rows: result.data?.length ?? 0,
+          total: result.total_records,
+        });
+        return result;
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("[DashboardLoad] getRFQsPaged FAILED", err);
+        throw err;
+      }
+    },
     staleTime: LIST_STALE_TIME,
+    retry: 1,
+    retryDelay: 1_200,
     placeholderData: (prev) => prev,
   });
 

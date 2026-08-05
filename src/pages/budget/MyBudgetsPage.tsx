@@ -42,7 +42,7 @@ export default function MyBudgetsPage() {
     <div>
       <PageHeader
         title="My Budgets"
-        description="Live ERPNext Budget documents with real-time consumption."
+        description="Live budget documents with real-time consumption."
       />
 
       {isLoading ? (

@@ -21,6 +21,7 @@ import {
   Scale,
   ShoppingCart,
   Sparkles,
+  UserPlus,
 } from "lucide-react";
 
 import type {
@@ -117,15 +118,21 @@ export interface RFQDetailEnterpriseLayoutProps {
 
   canCompareQuotations: boolean;
   canViewQuotations: boolean;
+  canInviteMoreSuppliers: boolean;
   showSubmitRFQ: boolean;
   submittingRFQ: boolean;
   creatingPO: boolean;
+
+  aiNeedsRerun: boolean;
+  aiStaleSource?: "invite" | "quotation";
+  onRerunAiAnalysis: () => void;
 
   localQuotes: Map<string, SupplierQuoteView>;
   declineBySupplier: Map<string, SupplierRfqResponse>;
   supplierAnalysisRows: SupplierAnalysisRow[];
 
   quotesQueryError: boolean;
+  quotesQueryErrorMessage?: string | null;
   onRetryQuotes: () => void;
 
   onCheckBudget: () => void;
@@ -139,12 +146,16 @@ export interface RFQDetailEnterpriseLayoutProps {
   onCreatePO: () => void;
   onPrint: () => void;
   onExportPdf: () => void;
+  onInviteMoreSuppliers: () => void;
+
+  pendingInvitationSupplierIds: Set<string>;
 
   resolveSupplierStatus: (
     s: RFQSupplier,
     hasQuote: boolean,
     validTill: string | undefined,
     hasDecline: boolean,
+    pendingInvitation?: boolean,
   ) => string;
   supplierStatusTone: (
     status: string,
@@ -156,6 +167,7 @@ export interface RFQDetailEnterpriseLayoutProps {
 
   rejectionBanners: ReactNode;
   reverseBiddingSlot: ReactNode;
+  quoteRoundsSlot?: ReactNode;
   legalRejectedActions: ReactNode;
   financeRejectedActions: ReactNode;
   checkBudgetModal: ReactNode;
@@ -597,16 +609,19 @@ const WorkflowBar = memo(function WorkflowBar({
   );
 });
 
-/** Read-only Target Pricing — configured at RFQ creation; used by AI Analysis. */
+/** Read-only Target Pricing + quantity trail — configured at RFQ creation. */
 function ItemsWithTargetPrice({ rfq }: { rfq: RFQ }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[860px] text-left text-sm">
+      <table className="w-full min-w-[1100px] text-left text-sm">
         <thead className="bg-[var(--rfq-paper)] text-[11px] font-semibold uppercase tracking-wide text-[var(--rfq-text-soft)]">
           <tr>
             <th className="px-4 py-2.5">Item</th>
-            <th className="px-4 py-2.5">Qty</th>
+            <th className="px-4 py-2.5 text-right">Dept Requested</th>
+            <th className="px-4 py-2.5 text-right">WH Available</th>
+            <th className="px-4 py-2.5 text-right">Final Qty</th>
             <th className="px-4 py-2.5">UOM</th>
+            <th className="px-4 py-2.5">Qty Reason</th>
             <th className="px-4 py-2.5 text-right">Target Price</th>
             <th className="px-4 py-2.5 text-center">Show to Supplier</th>
             <th className="px-4 py-2.5">Required By</th>
@@ -622,6 +637,21 @@ function ItemsWithTargetPrice({ rfq }: { rfq: RFQ }) {
               it.custom_show_target_price_to_supplier ??
               rfq.custom_show_target_price_to_supplier
             );
+            const dept =
+              it.custom_department_requested_qty != null &&
+              Number.isFinite(Number(it.custom_department_requested_qty))
+                ? Number(it.custom_department_requested_qty)
+                : Number(it.qty) || 0;
+            const wh =
+              it.custom_warehouse_available_qty != null &&
+              Number.isFinite(Number(it.custom_warehouse_available_qty))
+                ? Number(it.custom_warehouse_available_qty)
+                : null;
+            const final =
+              it.custom_procurement_final_qty != null &&
+              Number.isFinite(Number(it.custom_procurement_final_qty))
+                ? Number(it.custom_procurement_final_qty)
+                : Number(it.qty) || 0;
             return (
               <tr key={key} className="bg-[var(--rfq-surface)]">
                 <td className="px-4 py-2.5">
@@ -632,8 +662,21 @@ function ItemsWithTargetPrice({ rfq }: { rfq: RFQ }) {
                     {it.item_name || it.description || "—"}
                   </div>
                 </td>
-                <td className={`px-4 py-2.5 ${mono}`}>{it.qty}</td>
+                <td className={`px-4 py-2.5 text-right ${mono} tabular-nums`}>
+                  {dept}
+                </td>
+                <td className={`px-4 py-2.5 text-right ${mono} tabular-nums`}>
+                  {wh == null ? "—" : wh}
+                </td>
+                <td
+                  className={`px-4 py-2.5 text-right font-semibold ${mono} tabular-nums text-[var(--rfq-text)]`}
+                >
+                  {final}
+                </td>
                 <td className={`px-4 py-2.5 ${mono}`}>{it.uom || "—"}</td>
+                <td className="px-4 py-2.5 text-[12px] text-[var(--rfq-text-soft)]">
+                  {it.custom_qty_change_reason?.trim() || "—"}
+                </td>
                 <td className={`px-4 py-2.5 text-right ${mono} tabular-nums`}>
                   {hasTarget ? formatCurrency(displayTarget) : "—"}
                 </td>
@@ -698,15 +741,20 @@ export default function RFQDetailEnterpriseLayout(
     aiButtonMode,
     hasQuotations,
     hasAnthropicKey,
-    canCompareQuotations,
-    canViewQuotations,
-    showSubmitRFQ,
-    submittingRFQ,
-    creatingPO,
+  canCompareQuotations,
+  canViewQuotations,
+  canInviteMoreSuppliers,
+  showSubmitRFQ,
+  submittingRFQ,
+  creatingPO,
+  aiNeedsRerun,
+  aiStaleSource = "quotation",
+  onRerunAiAnalysis,
     localQuotes,
     declineBySupplier,
     supplierAnalysisRows,
     quotesQueryError,
+    quotesQueryErrorMessage,
     onRetryQuotes,
     onCheckBudget,
     onSubmitRFQ,
@@ -717,13 +765,16 @@ export default function RFQDetailEnterpriseLayout(
     onViewAnalysis,
     onReAnalyze,
     onCreatePO,
-    onPrint,
-    onExportPdf,
+  onPrint,
+  onExportPdf,
+  onInviteMoreSuppliers,
+  pendingInvitationSupplierIds,
     resolveSupplierStatus,
     supplierStatusTone,
     quoteForSupplier,
     rejectionBanners,
     reverseBiddingSlot,
+    quoteRoundsSlot,
     checkBudgetModal,
     modals,
   } = props;
@@ -866,6 +917,27 @@ export default function RFQDetailEnterpriseLayout(
 
       {rejectionBanners}
 
+      {aiNeedsRerun && !procurementFinalized && !hasSelectedSupplier ? (
+        <div className="mb-4 flex flex-col gap-3 rounded-[var(--rfq-radius-card)] border border-amber-200 bg-amber-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-[13px] font-semibold text-amber-900">
+              {aiStaleSource === "invite"
+                ? "New supplier(s) invited."
+                : "New supplier quotation received."}
+            </p>
+            <p className="mt-0.5 text-[12px] text-amber-800">
+              {aiStaleSource === "invite"
+                ? "AI recommendation will update after new quotations are received."
+                : "AI recommendation needs to be recalculated before award."}
+            </p>
+          </div>
+          <Btn onClick={onRerunAiAnalysis} variant="primary" className="shrink-0">
+            <Sparkles className="h-3.5 w-3.5" />
+            Re-run AI Analysis
+          </Btn>
+        </div>
+      ) : null}
+
       <div className={stack}>
         {/* ── Top bar / header ── */}
         <header className={`${card} p-4 md:p-5`}>
@@ -886,6 +958,12 @@ export default function RFQDetailEnterpriseLayout(
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
+              {canInviteMoreSuppliers ? (
+                <Btn onClick={onInviteMoreSuppliers}>
+                  <UserPlus className="h-3.5 w-3.5" />
+                  Invite More Suppliers
+                </Btn>
+              ) : null}
               {poExists && poName && poName !== "—" && (
                 <Btn
                   variant="primary"
@@ -1170,14 +1248,16 @@ export default function RFQDetailEnterpriseLayout(
         {/* ── Procurement Status ── */}
         <WorkflowBar steps={timeline} />
 
+        {quoteRoundsSlot}
+
         {/* ── Items ── */}
         <section className={`${card} overflow-hidden`}>
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--rfq-border)] px-4 py-3 md:px-5">
             <div>
               <h2 className={sectionTitle}>Items</h2>
               <p className="mt-0.5 text-[12px] text-[var(--rfq-text-soft)]">
-                Target Price is set during RFQ creation. AI Analysis uses it
-                read-only for variance, savings, and scoring.
+                Procurement Final Qty is sent to suppliers. Department Requested
+                and Warehouse Available are internal history only.
               </p>
             </div>
             <span className={`${mono} text-[13px] text-[var(--rfq-text-soft)]`}>
@@ -1219,7 +1299,8 @@ export default function RFQDetailEnterpriseLayout(
 
           {quotesQueryError ? (
             <div className="rounded-[var(--rfq-radius-card)] border border-[var(--rfq-danger)]/30 bg-[var(--rfq-danger-soft)] px-3 py-2 text-[13px] text-[var(--rfq-danger)]">
-              Could not load quotations.{" "}
+              {quotesQueryErrorMessage ||
+                "Could not load supplier quotations."}{" "}
               <button
                 type="button"
                 onClick={onRetryQuotes}
@@ -1241,6 +1322,8 @@ export default function RFQDetailEnterpriseLayout(
                 !!quote,
                 rfq.valid_till || undefined,
                 !!decline,
+                pendingInvitationSupplierIds.has(normKey(s.supplier)) ||
+                  pendingInvitationSupplierIds.has(normKey(s.supplier_name)),
               );
               const isWinner =
                 hasSelectedSupplier &&
@@ -1294,6 +1377,8 @@ export default function RFQDetailEnterpriseLayout(
                       <Badge tone="green">Submitted</Badge>
                     ) : decline ? (
                       <Badge tone="amber">No quote</Badge>
+                    ) : status === "Pending Invitation" ? (
+                      <Badge tone="blue">Pending Invitation</Badge>
                     ) : (
                       <StatusBadge
                         status={status}

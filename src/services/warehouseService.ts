@@ -16,7 +16,7 @@ export interface WarehouseItem {
   description: string;
   category: string;
   uom: string;
-  status: "In Stock" | "Low Stock" | "Out of Stock";
+  status: "In Stock" | "Reorder Required" | "Low Stock" | "Out of Stock";
   available_qty: number;
   reserved_qty: number;
   reorder_level: number;
@@ -147,7 +147,10 @@ import {
   WAREHOUSE_PENDING_STATUSES,
 } from "../api/materialRequestWorkflow";
 import { fetchWarehouseStockSummary } from "../api/warehouseStock";
-import { getItemStockAcrossWarehouses } from "../api/warehouseInventoryService";
+import {
+  getItemStockAcrossWarehouses,
+  getItemsAvailableQtyBatch,
+} from "../api/warehouseInventoryService";
 import { enhanceMrStatusFromReceipts } from "../api/materialIssueReceipt";
 import { getMaterialRequest } from "../api/purchasing";
 import {
@@ -155,14 +158,51 @@ import {
   buildListConfig,
   buildResourceUrl,
   COMPANY,
+  withSilent,
   type Filter,
 } from "../api/erpnext";
+
+/** Cap detail+stock work so dashboard widgets resolve instead of hanging on N+1. */
+const DASHBOARD_MR_HYDRATE_CAP = 40;
+const HYDRATE_CONCURRENCY = 8;
+
+async function mapPool<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const idx = next;
+      next += 1;
+      results[idx] = await fn(items[idx]!, idx);
+    }
+  }
+  const workers = Array.from(
+    { length: Math.min(concurrency, Math.max(items.length, 1)) },
+    () => worker(),
+  );
+  await Promise.all(workers);
+  return results;
+}
+
+async function fetchMrDetailSilent(name: string): Promise<Record<string, unknown> | null> {
+  try {
+    return await apiGet<Record<string, unknown>>(
+      buildResourceUrl("Material Request", name),
+      { ...withSilent(), timeout: 15_000 },
+    );
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[DashboardLoad] MR detail fetch failed", { name, err });
+    return null;
+  }
+}
 import { hydrateEngineeringDocsFromChild } from "../utils/materialRequestItemFiles";
 import type { EngineeringAttachment } from "../utils/materialRequestItemFiles";
-import {
-  logMrFilterTable,
-  logMrWorkflowStage,
-} from "../utils/mrWorkflowDebug";
+import { logMrFilterTable } from "../utils/mrWorkflowDebug";
 import { parseMaterialIssueAudit } from "../api/materialIssue";
 import {
   cleanBusinessWarehouseRemarks,
@@ -268,129 +308,132 @@ function workflowStatusFromStandardFields(mr: any): MaterialRequestWorkflowStatu
  *  "Pending Material Requests" widget renders its empty state instead of
  *  blocking the rest of the dashboard. */
 export async function getPendingMaterialRequests(): Promise<WarehouseMaterialRequest[]> {
+  const t0 = performance.now();
+  // eslint-disable-next-line no-console
+  console.info("[DashboardLoad] getPendingMaterialRequests START");
+
   let rawList: Awaited<ReturnType<typeof listWarehouseMaterialRequestQueue>>;
   try {
-    rawList = await listWarehouseMaterialRequestQueue();
+    // Cap list early — dashboard cards do not need hundreds of rows.
+    rawList = await listWarehouseMaterialRequestQueue(DASHBOARD_MR_HYDRATE_CAP);
   } catch (err) {
     logWidgetFailure("Pending Material Requests", err);
+    // eslint-disable-next-line no-console
+    console.error("[DashboardLoad] getPendingMaterialRequests list FAILED", err);
     return [];
   }
 
   // eslint-disable-next-line no-console
-  console.log("Material Request API Response", {
-    page: "Warehouse → Pending Review",
-    api: "listWarehouseMaterialRequestQueue",
-    beforeFilter: rawList.length,
+  console.info("[DashboardLoad] pending queue list", {
+    count: rawList.length,
+    sample: rawList.slice(0, 5).map((r) => r.name),
   });
 
-  // Fetch details in parallel — Promise.allSettled so a single failed detail
-  // fetch never blocks the others from rendering.
-  const detailResults = await Promise.allSettled(
-    rawList.map((row) => getMaterialRequest(row.name))
-  );
-  const detailsRaw = detailResults.map((result, idx) =>
-    result.status === "fulfilled" ? result.value : rawList[idx]
+  // Bounded concurrency + silent GETs — avoid toast storms and browser request floods.
+  const detailDocs = await mapPool(
+    rawList,
+    HYDRATE_CONCURRENCY,
+    async (row) => {
+      const detail = await fetchMrDetailSilent(row.name);
+      return detail ?? (row as unknown as Record<string, unknown>);
+    },
   );
 
-  // ERP BidSphere Status is the single source of truth after hydrate.
-  // Do NOT hide rows that still say Under Warehouse Review just because an
-  // optional forwarded flag/tag was set by a partial write.
   const rejected: Array<{ name: string; reason: string }> = [];
-  const details = detailsRaw.filter((mr: any) => {
+  const details = detailDocs.filter((mr: any) => {
     const status =
       normalizeWorkflowStatus(mr.custom_bidsphere_status) ||
       workflowStatusFromStandardFields(mr);
-    const payload = {
-      "MR Number": mr.name,
-      Purpose: mr.material_request_type,
-      Docstatus: mr.docstatus,
-      Status: mr.status,
-      "Workflow State": mr.workflow_state ?? null,
-      "BidSphere Status": mr.custom_bidsphere_status ?? null,
-      "Warehouse Status": status,
-      "Procurement Status": mr.custom_bidsphere_status ?? status,
-      "Request Type": mr.custom_procurement_type ?? null,
-      "Request Mode": mr.custom_request_mode ?? null,
-      Resolved: status,
-    };
-    // eslint-disable-next-line no-console
-    console.log("ERP Response (hydrated MR)", payload);
-
     const keep = WAREHOUSE_PENDING_STATUSES.includes(status);
     if (!keep) {
-      const reason = `Rejected ${mr.name} — BidSphere Status "${mr.custom_bidsphere_status || status}" is not a Pending Review status (${WAREHOUSE_PENDING_STATUSES.join(", ")})`;
-      // eslint-disable-next-line no-console
-      console.log(reason);
-      rejected.push({ name: mr.name, reason });
+      rejected.push({
+        name: String(mr.name || ""),
+        reason: `bidsphere_status=${mr.custom_bidsphere_status || status}`,
+      });
     }
     return keep;
   });
 
   logMrFilterTable({
     page: "Warehouse → Pending Review",
-    api: "listWarehouseMaterialRequestQueue + getMaterialRequest hydrate",
+    api: "listWarehouseMaterialRequestQueue + silent hydrate",
     filterUsed: {
       docstatus: 1,
       bidsphere_status_in: WAREHOUSE_PENDING_STATUSES,
-      request_type: "Direct",
+      hydrate_cap: DASHBOARD_MR_HYDRATE_CAP,
     },
     recordsReturned: details.length,
     rejected: rejected.slice(0, 40),
   });
 
-  const mappedResults = await Promise.allSettled(
-    details.map(async (mr: any) => {
-      let stockLines: any[] = [];
-      try {
-        const stockCheck = await checkMaterialRequestStock(mr.name);
-        stockLines = stockCheck.lines;
-      } catch {
-        // ignore stock check failure — items fall back to 0 available
-      }
-      const stockMap = new Map(stockLines.map((l) => [l.item_code, l]));
-
-      const items = (mr.items || []).map((item: any) => {
-        const stock = stockMap.get(item.item_code);
-        const avail = nonNegativeQty(stock?.available_qty);
-        return {
-          item_code: item.item_code,
-          description: item.description || "",
-          required_qty: item.qty || 0,
-          available_qty: avail,
-          uom: item.uom || "Nos",
-          warehouse: stock?.warehouse || item.warehouse || undefined,
-          status:
-            avail >= (item.qty || 0)
-              ? ("Available" as const)
-              : avail > 0
-                ? ("Partial Stock" as const)
-                : ("Out of Stock" as const),
-        };
-      });
-
-      return {
-        name: mr.name,
-        company: String(mr.company || COMPANY || "").trim(),
-        department: mr.custom_department || mr.department || "General",
-        requested_by: mr.custom_requested_by || mr.owner || "System",
-        request_date: mr.transaction_date || mr.modified?.split("T")[0] || "",
-        required_date: mr.schedule_date || "",
-        priority: mr.custom_priority || "Medium",
-        status: normalizeWorkflowStatus(mr.custom_bidsphere_status) || workflowStatusFromStandardFields(mr),
-        procurement_type: resolveProcurementType(mr.custom_procurement_type),
-        request_mode: resolveRequestMode(mr.custom_request_mode),
-        items_count: mr.items ? mr.items.length : 0,
-        items,
-      };
-    })
+  // ONE batched Bin query for all item codes (was N×M checkMaterialRequestStock).
+  const itemCodes = Array.from(
+    new Set(
+      details.flatMap((mr: any) =>
+        (mr.items || [])
+          .map((item: { item_code?: string }) => String(item.item_code || "").trim())
+          .filter(Boolean),
+      ),
+    ),
   );
 
-  return mappedResults
-    .filter(
-      (r): r is PromiseFulfilledResult<WarehouseMaterialRequest> =>
-        r.status === "fulfilled"
-    )
-    .map((r) => r.value);
+  let stockByItem = new Map<string, { available_qty: number; warehouse: string }>();
+  try {
+    stockByItem = await getItemsAvailableQtyBatch(itemCodes, {
+      company: COMPANY,
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[DashboardLoad] batch stock lookup FAILED — qty=0 fallback", err);
+  }
+
+  const mapped: WarehouseMaterialRequest[] = details.map((mr: any) => {
+    const items = (mr.items || []).map((item: any) => {
+      const stock = stockByItem.get(String(item.item_code || "").trim());
+      const avail = nonNegativeQty(stock?.available_qty);
+      const required = item.qty || 0;
+      return {
+        item_code: item.item_code,
+        description: item.description || "",
+        required_qty: required,
+        available_qty: avail,
+        uom: item.uom || "Nos",
+        warehouse: stock?.warehouse || item.warehouse || undefined,
+        status:
+          avail >= required
+            ? ("Available" as const)
+            : avail > 0
+              ? ("Partial Stock" as const)
+              : ("Out of Stock" as const),
+      };
+    });
+
+    return {
+      name: mr.name,
+      company: String(mr.company || COMPANY || "").trim(),
+      department: mr.custom_department || mr.department || "General",
+      requested_by: mr.custom_requested_by || mr.owner || "System",
+      request_date: mr.transaction_date || mr.modified?.split("T")[0] || "",
+      required_date: mr.schedule_date || "",
+      priority: mr.custom_priority || "Medium",
+      status:
+        normalizeWorkflowStatus(mr.custom_bidsphere_status) ||
+        workflowStatusFromStandardFields(mr),
+      procurement_type: resolveProcurementType(mr.custom_procurement_type),
+      request_mode: resolveRequestMode(mr.custom_request_mode),
+      items_count: mr.items ? mr.items.length : 0,
+      items,
+    };
+  });
+
+  // eslint-disable-next-line no-console
+  console.info("[DashboardLoad] getPendingMaterialRequests DONE", {
+    ms: Math.round(performance.now() - t0),
+    returned: mapped.length,
+    itemCodes: itemCodes.length,
+  });
+
+  return mapped;
 }
 
 /**
@@ -409,33 +452,33 @@ export async function getWarehouseProcurementRequiredRequests(): Promise<
     // warehouse review. Do NOT rely on list-row workflowStatus alone (custom
     // fields may be missing from list). Fetch submitted MRs, hydrate, then
     // filter on ERP custom_bidsphere_status.
+    // Prefer server/list status filter so we do NOT hydrate hundreds of MRs.
     rows = await listMaterialRequestsWorkflow({
       docstatus: 1,
-      limit: 500,
+      workflowStatus: "Procurement Required",
+      limit: DASHBOARD_MR_HYDRATE_CAP,
     });
   } catch (err) {
     logWidgetFailure("Procurement Required (persisted)", err);
+    // eslint-disable-next-line no-console
+    console.error("[DashboardLoad] procurement-required list FAILED", err);
     return [];
   }
 
   // eslint-disable-next-line no-console
-  console.log("Material Request API Response", {
-    page: "Warehouse → Procurement Required",
-    api: "listMaterialRequestsWorkflow(docstatus=1)",
-    beforeFilter: rows.length,
-    sample: rows.slice(0, 10).map((m) => ({
-      name: m.name,
-      custom_bidsphere_status: m.custom_bidsphere_status,
-      material_request_type: m.material_request_type,
-      docstatus: m.docstatus,
-    })),
+  console.info("[DashboardLoad] procurement-required list", {
+    count: rows.length,
+    sample: rows.slice(0, 5).map((m) => m.name),
   });
 
-  const detailResults = await Promise.allSettled(
-    rows.map((r) => getMaterialRequest(r.name)),
-  );
-  const hydrated = detailResults.map((result, idx) =>
-    result.status === "fulfilled" ? (result.value as any) : (rows[idx] as any),
+  const candidates = rows.slice(0, DASHBOARD_MR_HYDRATE_CAP);
+  const hydrated = await mapPool(
+    candidates,
+    HYDRATE_CONCURRENCY,
+    async (r) => {
+      const detail = await fetchMrDetailSilent(r.name);
+      return (detail ?? (r as unknown as Record<string, unknown>)) as any;
+    },
   );
 
   const rejected: Array<{ name: string; reason: string }> = [];
@@ -446,8 +489,6 @@ export async function getWarehouseProcurementRequiredRequests(): Promise<
       workflowStatusFromStandardFields(mr);
     const procurementType = resolveProcurementType(mr.custom_procurement_type);
     const forwardedFlag = Number(mr.custom_forwarded_to_procurement) === 1;
-
-    logMrWorkflowStage("Warehouse Procurement Required (hydrate)", mr);
 
     if (procurementType !== "Direct") {
       rejected.push({ name, reason: `procurement_type=${procurementType}` });
@@ -469,12 +510,13 @@ export async function getWarehouseProcurementRequiredRequests(): Promise<
 
   logMrFilterTable({
     page: "Warehouse → Procurement Required",
-    api: "listMaterialRequestsWorkflow + getMaterialRequest hydrate",
+    api: "listMaterialRequestsWorkflow(status) + silent hydrate",
     filterUsed: {
       docstatus: 1,
       custom_bidsphere_status: "Procurement Required",
       custom_forwarded_to_procurement: "!= 1",
       procurement_type: "Direct",
+      hydrate_cap: DASHBOARD_MR_HYDRATE_CAP,
     },
     recordsReturned: notForwarded.length,
     rejected: rejected.slice(0, 30),
@@ -620,7 +662,11 @@ export async function getInventorySummary(): Promise<WarehouseItem[]> {
       description: row.description,
       category: row.category,
       uom: row.uom,
-      status: row.status as "In Stock" | "Low Stock" | "Out of Stock",
+      status: row.status as
+        | "In Stock"
+        | "Reorder Required"
+        | "Low Stock"
+        | "Out of Stock",
       available_qty: nonNegativeQty(row.available_qty),
       reserved_qty: nonNegativeQty(row.reserved_qty),
       reorder_level: nonNegativeQty(row.reorder_level),
@@ -722,6 +768,7 @@ export async function getIssuedMaterials(options?: {
           limit_page_length: 200,
           order_by: "posting_date desc",
         }),
+        ...withSilent(),
         timeout: 5000,
       });
       logErpListQuery({
@@ -762,6 +809,7 @@ export async function getIssuedMaterials(options?: {
             filters: detailFilters,
             limit_page_length: 2000,
           }),
+          ...withSilent(),
           timeout: 5000,
         },
       );

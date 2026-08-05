@@ -160,7 +160,7 @@ export default function WarehouseGRNListPage() {
     <div className="space-y-5">
       <PageHeader
         title="GRN List"
-        description="All Goods Receipt Notes recorded in ERPNext. Search, filter, and view receipts."
+        description="All Goods Receipt Notes on record. Search, filter, and view receipts."
       />
 
       <FilterBar>
@@ -247,7 +247,7 @@ export default function WarehouseGRNListPage() {
         ) : grnQuery.isError ? (
           <ErrorState
             title="Could not load goods receipts"
-            description="Goods Receipt Notes could not be loaded from ERPNext."
+            description="Goods Receipt Notes could not be loaded."
             onRetry={() => void grnQuery.refetch()}
           />
         ) : filteredRows.length === 0 ? (

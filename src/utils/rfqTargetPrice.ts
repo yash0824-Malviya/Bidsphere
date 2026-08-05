@@ -7,6 +7,8 @@
  */
 
 import type { RFQ, RFQItem, RequestForQuotation } from "../types/erpnext";
+import { sanitizeItemAttachmentsForSupplier } from "./materialRequestItemFiles";
+import { sanitizeItemQtyForSupplier } from "./rfqProcurementQty";
 
 export function isTruthyFlag(value: unknown): boolean {
   if (value === true || value === 1 || value === "1") return true;
@@ -97,26 +99,30 @@ export type SupplierRfqView = RFQ & {
  * - Per-item: keep Target Price only when that line's show flag is ON
  * - When OFF: strip Target Price completely from that line
  * - Header show_target_price is true if any line is visible (portal convenience)
+ * - Strip Internal Only engineering attachments (supplier-visible by default)
  */
 export function sanitizeRfqForSupplier(rfq: RFQ): SupplierRfqView {
   const items = (rfq.items ?? []).map((it) => {
-    const show = isItemTargetPriceVisibleToSupplier(it, rfq);
+    const withDocs = sanitizeItemQtyForSupplier(
+      sanitizeItemAttachmentsForSupplier(it),
+    );
+    const show = isItemTargetPriceVisibleToSupplier(withDocs, rfq);
     if (!show) {
       const {
         custom_target_price: _a,
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         target_price: _b,
         ...rest
-      } = it as RFQItem & { target_price?: number | null };
+      } = withDocs as RFQItem & { target_price?: number | null };
       return {
         ...rest,
         custom_show_target_price_to_supplier: 0,
         show_target_price: false,
       } as RFQItem & { show_target_price: boolean };
     }
-    const target = getItemTargetPrice(it);
+    const target = getItemTargetPrice(withDocs);
     return {
-      ...it,
+      ...withDocs,
       custom_target_price: target,
       target_price: target,
       custom_show_target_price_to_supplier: 1,

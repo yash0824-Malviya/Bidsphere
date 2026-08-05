@@ -14,6 +14,11 @@ import {
 import EmptyState from "../../components/EmptyState";
 import ErrorState from "../../components/ErrorState";
 import { TableSkeleton } from "../../components/Skeleton";
+import ReorderStockStatusBadge from "../../components/warehouse/item-master/ReorderStockStatusBadge";
+import {
+  formatReorderLevelDisplay,
+  shouldHighlightReorderLevel,
+} from "../../utils/reorderPlanning";
 
 export default function WarehouseStockOverviewPage() {
   const [search, setSearch] = useState("");
@@ -62,8 +67,11 @@ export default function WarehouseStockOverviewPage() {
         (acc, row) => acc + Math.max(0, Number(row.available_qty) || 0),
         0,
       ),
-      lowStock: filteredData.filter((row) => row.status === "Low Stock").length,
-      outOfStock: filteredData.filter((row) => row.status === "Out of Stock").length,
+      lowStock: filteredData.filter(
+        (row) => row.status === "Reorder Required",
+      ).length,
+      outOfStock: filteredData.filter((row) => row.status === "Out of Stock")
+        .length,
     };
     return {
       ...fromFiltered,
@@ -91,7 +99,7 @@ export default function WarehouseStockOverviewPage() {
         <div className="rounded-2xl border border-slate-100 bg-white p-8 shadow-sm">
           <ErrorState
             title="Unable to load stock data."
-            description="We couldn't retrieve inventory from ERPNext. Check your connection and try again."
+            description="We couldn't retrieve inventory. Check your connection and try again."
             onRetry={() => void stockQuery.refetch()}
           />
         </div>
@@ -122,7 +130,7 @@ export default function WarehouseStockOverviewPage() {
 
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-            Low Stock Alerts
+            Reorder Required
           </p>
           <div className="mt-2 flex items-baseline justify-between">
             {stockQuery.isLoading ? (
@@ -205,9 +213,9 @@ export default function WarehouseStockOverviewPage() {
             onChange={(e) => setStatusFilter(e.target.value as WarehouseStockStatus | "")}
             className="w-full rounded-lg border border-slate-200 py-2 px-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
           >
-            <option value="">All Stock Statuses</option>
+            <option value="">All Items</option>
             <option value="In Stock">In Stock</option>
-            <option value="Low Stock">Low Stock</option>
+            <option value="Reorder Required">Reorder Required</option>
             <option value="Out of Stock">Out of Stock</option>
           </select>
         </div>
@@ -241,7 +249,7 @@ export default function WarehouseStockOverviewPage() {
               description={
                 search || statusFilter || warehouseFilter
                   ? "Adjust your filters or search terms to find records."
-                  : "ERPNext returned no warehouse bin records. Stock will appear here once items are received into inventory."
+                  : "No warehouse stock records were returned. Stock will appear here once items are received into inventory."
               }
             />
           </div>
@@ -282,21 +290,20 @@ export default function WarehouseStockOverviewPage() {
                       <td className="py-4 px-6 text-right text-slate-500 tabular-nums">
                         {Math.max(0, row.reserved_qty).toLocaleString()} {row.uom}
                       </td>
-                      <td className="py-4 px-6 text-right text-slate-500 tabular-nums">
-                        {row.reorder_level.toLocaleString()} {row.uom}
+                      <td
+                        className={`py-4 px-6 text-right tabular-nums ${
+                          shouldHighlightReorderLevel(
+                            row.current_stock,
+                            row.reorder_level,
+                          )
+                            ? "bg-amber-50 font-semibold text-amber-900"
+                            : "text-slate-500"
+                        }`}
+                      >
+                        {formatReorderLevelDisplay(row.reorder_level, row.uom)}
                       </td>
                       <td className="py-4 px-6 text-center">
-                        <span
-                          className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold border ${
-                            row.status === "In Stock"
-                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                              : row.status === "Low Stock"
-                                ? "bg-amber-50 text-amber-700 border-amber-200"
-                                : "bg-rose-50 text-rose-700 border-rose-200"
-                          }`}
-                        >
-                          {row.status}
-                        </span>
+                        <ReorderStockStatusBadge status={row.status} />
                       </td>
                     </tr>
                   ))}

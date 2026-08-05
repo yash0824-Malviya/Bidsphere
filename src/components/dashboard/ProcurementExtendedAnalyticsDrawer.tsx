@@ -80,7 +80,7 @@ export default function ProcurementExtendedAnalyticsDrawer({
               Procurement Analytics
             </h2>
             <p className="mt-0.5 text-xs text-neutral-500">
-              RFQ turnaround and procurement cycle time from live ERPNext data
+              RFQ turnaround and procurement cycle time from live data
             </p>
           </div>
           <button

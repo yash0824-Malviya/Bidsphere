@@ -791,7 +791,7 @@ export function toFriendlyOnboardingError(err: unknown): OnboardingError {
   // Avoid leaking raw Frappe/HTML exception pages
   if (/<html|Traceback|frappe\.exceptions/i.test(msg)) {
     return new OnboardingError(
-      "Something went wrong while talking to ERPNext. Please try again.",
+      "Something went wrong while saving your information. Please try again.",
       502,
     );
   }

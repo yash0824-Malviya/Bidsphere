@@ -228,7 +228,7 @@ export default function PaymentDetailPage() {
   );
 
   return (
-    <div>
+    <div className="payment-detail-page">
       <BackLink />
 
       <PageHeader
@@ -272,12 +272,8 @@ export default function PaymentDetailPage() {
         }
       />
 
-      <p className="mb-4 text-sm font-semibold text-neutral-700">
-        {payment.name ?? name}
-      </p>
-
       {isDraft && (
-        <div className="mt-4 flex items-start gap-3 rounded-2xl border border-warning-300 bg-warning-50 p-4 shadow-sm">
+        <div className="payment-detail-draft-banner">
           <Send className="mt-0.5 h-5 w-5 flex-shrink-0 text-warning-600" />
           <div className="flex-1 text-sm text-warning-800">
             <p className="font-semibold text-warning-900">Draft payment</p>
@@ -289,36 +285,37 @@ export default function PaymentDetailPage() {
         </div>
       )}
 
-      <div className="mt-4 grid gap-6 lg:grid-cols-3">
-        <div className="space-y-6 lg:col-span-2">
-          <div className="grid gap-4 card p-5 shadow-sm sm:grid-cols-2">
-            <DetailField
-              icon={Building2}
-              label="Supplier"
-              value={payment.party_name ?? payment.party ?? "—"}
-            />
-            <DetailField
-              icon={Banknote}
-              label={`Amount Paid (${currency})`}
-              value={formatCurrency(amount)}
-              valueClass="text-lg font-semibold text-neutral-900"
-            />
-            {payment.paid_to && (
-              <DetailField icon={Receipt} label="Paid To" value={payment.paid_to} />
-            )}
-            {payment.owner && (
-              <DetailField
+      <div className="payment-detail-layout">
+        <div className="payment-detail-main">
+          <section className="payment-detail-section" aria-label="Payment Overview">
+            <h2 className="payment-detail-section__title">Payment Overview</h2>
+            <div className="payment-detail-overview-grid">
+              <OverviewCard
+                icon={Building2}
+                label="Supplier"
+                value={payment.party_name ?? payment.party ?? "—"}
+              />
+              <OverviewCard
+                icon={Banknote}
+                label={`Amount Paid (${currency})`}
+                value={formatCurrency(amount)}
+                highlight
+              />
+              <OverviewCard
+                icon={Receipt}
+                label="Paid To"
+                value={payment.paid_to ?? "—"}
+              />
+              <OverviewCard
                 icon={FileText}
                 label="Authorized By"
-                value={payment.owner}
+                value={payment.owner ?? "—"}
               />
-            )}
-          </div>
+            </div>
+          </section>
 
-          <section className="card p-5 shadow-sm">
-            <h3 className="mb-4 text-sm font-semibold text-neutral-900">
-              Payment Details
-            </h3>
+          <section className="payment-detail-section payment-detail-panel">
+            <h3 className="payment-detail-panel__title">Payment Details</h3>
             {isDraft ? (
               <div className="space-y-4">
                 <div className="grid gap-4 sm:grid-cols-2">
@@ -413,12 +410,12 @@ export default function PaymentDetailPage() {
             )}
           </section>
 
-          <PaymentTraceability payment={payment} />
+          <PaymentTraceability payment={payment} className="payment-detail-section" />
 
           {references.length > 0 && (
-            <div className="card">
-              <div className="border-b border-neutral-200 px-5 py-3.5">
-                <h3 className="flex items-center gap-2 text-sm font-semibold text-neutral-800">
+            <section className="payment-detail-section payment-detail-panel payment-detail-panel--flush">
+              <div className="payment-detail-panel__header">
+                <h3 className="payment-detail-panel__title payment-detail-panel__title--inline">
                   <FileText className="h-4 w-4 text-neutral-400" />
                   Linked Invoices
                 </h3>
@@ -459,12 +456,13 @@ export default function PaymentDetailPage() {
                   </tbody>
                 </table>
               </div>
-            </div>
+            </section>
           )}
         </div>
 
-        <div>
+        <aside className="payment-detail-summary">
           <PaymentSummaryPanel
+            className="payment-summary-panel"
             invoiceName={primaryRef?.reference_name}
             supplierName={payment.party_name ?? payment.party}
             invoiceAmount={invoiceTotal}
@@ -476,16 +474,16 @@ export default function PaymentDetailPage() {
             paymentDate={payment.posting_date ?? ""}
             status={submitMutation.isPending ? "Processing" : displayStatus}
           />
-        </div>
+        </aside>
       </div>
 
       {isSubmitted && (
-        <p className="mt-4 text-xs text-neutral-500">
+        <p className="payment-detail-footnote">
           This payment has been submitted and can no longer be edited.
         </p>
       )}
       {isCancelled && (
-        <p className="mt-4 text-xs text-neutral-500">
+        <p className="payment-detail-footnote">
           This payment has been voided and is read-only.
         </p>
       )}
@@ -506,18 +504,18 @@ function ReadOnlyMethodDetails({
 }) {
   const fields = getFieldsForPaymentMethod(method);
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      <DetailField
+    <div className="payment-detail-fields-grid">
+      <InlineDetailField
         icon={CreditCard}
         label="Payment Method"
         value={getPaymentModeLabel(method)}
       />
-      <DetailField
+      <InlineDetailField
         icon={Calendar}
         label="Payment Date"
         value={formatUsDisplayDate(postingDate) || "—"}
       />
-      <DetailField
+      <InlineDetailField
         icon={Hash}
         label="Payment Reference"
         value={paymentReference ?? "—"}
@@ -526,7 +524,7 @@ function ReadOnlyMethodDetails({
         const val = details[field.key]?.trim();
         if (!val) return null;
         return (
-          <DetailField
+          <InlineDetailField
             key={field.key}
             icon={FileText}
             label={field.label}
@@ -570,22 +568,42 @@ function BackLink() {
   );
 }
 
-interface DetailFieldProps {
+function InlineDetailField({
+  icon: Icon,
+  label,
+  value,
+}: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   value: string;
-  valueClass?: string;
-}
-
-function DetailField({ icon: Icon, label, value, valueClass }: DetailFieldProps) {
+}) {
   return (
-    <div className="flex items-start gap-3 rounded-xl border border-neutral-100 bg-neutral-50 px-4 py-3">
-      <Icon className="mt-0.5 h-4 w-4 shrink-0 text-neutral-400" />
+    <div className="payment-detail-inline-field">
+      <Icon className="h-4 w-4 shrink-0 text-neutral-400" aria-hidden />
       <div className="min-w-0">
         <p className="text-xs text-neutral-500">{label}</p>
+        <p className="mt-0.5 truncate text-sm font-medium text-neutral-800">{value}</p>
+      </div>
+    </div>
+  );
+}
+
+interface OverviewCardProps {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  value: string;
+  highlight?: boolean;
+}
+
+function OverviewCard({ icon: Icon, label, value, highlight }: OverviewCardProps) {
+  return (
+    <div className="payment-detail-overview-card">
+      <Icon className="payment-detail-overview-card__icon" aria-hidden />
+      <div className="payment-detail-overview-card__body">
+        <p className="payment-detail-overview-card__label">{label}</p>
         <p
-          className={`mt-0.5 truncate text-sm ${
-            valueClass ?? "font-medium text-neutral-800"
+          className={`payment-detail-overview-card__value${
+            highlight ? " payment-detail-overview-card__value--highlight" : ""
           }`}
         >
           {value}

@@ -24,7 +24,7 @@ export const formatCurrency = (
   }).format(n);
 };
 
-/** Compact USD for dashboards and KPI cards (e.g. $949.5K, $7.5M). */
+/** Compact USD for dashboards and KPI cards (e.g. $21.8K, $362.1K, $7.5M). */
 export function formatCurrencyCompact(amount: number): string {
   if (Number.isNaN(amount)) return "—";
   const abs = Math.abs(amount);
@@ -34,14 +34,19 @@ export function formatCurrencyCompact(amount: number): string {
         style: "currency",
         currency: DEFAULT_CURRENCY,
         notation: "compact",
-        maximumFractionDigits: abs >= 1_000_000 ? 1 : abs >= 100_000 ? 1 : 0,
+        maximumFractionDigits: 1,
+        minimumFractionDigits: 0,
       }).format(amount);
     } catch {
-      /* fall through */
+      /* Manual fallback: $21.8K / $7.5M */
+      if (abs >= 1_000_000) {
+        return `$${(amount / 1_000_000).toFixed(1)}M`;
+      }
+      return `$${(amount / 1_000).toFixed(1)}K`;
     }
   }
   return formatCurrency(amount);
-};
+}
 
 /** Full currency in a specific ERPNext currency code (defaults to USD). */
 export function formatCurrencyIn(
@@ -63,7 +68,7 @@ export function formatCurrencyIn(
   }
 }
 
-/** Compact currency in a specific ERPNext currency code (defaults to USD). */
+/** Compact currency in a specific ERPNext currency code (e.g. $500.0K, $67.2K). */
 export function formatCurrencyCompactIn(
   amount: number,
   currency = DEFAULT_CURRENCY
@@ -76,10 +81,15 @@ export function formatCurrencyCompactIn(
         style: "currency",
         currency: currency || DEFAULT_CURRENCY,
         notation: "compact",
-        maximumFractionDigits: abs >= 1_000_000 ? 1 : abs >= 100_000 ? 1 : 0,
+        maximumFractionDigits: 1,
+        minimumFractionDigits: 0,
       }).format(amount);
     } catch {
-      /* fall through */
+      const code = (currency || DEFAULT_CURRENCY).toUpperCase() === "USD" ? "$" : "";
+      if (abs >= 1_000_000) {
+        return `${code}${(amount / 1_000_000).toFixed(1)}M`;
+      }
+      return `${code}${(amount / 1_000).toFixed(1)}K`;
     }
   }
   return formatCurrencyIn(amount, currency);

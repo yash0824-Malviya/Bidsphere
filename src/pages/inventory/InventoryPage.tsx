@@ -27,6 +27,8 @@ import { useClientPagination } from "../../hooks/usePagination";
 import type { Bin, Item } from "../../types/erpnext";
 import { formatNumber } from "../../utils/format";
 import { generateItemCode } from "../../utils/itemCode";
+import UomSelect from "../../components/UomSelect";
+import { normalizeToEnterpriseUom } from "../../config/uomMaster";
 
 /* ── Add-Item form state ─────────────────────────────────────────────────── */
 
@@ -519,10 +521,11 @@ export default function InventoryPage() {
                   </select>
                 </Field>
                 <Field label="Unit of Measure (UOM)">
-                  <input
+                  <UomSelect
                     value={form.stock_uom}
-                    onChange={(e) => patch("stock_uom", e.target.value)}
-                    placeholder="Nos"
+                    onChange={(v) =>
+                      patch("stock_uom", normalizeToEnterpriseUom(v) || v)
+                    }
                     className={inputCls(false)}
                   />
                 </Field>

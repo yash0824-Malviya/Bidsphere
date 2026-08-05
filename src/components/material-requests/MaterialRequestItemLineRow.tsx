@@ -12,15 +12,14 @@ import {
 import {
   getItemGroups,
   getItems,
-  getItemsByCodes,
   type ItemGroupOption,
   type ItemSearchResult,
 } from "../../api/sourcing";
+import type { ProcurementCategory } from "../../config/procurementCategory";
 import {
-  INDIRECT_CATALOG,
-  INDIRECT_ITEM_GROUPS,
-  indirectItemCodesFor,
-} from "../../config/indirectProcurementCatalog";
+  filterItemGroupsForMrPicker,
+  itemGroupNamesForCategory,
+} from "../../utils/procurementCategoryMatch";
 import type {
   MaterialRequestMode,
   MaterialRequestProcurementType,
@@ -30,6 +29,7 @@ import type {
   EngineeringAttachment,
   PendingAttachment,
 } from "../../utils/materialRequestItemFiles";
+import UomSelect from "../UomSelect";
 import ItemAttachmentsField from "./ItemAttachmentsField";
 import SearchableSelect, {
   type SearchableOption,
@@ -80,6 +80,8 @@ interface Props {
    * Request Type of the parent request (Direct / Indirect).
    */
   procurementType: MaterialRequestProcurementType;
+  /** Selected procurement category — drives automatic item filtering. */
+  procurementCategory?: ProcurementCategory | "";
   /**
    * Request Mode — Existing uses catalog/ERP dropdowns for Direct;
    * New and all Indirect modes use manual entry.
@@ -124,6 +126,7 @@ function StockStatusBadge({ status }: { status: ItemStockStatusLabel | "-" }) {
   const styles: Record<ItemStockStatusLabel, string> = {
     "In Stock": "border-emerald-200 bg-emerald-50 text-emerald-800",
     "Low Stock": "border-amber-200 bg-amber-50 text-amber-800",
+    "Reorder Required": "border-amber-200 bg-amber-50 text-amber-800",
     "Out of Stock": "border-red-200 bg-red-50 text-red-800",
   };
 
@@ -149,6 +152,7 @@ export default function MaterialRequestItemLineRow({
   canRemove,
   usedItemCodes,
   procurementType,
+  procurementCategory = "",
   requestMode,
   showStock = false,
   attachmentsReadOnly = false,
@@ -162,64 +166,72 @@ export default function MaterialRequestItemLineRow({
   const nameError = showErrors && !useDropdowns && !row.item_name.trim();
   const qtyError = showErrors && !(row.qty > 0);
 
-  // Direct + Existing → ERP Item Group / Item dropdowns.
-  // Indirect (any) and Direct + New → manual text entry.
-  const isIndirect = procurementType === "Indirect";
-
   const groupsQuery = useQuery<ItemGroupOption[]>({
-    queryKey: ["item-groups"],
+    queryKey: ["item-groups", procurementType, procurementCategory],
     queryFn: () => getItemGroups(),
-    enabled: useDropdowns && !isIndirect,
+    enabled: useDropdowns,
     staleTime: 5 * 60_000,
   });
 
   const groups = groupsQuery.data ?? EMPTY_GROUPS;
 
-  const groupOptions = useMemo<SearchableOption[]>(() => {
-    if (isIndirect) {
-      return INDIRECT_ITEM_GROUPS.map((g) => ({ value: g, label: g }));
-    }
-    return groups.map((g) => ({
-      value: g.name,
-      label: g.item_group_name || g.name,
-    }));
-  }, [isIndirect, groups]);
+  const filteredGroups = useMemo(
+    () =>
+      filterItemGroupsForMrPicker(groups, {
+        procurementType,
+        procurementCategory: procurementCategory as ProcurementCategory | "",
+      }),
+    [groups, procurementType, procurementCategory],
+  );
+
+  const categoryItemGroups = useMemo(
+    () =>
+      itemGroupNamesForCategory(
+        groups,
+        procurementCategory as ProcurementCategory | "",
+      ),
+    [groups, procurementCategory],
+  );
+
+  const groupOptions = useMemo<SearchableOption[]>(
+    () =>
+      filteredGroups.map((g) => ({
+        value: g.name,
+        label: g.item_group_name || g.name,
+      })),
+    [filteredGroups],
+  );
 
   const itemsQuery = useQuery<ItemSearchResult[]>({
-    queryKey: ["mr-items", isIndirect ? "indirect" : "direct", row.item_group],
-    queryFn: () =>
-      isIndirect
-        ? getItemsByCodes(indirectItemCodesFor(row.item_group))
-        : getItems({ itemGroup: row.item_group, limit: 500 }),
-    enabled: useDropdowns && !!row.item_group,
+    queryKey: [
+      "mr-items",
+      procurementType,
+      procurementCategory,
+      row.item_group,
+      categoryItemGroups.join("|"),
+    ],
+    queryFn: async () => {
+      const pickerFilters = {
+        limit: 500,
+        procurementType,
+        procurementCategory: procurementCategory || undefined,
+        activeOnly: true,
+      };
+      if (row.item_group) {
+        return getItems({ ...pickerFilters, itemGroup: row.item_group });
+      }
+      if (categoryItemGroups.length > 0) {
+        return getItems({ ...pickerFilters, itemGroups: categoryItemGroups });
+      }
+      return [];
+    },
+    enabled:
+      useDropdowns &&
+      Boolean(row.item_group || categoryItemGroups.length > 0),
     staleTime: 60_000,
   });
 
-  const stockQuery = useQuery({
-    queryKey: ["mr-item-stock", row.item_code],
-    queryFn: () => getItemStockSummary(row.item_code),
-    enabled: !!row.item_code && showStock && useDropdowns,
-    staleTime: 30_000,
-  });
-
-  const items = useMemo<ItemSearchResult[]>(() => {
-    if (!isIndirect) return itemsQuery.data ?? EMPTY_ITEMS;
-    const catalog = INDIRECT_CATALOG[row.item_group] ?? [];
-    const erpByCode = new Map(
-      (itemsQuery.data ?? []).map((it) => [it.item_code, it]),
-    );
-    return catalog.map((c) => {
-      const erp = erpByCode.get(c.code);
-      return {
-        name: erp?.name ?? c.code,
-        item_code: c.code,
-        item_name: erp?.item_name || c.name,
-        description: erp?.description || c.description,
-        uom: erp?.uom || c.uom,
-        item_group: row.item_group,
-      };
-    });
-  }, [isIndirect, row.item_group, itemsQuery.data]);
+  const items = itemsQuery.data ?? EMPTY_ITEMS;
 
   const itemOptions = useMemo<SearchableOption[]>(
     () =>
@@ -235,6 +247,13 @@ export default function MaterialRequestItemLineRow({
       })),
     [items, usedItemCodes],
   );
+
+  const stockQuery = useQuery({
+    queryKey: ["mr-item-stock", row.item_code],
+    queryFn: () => getItemStockSummary(row.item_code),
+    enabled: !!row.item_code && showStock && useDropdowns,
+    staleTime: 30_000,
+  });
 
   const selectedGroupLabel = useMemo(() => {
     if (!row.item_group) return "";
@@ -287,6 +306,7 @@ export default function MaterialRequestItemLineRow({
       item_name: item.item_name,
       description: item.description ?? item.item_name,
       uom: item.uom,
+      item_group: item.item_group || row.item_group,
     });
   }
 
@@ -334,7 +354,11 @@ export default function MaterialRequestItemLineRow({
             invalid={groupError}
             placeholder="Search item group"
             ariaLabel={`Item group for row ${rowNumber}`}
-            emptyText="No item groups available."
+            emptyText={
+              procurementCategory
+                ? "No item groups for this procurement category."
+                : "Select a procurement category first."
+            }
             errorText="Couldn't load item groups."
           />
         ) : (
@@ -357,12 +381,19 @@ export default function MaterialRequestItemLineRow({
             selectedLabel={selectedItemLabel}
             onSelect={handleItemSelect}
             onClear={handleItemClear}
-            disabled={!row.item_group}
+            disabled={
+              !procurementCategory ||
+              (!row.item_group && categoryItemGroups.length === 0)
+            }
             loading={itemsQuery.isLoading || itemsQuery.isFetching}
             error={itemsQuery.isError}
             invalid={itemError}
-            placeholder="Type to search item"
-            disabledPlaceholder="Select an item group first"
+            placeholder="Search by item code or name"
+            disabledPlaceholder={
+              !procurementCategory
+                ? "Select a procurement category first"
+                : "Select an item group first"
+            }
             ariaLabel={`Item for row ${rowNumber}`}
             emptyText="No items in this group."
             errorText="Couldn't load items."
@@ -417,11 +448,11 @@ export default function MaterialRequestItemLineRow({
             tabIndex={-1}
           />
         ) : (
-          <input
+          <UomSelect
             value={row.uom}
-            onChange={(e) => onChange({ uom: e.target.value })}
-            placeholder="UOM"
+            onChange={(v) => onChange({ uom: v })}
             className={`${textInputCls(false)} text-center`}
+            erpUoms={row.uom ? [row.uom] : []}
           />
         )}
       </td>

@@ -17,7 +17,13 @@ import {
   Upload,
 } from "lucide-react";
 
-import { apiGet, COMPANY, fetchServerDate, withSilent } from "../../api/erpnext";
+import {
+  apiGet,
+  COMPANY,
+  fetchErpServerDateInfo,
+  fetchServerDate,
+  withSilent,
+} from "../../api/erpnext";
 import { uploadFileToERPNext } from "../../api/legalDocsStorage";
 import {
   createPurchaseReceipt,
@@ -30,6 +36,8 @@ import {
 } from "../../api/purchasing";
 import { invalidateWarehouseStock } from "../../api/warehouseStock";
 import { reconcileProcurementReadyToIssue } from "../../api/materialRequestWorkflow";
+import { advancePoWorkflowAfterGrnSubmit } from "../../api/poDeliveryWorkflow";
+import { getInvoicesForPO } from "../../api/accounts";
 import ErrorState from "../../components/ErrorState";
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
@@ -44,7 +52,15 @@ import { useAuthStore } from "../../store/authStore";
 import { useDebounce } from "../../hooks/useDebounce";
 import { buildGrnPdf, grnPdfFilename } from "../../utils/pdf/grnPdf";
 import { formatCurrency, formatDate, formatDateTime, todayIso } from "../../utils/format";
-import { toCalendarYmd, todayERPNextDate } from "../../utils/erpNextDate";
+import {
+  formatGrnPostingDateMessage,
+  isGrnPostingDateFuture,
+  logGrnPostingDateDebug,
+  normalizeGrnPostingDate,
+  resolveGrnPostingDate,
+  toCalendarYmd,
+  todayERPNextDate,
+} from "../../utils/erpNextDate";
 import {
   buildUpcomingDeliveries,
   computeReceivingKpis,
@@ -236,14 +252,17 @@ export default function WarehouseCreateGRNPage() {
     retry: 1,
   });
 
-  // Optional ERPNext server date for UI defaults only — not a hard client gate.
+  // ERP site calendar today in System Settings time zone (not UTC).
   const serverDateQuery = useQuery({
     queryKey: ["erpnext-server-date"],
-    queryFn: fetchServerDate,
-    staleTime: 5 * 60_000,
-    retry: 1,
+    queryFn: fetchErpServerDateInfo,
+    staleTime: 60_000,
+    refetchOnWindowFocus: true,
+    retry: 2,
   });
-  const serverToday = serverDateQuery.data ?? todayIso();
+  const erpToday = serverDateQuery.data?.today ?? null;
+  /** List KPIs still need a stable YYYY-MM-DD; prefer ERP today. */
+  const serverToday = erpToday ?? todayIso();
 
   const deliveries = useMemo(
     () => buildUpcomingDeliveries(incomingQuery.data ?? []),
@@ -546,19 +565,38 @@ export default function WarehouseCreateGRNPage() {
     return rows.every((r) => r.pending_qty <= 0);
   }, [selectedPO, rows]);
 
-  // PO / local calendar days as YYYY-MM-DD only (never UTC / Date serialization).
+  // PO / calendar days as YYYY-MM-DD only (never UTC / Date serialization).
   const poPostingDate =
     toCalendarYmd(selectedPO?.transaction_date) ?? "";
   const localToday = todayERPNextDate();
-  // Default = max(local today, PO date). Always sent explicitly on create so
-  // ERPNext cannot stamp UTC nowdate() (19) while PO is 20.
-  const defaultPostingDate =
-    poPostingDate && poPostingDate > localToday ? poPostingDate : localToday;
-  const pickerMin = poPostingDate || undefined;
-  const pickerMax =
-    defaultPostingDate > localToday ? defaultPostingDate : localToday;
+  // Default = PO posting date (not today). Single source: normalizeGrnPostingDate.
+  const postingResolution = useMemo(
+    () =>
+      normalizeGrnPostingDate({
+        selected: postingDateTouched ? postingDate : null,
+        poDate: poPostingDate || null,
+        erpToday,
+        browserToday: localToday,
+      }),
+    [
+      postingDateTouched,
+      postingDate,
+      poPostingDate,
+      erpToday,
+      localToday,
+    ],
+  );
+  const defaultPostingDate = resolveGrnPostingDate(
+    poPostingDate || null,
+    erpToday,
+    localToday,
+  );
+  const pickerMin = postingResolution.floor || undefined;
+  const pickerMax = postingResolution.invalidWindow
+    ? postingResolution.floor || postingResolution.ceiling
+    : postingResolution.ceiling;
 
-  // Keep the (untouched) display value aligned with the UI default.
+  // Keep the (untouched) display value = PO date when Create GRN opens.
   useEffect(() => {
     if (!postingDateTouched) {
       setPostingDate(defaultPostingDate);
@@ -566,22 +604,90 @@ export default function WarehouseCreateGRNPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultPostingDate, postingDateTouched]);
 
+  // When ERP today arrives: clamp user picks that are truly in the future,
+  // but never pull an untouched PO default down below the PO date.
+  useEffect(() => {
+    if (!erpToday || !postingDate || !postingDateTouched) return;
+    if (!isGrnPostingDateFuture(postingDate, erpToday, localToday)) return;
+    const next = normalizeGrnPostingDate({
+      selected: postingDate,
+      poDate: poPostingDate || null,
+      erpToday,
+      browserToday: localToday,
+    });
+    if (next.postingDate !== postingDate && next.clampedToErpToday) {
+      setPostingDate(next.postingDate);
+      toast(
+        formatGrnPostingDateMessage("future_blocked", {
+          poDate: poPostingDate,
+          selectedDate: postingDate,
+          today: erpToday,
+          adjustedDate: next.postingDate,
+        }),
+        { icon: "ℹ️" },
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [erpToday]);
+
   useEffect(() => {
     if (!poName) return;
-    // eslint-disable-next-line no-console
-    console.log("[GRN Date Check]", {
-      erpServerDate:
-        serverDateQuery.data ?? "(unresolved — ERPNext today() will apply)",
-      purchaseOrderDate: poPostingDate || "(unknown)",
-      postingDate,
-      postingDateTouched,
+    const info = serverDateQuery.data;
+    /* eslint-disable no-console */
+    console.group("[GRN Date Validation]");
+    console.log("Browser Date:", localToday);
+    console.log("Server Date:", info?.today ?? erpToday ?? "(unresolved)");
+    console.log("ERP Today:", erpToday ?? "(unresolved)");
+    console.log("UTC Today:", info?.utcToday ?? "(n/a)");
+    console.log("ERP Time Zone:", info?.timeZone ?? "(n/a)");
+    console.log(
+      "System Settings Time Zone:",
+      info?.systemSettingsTimeZone ?? "(n/a)",
+    );
+    console.log("PO Date:", poPostingDate || "(unknown)");
+    console.log("Posting Date:", postingDate);
+    console.log(
+      "Comparison:",
+      `PO(${poPostingDate || "?"}) <= Today(${erpToday || "?"}) && ` +
+        `Posting(${postingDate}) >= PO && Posting <= Today`,
+    );
+    console.log(
+      "Result:",
+      postingResolution.invalidWindow
+        ? "INVALID WINDOW (PO after ERP today — check time zone)"
+        : postingResolution.clampedToPoDate
+          ? "ADJUSTED TO PO DATE"
+          : postingResolution.wouldBeFuture
+            ? "FUTURE → clamp to today"
+            : "ALLOWED",
+    );
+    console.groupEnd();
+    /* eslint-enable no-console */
+    logGrnPostingDateDebug({
+      browserDate: localToday,
+      selectedDate: postingDate,
+      payloadDate: postingResolution.postingDate,
+      serverDate: erpToday,
+      erpToday,
+      poDate: poPostingDate || null,
+      comparisonResult: postingResolution.invalidWindow
+        ? "INVALID WINDOW (PO after today)"
+        : postingResolution.clampedToPoDate
+          ? "ADJUSTED TO PO DATE"
+          : postingResolution.wouldBeFuture
+            ? "FUTURE → clamp to today"
+            : "ALLOWED",
+      resolution: postingResolution,
     });
   }, [
     poName,
     poPostingDate,
-    serverDateQuery.data,
+    erpToday,
     postingDate,
     postingDateTouched,
+    localToday,
+    postingResolution,
+    serverDateQuery.data,
   ]);
 
   function updateRow(id: string, patch: Partial<GrnLineRow>) {
@@ -607,8 +713,8 @@ export default function WarehouseCreateGRNPage() {
     if (targetStep >= 1) {
       if (isFullyReceivedFromErp) {
         errors.submit = primaryExistingGrn
-          ? `This Purchase Order is already fully received in ERPNext (${primaryExistingGrn.name}). Open the existing GRN instead of creating another.`
-          : "This Purchase Order has no pending quantity in ERPNext. A GRN cannot be created.";
+          ? `This Purchase Order is already fully received (${primaryExistingGrn.name}). Open the existing GRN instead of creating another.`
+          : "This Purchase Order has no pending quantity. A GRN cannot be created.";
         setFieldErrors(errors);
         return false;
       }
@@ -622,7 +728,7 @@ export default function WarehouseCreateGRNPage() {
         if (row.received_qty > row.pending_qty) {
           lineErrors[row.itemId] =
             row.pending_qty <= 0
-              ? `This line is already fully received in ERPNext (${row.already_received_qty} of ${row.ordered_qty}). Pending quantity is 0.`
+              ? `This line is already fully received (${row.already_received_qty} of ${row.ordered_qty}). Pending quantity is 0.`
               : `Cannot receive more than the remaining ${row.pending_qty} pending on this PO line.`;
         }
         if (row.rejected_qty > 0 && !row.rejection_reason) {
@@ -660,33 +766,39 @@ export default function WarehouseCreateGRNPage() {
   }
 
   /**
-   * Always send calendar posting_date = max(UI|local today, PO date).
-   * Omitting lets ERPNext stamp server nowdate() (often UTC → 19 while PO is 20).
-   * Never use Date / toISOString / UTC — wire value is literal YYYY-MM-DD.
+   * Wire posting_date = YYYY-MM-DD only, clamped to [PO date, ERP today].
+   * Never use Date / toISOString / UTC — ERP compares date portions via nowdate().
    */
   function resolvePostingFields(): Partial<
     Pick<PurchaseReceipt, "posting_date" | "set_posting_time">
   > {
     const localYmd = todayERPNextDate();
-    const poYmd = poPostingDate;
-    const floor = poYmd && poYmd > localYmd ? poYmd : localYmd;
+    const uiRaw =
+      postingDateTouched && postingDate ? postingDate : defaultPostingDate;
+    const resolution = normalizeGrnPostingDate({
+      selected: uiRaw,
+      poDate: poPostingDate || null,
+      erpToday,
+      browserToday: localYmd,
+    });
 
-    const uiRaw = postingDateTouched && postingDate ? postingDate : floor;
-    // eslint-disable-next-line no-console
-    console.log("[GRN posting_date] DatePicker / state:", postingDate);
-    // eslint-disable-next-line no-console
-    console.log("[GRN posting_date] before transform:", uiRaw);
-
-    const uiYmd = toCalendarYmd(uiRaw) ?? floor;
-    const postingYmd = uiYmd < floor ? floor : uiYmd;
-
-    // eslint-disable-next-line no-console
-    console.log("[GRN posting_date] after transform (wire YYYY-MM-DD):", postingYmd);
-    // eslint-disable-next-line no-console
-    console.log("[GRN posting_date] PO date:", poYmd || "(unknown)", "localToday:", localYmd);
+    logGrnPostingDateDebug({
+      browserDate: localYmd,
+      selectedDate: postingDate,
+      payloadDate: resolution.postingDate,
+      serverDate: erpToday,
+      erpToday,
+      poDate: poPostingDate || null,
+      comparisonResult: resolution.wouldBeFuture
+        ? "BLOCKED future → clamped to ERP Today"
+        : resolution.postingDate === resolution.ceiling
+          ? "ALLOWED (Today)"
+          : "ALLOWED (on or before Today)",
+      resolution,
+    });
 
     return {
-      posting_date: postingYmd,
+      posting_date: resolution.postingDate,
       set_posting_time: 1,
     };
   }
@@ -778,18 +890,45 @@ export default function WarehouseCreateGRNPage() {
         );
       }
 
-      const payload = buildPayload(signedEsign);
-      // Requirement: print the EXACT payload sent to ERPNext + the dates used.
-      /* eslint-disable no-console */
-      console.log("[GRN Submit] Dates", {
-        datePickerState: postingDate,
-        purchaseOrderDate: poPostingDate || "(unknown)",
-        localToday: todayERPNextDate(),
-        payloadPostingDate: payload.posting_date,
-        set_posting_time: payload.set_posting_time,
+      // Refresh ERP today immediately before submit so TZ midnight edge cases
+      // cannot use a stale ceiling from an earlier page load.
+      let liveErpToday = erpToday;
+      try {
+        liveErpToday = (await fetchServerDate()) ?? erpToday;
+      } catch {
+        /* keep cached */
+      }
+
+      const liveResolution = normalizeGrnPostingDate({
+        selected:
+          postingDateTouched && postingDate ? postingDate : defaultPostingDate,
+        poDate: poPostingDate || null,
+        erpToday: liveErpToday,
+        browserToday: todayERPNextDate(),
       });
-      console.log(
-        "[GRN Submit] Exact payload sent to ERPNext:\n" +
+
+      const payload = buildPayload(signedEsign);
+      // Enforce live ceiling on the payload (buildPayload may have used cache).
+      payload.posting_date = liveResolution.postingDate;
+      payload.set_posting_time = 1;
+
+      logGrnPostingDateDebug({
+        browserDate: todayERPNextDate(),
+        selectedDate: postingDate,
+        payloadDate: payload.posting_date,
+        serverDate: liveErpToday,
+        erpToday: liveErpToday,
+        poDate: poPostingDate || null,
+        comparisonResult: liveResolution.wouldBeFuture
+          ? "BLOCKED future → clamped to ERP Today"
+          : liveResolution.postingDate === liveResolution.ceiling
+            ? "ALLOWED (Today)"
+            : "ALLOWED (on or before Today)",
+        resolution: liveResolution,
+      });
+
+      /* eslint-disable no-console */
+      console.log("[GRN Submit] Exact payload sent to ERPNext:\n" +
           JSON.stringify(
             {
               ...payload,
@@ -885,7 +1024,7 @@ export default function WarehouseCreateGRNPage() {
             err,
           });
           toast(
-            `Goods Receipt ${createdName} was created, but attachment "${entry.file.name}" could not be uploaded. You can attach it from ERPNext.`,
+            `Goods Receipt ${createdName} was created, but attachment "${entry.file.name}" could not be uploaded. You can attach it from the document detail page.`,
             { duration: 8_000, icon: "⚠️" },
           );
         }
@@ -978,7 +1117,7 @@ export default function WarehouseCreateGRNPage() {
       }
       return submitted;
     },
-    onSuccess: (grn) => {
+    onSuccess: async (grn) => {
       setSubmittedGrnName(grn.name);
       setEsign((prev) => ({ ...prev, locked: true, verificationStatus: "verified" }));
       appendWarehouseEsignAudit(
@@ -988,25 +1127,61 @@ export default function WarehouseCreateGRNPage() {
         { grnName: grn.name, targetRole: "warehouse" },
       );
       toast.success("GRN successfully signed and finalized.");
-      // Refresh every live-stock, inventory, GRN and procurement view so the
-      // received quantities (and any MR moved to Ready to Issue) show instantly
-      // — all read live from ERPNext Bin, no page reload needed.
       invalidateWarehouseStock(queryClient);
-      void queryClient.invalidateQueries({ queryKey: ["purchase-order", poName] });
-      void queryClient.invalidateQueries({ queryKey: ["incoming-purchase-orders"] });
       void queryClient.invalidateQueries({
         queryKey: ["purchase-receipt", grn.name],
       });
+
+      if (poName) {
+        try {
+          const [freshPo, freshGrns, freshInvoices] = await Promise.all([
+            queryClient.fetchQuery({
+              queryKey: ["purchase-order", poName],
+              queryFn: () => getPurchaseOrder(poName),
+            }),
+            queryClient.fetchQuery({
+              queryKey: ["po-grns", poName],
+              queryFn: () => getGRNsForPO(poName),
+            }),
+            queryClient.fetchQuery({
+              queryKey: ["po-invoices", poName],
+              queryFn: () => getInvoicesForPO(poName),
+            }),
+          ]);
+          const submittedGrnCount = freshGrns.filter((g) => g.docstatus === 1).length;
+          const primaryInvoice =
+            freshInvoices.find((inv) => inv.docstatus === 1) ?? freshInvoices[0];
+          await advancePoWorkflowAfterGrnSubmit(poName, {
+            perReceived: freshPo.per_received ?? 0,
+            perBilled: freshPo.per_billed ?? 0,
+            submittedGrnCount,
+            hasSubmittedInvoice: freshInvoices.some((inv) => inv.docstatus === 1),
+            invoiceOutstanding: primaryInvoice?.outstanding_amount,
+            invoiceGrandTotal: primaryInvoice?.grand_total,
+          });
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn("[GRN Submit] PO workflow sync after GRN failed:", err);
+          void queryClient.invalidateQueries({ queryKey: ["purchase-order", poName] });
+          void queryClient.invalidateQueries({ queryKey: ["po-grns", poName] });
+          void queryClient.invalidateQueries({ queryKey: ["po-shipment", poName] });
+        }
+      } else {
+        void queryClient.invalidateQueries({ queryKey: ["incoming-purchase-orders"] });
+      }
     },
     onError: (err: unknown) => {
       // eslint-disable-next-line no-console
       console.error("[GRN Submit] error:", err);
       if (isDateConflictError(err)) {
-        // eslint-disable-next-line no-console
-        console.error("[GRN Posting Date] ERPNext rejected posting date", {
-          erpServerDate: serverDateQuery.data ?? "(unresolved)",
-          purchaseOrderDate: poPostingDate || "(unknown)",
-          selectedPostingDate: postingDateTouched ? postingDate : "(omitted)",
+        logGrnPostingDateDebug({
+          browserDate: todayERPNextDate(),
+          selectedDate: postingDate,
+          payloadDate: postingDate,
+          serverDate: erpToday,
+          erpToday,
+          poDate: poPostingDate || null,
+          comparisonResult: "ERPNext REJECTED — check Payload vs ERP Today",
         });
       }
       const message = friendlyGrnError(err);
@@ -1020,10 +1195,47 @@ export default function WarehouseCreateGRNPage() {
 
   function handleSubmit() {
     if (!validateStep(STEPS.length - 1)) return;
-    // Keep picker aligned with floor; payload still clamps to max(today, PO).
-    if (postingDate && postingDate < defaultPostingDate) {
-      setPostingDate(defaultPostingDate);
+    const resolution = normalizeGrnPostingDate({
+      selected: postingDate,
+      poDate: poPostingDate || null,
+      erpToday,
+      browserToday: todayERPNextDate(),
+    });
+
+    if (resolution.invalidWindow) {
+      const message = formatGrnPostingDateMessage("invalid_window", {
+        poDate: resolution.floor,
+        selectedDate: postingDate,
+        today: resolution.ceiling,
+      });
+      setFieldErrors((prev) => ({ ...prev, submit: message }));
+      toast.error(message);
+      return;
     }
+
+    if (postingDate !== resolution.postingDate) {
+      setPostingDate(resolution.postingDate);
+      if (resolution.clampedToPoDate) {
+        toast(
+          formatGrnPostingDateMessage("adjusted_to_po", {
+            poDate: resolution.floor,
+            selectedDate: postingDate,
+          }),
+          { icon: "ℹ️" },
+        );
+      } else if (resolution.clampedToErpToday) {
+        toast(
+          formatGrnPostingDateMessage("future_blocked", {
+            poDate: resolution.floor,
+            selectedDate: postingDate,
+            today: resolution.ceiling,
+            adjustedDate: resolution.postingDate,
+          }),
+          { icon: "ℹ️" },
+        );
+      }
+    }
+
     setFieldErrors((prev) => ({ ...prev, submit: undefined }));
     submitMutation.mutate();
   }
@@ -1032,9 +1244,9 @@ export default function WarehouseCreateGRNPage() {
     setPoName(targetPoName);
     setStep(0);
     setWarehouse("");
-    // Default = max(local today, PO) — always sent as YYYY-MM-DD on create.
-    setPostingDate(defaultPostingDate);
+    // Reset so the PO-date effect can set default = PO posting date (not today).
     setPostingDateTouched(false);
+    setPostingDate(todayERPNextDate());
     setRows([]);
     setNotes("");
     setAttachments([]);
@@ -1177,7 +1389,7 @@ export default function WarehouseCreateGRNPage() {
         {listFailed && (
           <ErrorState
             title="Unable to load GRN prerequisites"
-            description="The purchase order or warehouses could not be loaded from ERPNext."
+            description="The purchase order or warehouses could not be loaded."
             onRetry={() => {
               void poQuery.refetch();
               void warehousesQuery.refetch();
@@ -1219,7 +1431,7 @@ export default function WarehouseCreateGRNPage() {
                 {isFullyReceivedFromErp && (
                   <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
                     <p className="font-semibold">
-                      This Purchase Order is already fully received in ERPNext.
+                      This Purchase Order is already fully received.
                     </p>
                     <p className="mt-1 text-emerald-800/90">
                       Pending quantity is calculated from live PO lines
@@ -1253,7 +1465,7 @@ export default function WarehouseCreateGRNPage() {
                       </p>
                     ) : (
                       <p className="mt-2 text-xs text-amber-800">
-                        PO received quantities are already 100% in ERPNext, but
+                        PO received quantities are already 100%, but
                         no Purchase Receipt was found for this PO. Contact an
                         administrator before changing quantities.
                       </p>
@@ -1294,20 +1506,78 @@ export default function WarehouseCreateGRNPage() {
                   min={pickerMin}
                   max={pickerMax}
                   onChange={(e) => {
-                    let value = e.target.value;
+                    const raw = e.target.value;
                     setPostingDateTouched(true);
-                    if (pickerMin && value < pickerMin) value = pickerMin;
-                    if (pickerMax && value > pickerMax) value = pickerMax;
-                    setPostingDate(value);
+                    const resolution = normalizeGrnPostingDate({
+                      selected: raw,
+                      poDate: poPostingDate || null,
+                      erpToday,
+                      browserToday: localToday,
+                    });
+                    setPostingDate(resolution.postingDate);
+                    if (resolution.clampedToPoDate) {
+                      toast(
+                        formatGrnPostingDateMessage("adjusted_to_po", {
+                          poDate: resolution.floor,
+                          selectedDate: raw,
+                        }),
+                        { icon: "ℹ️" },
+                      );
+                    } else if (resolution.clampedToErpToday) {
+                      toast(
+                        formatGrnPostingDateMessage("future_blocked", {
+                          poDate: resolution.floor,
+                          selectedDate: raw,
+                          today: resolution.ceiling,
+                          adjustedDate: resolution.postingDate,
+                        }),
+                        { icon: "ℹ️" },
+                      );
+                    }
                     setFieldErrors((prev) => ({ ...prev, submit: undefined }));
                   }}
                   className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
                 />
                 <p className="mt-1 text-xs text-slate-400">
                   {poPostingDate
-                    ? `Sent as YYYY-MM-DD = max(today, PO ${formatDate(poPostingDate)}). Never before the Purchase Order date.`
-                    : "Sent as today's local calendar date (YYYY-MM-DD)."}
+                    ? `Defaults to Purchase Order Date (${formatDate(poPostingDate)}). Allowed: PO date through today${
+                        erpToday || localToday
+                          ? ` (${formatDate(erpToday || localToday)})`
+                          : ""
+                      }.`
+                    : `Calendar date only (YYYY-MM-DD). Today and past dates allowed; future dates blocked.`}
                 </p>
+                {postingResolution.invalidWindow ? (
+                  <p className="mt-1 text-xs text-amber-700">
+                    {formatGrnPostingDateMessage("invalid_window", {
+                      poDate: poPostingDate,
+                      selectedDate: postingDate,
+                      today: postingResolution.ceiling,
+                    })}{" "}
+                    If the browser date is correct, ERP System Settings time
+                    zone may still be UTC — run{" "}
+                    <code className="rounded bg-amber-100 px-1">
+                      node scripts/setup-erp-timezone.mjs
+                    </code>{" "}
+                    and clear the ERP cache.
+                  </p>
+                ) : null}
+                {serverDateQuery.data?.systemSettingsTimeZone &&
+                /^(UTC|Etc\/UTC)$/i.test(
+                  serverDateQuery.data.systemSettingsTimeZone,
+                ) ? (
+                  <p className="mt-1 text-xs text-amber-700">
+                    ERP System Settings time zone is{" "}
+                    {serverDateQuery.data.systemSettingsTimeZone} (UTC day{" "}
+                    {serverDateQuery.data.utcToday ?? "—"}). Business calendar
+                    uses {serverDateQuery.data.timeZone} (
+                    {serverDateQuery.data.today}). Align ERP with{" "}
+                    <code className="rounded bg-amber-100 px-1">
+                      node scripts/setup-erp-timezone.mjs
+                    </code>
+                    .
+                  </p>
+                ) : null}
               </div>
             </div>
 
@@ -1377,7 +1647,7 @@ export default function WarehouseCreateGRNPage() {
                                 disabled={row.pending_qty <= 0 || isFullyReceivedFromErp}
                                 title={
                                   row.pending_qty <= 0
-                                    ? "No pending quantity left on this PO line in ERPNext"
+                                    ? "No pending quantity left on this PO line"
                                     : undefined
                                 }
                                 value={row.received_qty || ""}
@@ -1801,7 +2071,7 @@ export default function WarehouseCreateGRNPage() {
             ) : incomingQuery.isError ? (
               <ErrorState
                 title="Could not load purchase orders"
-                description="Purchase orders awaiting receipt could not be loaded from ERPNext."
+                description="Purchase orders awaiting receipt could not be loaded."
                 onRetry={() => void incomingQuery.refetch()}
               />
             ) : filteredDeliveries.length === 0 ? (
@@ -2010,7 +2280,7 @@ export default function WarehouseCreateGRNPage() {
             ) : grnHistoryQuery.isError ? (
               <ErrorState
                 title="Could not load goods receipts"
-                description="Completed goods receipt notes could not be loaded from ERPNext."
+                description="Completed goods receipt notes could not be loaded."
                 onRetry={() => void grnHistoryQuery.refetch()}
               />
             ) : filteredHistoryRows.length === 0 ? (

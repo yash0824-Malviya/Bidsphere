@@ -289,6 +289,7 @@
     "submitYourItemPrices": "Envíe sus precios por artículo",
     "itemPricesHint": "Introduzca un nuevo precio para cualquier artículo. Cada nuevo precio debe ser inferior al más bajo actual. Los nombres de los competidores están ocultos.",
     "itemPricesHintDecrement": "Introduzca un nuevo precio para cualquier artículo. Cada nuevo precio debe ser inferior al más bajo actual en al menos {{amount}}. Los nombres de los competidores están ocultos.",
+    "itemMaxBidHint": "Puja máxima: {{amount}}",
     "item": "Artículo",
     "qty": "Cant.",
     "currentLowest": "Más bajo actual",
@@ -434,7 +435,8 @@
     "directProcurement": "Compra directa",
     "indirectProcurement": "Compra indirecta",
     "helpDirect": "Materiales de fabricación / materia prima — se enrutan al almacén para verificación de existencias.",
-    "helpIndirect": "Artículos de oficina / soporte — se enrutan a administración para aprobación.",
+    "helpIndirect": "Artículos de oficina / soporte — se enrutan al almacén para verificación de inventario.",
+    "helpWarehouse": "La solicitud de material se enviará al almacén para verificación de inventario.",
     "filterLabel": "Tipo de solicitud"
   },
   "requestMode": {
@@ -486,6 +488,7 @@
       "slaMonitor": "Monitor de SLA",
       "supplierAnalytics": "Analítica de Proveedores",
       "inventorySnapshot": "Resumen de Inventario",
+      "operationalHealth": "Salud Operativa",
       "aiInsights": "Perspectivas de IA",
       "notifications": "Notificaciones",
       "recentActivity": "Actividad Reciente",
@@ -527,14 +530,15 @@
       "payment": "Pago"
     },
     "approval": {
-      "pendingApprovals": "Aprobaciones Pendientes",
-      "budgetApproval": "Aprobación de Presupuesto",
-      "legalReview": "Revisión Legal",
-      "financeReview": "Revisión Financiera",
-      "poApproval": "Aprobación de Orden de Compra",
-      "warehouseReview": "Revisión de Almacén",
-      "highPriority": "{{count}} de alta prioridad",
-      "pending": "pendientes",
+      "pendingApprovals": "Pendientes",
+      "budgetApproval": "Presupuesto",
+      "legalReview": "Legal",
+      "financeReview": "Finanzas",
+      "poApproval": "OC",
+      "warehouseReview": "Almacén",
+      "highPriority": "{{count}} alta",
+      "pending": "Pendiente",
+      "pendingBadge": "{{count}} Pendiente",
       "viewAll": "Ver Todo"
     },
     "sla": {
@@ -567,7 +571,7 @@
     },
     "health": {
       "backend": "Estado del Backend",
-      "erpnext": "Conexión ERPNext",
+      "erpnext": "Backend Connection",
       "database": "Base de Datos",
       "api": "API",
       "email": "Servicio de Correo",

@@ -292,6 +292,7 @@
     "submitYourItemPrices": "Submit your item prices",
     "itemPricesHint": "Enter a new price for any item. Each new price must be lower than the current lowest. Competitor names are hidden.",
     "itemPricesHintDecrement": "Enter a new price for any item. Each new price must be lower than the current lowest by at least {{amount}}. Competitor names are hidden.",
+    "itemMaxBidHint": "Maximum bid: {{amount}}",
     "item": "Item",
     "qty": "Qty",
     "currentLowest": "Current Lowest",
@@ -439,7 +440,8 @@
     "directProcurement": "Direct Procurement",
     "indirectProcurement": "Indirect Procurement",
     "helpDirect": "Manufacturing / raw materials — routed through the warehouse for stock check.",
-    "helpIndirect": "Office / support items — routed to admin for approval.",
+    "helpIndirect": "Office / support items — routed through the warehouse for inventory verification.",
+    "helpWarehouse": "Material Request will be routed to Warehouse for inventory verification.",
     "filterLabel": "Request Type"
   },
   "requestMode": {
@@ -491,6 +493,7 @@
       "slaMonitor": "SLA Monitor",
       "supplierAnalytics": "Supplier Analytics",
       "inventorySnapshot": "Inventory Snapshot",
+      "operationalHealth": "Operational Health",
       "aiInsights": "AI Insights",
       "notifications": "Notifications",
       "recentActivity": "Recent Activity",
@@ -533,13 +536,14 @@
     },
     "approval": {
       "pendingApprovals": "Pending Approvals",
-      "budgetApproval": "Budget Approval",
-      "legalReview": "Legal Review",
-      "financeReview": "Finance Review",
-      "poApproval": "Purchase Order Approval",
-      "warehouseReview": "Warehouse Review",
-      "highPriority": "{{count}} high priority",
-      "pending": "pending",
+      "budgetApproval": "Budget",
+      "legalReview": "Legal",
+      "financeReview": "Finance",
+      "poApproval": "PO",
+      "warehouseReview": "Warehouse",
+      "highPriority": "{{count}} high",
+      "pending": "Pending",
+      "pendingBadge": "{{count}} Pending",
       "viewAll": "View All"
     },
     "sla": {
@@ -568,11 +572,13 @@
       "readyToIssue": "Ready to Issue",
       "procurementRequired": "Procurement Required",
       "grnPending": "GRN Pending",
-      "awaitingInspection": "Awaiting Inspection"
+      "awaitingInspection": "Awaiting Inspection",
+      "inStock": "In Stock",
+      "statusBreakdown": "Stock status"
     },
     "health": {
       "backend": "Backend Status",
-      "erpnext": "ERPNext Connection",
+      "erpnext": "Backend Connection",
       "database": "Database",
       "api": "API",
       "email": "Email Service",
@@ -607,6 +613,7 @@
       "viewAll": "View All",
       "viewFullAuditTrail": "View Full Audit Trail",
       "viewReports": "View Full Reports",
+      "openInventory": "Open Inventory",
       "noData": "No data available yet.",
       "noActivity": "No recent activity logged.",
       "noNotifications": "You're all caught up."

@@ -273,6 +273,7 @@ export default async function handler(
       method,
       headers: upstreamHeaders(req),
       body,
+      signal: AbortSignal.timeout(30_000),
     });
 
     const headers = responseHeaders(upstream);
@@ -331,10 +332,15 @@ export default async function handler(
     return;
   } catch (err) {
     const message = err instanceof Error ? err.message : "Proxy request failed.";
-    console.error("[erpnext-proxy] upstream:", targetUrl, message);
+    console.error("[erpnext-proxy] upstream unreachable", {
+      targetUrl,
+      message,
+      stack: err instanceof Error ? err.stack : undefined,
+    });
     res.status(502).json({
       error:
-        "Unable to load data at the moment. Please try again in a few seconds.",
+        "Unable to reach the application server. Please try again in a few seconds.",
+      exc_type: "ProxyUpstreamError",
     });
   }
 }

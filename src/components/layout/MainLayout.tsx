@@ -21,7 +21,7 @@ function MainLayoutShell() {
         : "full";
 
   return (
-    <div className="min-h-screen w-full min-w-0 overflow-x-clip bg-surface-page">
+    <div className="app-shell min-w-0 bg-surface-page">
       {sidebarMode !== "drawer" && (
         <Sidebar variant={sidebarVariant} fixed />
       )}
@@ -51,7 +51,7 @@ function MainLayoutShell() {
       )}
 
       <div
-        className="flex min-h-screen min-w-0 flex-col transition-[margin,width] duration-300 ease-in-out"
+        className="app-shell-main transition-[margin,width] duration-300 ease-in-out"
         style={
           sidebarMode !== "drawer"
             ? {
@@ -63,7 +63,7 @@ function MainLayoutShell() {
       >
         <Header />
         <ConnectionStatus />
-        <main className="layout-main">
+        <main className="app-shell-scroll layout-main">
           <PageContainer>
             <Outlet />
           </PageContainer>

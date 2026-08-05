@@ -1,8 +1,7 @@
 /**
- * Frontend client for Procurement BOM Reader APIs.
- *
- * Calls same-origin `/api/bom/*` via fetch (no credentials / no sid cookies),
- * matching the Legal Review gateway pattern. Excel is parsed on the server.
+ * Frontend client for Department BOM APIs (`/api/bom/*`).
+ * Department users upload BOMs → Material Request + Temporary Item Store.
+ * Procurement must NOT use this module (RFQ starts after warehouse shortage).
  */
 
 export type BomRowStatus =
@@ -86,11 +85,149 @@ export interface CreateBomRfqPayload {
   file_mime?: string;
 }
 
+/** @deprecated Legacy procurement RFQ-from-BOM — admin-only on server. */
+export async function createRfqFromUploadedBom(
+  payload: CreateBomRfqPayload,
+): Promise<CreateBomRfqResult> {
+  return callBomApi<CreateBomRfqResult>("create-rfq", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export interface SubmitDepartmentBomPayload {
+  rows: BomParsedRow[];
+  uploaded_by?: string;
+  department?: string;
+  project?: string;
+  program?: string;
+  bom_version?: string;
+  remarks?: string;
+  company?: string;
+  file_name?: string;
+  file_base64?: string;
+  file_mime?: string;
+}
+
+export interface SubmitDepartmentBomResult {
+  success: true;
+  uploaded_bom_name: string;
+  material_request?: string;
+  temporary_items_created: number;
+  existing_items_in_mr: number;
+  pending_master_data: number;
+  status: string;
+}
+
+/** Submit validated Department BOM → MR + Temporary Item Store. */
+export async function submitDepartmentBomFromUpload(
+  payload: SubmitDepartmentBomPayload,
+): Promise<SubmitDepartmentBomResult> {
+  return callBomApi<SubmitDepartmentBomResult>("submit-department", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export interface TemporaryItemRecord {
+  name: string;
+  item_name: string;
+  proposed_item_code?: string;
+  description?: string;
+  item_group?: string;
+  commodity?: string;
+  default_uom?: string;
+  manufacturer?: string;
+  drawing_number?: string;
+  revision?: string;
+  qty?: number;
+  status: string;
+  source_upload?: string;
+  department?: string;
+  project?: string;
+  program?: string;
+  uploaded_by?: string;
+  erp_item?: string;
+  rejection_reason?: string;
+  modified?: string;
+}
+
+export async function getTemporaryItems(): Promise<TemporaryItemRecord[]> {
+  const data = await callBomApi<{ success?: boolean; items?: TemporaryItemRecord[] }>(
+    "temporary-items",
+    { method: "GET" },
+  );
+  return data.items ?? [];
+}
+
+export async function approveTemporaryItem(name: string): Promise<TemporaryItemRecord> {
+  const data = await callBomApi<{ success?: boolean; item?: TemporaryItemRecord }>(
+    "temporary-items-approve",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    },
+  );
+  if (!data.item) throw new Error("Could not approve temporary item.");
+  return data.item;
+}
+
+export async function rejectTemporaryItem(
+  name: string,
+  reason?: string,
+): Promise<TemporaryItemRecord> {
+  const data = await callBomApi<{ success?: boolean; item?: TemporaryItemRecord }>(
+    "temporary-items-reject",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, reason }),
+    },
+  );
+  if (!data.item) throw new Error("Could not reject temporary item.");
+  return data.item;
+}
+
 export interface CreateBomRfqResult {
   success: true;
   rfq_name: string;
   uploaded_bom_name: string;
   items_ensured: string[];
+}
+
+/** Parse extended metadata stored in Uploaded BOM remarks. */
+export function parseBomHistoryMeta(remarks: string): {
+  project?: string;
+  program?: string;
+  department?: string;
+  materialRequest?: string;
+  tempItems?: number;
+  fileName?: string;
+} {
+  const out: ReturnType<typeof parseBomHistoryMeta> = {};
+  const mrMatch = /material_request:([^\s\n]+)/i.exec(remarks);
+  if (mrMatch?.[1]) out.materialRequest = mrMatch[1].trim();
+  const tempMatch = /temp_items:(\d+)/i.exec(remarks);
+  if (tempMatch?.[1]) out.tempItems = Number(tempMatch[1]);
+  const fileMatch = /file:([^\n]+)/i.exec(remarks);
+  if (fileMatch?.[1]) out.fileName = fileMatch[1].trim();
+  for (const line of remarks.split("\n")) {
+    const t = line.trim();
+    if (t.startsWith("{") && t.endsWith("}")) {
+      try {
+        const j = JSON.parse(t) as Record<string, string>;
+        out.project = j.project || out.project;
+        out.program = j.program || out.program;
+        out.department = j.department || out.department;
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  return out;
 }
 
 export interface BomHistoryRow {
@@ -166,17 +303,6 @@ export async function uploadBomFile(file: File): Promise<BomUploadResult> {
   return callBomApi<BomUploadResult>("upload", {
     method: "POST",
     body: form,
-  });
-}
-
-/** Create ERPNext RFQ from reviewed BOM rows + selected suppliers. */
-export async function createRfqFromUploadedBom(
-  payload: CreateBomRfqPayload,
-): Promise<CreateBomRfqResult> {
-  return callBomApi<CreateBomRfqResult>("create-rfq", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
   });
 }
 

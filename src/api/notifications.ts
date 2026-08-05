@@ -566,6 +566,29 @@ export function triggerQuotationDeclined(
   });
 }
 
+export function triggerRfqSupplierInvited(input: {
+  rfqId: string;
+  supplier: string;
+  supplierName: string;
+  validTill?: string;
+}) {
+  const deadline = input.validTill?.trim()
+    ? ` Deadline: ${input.validTill}.`
+    : "";
+  createNotification({
+    title: "New RFQ Invitation",
+    description: `You have been invited to quote on RFQ ${input.rfqId}.${deadline}`,
+    module: "RFQ Invitation",
+    event_type: "rfq_supplier_invited",
+    target_role: "supplier",
+    supplier_id: input.supplier,
+    document_type: "Request for Quotation",
+    document_name: input.rfqId,
+    route_path: `/supplier/rfq/${encodeURIComponent(input.rfqId)}`,
+    email_sent: false,
+  });
+}
+
 export function triggerLegalReviewRequired(rfqId: string, amount: number) {
   const fmt = new Intl.NumberFormat("en-IN", {
     style: "currency",

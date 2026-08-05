@@ -5,8 +5,12 @@ import {
   compareERPNextDates,
   ERP_NEXT_ISO_DATE_RE,
   formatERPNextDate,
+  formatGrnPostingDateMessage,
   formatUsDisplayDate,
+  GRN_POSTING_ADJUSTED_TO_PO_MSG,
   isERPNextDateBefore,
+  isGrnPostingDateFuture,
+  normalizeGrnPostingDate,
   parseERPNextDateInput,
   parseUsDisplayDate,
   resolveGrnPostingDate,
@@ -98,15 +102,99 @@ describe("compareERPNextDates", () => {
   });
 });
 
-describe("resolveGrnPostingDate", () => {
-  it("uses PO date when today is earlier", () => {
-    expect(resolveGrnPostingDate("2026-06-19", "2026-06-11")).toBe("2026-06-19");
-    expect(resolveGrnPostingDate("06/11/2026", "06/10/2026")).toBe("2026-06-11");
+describe("normalizeGrnPostingDate / resolveGrnPostingDate", () => {
+  it("defaults to PO date (not today) when Create GRN opens", () => {
+    // PO 30-Jul, today 31-Jul → default GRN 30-Jul
+    expect(resolveGrnPostingDate("2026-07-30", "2026-07-31")).toBe("2026-07-30");
+    // Never initialize to today when PO is later
+    expect(resolveGrnPostingDate("2026-07-31", "2026-07-30")).toBe("2026-07-31");
   });
 
-  it("uses today when today is on or after PO date", () => {
-    expect(resolveGrnPostingDate("2026-06-11", "2026-06-19")).toBe("2026-06-19");
-    expect(resolveGrnPostingDate("06/11/2026", "2026-06-19")).toBe("2026-06-19");
+  it("PO 30-Jul → GRN 30-Jul allow; PO 30-Jul → GRN 31-Jul allow", () => {
+    const erpToday = "2026-07-31";
+    expect(
+      normalizeGrnPostingDate({
+        selected: "2026-07-30",
+        poDate: "2026-07-30",
+        erpToday,
+      }).postingDate,
+    ).toBe("2026-07-30");
+    expect(
+      normalizeGrnPostingDate({
+        selected: "2026-07-31",
+        poDate: "2026-07-30",
+        erpToday,
+      }).postingDate,
+    ).toBe("2026-07-31");
+  });
+
+  it("PO 31-Jul → GRN 30-Jul blocked (raised to PO)", () => {
+    const blocked = normalizeGrnPostingDate({
+      selected: "2026-07-30",
+      poDate: "2026-07-31",
+      erpToday: "2026-07-31",
+    });
+    expect(blocked.postingDate).toBe("2026-07-31");
+    expect(blocked.clampedToPoDate).toBe(true);
+    expect(
+      formatGrnPostingDateMessage("adjusted_to_po", {
+        poDate: "2026-07-31",
+        selectedDate: "2026-07-30",
+      }),
+    ).toContain(GRN_POSTING_ADJUSTED_TO_PO_MSG);
+    expect(
+      formatGrnPostingDateMessage("adjusted_to_po", {
+        poDate: "2026-07-31",
+        selectedDate: "2026-07-30",
+      }),
+    ).toContain("Purchase Order Date: 2026-07-31");
+    expect(
+      formatGrnPostingDateMessage("adjusted_to_po", {
+        poDate: "2026-07-31",
+        selectedDate: "2026-07-30",
+      }),
+    ).toContain("Selected GRN Date: 2026-07-30");
+  });
+
+  it("future GRN is blocked (clamped to today)", () => {
+    const future = normalizeGrnPostingDate({
+      selected: "2026-08-01",
+      poDate: "2026-07-30",
+      erpToday: "2026-07-31",
+    });
+    expect(future.postingDate).toBe("2026-07-31");
+    expect(future.wouldBeFuture).toBe(true);
+    expect(future.clampedToErpToday).toBe(true);
+  });
+
+  it("never exceeds ERP today when browser today is ahead (TZ skew)", () => {
+    const resolved = normalizeGrnPostingDate({
+      selected: "2026-07-31",
+      poDate: "2026-07-20",
+      erpToday: "2026-07-30",
+      browserToday: "2026-07-31",
+    });
+    expect(resolved.postingDate).toBe("2026-07-30");
+    expect(resolved.clampedToErpToday).toBe(true);
+  });
+
+  it("marks invalid window when PO is after today", () => {
+    const win = normalizeGrnPostingDate({
+      selected: null,
+      poDate: "2026-07-31",
+      erpToday: "2026-07-30",
+    });
+    expect(win.postingDate).toBe("2026-07-31");
+    expect(win.invalidWindow).toBe(true);
+  });
+
+  it("isGrnPostingDateFuture compares YYYY-MM-DD only", () => {
+    expect(isGrnPostingDateFuture("2026-07-31", "2026-07-31")).toBe(false);
+    expect(isGrnPostingDateFuture("2026-07-30", "2026-07-31")).toBe(false);
+    expect(isGrnPostingDateFuture("2026-08-01", "2026-07-31")).toBe(true);
+    expect(
+      isGrnPostingDateFuture("2026-07-31T23:59:59.000Z", "2026-07-31"),
+    ).toBe(false);
   });
 });
 

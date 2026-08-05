@@ -38,6 +38,7 @@ import {
   mergeIssuedIntoForwardedItems,
   parseMaterialIssueJsonFromRemarks,
 } from "../utils/warehouseIssueFulfillmentSync";
+import { assertCanIssueQuantity } from "../utils/warehouseStockActionRules";
 
 export type StockLineStatus = "Available" | "Partial Stock" | "Out of Stock";
 export type IssueType = "Full Issue" | "Partial Issue";
@@ -119,6 +120,9 @@ export function validateIssueLines(
     if (issue < 0) {
       return `Issue Qty for ${line.item_code} cannot be negative.`;
     }
+    if (issue > 0 && avail <= 0) {
+      return `Cannot issue ${line.item_code}: Available Qty is 0. Forward this request to Procurement.`;
+    }
     if (issue > avail + 1e-9) {
       return `Issue Qty for ${line.item_code} cannot exceed Available Qty (${avail}).`;
     }
@@ -187,7 +191,7 @@ export async function executeMaterialIssue(
     input.lines.map((l) => [l.item_code, Number(l.issue_qty) || 0]),
   );
 
-  // Re-validate against live stock.
+  // Re-validate against live stock — never issue when Available Qty <= 0.
   for (const line of input.lines) {
     const live = stockCheck.lines.find((l) => l.item_code === line.item_code);
     const avail = Math.max(
@@ -195,6 +199,7 @@ export async function executeMaterialIssue(
       Number(live?.available_qty ?? line.available_qty) || 0,
     );
     const issue = qtyByCode.get(line.item_code) ?? 0;
+    assertCanIssueQuantity(line.item_code, avail, issue);
     if (issue > avail + 1e-9) {
       throw new Error(
         `Insufficient live stock for ${line.item_code}. Available: ${avail}.`,

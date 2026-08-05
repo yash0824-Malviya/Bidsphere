@@ -22,6 +22,11 @@ import {
 } from "./erpnext";
 import type { Filter } from "./erpnext";
 import {
+  erpErrorMessage,
+  isFieldPermissionError,
+  nextFieldsAfterPermissionError,
+} from "../utils/erpListFieldRetry";
+import {
   createMaterialRequest,
   getMaterialRequest,
   submitMaterialRequest,
@@ -37,9 +42,11 @@ import {
 } from "./stockEntryCostCenter";
 import { assertMaterialRequestIsWarehouseCompany } from "./warehouseCompany";
 import type { MaterialRequest, MaterialRequestItem } from "../types/erpnext";
+import { assertProcurementTypeCategory } from "../config/procurementCategory";
 import {
   ADMIN_REVIEW_STATUSES,
   MR_PROCUREMENT_TYPE_FIELD,
+  MR_PROCUREMENT_CATEGORY_FIELD,
   MR_REQUEST_MODE_FIELD,
   MR_WORKFLOW_FIELD,
   normalizeWorkflowStatus,
@@ -55,10 +62,16 @@ import {
   type MaterialRequestWorkflowStatus,
 } from "../types/materialRequestWorkflow";
 import { nowERPDateTime, toERPDateTime, todayERPNextDate } from "../utils/erpDate";
+import { hydrateMaterialRequestItemsWithAttachments } from "../utils/materialRequestItemFiles";
 import {
   nonNegativeQty,
   resolveInventoryStockStatus,
 } from "../utils/inventoryStock";
+import {
+  assertCanIssueQuantity,
+  resolveLineActionPlan,
+} from "../utils/warehouseStockActionRules";
+import { WAREHOUSE_POLICY } from "../config/warehousePolicy";
 import { getAvailableQty, getItemStockAcrossWarehouses } from "./warehouseInventoryService";
 import { sanitizeFrappeError } from "../utils/friendlyError";
 
@@ -82,6 +95,7 @@ export const MR_WORKFLOW_STATUSES: MaterialRequestWorkflowStatus[] = [
 /** MRs awaiting warehouse action (stock check, issue, or forward). */
 export const WAREHOUSE_PENDING_STATUSES: MaterialRequestWorkflowStatus[] = [
   "Submitted",
+  "Admin Review", // legacy Indirect rows — warehouse picks these up
   "Under Warehouse Review",
   "Stock Available",
 ];
@@ -149,6 +163,7 @@ export interface CreateMaterialRequestWorkflowInput {
   schedule_date?: string;
   department?: string;
   procurement_type?: MaterialRequestProcurementType;
+  procurement_category?: string;
   /** Existing (default/legacy) | New — item not yet in Item Master */
   request_mode?: MaterialRequestMode;
   priority?: MaterialRequestPriority;
@@ -192,6 +207,7 @@ const MR_LIST_FIELDS_STANDARD = [
  *
  * NEVER include:
  *   - remarks (417 Field not permitted)
+ *   - Small Text customs: custom_purpose, custom_*_remarks (same 417 class)
  *   - custom_request_mode (417 on this ERP site — not in list permission)
  *   - custom_forwarded_* (417 — optional fields, often not provisioned for list)
  * Read those only via get_doc / fetchMaterialRequestWorkflow.
@@ -201,10 +217,6 @@ const MR_CUSTOM_QUERY_FIELDS = [
   MR_PROCUREMENT_TYPE_FIELD,
   "custom_department",
   "custom_priority",
-  "custom_purpose",
-  "custom_warehouse_remarks",
-  "custom_procurement_remarks",
-  "custom_admin_remarks",
   "custom_linked_rfq",
   "custom_requested_by",
 ] as const;
@@ -214,43 +226,38 @@ const MR_LIST_FIELDS_FULL: string[] = [
   ...MR_CUSTOM_QUERY_FIELDS,
 ];
 
+/** Fields permanently rejected by ERP list queries (process lifetime). */
+const mrUnsupportedListFields = new Set<string>();
+
 /** Avoid repeating failed list queries when custom fields are absent or not queryable. */
 let mrListUsesCustomFields: boolean | null = null;
 
 /** Bump when list field sets change so a prior 417 cache cannot stick on STANDARD-only. */
-const MR_LIST_FIELDS_REVISION = 3;
+const MR_LIST_FIELDS_REVISION = 4;
 let mrListFieldsRevisionSeen = 0;
+
+function mrListFieldsForAttempt(preferCustom: boolean): string[] {
+  const base = preferCustom
+    ? MR_LIST_FIELDS_FULL
+    : [...MR_LIST_FIELDS_STANDARD];
+  return base.filter((f) => !mrUnsupportedListFields.has(f));
+}
+
 function mrListFieldModes(): Array<{ fields: string[]; useCustom: boolean }> {
   if (mrListFieldsRevisionSeen !== MR_LIST_FIELDS_REVISION) {
     mrListFieldsRevisionSeen = MR_LIST_FIELDS_REVISION;
     mrListUsesCustomFields = null;
+    mrUnsupportedListFields.clear();
   }
   if (mrListUsesCustomFields === false) {
-    return [{ fields: [...MR_LIST_FIELDS_STANDARD], useCustom: false }];
+    return [{ fields: mrListFieldsForAttempt(false), useCustom: false }];
   }
-  if (mrListUsesCustomFields === true) {
-    return [{ fields: MR_LIST_FIELDS_FULL, useCustom: true }];
-  }
+  // Always keep STANDARD as a same-request fallback — a sticky "custom OK"
+  // cache must not prevent recovery when ERP later rejects a field.
   return [
-    { fields: MR_LIST_FIELDS_FULL, useCustom: true },
-    { fields: [...MR_LIST_FIELDS_STANDARD], useCustom: false },
+    { fields: mrListFieldsForAttempt(true), useCustom: true },
+    { fields: mrListFieldsForAttempt(false), useCustom: false },
   ];
-}
-
-function isCustomFieldUnavailableError(err: unknown): boolean {
-  const msg =
-    err instanceof Error
-      ? err.message
-      : typeof err === "object" && err && "message" in err
-        ? String((err as { message?: unknown }).message ?? "")
-        : String(err ?? "");
-  return /Field not permitted in query|DataError|Unknown column|No field named|Could not find .* in/i.test(
-    msg,
-  );
-}
-
-function isQueryFieldError(err: unknown): boolean {
-  return isCustomFieldUnavailableError(err);
 }
 
 function linkedRfqFromRemarks(remarks?: string | null): string | undefined {
@@ -450,77 +457,105 @@ async function fetchMaterialRequestListRows(
   limit?: number,
 ): Promise<MaterialRequestWorkflowRecord[]> {
   logMrApi("request", { filters, limit: limit ?? "all", doctype: MR_DOCTYPE });
-  console.log("Applied Filters", filters);
+  if (import.meta.env.DEV) {
+    // eslint-disable-next-line no-console
+    console.log("[Material Request] Applied Filters", filters);
+  }
 
   const modes = mrListFieldModes();
-
   let lastError: unknown;
-  for (const { fields, useCustom } of modes) {
-    try {
-      const pageSize = limit ?? 500;
-      let start = 0;
-      const rows: MaterialRequestWorkflowRecord[] = [];
 
-      while (true) {
-        const page = await apiGet<MaterialRequestWorkflowRecord[]>(
-          buildResourceUrl(MR_DOCTYPE),
-          withSilent(
-            buildListConfig({
-              fields,
-              filters: filters.length > 0 ? filters : undefined,
-              order_by: "creation desc",
-              limit_page_length: pageSize,
-              limit_start: start,
-            }),
-          ),
-        );
+  for (const mode of modes) {
+    let fields = [...mode.fields];
+    for (let attempt = 0; attempt < 12; attempt++) {
+      if (fields.length === 0) break;
+      try {
+        const pageSize = limit ?? 500;
+        let start = 0;
+        const rows: MaterialRequestWorkflowRecord[] = [];
 
-        const currentPage = page ?? [];
-        rows.push(...currentPage);
+        while (true) {
+          const page = await apiGet<MaterialRequestWorkflowRecord[]>(
+            buildResourceUrl(MR_DOCTYPE),
+            withSilent(
+              buildListConfig({
+                fields,
+                filters: filters.length > 0 ? filters : undefined,
+                order_by: "creation desc",
+                limit_page_length: pageSize,
+                limit_start: start,
+              }),
+            ),
+          );
 
-        if (limit !== undefined || currentPage.length < pageSize) {
-          break;
+          const currentPage = page ?? [];
+          rows.push(...currentPage);
+
+          if (limit !== undefined || currentPage.length < pageSize) {
+            break;
+          }
+
+          start += currentPage.length;
         }
 
-        start += currentPage.length;
+        mrListUsesCustomFields =
+          mode.useCustom &&
+          fields.some((f) => f.startsWith("custom_"));
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.log("[Material Request] List OK", {
+            useCustomFields: mrListUsesCustomFields,
+            fields,
+            rowCount: rows.length,
+          });
+        }
+        logMrApi("response", {
+          rowCount: rows.length,
+          useCustomFields: mrListUsesCustomFields,
+          firstRecord: rows[0]
+            ? {
+                name: rows[0].name,
+                creation: rows[0].creation,
+                status: rows[0].status,
+                docstatus: rows[0].docstatus,
+              }
+            : null,
+          lastRecord: rows.at(-1)
+            ? {
+                name: rows.at(-1)?.name,
+                creation: rows.at(-1)?.creation,
+                status: rows.at(-1)?.status,
+                docstatus: rows.at(-1)?.docstatus,
+              }
+            : null,
+        });
+        return rows;
+      } catch (err) {
+        lastError = err;
+        const next = nextFieldsAfterPermissionError(fields, err);
+        if (next && next.fields.length > 0 && next.fields.length < fields.length) {
+          for (const removed of next.removed) {
+            mrUnsupportedListFields.add(removed);
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[Material Request] Field not permitted in query: "${removed}" — retrying without it`,
+            );
+          }
+          fields = next.fields;
+          mrListUsesCustomFields = false;
+          continue;
+        }
+        // Non-field errors (auth, network, 5xx) — surface immediately.
+        if (!next) throw err;
+        // Field error but nothing left to strip in this mode — try next mode.
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[Material Request] List query field rejected; trying safer field set:",
+          erpErrorMessage(err),
+        );
+        mrListUsesCustomFields = false;
+        break;
       }
-
-      mrListUsesCustomFields = useCustom;
-      console.log("Material Request API Response", {
-        useCustomFields: useCustom,
-        fields,
-        data: rows,
-      });
-      console.log("Returned Records", rows.length);
-      logMrApi("response", {
-        rowCount: rows.length,
-        useCustomFields: useCustom,
-        firstRecord: rows[0]
-          ? {
-              name: rows[0].name,
-              creation: rows[0].creation,
-              status: rows[0].status,
-              docstatus: rows[0].docstatus,
-            }
-          : null,
-        lastRecord: rows.at(-1)
-          ? {
-              name: rows.at(-1)?.name,
-              creation: rows.at(-1)?.creation,
-              status: rows.at(-1)?.status,
-              docstatus: rows.at(-1)?.docstatus,
-            }
-          : null,
-      });
-      return rows;
-    } catch (err) {
-      lastError = err;
-      if (!isQueryFieldError(err)) throw err;
-      console.warn(
-        "[Material Request] List query field rejected, retrying without custom/invalid fields:",
-        err,
-      );
-      mrListUsesCustomFields = false;
     }
   }
 
@@ -591,7 +626,7 @@ export async function ensureItemsExistForNewMode(
     }
     const group =
       String(row.item_group || "").trim() ||
-      (procurementType === "Indirect" ? "Products" : "Raw Material");
+      (procurementType === "Indirect" ? "Stationery" : "Raw Material");
     try {
       await apiPost(
         buildResourceUrl("Item"),
@@ -621,7 +656,33 @@ export async function fetchMaterialRequestWorkflow(
   name: string,
 ): Promise<MaterialRequestWorkflowRecord> {
   const doc = await getMaterialRequest(name);
-  return doc as MaterialRequestWorkflowRecord;
+  const hydratedItems = await hydrateMaterialRequestItemsWithAttachments(
+    doc.name,
+    doc.items ?? [],
+  );
+  const record = {
+    ...doc,
+    items: hydratedItems,
+  } as MaterialRequestWorkflowRecord;
+
+  if (import.meta.env.DEV) {
+    // eslint-disable-next-line no-console
+    console.log("[MR attachments] fetchMaterialRequestWorkflow", {
+      mr: record.name,
+      itemCount: hydratedItems.length,
+      items: hydratedItems.map((row) => ({
+        item_code: row.item_code,
+        child_name: row.name,
+        attachment_count: row.attachment_count ?? 0,
+        file_name: row.attachment_file_name ?? null,
+        file_url: row.attachment_file_url ?? null,
+        has_json: Boolean(String(row.custom_engineering_attachments ?? "").trim()),
+        has_legacy_2d: Boolean(String(row.custom_2d_drawing ?? "").trim()),
+      })),
+    });
+  }
+
+  return record;
 }
 
 /**
@@ -744,8 +805,7 @@ export async function listMaterialRequestsWorkflow(params?: {
 
 /**
  * Warehouse review queue — submitted Material Requests pending warehouse action.
- * Only DIRECT procurement requests reach the warehouse; Indirect requests are
- * gated by Admin approval and never appear here.
+ * Both Direct and Indirect requests enter this queue after submission.
  *
  * IMPORTANT: do NOT hard-filter by `material_request_type`. Legacy/ERP-created
  * requests may be `"Purchase"` while still legitimately entering the warehouse
@@ -755,12 +815,13 @@ export async function listMaterialRequestsWorkflow(params?: {
 export async function listWarehouseMaterialRequestQueue(
   limit = 500,
 ): Promise<MaterialRequestWorkflowRecord[]> {
-  // Fetch a wide submitted page first, then filter on ERP BidSphere status.
-  // Applying a small limit BEFORE status filter previously dropped valid
-  // pending rows when many non-pending MRs were newer.
+  // Fetch submitted MRs then filter on BidSphere status. Cap the ERP page size
+  // so dashboard loads do not pull/hydrate hundreds of unrelated documents.
+  // Oversample a bit so newer non-pending rows don't push pending ones out.
+  const fetchLimit = Math.min(Math.max(limit * 4, limit), 200);
   const rows = await listMaterialRequestsWorkflow({
     docstatus: 1,
-    limit: Math.max(limit, 500),
+    limit: fetchLimit,
   });
 
   console.log("ERP Response", {
@@ -779,14 +840,6 @@ export async function listWarehouseMaterialRequestQueue(
   const rejected: Array<{ name: string; reason: string }> = [];
   const pending = rows.filter((mr) => {
     const status = getMaterialRequestWorkflowStatus(mr);
-    const procurementType = getMaterialRequestProcurementType(mr);
-    if (procurementType !== "Direct") {
-      rejected.push({
-        name: mr.name,
-        reason: `request_type=${procurementType} (warehouse queue is Direct only)`,
-      });
-      return false;
-    }
     if (!WAREHOUSE_PENDING_STATUSES.includes(status)) {
       rejected.push({
         name: mr.name,
@@ -802,7 +855,6 @@ export async function listWarehouseMaterialRequestQueue(
     API: "listMaterialRequestsWorkflow(docstatus=1)",
     "Filter Used": {
       docstatus: 1,
-      request_type: "Direct",
       bidsphere_status_in: WAREHOUSE_PENDING_STATUSES,
     },
     "Records Returned": pending.length,
@@ -921,6 +973,10 @@ export async function createMaterialRequestWorkflow(
     const company = (input.company ?? COMPANY).trim() || COMPANY;
     const procurementType = input.procurement_type ?? "Direct";
     const requestMode = input.request_mode ?? "Existing";
+    const procurementCategory = input.procurement_category?.trim() ?? "";
+    if (procurementCategory) {
+      assertProcurementTypeCategory(procurementType, procurementCategory);
+    }
 
     if (requestMode === "New") {
       await ensureItemsExistForNewMode(input.items, procurementType);
@@ -940,6 +996,7 @@ export async function createMaterialRequestWorkflow(
         uom: row.uom,
         warehouse: row.warehouse,
         schedule_date: row.schedule_date ?? input.schedule_date,
+        item_group: row.item_group,
         custom_part_name: row.custom_part_name,
         custom_2d_drawing: row.custom_2d_drawing,
         custom_engineering_attachments: row.custom_engineering_attachments,
@@ -975,11 +1032,14 @@ export async function createMaterialRequestWorkflow(
     if (input.priority) updates.custom_priority = input.priority;
     if (input.purpose) updates.custom_purpose = input.purpose;
     if (input.requested_by) updates.custom_requested_by = input.requested_by;
+    if (input.procurement_category?.trim()) {
+      updates[MR_PROCUREMENT_CATEGORY_FIELD] = input.procurement_category.trim();
+    }
 
     try {
       await updateMaterialRequest(created.name, updates);
     } catch (err) {
-      if (!isCustomFieldUnavailableError(err)) throw err;
+      if (!isFieldPermissionError(err)) throw err;
     }
 
     const result = await fetchMaterialRequestWorkflow(created.name);
@@ -1004,8 +1064,7 @@ export async function createMaterialRequestWorkflow(
  *
  * ERP source of truth:
  *   • docstatus 0 → 1 (frappe submit) when still a draft document
- *   • custom_bidsphere_status → Under Warehouse Review (Direct) or Admin Review
- *     (Indirect)
+ *   • custom_bidsphere_status → Under Warehouse Review (Direct and Indirect)
  *
  * Also recovers orphaned docs that were submitted (docstatus=1) but still carry
  * BidSphere Status = Draft (e.g. Warehouse-created Purchase MRs) by writing the
@@ -1035,9 +1094,7 @@ export async function submitMaterialRequestWorkflow(
     return fresh;
   }
 
-  const procurementType = getMaterialRequestProcurementType(fresh);
-  const targetStatus: MaterialRequestWorkflowStatus =
-    procurementType === "Indirect" ? "Admin Review" : "Under Warehouse Review";
+  const targetStatus: MaterialRequestWorkflowStatus = "Under Warehouse Review";
 
   const submittedBy =
     actor?.full_name || actor?.email || actor?.name || fresh.owner || "Unknown";
@@ -1061,7 +1118,7 @@ export async function submitMaterialRequestWorkflow(
     try {
       await apiPut<MaterialRequest>(endpoint, payload);
     } catch (err) {
-      if (!isCustomFieldUnavailableError(err)) {
+      if (!isFieldPermissionError(err)) {
         // Retry: submit first, then set status (some sites reject combined PUT).
         await submitMaterialRequest(name);
         await updateMaterialRequestWorkflowStatus(name, targetStatus);
@@ -1279,7 +1336,7 @@ export async function updateMaterialRequestWorkflowStatus(
       ...erpExtra,
     });
   } catch (err) {
-    if (!isCustomFieldUnavailableError(err)) {
+    if (!isFieldPermissionError(err)) {
       // Log the full backend exception (server/console) but surface a clean,
       // user-safe message — never a raw Frappe traceback in the UI toast.
       throw sanitizeFrappeError(
@@ -1305,7 +1362,11 @@ export async function getBinQuantity(
   return getAvailableQty(itemCode, warehouse);
 }
 
-export type ItemStockStatusLabel = "In Stock" | "Low Stock" | "Out of Stock";
+export type ItemStockStatusLabel =
+  | "In Stock"
+  | "Low Stock"
+  | "Reorder Required"
+  | "Out of Stock";
 
 /** Sum stock levels across all warehouse bins for an item. */
 export async function getItemStockSummary(itemCode: string): Promise<{
@@ -1359,45 +1420,55 @@ export async function checkMaterialRequestStock(
     );
   }
   const defaultWarehouse = await lookupDefaultWarehouse(company);
-  const lines: MaterialRequestStockLine[] = [];
+  const items = mr.items ?? [];
 
-  for (const row of mr.items ?? []) {
-    const required = Number(row.qty) || 0;
-    const across = await getItemStockAcrossWarehouses(row.item_code, {
-      company,
-      forIssue: true,
-    });
-    const available = across.total_available;
-    const bestWh =
-      across.by_warehouse.sort((a, b) => b.available_qty - a.available_qty)[0]
-        ?.warehouse ||
-      row.warehouse ||
-      defaultWarehouse ||
-      "—";
-    // eslint-disable-next-line no-console
-    console.log("[WarehouseInventory] checkMaterialRequestStock line", {
-      mr: name,
-      company,
-      item_code: row.item_code,
-      required,
-      available,
-      warehouse: bestWh,
-      by_warehouse: across.by_warehouse.slice(0, 5),
-    });
-    lines.push({
-      item_code: row.item_code,
-      warehouse: bestWh,
-      required_qty: required,
-      available_qty: available,
-      sufficient: available >= required,
-      uom: row.uom,
-    });
-  }
+  // Parallel per-item stock (shared company scope) — was sequential await-in-loop.
+  const stockRows = await Promise.all(
+    items.map(async (row) => {
+      const required = Number(row.qty) || 0;
+      try {
+        const across = await getItemStockAcrossWarehouses(row.item_code, {
+          company,
+          forIssue: true,
+        });
+        const available = across.total_available;
+        const bestWh =
+          across.by_warehouse.sort((a, b) => b.available_qty - a.available_qty)[0]
+            ?.warehouse ||
+          row.warehouse ||
+          defaultWarehouse ||
+          "—";
+        return {
+          item_code: row.item_code,
+          warehouse: bestWh,
+          required_qty: required,
+          available_qty: available,
+          sufficient: available >= required,
+          uom: row.uom,
+        } satisfies MaterialRequestStockLine;
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("[DashboardLoad] checkMaterialRequestStock line failed", {
+          mr: name,
+          item_code: row.item_code,
+          err,
+        });
+        return {
+          item_code: row.item_code,
+          warehouse: row.warehouse || defaultWarehouse || "—",
+          required_qty: required,
+          available_qty: 0,
+          sufficient: false,
+          uom: row.uom,
+        } satisfies MaterialRequestStockLine;
+      }
+    }),
+  );
 
   return {
     mr_name: name,
-    all_sufficient: lines.length > 0 && lines.every((l) => l.sufficient),
-    lines,
+    all_sufficient: stockRows.length > 0 && stockRows.every((l) => l.sufficient),
+    lines: stockRows,
   };
 }
 
@@ -1498,6 +1569,27 @@ export async function issueMaterialRequest(
     throw new Error("Insufficient stock. Forward this request to Procurement.");
   }
 
+  // Backend guard: never issue inventory that does not exist.
+  for (const line of stockCheck.lines) {
+    const available = nonNegativeQty(line.available_qty);
+    const requested = nonNegativeQty(line.required_qty);
+    const plannedIssue = options?.partial
+      ? Math.min(available, requested)
+      : requested;
+    if (plannedIssue > 0) {
+      assertCanIssueQuantity(line.item_code, available, plannedIssue);
+    }
+  }
+  const anyIssuable = stockCheck.lines.some(
+    (l) =>
+      nonNegativeQty(l.available_qty) > 0 && nonNegativeQty(l.required_qty) > 0,
+  );
+  if (!anyIssuable) {
+    throw new Error(
+      "Cannot issue material when Available Qty is 0. Forward this request to Procurement.",
+    );
+  }
+
   const draft = (await makeStockEntryDraftFromMaterialRequest(name, {
     items: stockCheck.lines.map((l) => ({
       item_code: l.item_code,
@@ -1515,19 +1607,35 @@ export async function issueMaterialRequest(
       const stockLine = stockCheck.lines.find(
         (l) => l.item_code === item.item_code,
       );
-      const available = stockLine ? stockLine.available_qty : 0;
+      const available = stockLine ? nonNegativeQty(stockLine.available_qty) : 0;
       if (available > 0) {
         const requested = Number(item.qty) || 0;
         const issueQty = Math.min(requested, available);
+        assertCanIssueQuantity(
+          String(item.item_code || ""),
+          available,
+          issueQty,
+        );
         item.qty = issueQty;
         item.transfer_qty = issueQty;
         adjustedItems.push(item);
       }
     }
     if (adjustedItems.length === 0) {
-      throw new Error("No items have available stock to issue.");
+      throw new Error(
+        "Cannot issue material when Available Qty is 0. Forward this request to Procurement.",
+      );
     }
     draft.items = adjustedItems;
+  } else if (draft && Array.isArray(draft.items)) {
+    for (const item of draft.items) {
+      const stockLine = stockCheck.lines.find(
+        (l) => l.item_code === item.item_code,
+      );
+      const available = stockLine ? nonNegativeQty(stockLine.available_qty) : 0;
+      const issueQty = Number(item.qty) || 0;
+      assertCanIssueQuantity(String(item.item_code || ""), available, issueQty);
+    }
   }
 
   // Remap Cost Center to Material Request company (reject Main - B / Bidsphere).
@@ -1945,7 +2053,7 @@ export async function promotePurchaseMrToProcurementQueue(
     try {
       await updateMaterialRequest(input.purchaseMrName, workflowFields);
     } catch (err2) {
-      if (!isCustomFieldUnavailableError(err2)) {
+      if (!isFieldPermissionError(err2)) {
         throw err2 instanceof Error
           ? err2
           : new Error(
@@ -2314,14 +2422,19 @@ export function buildWarehouseDecisions(
     const meta = mrItems.find((i) => i.item_code === line.item_code);
     const requested_qty = nonNegativeQty(line.required_qty);
     const available_qty = nonNegativeQty(line.available_qty);
-    const issue_qty = Math.min(available_qty, requested_qty);
-    const forward_qty = Math.max(0, requested_qty - available_qty);
+    const plan = resolveLineActionPlan(
+      available_qty,
+      requested_qty,
+      WAREHOUSE_POLICY.partialIssuePolicy,
+    );
+    const issue_qty = plan.issueQty;
+    const forward_qty = plan.forwardQty;
     const shortage_qty = Math.max(0, requested_qty - available_qty);
 
     let status: WarehouseItemDecisionStatus;
-    if (available_qty >= requested_qty) {
+    if (issue_qty > 0 && forward_qty <= 0) {
       status = "Issued";
-    } else if (available_qty > 0) {
+    } else if (issue_qty > 0 && forward_qty > 0) {
       status = "Partially Issued";
     } else {
       status = "Forwarded to Procurement";
@@ -2377,6 +2490,11 @@ export async function processWarehouseDecisions(
 
   // Case 2: Partial stock (some items have stock, some don't)
   if (hasAnyStock && hasAnyShortage) {
+    for (const d of decisions) {
+      if (d.issue_qty > 0) {
+        assertCanIssueQuantity(d.item_code, d.available_qty, d.issue_qty);
+      }
+    }
     const draft = (await makeStockEntryDraftFromMaterialRequest(mrName, {
       items: decisions.map((d) => ({
         item_code: d.item_code,
@@ -2395,6 +2513,11 @@ export async function processWarehouseDecisions(
             (d) => d.item_code === (item.item_code as string),
           );
           if (!decision || decision.issue_qty <= 0) return null;
+          assertCanIssueQuantity(
+            decision.item_code,
+            decision.available_qty,
+            decision.issue_qty,
+          );
           item.qty = decision.issue_qty;
           item.transfer_qty = decision.issue_qty;
           return item;
@@ -2556,9 +2679,13 @@ async function fetchForwardedMrsByField(
     );
     return rows ?? [];
   } catch (err) {
-    if (isQueryFieldError(err)) return [];
-    // A non-field error (permission/network) also degrades to the scan fallback.
-    if (import.meta.env.DEV) {
+    // Field-query 417s and other list failures degrade to the client-side scan.
+    if (isFieldPermissionError(err) && import.meta.env.DEV) {
+      console.warn(
+        "[Procurement Queue] Field not permitted in query — falling back:",
+        erpErrorMessage(err),
+      );
+    } else if (import.meta.env.DEV) {
       console.warn("[Procurement Queue] targeted forwarded query failed:", err);
     }
     return [];

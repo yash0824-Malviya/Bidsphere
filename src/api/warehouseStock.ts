@@ -39,6 +39,7 @@ export interface WarehouseStockSummary {
   kpis: {
     totalAvailableQty: number;
     lowStockCount: number;
+    reorderRequiredCount: number;
     outOfStockCount: number;
     grnsLast30Days: number;
   };
@@ -141,6 +142,8 @@ export async function fetchWarehouseStockSummary(
     kpis: {
       totalAvailableQty: snapshot.kpis.totalAvailableQty,
       lowStockCount: snapshot.kpis.lowStockCount,
+      reorderRequiredCount:
+        snapshot.kpis.reorderRequiredCount ?? snapshot.kpis.lowStockCount,
       outOfStockCount: snapshot.kpis.outOfStockCount,
       grnsLast30Days,
     },
@@ -157,7 +160,7 @@ export async function fetchWarehouseNames(): Promise<string[]> {
 export const WAREHOUSE_STOCK_QUERY_KEY = [
   "warehouse",
   "stock-summary",
-  "v3-shared-inv",
+  "v4-reorder-required",
 ] as const;
 export const WAREHOUSE_NAMES_QUERY_KEY = [
   "warehouse",

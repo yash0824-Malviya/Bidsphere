@@ -1151,7 +1151,7 @@ export default function LegalReviewDetailPage() {
             <textarea
               value={actionReason}
               onChange={(e) => setActionReason(e.target.value)}
-              placeholder="Provide the reason for your approval or rejection. This is mandatory before submitting a decision and is saved permanently on the Legal Document Review record in ERPNext."
+              placeholder="Provide the reason for your approval or rejection. This is mandatory before submitting a decision and is saved permanently on the Legal Document Review record."
               rows={4}
               disabled={submitted}
               className="w-full resize-none rounded-lg border border-neutral-300 px-3 py-2.5 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-neutral-100 disabled:text-neutral-500"

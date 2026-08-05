@@ -658,7 +658,7 @@ export default function PurchaseOrderReportPage() {
               description={
                 allRows.length > 0
                   ? "Filters excluded all records. Reset filters to see Purchase Orders."
-                  : "ERPNext returned no Purchase Orders for this user. Confirm POs exist and you have read permission."
+                  : "No Purchase Orders were returned for this user. Confirm POs exist and you have read permission."
               }
             />
           ) : (

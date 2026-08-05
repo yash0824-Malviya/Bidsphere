@@ -171,7 +171,7 @@ export default function AdminDashboard({ role, greetingName }: Props) {
 
       <ProcurementAnalyticsSection
         title="Enterprise Analytics"
-        subtitle="Budget & savings from ERPNext"
+        subtitle="Budget & savings overview"
         kpis={["budgetUtilisation", "costSavings"]}
         charts={["budgetVsActual", "costSavings"]}
       />

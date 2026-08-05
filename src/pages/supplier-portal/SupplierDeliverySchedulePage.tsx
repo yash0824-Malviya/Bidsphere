@@ -380,7 +380,7 @@ export default function SupplierDeliverySchedulePage() {
         <EmptyState
           icon={Truck}
           title="Supplier account not linked"
-          description="Your portal login is not linked to an ERPNext Supplier record, so delivery schedules cannot be loaded."
+          description="Your portal login is not linked to a supplier record, so delivery schedules cannot be loaded."
         />
       </>
     );

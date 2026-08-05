@@ -384,7 +384,7 @@ function mergeBuckets(target: Map<string, number>, buckets: SpendBucket[]): void
   }
 }
 
-function bucketsFromMap(map: Map<string, number>, limit = 12): SpendBucket[] {
+function bucketsFromMap(map: Map<string, number>, limit = 24): SpendBucket[] {
   return [...map.entries()]
     .filter(([, amount]) => amount > 0)
     .map(([label, amount]) => ({ label, amount }))

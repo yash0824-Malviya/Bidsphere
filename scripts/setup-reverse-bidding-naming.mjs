@@ -1,20 +1,49 @@
 /**
- * Configure naming for the Reverse Bidding DocTypes.
+ * Configure hash autoname on Reverse Bidding child DocTypes.
  *
- * Root cause of the "Please set the document name" error when creating a
- * Reverse Bidding: the child tables "Reverse Bidding Supplier" and
- * "Reverse Bids" shipped with autoname = "prompt" (naming_rule "Set by user").
- * A child row inserted without a manually-set name then fails naming.
+ * Root cause of "Please set the document name" when saving bid history:
+ * child tables shipped with autoname = "prompt". New rows need hash / Random
+ * naming so ERPNext assigns unique names on parent save.
  *
- * This script sets both child tables to hash / Random naming so their rows are
- * auto-named when the parent is saved. The parent "Reverse Bidding" already
- * uses the "RB-.YYYY.-.#####" naming series (unchanged here).
- *
- * Idempotent — safe to re-run. Run with: node scripts/setup-reverse-bidding-naming.mjs
+ * Idempotent — safe to re-run.
+ * Usage: node scripts/setup-reverse-bidding-naming.mjs
  */
-const apiKey = "d38c611ab48e170";
-const apiSecret = "9aac303194dc746";
-const baseUrl = "http://80.225.204.210:8090";
+import { readFileSync, existsSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const root = resolve(__dirname, "..");
+
+function loadEnvFile() {
+  const envPath = resolve(root, ".env");
+  if (!existsSync(envPath)) return;
+  for (const line of readFileSync(envPath, "utf8").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) continue;
+    const key = trimmed.slice(0, eq).trim();
+    const value = trimmed.slice(eq + 1).trim();
+    if (!process.env[key]) process.env[key] = value;
+  }
+}
+
+loadEnvFile();
+
+const baseUrl = (
+  process.env.ERPNEXT_URL ??
+  process.env.VITE_ERPNEXT_URL ??
+  process.env.VITE_PROXY_TARGET ??
+  ""
+).replace(/\/+$/, "");
+const apiKey = process.env.ERP_API_KEY ?? process.env.VITE_API_KEY ?? "";
+const apiSecret = process.env.ERP_API_SECRET ?? process.env.VITE_API_SECRET ?? "";
+
+if (!baseUrl || !apiKey || !apiSecret) {
+  console.error("Missing ERPNEXT_URL / ERP_API_KEY / ERP_API_SECRET");
+  process.exit(1);
+}
 
 const headers = {
   Authorization: `token ${apiKey}:${apiSecret}`,
@@ -22,34 +51,70 @@ const headers = {
   Accept: "application/json",
 };
 
-const CHILD_DOCTYPES = ["Reverse Bidding Supplier", "Reverse Bids"];
+const CHILD_DOCTYPES = [
+  "Reverse Bidding Supplier",
+  "Reverse Bids",
+  "Reverse Bid Item",
+];
+
+async function api(method, path, body) {
+  const res = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = { raw: text };
+  }
+  if (!res.ok) {
+    throw new Error(`${method} ${path} → ${res.status}: ${text}`);
+  }
+  return data?.data ?? data?.message ?? data;
+}
 
 async function ensureHashNaming(child) {
   console.log(`\n=== ${child} ===`);
-  const res = await fetch(
-    `${baseUrl}/api/resource/DocType/${encodeURIComponent(child)}`,
-    {
-      method: "PUT",
-      headers,
-      body: JSON.stringify({ autoname: "hash", naming_rule: "Random" }),
-    }
+  const current = await api(
+    "GET",
+    `/api/resource/DocType/${encodeURIComponent(child)}?fields=${encodeURIComponent(JSON.stringify(["autoname", "naming_rule"]))}`,
   );
-  console.log("PUT status:", res.status);
-  const check = await fetch(
-    `${baseUrl}/api/resource/DocType/${encodeURIComponent(child)}?fields=["autoname","naming_rule"]`,
-    { headers }
-  );
-  if (check.ok) {
-    const { data } = await check.json();
-    console.log("autoname:", data.autoname, "| naming_rule:", data.naming_rule);
-  } else {
-    console.error("Verify failed:", check.status, await check.text());
+  console.log("Before:", current.autoname, "|", current.naming_rule);
+
+  if (current.autoname === "hash" && current.naming_rule === "Random") {
+    console.log("Already configured — skipping.");
+    return;
   }
+
+  await api("PUT", `/api/resource/DocType/${encodeURIComponent(child)}`, {
+    autoname: "hash",
+    naming_rule: "Random",
+  });
+
+  const after = await api(
+    "GET",
+    `/api/resource/DocType/${encodeURIComponent(child)}?fields=${encodeURIComponent(JSON.stringify(["autoname", "naming_rule"]))}`,
+  );
+  console.log("After:", after.autoname, "|", after.naming_rule);
 }
 
 async function run() {
-  for (const dt of CHILD_DOCTYPES) await ensureHashNaming(dt);
+  for (const dt of CHILD_DOCTYPES) {
+    await ensureHashNaming(dt);
+  }
+  try {
+    await api("POST", "/api/method/frappe.clear_cache", {});
+    console.log("\n✓ Cleared ERPNext cache");
+  } catch {
+    /* optional */
+  }
   console.log("\nDone.");
 }
 
-run().catch(console.error);
+run().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Circle, QrCode, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Circle, QrCode, XCircle } from "lucide-react";
 import QRCode from "qrcode";
 
 import { receiptVerificationUrl } from "../../../api/materialIssueReceipt";
@@ -12,6 +12,11 @@ import {
   receiptStatusDisplayLabel,
 } from "../../../types/materialIssueReceipt";
 import { splitMaterialIssueRemarksForDisplay } from "../../../utils/materialIssueRemarksDisplay";
+import {
+  getPublicAppOrigin,
+  isPublicAppOriginLoopback,
+  probeVerificationServiceAvailable,
+} from "../../../utils/publicAppUrl";
 import MaterialIssueAuditPanel from "../MaterialIssueAuditPanel";
 
 type Audience = "warehouse" | "department";
@@ -27,6 +32,9 @@ export default function MaterialIssueReceiptView({
   children?: React.ReactNode;
 }) {
   const [qrUrl, setQrUrl] = useState<string | null>(null);
+  const [verifyReachable, setVerifyReachable] = useState<
+    "checking" | "ok" | "unavailable"
+  >("checking");
   const timeline = buildReceiptTimeline(receipt);
   const statusLabel = receiptStatusDisplayLabel(receipt.status, audience);
 
@@ -72,14 +80,35 @@ export default function MaterialIssueReceiptView({
   );
 
   const verifyUrl = receiptVerificationUrl(receipt);
+  const publicOrigin = getPublicAppOrigin();
 
   useEffect(() => {
     // eslint-disable-next-line no-console
     console.log("[QR] Material Issue verification URL:", verifyUrl);
+    // eslint-disable-next-line no-console
+    console.log("[QR] Public origin source:", {
+      origin: publicOrigin,
+      loopback: isPublicAppOriginLoopback(),
+    });
     void QRCode.toDataURL(verifyUrl, {
       width: 180,
       margin: 1,
     }).then(setQrUrl);
+  }, [verifyUrl, publicOrigin]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setVerifyReachable("checking");
+    if (isPublicAppOriginLoopback()) {
+      setVerifyReachable("unavailable");
+      return;
+    }
+    void probeVerificationServiceAvailable().then((ok) => {
+      if (!cancelled) setVerifyReachable(ok ? "ok" : "unavailable");
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [verifyUrl]);
 
   const deptAwaiting =
@@ -385,7 +414,28 @@ export default function MaterialIssueReceiptView({
               <QrCode className="h-4 w-4" />
               QR Verification
             </div>
-            {qrUrl ? (
+            {verifyReachable === "unavailable" ? (
+              <div className="flex max-w-[18rem] flex-col items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-4 text-center">
+                <AlertTriangle className="h-5 w-5 text-amber-600" />
+                <p className="text-sm font-semibold text-amber-900">
+                  Verification service unavailable.
+                </p>
+                <p className="text-[11px] leading-relaxed text-amber-800">
+                  Open BidSphere via a network-reachable host (not localhost),
+                  set{" "}
+                  <code className="rounded bg-amber-100 px-1">VITE_PUBLIC_URL</code>{" "}
+                  or{" "}
+                  <code className="rounded bg-amber-100 px-1">
+                    VITE_APP_BASE_URL
+                  </code>{" "}
+                  to that origin, then confirm another device can open{" "}
+                  <span className="break-all font-mono text-[10px]">
+                    {publicOrigin || "http://<host>:5175"}
+                  </span>{" "}
+                  before sharing QR codes.
+                </p>
+              </div>
+            ) : verifyReachable === "ok" && qrUrl ? (
               <img
                 src={qrUrl}
                 alt="Receipt verification QR"
@@ -398,14 +448,21 @@ export default function MaterialIssueReceiptView({
               Scan this QR using any mobile device to verify the authenticity of
               this Material Issue Receipt.
             </p>
-            <a
-              href={verifyUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-4 text-center text-xs font-medium text-primary-700 hover:underline"
-            >
-              Open Verification Page
-            </a>
+            {verifyReachable === "ok" ? (
+              <>
+                <p className="mt-2 max-w-[18rem] break-all text-center font-mono text-[10px] text-slate-400">
+                  {verifyUrl}
+                </p>
+                <a
+                  href={verifyUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-4 text-center text-xs font-medium text-primary-700 hover:underline"
+                >
+                  Open Verification Page
+                </a>
+              </>
+            ) : null}
           </div>
         </div>
       </div>

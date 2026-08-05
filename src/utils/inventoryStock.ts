@@ -6,9 +6,15 @@
  * - Available Qty is never negative in UI
  * - Shortage is computed separately and never reduces inventory below zero
  * - NEVER: availableQty = currentStock - requestedQty
+ * - Stock status / reorder planning: see `reorderPlanning.ts`
  */
 
-export type InventoryStockStatus = "In Stock" | "Low Stock" | "Out of Stock";
+import {
+  resolveReorderStockStatus,
+  type WarehouseReorderStockStatus,
+} from "./reorderPlanning";
+
+export type InventoryStockStatus = WarehouseReorderStockStatus;
 
 /** Coerce to a finite non-negative quantity. */
 export function nonNegativeQty(value: unknown): number {
@@ -63,18 +69,14 @@ export function computeRemainingAfterIssue(
 }
 
 /**
- * Inventory status from Available Qty (+ optional reorder level).
- * - Available == 0 → Out of Stock
- * - 0 < Available <= reorder → Low Stock
- * - Available > reorder (or no reorder) → In Stock
+ * Inventory status from Current Stock (+ optional reorder level).
+ * - Current == 0 → Out of Stock (red)
+ * - 0 < Current <= reorder → Reorder Required (orange)
+ * - Current > reorder (or no reorder) → In Stock (green)
  */
 export function resolveInventoryStockStatus(
-  availableQty: unknown,
+  currentStock: unknown,
   reorderLevel: unknown = 0,
 ): InventoryStockStatus {
-  const available = nonNegativeQty(availableQty);
-  const reorder = nonNegativeQty(reorderLevel);
-  if (available <= 0) return "Out of Stock";
-  if (reorder > 0 && available <= reorder) return "Low Stock";
-  return "In Stock";
+  return resolveReorderStockStatus(currentStock, reorderLevel);
 }

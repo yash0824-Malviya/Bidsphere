@@ -26,6 +26,7 @@ import {
   buildListConfig,
   erpnext,
   getExactCount,
+  withSilent,
   COMPANY as DEFAULT_COMPANY,
   type Filter,
   type PagedListResult,
@@ -33,6 +34,23 @@ import {
 import type { RFQ, RFQItem, SupplierQuotation } from "../types/erpnext";
 import { assertSuppliersActive } from "./supplier";
 import { assertERPNextDate, todayERPNextDate } from "../utils/erpNextDate";
+import {
+  hasItemMasterUom,
+  resolveStockUomFromItem,
+} from "../utils/itemMasterUom";
+import {
+  assembleCompatibleUomOptions,
+  erpConversionFactorForUom,
+  type CompatibleUomOption,
+  type ItemUomProfile,
+} from "../utils/itemUomConversions";
+import { resolveItemUomConfiguration } from "./itemUomConfiguration";
+import type { ProcurementCategory } from "../config/procurementCategory";
+import { assertProcurementTypeCategory } from "../config/procurementCategory";
+import { itemMatchesTransactionalFilters } from "../utils/itemMasterProcurement";
+import { resolveItemProcurement } from "../utils/itemProcurementInfer";
+import type { MaterialRequestProcurementType } from "../types/materialRequestWorkflow";
+import { nextFieldsAfterPermissionError } from "../utils/erpListFieldRetry";
 
 const RFQ_DOCTYPE = "Request for Quotation";
 const RFQ_ITEM_DOCTYPE = "Request for Quotation Item";
@@ -447,6 +465,13 @@ export interface CreateRFQItemInput {
   description?: string;
   qty: number | string;
   uom?: string;
+  /** Item Master primary (stock) UOM — persisted as stock_uom on RFQ Item. */
+  primary_uom?: string;
+  stock_uom?: string;
+  /** ERPNext conversion: qty × factor = qty in stock_uom. */
+  uom_conversion_factor?: number;
+  /** Resolved compatible UOM options (for conversion factor lookup). */
+  compatible_uoms?: CompatibleUomOption[];
   /** Optional schedule date per row. Defaults to the RFQ's transaction_date. */
   schedule_date?: string;
   /** Optional engineering docs carried from Material Request Item. */
@@ -457,6 +482,10 @@ export interface CreateRFQItemInput {
   custom_target_price?: number | null;
   /** Per-line: show Target Price to invited suppliers. */
   custom_show_target_price_to_supplier?: 0 | 1 | boolean;
+  custom_department_requested_qty?: number | null;
+  custom_warehouse_available_qty?: number | null;
+  custom_procurement_final_qty?: number | null;
+  custom_qty_change_reason?: string | null;
 }
 
 export interface CreateRFQSupplierInput {
@@ -474,6 +503,12 @@ export interface CreateRFQInput {
   suppliers: CreateRFQSupplierInput[];
   /** When true, Target Price is visible to invited suppliers. */
   custom_show_target_price_to_supplier?: 0 | 1 | boolean;
+  /** Direct / Indirect — set on direct RFQ creation or inherited from MR. */
+  custom_procurement_type?: string;
+  /** Procurement category for supplier + item filtering. */
+  custom_procurement_category?: string;
+  /** Existing vs New item entry (direct RFQ only). */
+  custom_request_mode?: string;
 }
 
 /**
@@ -499,6 +534,15 @@ export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
     throw new Error("RFQ requires at least one supplier.");
   }
 
+  const rfqType = String(data.custom_procurement_type ?? "").trim();
+  const rfqCategory = String(data.custom_procurement_category ?? "").trim();
+  if (
+    (rfqType === "Direct" || rfqType === "Indirect") &&
+    rfqCategory
+  ) {
+    assertProcurementTypeCategory(rfqType, rfqCategory);
+  }
+
   // Pre-flight: ensure no Server Scripts block creation
   await disableServerScriptsFor(RFQ_DOCTYPE);
 
@@ -518,7 +562,7 @@ export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
   const warehouse = await lookupDefaultWarehouse(company);
   if (!warehouse) {
     throw new Error(
-      `No warehouse found for company "${company}". Configure a warehouse in ERPNext before creating an RFQ.`,
+      `No warehouse found for company "${company}". Configure a warehouse before creating an RFQ.`,
     );
   }
   // eslint-disable-next-line no-console
@@ -532,7 +576,23 @@ export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
     company,
     items: data.items.map((item) => {
       const qty = typeof item.qty === "number" ? item.qty : parseFloat(item.qty);
-      const uom = item.uom || "Nos";
+      const uom = resolveStockUomFromItem(item.uom);
+      if (!hasItemMasterUom(uom)) {
+        throw new Error(
+          `Item ${item.item_code} has no Unit of Measure. Configure stock_uom in the Item Master.`,
+        );
+      }
+      const primaryUom =
+        resolveStockUomFromItem(item.primary_uom ?? item.stock_uom) || uom;
+      const conversionFactor =
+        item.uom_conversion_factor != null &&
+        Number.isFinite(Number(item.uom_conversion_factor)) &&
+        Number(item.uom_conversion_factor) > 0
+          ? Number(item.uom_conversion_factor)
+          : uom === primaryUom
+            ? 1
+            : erpConversionFactorForUom(uom, item.compatible_uoms ?? []) ||
+              1;
       const row: Record<string, unknown> = {
         doctype: RFQ_ITEM_DOCTYPE,
         item_code: item.item_code,
@@ -540,8 +600,8 @@ export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
         description: item.description || item.item_name || item.item_code,
         qty: Number.isFinite(qty) && qty > 0 ? qty : 1,
         uom,
-        stock_uom: uom,
-        conversion_factor: 1,
+        stock_uom: primaryUom,
+        conversion_factor: conversionFactor,
         warehouse,
         schedule_date: item.schedule_date
           ? assertERPNextDate(item.schedule_date, "schedule_date")
@@ -576,6 +636,35 @@ export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
             ? 1
             : 0;
       }
+      const finalQty =
+        item.custom_procurement_final_qty != null
+          ? Number(item.custom_procurement_final_qty)
+          : Number.isFinite(qty) && qty > 0
+            ? qty
+            : 1;
+      if (Number.isFinite(finalQty) && finalQty > 0) {
+        row.qty = finalQty;
+        row.custom_procurement_final_qty = finalQty;
+      }
+      if (item.custom_department_requested_qty != null) {
+        const dept = Number(item.custom_department_requested_qty);
+        if (Number.isFinite(dept) && dept >= 0) {
+          row.custom_department_requested_qty = dept;
+        }
+      } else if (Number.isFinite(finalQty)) {
+        row.custom_department_requested_qty = finalQty;
+      }
+      if (
+        item.custom_warehouse_available_qty != null &&
+        Number.isFinite(Number(item.custom_warehouse_available_qty))
+      ) {
+        row.custom_warehouse_available_qty = Number(
+          item.custom_warehouse_available_qty,
+        );
+      }
+      if (item.custom_qty_change_reason?.trim()) {
+        row.custom_qty_change_reason = item.custom_qty_change_reason.trim();
+      }
       return row;
     }),
     suppliers: data.suppliers.map((s) => ({
@@ -591,6 +680,16 @@ export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
       data.custom_show_target_price_to_supplier === 1
         ? 1
         : 0;
+  }
+
+  if (data.custom_procurement_type?.trim()) {
+    doc.custom_procurement_type = data.custom_procurement_type.trim();
+  }
+  if (data.custom_procurement_category?.trim()) {
+    doc.custom_procurement_category = data.custom_procurement_category.trim();
+  }
+  if (data.custom_request_mode?.trim()) {
+    doc.custom_request_mode = data.custom_request_mode.trim();
   }
 
   // eslint-disable-next-line no-console
@@ -694,6 +793,8 @@ export interface CreateSQInput {
    * the buyer sees on the RFQ detail page.
    */
   rfq_supplier_name?: string;
+  /** RFQ Round name stamped on the quotation (custom_rfq_round). */
+  rfq_round?: string;
   transaction_date?: string;
   company?: string;
   warehouse?: string;
@@ -805,7 +906,7 @@ async function createSupplierQuotationInternal(
   const warehouse = await lookupDefaultWarehouse(company);
   if (!warehouse) {
     throw new Error(
-      `No warehouse found for company "${company}". Configure a warehouse in ERPNext before submitting quotations.`,
+      `No warehouse found for company "${company}". Configure a warehouse before submitting quotations.`,
     );
   }
   // eslint-disable-next-line no-console
@@ -841,6 +942,7 @@ async function createSupplierQuotationInternal(
 
   if (data.rfq_no) payload.request_for_quotation = data.rfq_no;
   if (data.rfq_supplier_name) payload.request_for_quotation_supplier = data.rfq_supplier_name;
+  if (data.rfq_round) payload.custom_rfq_round = data.rfq_round;
 
   if (data.legal_documents) {
     const ld = data.legal_documents;
@@ -1231,7 +1333,8 @@ export async function getSupplierQuotationSummariesForRfq(
 }
 
 export async function getSupplierQuotations(
-  rfqName: string
+  rfqName: string,
+  opts?: { activeRoundName?: string | null; includeAllRounds?: boolean },
 ): Promise<SupplierQuotation[]> {
   const sqFilter = [["items.request_for_quotation", "=", rfqName]];
   // eslint-disable-next-line no-console
@@ -1274,17 +1377,26 @@ export async function getSupplierQuotations(
     )
     .map((r) => r.value);
 
+  const activeRound = opts?.activeRoundName?.trim();
+  const filtered =
+    opts?.includeAllRounds || !activeRound
+      ? result
+      : result.filter((sq) => {
+          const round = (sq as SupplierQuotation).custom_rfq_round;
+          return !round || round === activeRound;
+        });
+
   // eslint-disable-next-line no-console
   console.log(
-    `[SQ Query] Hydrated ${result.length}/${summaries.length} quotation(s) for RFQ "${rfqName}":`,
-    result.map((sq) => ({
+    `[SQ Query] Hydrated ${filtered.length}/${summaries.length} quotation(s) for RFQ "${rfqName}":`,
+    filtered.map((sq) => ({
       name: sq.name,
       supplier: sq.supplier,
       docstatus: (sq as { docstatus?: number }).docstatus,
       items_rfq_link: (sq.items ?? []).map((it) => (it as { request_for_quotation?: string }).request_for_quotation),
     }))
   );
-  return result;
+  return filtered;
 }
 
 /**
@@ -1529,10 +1641,33 @@ export interface ItemSearchResult {
   item_code: string;
   item_name: string;
   description?: string;
+  /** Item Master `stock_uom` — empty when not configured. */
   uom: string;
   item_group?: string;
   disabled?: 0 | 1;
+  /** Engineering part label when configured on Item (`custom_part_name`). */
+  part_name?: string;
+  procurement_type?: string;
+  procurement_category?: string;
+  lifecycle_status?: string;
 }
+
+/** Full Item Master snapshot used when populating an RFQ line. */
+export interface ItemMasterRfqDetail {
+  item_code: string;
+  item_name: string;
+  description?: string;
+  uom: string;
+  primary_uom: string;
+  /** Item Master stock UOM — default selection in the UOM dropdown. */
+  default_uom: string;
+  uom_conversion_factor: number;
+  compatible_uoms: CompatibleUomOption[];
+  item_group?: string;
+  part_name?: string;
+}
+
+export type { CompatibleUomOption, ItemUomProfile };
 
 export interface ItemGroupOption {
   name: string;
@@ -1554,6 +1689,12 @@ export interface GetItemsOptions {
    */
   itemGroups?: string[];
   limit?: number;
+  /** Filter by Direct / Indirect procurement type (MR / RFQ pickers). */
+  procurementType?: MaterialRequestProcurementType;
+  /** Filter by procurement category — used with procurementType. */
+  procurementCategory?: string;
+  /** When true (default), exclude Inactive / Obsolete items. */
+  activeOnly?: boolean;
 }
 
 interface RawItem {
@@ -1564,6 +1705,205 @@ interface RawItem {
   stock_uom?: string;
   item_group?: string;
   disabled?: 0 | 1;
+  custom_part_name?: string;
+  custom_procurement_type?: string;
+  custom_procurement_category?: string;
+  custom_bidsphere_item_status?: string;
+}
+
+const ITEM_SEARCH_LOG = "[ItemSearch]";
+
+/** Always-safe Item list fields for Material Request / RFQ pickers. */
+const ITEM_SEARCH_CORE_FIELDS = [
+  "name",
+  "item_name",
+  "item_code",
+  "stock_uom",
+  "description",
+  "item_group",
+  "disabled",
+] as const;
+
+/**
+ * Optional Item fields — only included when the Custom Field exists on Item.
+ * Never hard-fail the picker if any of these are missing or not queryable.
+ */
+const ITEM_SEARCH_OPTIONAL_FIELDS = [
+  "custom_part_name",
+  "custom_procurement_type",
+  "custom_procurement_category",
+  "custom_bidsphere_item_status",
+] as const;
+
+/** Session cache: optional fields known to exist on Item (Custom Field check). */
+let verifiedOptionalItemFields: string[] | null = null;
+/** Session cache: fields ERP rejected with "Field not permitted in query". */
+const unsupportedItemListFields = new Set<string>();
+
+async function itemCustomFieldExists(fieldname: string): Promise<boolean> {
+  try {
+    await apiGet(
+      buildResourceUrl("Custom Field", `${ITEM_DOCTYPE}-${fieldname}`),
+      withSilent(),
+    );
+    return true;
+  } catch {
+    /* fall through */
+  }
+  try {
+    const rows = await apiGet<Array<{ fieldname?: string }>>(
+      buildResourceUrl("Custom Field"),
+      withSilent(
+        buildListConfig({
+          fields: ["fieldname"],
+          filters: [
+            ["dt", "=", ITEM_DOCTYPE],
+            ["fieldname", "=", fieldname],
+          ],
+          limit_page_length: 1,
+        }),
+      ),
+    );
+    return Array.isArray(rows) && rows.length > 0;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `${ITEM_SEARCH_LOG} could not verify Item field "${fieldname}" — will attempt query and strip if rejected`,
+      err instanceof Error ? err.message : err,
+    );
+    // Optimistic: try once; strip-on-417 handles absence.
+    return true;
+  }
+}
+
+/**
+ * Resolve which optional Item fields to request. Skips fields that do not
+ * exist on the Item DocType (e.g. custom_part_name only on MR Item).
+ */
+async function resolveOptionalItemSearchFields(): Promise<string[]> {
+  if (verifiedOptionalItemFields) {
+    return verifiedOptionalItemFields.filter(
+      (f) => !unsupportedItemListFields.has(f),
+    );
+  }
+
+  const found: string[] = [];
+  await Promise.all(
+    ITEM_SEARCH_OPTIONAL_FIELDS.map(async (fieldname) => {
+      if (unsupportedItemListFields.has(fieldname)) return;
+      // Standard field — not a Custom Field doc; try query (strip if 417).
+      if (!fieldname.startsWith("custom_")) {
+        found.push(fieldname);
+        return;
+      }
+      const exists = await itemCustomFieldExists(fieldname);
+      if (exists) {
+        found.push(fieldname);
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `${ITEM_SEARCH_LOG} Item custom field "${fieldname}" not found — skipping from list query`,
+        );
+        unsupportedItemListFields.add(fieldname);
+      }
+    }),
+  );
+
+  verifiedOptionalItemFields = found;
+  return found.filter((f) => !unsupportedItemListFields.has(f));
+}
+
+/**
+ * Item list query that never fails the whole picker because of one bad field.
+ * Logs developer warnings; retries with valid fields only.
+ */
+async function fetchItemSearchRows(
+  queryFilters: Array<[string, string, string | number | string[]]>,
+  limit: number,
+): Promise<RawItem[]> {
+  const optional = await resolveOptionalItemSearchFields();
+  let fields = [
+    ...ITEM_SEARCH_CORE_FIELDS,
+    ...optional,
+  ].filter((f) => !unsupportedItemListFields.has(f));
+
+  for (let attempt = 0; attempt < 12; attempt++) {
+    if (fields.length === 0) {
+      throw new Error("Item search has no remaining permitted fields.");
+    }
+    try {
+      const raw = await apiGet<MaybeEnveloped<RawItem[]>>(
+        buildResourceUrl(ITEM_DOCTYPE),
+        withSilent({
+          params: {
+            fields: JSON.stringify(fields),
+            filters: JSON.stringify(queryFilters),
+            limit_page_length: limit,
+            order_by: "item_name asc",
+          },
+        }),
+      );
+      return unwrap<RawItem[]>(raw, []);
+    } catch (err) {
+      const next = nextFieldsAfterPermissionError(fields, err);
+      if (next && next.fields.length > 0 && next.fields.length < fields.length) {
+        for (const removed of next.removed) {
+          unsupportedItemListFields.add(removed);
+          // eslint-disable-next-line no-console
+          console.warn(
+            `${ITEM_SEARCH_LOG} Field not permitted in query: "${removed}" — retrying without it`,
+          );
+        }
+        fields = next.fields;
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  throw new Error("Item search exhausted field-permission retries.");
+}
+
+function itemUomProfileFromConfiguration(
+  config: Awaited<ReturnType<typeof resolveItemUomConfiguration>>,
+): ItemUomProfile | null {
+  if (!config?.default_uom) return null;
+  return {
+    primary_uom: config.default_uom,
+    default_uom: config.default_uom,
+    compatible_uoms: config.compatible_uoms,
+    options: config.compatible_uoms,
+  };
+}
+
+/** Resolve compatible UOM options for an Item Master record. */
+export async function resolveItemUomProfile(
+  itemCode: string,
+): Promise<ItemUomProfile | null> {
+  const config = await resolveItemUomConfiguration(itemCode);
+  return itemUomProfileFromConfiguration(config);
+}
+
+function mapRawItemToSearchResult(item: RawItem): ItemSearchResult {
+  const code = item.item_code || item.name;
+  const resolved = resolveItemProcurement({
+    procurement_type: item.custom_procurement_type,
+    procurement_category: item.custom_procurement_category,
+    item_group: item.item_group,
+  });
+  return {
+    name: item.name,
+    item_code: code,
+    item_name: item.item_name || item.name,
+    description: item.description,
+    uom: resolveStockUomFromItem(item.stock_uom),
+    item_group: item.item_group,
+    disabled: item.disabled,
+    part_name: item.custom_part_name?.trim() || undefined,
+    procurement_type: resolved.procurement_type || undefined,
+    procurement_category: resolved.procurement_category || undefined,
+    lifecycle_status: item.custom_bidsphere_item_status?.trim() || undefined,
+  };
 }
 
 function normalizeGetItemsArgs(
@@ -1637,7 +1977,7 @@ export async function getItemGroups(
 
 /**
  * Item list with normalized output. Supports optional `itemGroup` filters.
- * When `search` is set, matches `item_name` (like).
+ * When `search` is set, matches `item_name` or `item_code` (like).
  */
 export async function getItems(
   searchOrOptions: string | GetItemsOptions = "",
@@ -1659,39 +1999,129 @@ export async function getItems(
     filters.push(["item_group", "=", opts.itemGroup]);
   }
 
-  const raw = await apiGet<MaybeEnveloped<RawItem[]>>(
-    buildResourceUrl(ITEM_DOCTYPE),
-    {
-      params: {
-        fields: JSON.stringify([
-          "name",
-          "item_name",
-          "item_code",
-          "stock_uom",
-          "description",
-          "item_group",
-          "disabled",
-        ]),
-        filters: JSON.stringify(filters),
-        limit_page_length: opts.limit ?? 20,
-        order_by: "item_name asc",
-      },
-    }
-  );
+  const pageLimit = opts.limit ?? 20;
 
-  const items = unwrap<RawItem[]>(raw, []);
-  return items.map<ItemSearchResult>((item) => {
-    const code = item.item_code || item.name;
+  if (trimmed) {
+    const base = filters.filter(
+      (f) => f[0] !== "item_name" && f[0] !== "item_code",
+    );
+    const [byName, byCode] = await Promise.all([
+      fetchItemSearchRows(
+        [...base, ["item_name", "like", `%${trimmed}%`]],
+        pageLimit,
+      ),
+      fetchItemSearchRows(
+        [...base, ["item_code", "like", `%${trimmed}%`]],
+        pageLimit,
+      ),
+    ]);
+    const merged = new Map<string, RawItem>();
+    for (const row of [...byName, ...byCode]) {
+      const code = row.item_code || row.name;
+      if (code) merged.set(code, row);
+    }
+    return applyGetItemsFilters(
+      [...merged.values()].map(mapRawItemToSearchResult),
+      opts,
+    );
+  }
+
+  const items = await fetchItemSearchRows(filters, pageLimit);
+  return applyGetItemsFilters(items.map(mapRawItemToSearchResult), opts);
+}
+
+function applyGetItemsFilters(
+  items: ItemSearchResult[],
+  opts: GetItemsOptions,
+): ItemSearchResult[] {
+  const activeOnly = opts.activeOnly !== false;
+  const procurementType = opts.procurementType;
+  const procurementCategory = opts.procurementCategory as
+    | ProcurementCategory
+    | undefined;
+
+  if (!activeOnly && !procurementType && !procurementCategory) {
+    return items;
+  }
+
+  return items.filter((item) =>
+    itemMatchesTransactionalFilters(
+      {
+        procurement_type: item.procurement_type,
+        procurement_category: item.procurement_category,
+        item_group: item.item_group,
+        lifecycle_status: item.lifecycle_status,
+        disabled: item.disabled,
+      },
+      {
+        activeOnly,
+        procurementType,
+        procurementCategory,
+      },
+    ),
+  );
+}
+
+/**
+ * Resolve a single Item Master record for RFQ line auto-fill
+ * (UOM, description, item group, part name).
+ */
+export async function getItemMasterForRfqLine(
+  itemCode: string,
+): Promise<ItemMasterRfqDetail | null> {
+  const trimmed = itemCode.trim();
+  if (!trimmed) return null;
+
+  const config = await resolveItemUomConfiguration(trimmed);
+  if (!config) {
+    const rows = await getItemsByCodes([trimmed]);
+    const row = rows[0];
+    if (!row) return null;
+    const defaultUom = resolveStockUomFromItem(row.uom);
+    const options = defaultUom
+      ? assembleCompatibleUomOptions(defaultUom, [])
+      : [];
     return {
-      name: item.name,
-      item_code: code,
-      item_name: item.item_name || item.name,
-      description: item.description,
-      uom: item.stock_uom || "Nos",
-      item_group: item.item_group,
-      disabled: item.disabled,
+      item_code: row.item_code,
+      item_name: row.item_name,
+      description: row.description,
+      uom: defaultUom,
+      primary_uom: defaultUom,
+      default_uom: defaultUom,
+      uom_conversion_factor: 1,
+      compatible_uoms: options,
+      item_group: row.item_group,
+      part_name: row.part_name,
     };
-  });
+  }
+
+  if (!config.default_uom) {
+    return {
+      item_code: config.item_code,
+      item_name: config.item_name || config.item_code,
+      description: config.description,
+      uom: "",
+      primary_uom: "",
+      default_uom: "",
+      uom_conversion_factor: 1,
+      compatible_uoms: [],
+      item_group: config.item_group,
+      part_name: config.part_name,
+    };
+  }
+
+  return {
+    item_code: config.item_code,
+    item_name: config.item_name || config.item_code,
+    description: config.description,
+    uom: config.default_uom,
+    primary_uom: config.default_uom,
+    default_uom: config.default_uom,
+    uom_conversion_factor: 1,
+    compatible_uoms: config.compatible_uoms,
+    item_group: config.item_group,
+    part_name: config.part_name,
+  };
 }
 
 /**
@@ -1705,38 +2135,11 @@ export async function getItemsByCodes(
   const unique = Array.from(new Set(codes.filter((c) => !!c && c.trim())));
   if (unique.length === 0) return [];
 
-  const raw = await apiGet<MaybeEnveloped<RawItem[]>>(
-    buildResourceUrl(ITEM_DOCTYPE),
-    {
-      params: {
-        fields: JSON.stringify([
-          "name",
-          "item_name",
-          "item_code",
-          "stock_uom",
-          "description",
-          "item_group",
-          "disabled",
-        ]),
-        filters: JSON.stringify([["item_code", "in", unique]]),
-        limit_page_length: Math.max(unique.length, 20),
-      },
-    }
+  const items = await fetchItemSearchRows(
+    [["item_code", "in", unique]],
+    Math.max(unique.length, 20),
   );
-
-  const items = unwrap<RawItem[]>(raw, []);
-  return items.map<ItemSearchResult>((item) => {
-    const code = item.item_code || item.name;
-    return {
-      name: item.name,
-      item_code: code,
-      item_name: item.item_name || item.name,
-      description: item.description,
-      uom: item.stock_uom || "Nos",
-      item_group: item.item_group,
-      disabled: item.disabled,
-    };
-  });
+  return items.map(mapRawItemToSearchResult);
 }
 
 /** Backwards-compatible alias kept for early callers. */

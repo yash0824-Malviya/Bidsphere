@@ -418,7 +418,7 @@ export default function FinanceReviewsPage() {
 
                 : diagnostics?.emptyReason ??
 
-                  "RFQs appear here after legal approval. Data is loaded from ERPNext Request for Quotation workflow fields."
+                  "RFQs appear here after legal approval. Data is loaded from procurement workflow fields."
 
             }
 

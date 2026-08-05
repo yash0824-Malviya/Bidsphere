@@ -7,6 +7,15 @@ interface ImportMetaEnv {
   readonly VITE_PROXY_TARGET?: string;
   readonly VITE_API_KEY?: string;
   readonly VITE_API_SECRET?: string;
+  /**
+   * Public origin for QR / verification links (no trailing slash).
+   * Prefer opening the app via a LAN/public host; otherwise set one of these
+   * so phones do not receive localhost URLs.
+   */
+  readonly VITE_PUBLIC_URL?: string;
+  readonly VITE_APP_BASE_URL?: string;
+  readonly VITE_SITE_URL?: string;
+  readonly VITE_APP_URL?: string;
   /** TEMPORARY LEGACY MODE — PIN profile access. Remove after Account Login migration. */
   readonly VITE_ENABLE_LEGACY_PIN_PROFILE?: string;
   readonly ENABLE_LEGACY_PIN_PROFILE?: string;

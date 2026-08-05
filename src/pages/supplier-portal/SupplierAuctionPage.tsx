@@ -32,13 +32,37 @@ import { useServerTimeOffset } from "../../hooks/useServerTimeOffset";
 import { useAuctionCountdownAlerts } from "../../hooks/useAuctionCountdownAlerts";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
 import { formatCurrencyIn, formatDateTime } from "../../utils/format";
-import { toEnterpriseUserMessage } from "../../utils/enterpriseUserMessage";
+import {
+  extractRawErrorMessage,
+  toEnterpriseUserMessage,
+} from "../../utils/enterpriseUserMessage";
+import { ReverseBiddingSubmitApiError } from "../../api/reverseBiddingSubmit";
+import type { ReverseBidding } from "../../types/reverseBidding";
+import { toBidRate } from "../../utils/reverseBiddingBidValidation";
+
+function resolveReverseBidError(error: unknown, fallback: string): string {
+  if (error instanceof ReverseBiddingSubmitApiError) {
+    if (error.message.trim()) return error.message.trim();
+  }
+  const raw = extractRawErrorMessage(error);
+  if (
+    raw &&
+    /submitted bid|latest lowest bid|must be lower|auction is not live|bid sheet|at least .+ below|Rate must be greater|not invited to this reverse auction|Enter at least one lower|auction has been updated/i.test(
+      raw,
+    )
+  ) {
+    return raw;
+  }
+  return toEnterpriseUserMessage(error, fallback);
+}
+
+const LIVE_AUCTION_POLL_MS = 2000;
 
 export default function SupplierAuctionPage() {
   const { t } = useTranslation();
   const { auctionName } = useParams<{ auctionName: string }>();
   const name = auctionName ? decodeURIComponent(auctionName) : "";
-  const { supplierName, isReady, isAuthenticated } = useSupplierSession();
+  const { erpSupplierName, supplierName, isReady, isAuthenticated } = useSupplierSession();
   const queryClient = useQueryClient();
   const [amount, setAmount] = useState("");
   const [itemBids, setItemBids] = useState<Record<string, string>>({});
@@ -47,9 +71,15 @@ export default function SupplierAuctionPage() {
 
   const query = useQuery({
     queryKey: ["supplier-auction", name],
-    enabled: !!name && !!supplierName,
+    enabled: !!name && !!erpSupplierName,
     queryFn: () => getReverseBidding(name),
-    refetchInterval: 5000,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+    refetchInterval: (q) => {
+      const data = q.state.data;
+      if (!data) return LIVE_AUCTION_POLL_MS;
+      return deriveAuctionStatus(data) === "Live" ? LIVE_AUCTION_POLL_MS : false;
+    },
   });
 
   const auction = query.data;
@@ -122,7 +152,7 @@ export default function SupplierAuctionPage() {
 
   const bid = useMutation({
     mutationFn: () =>
-      submitBid({ auctionName: name, supplier: supplierName, amount: Number(amount) }),
+      submitBid({ auctionName: name, supplier: erpSupplierName, amount: Number(amount) }),
     onSuccess: () => {
       toast.success(t("reverseBidding.bidSubmitted"));
       setAmount("");
@@ -130,36 +160,88 @@ export default function SupplierAuctionPage() {
     },
     onError: (e: unknown) =>
       toast.error(
-        toEnterpriseUserMessage(e, t("reverseBidding.bidRejected")),
+        resolveReverseBidError(e, t("reverseBidding.bidRejected")),
         { id: "reverse-auction-bid-error" },
       ),
   });
 
   const itemBid = useMutation({
-    mutationFn: (items: ItemBidInput[]) => {
+    mutationFn: async (items: ItemBidInput[]) => {
+      const fresh = await queryClient.fetchQuery({
+        queryKey: ["supplier-auction", name],
+        queryFn: () => getReverseBidding(name),
+        staleTime: 0,
+      });
+      queryClient.setQueryData(["supplier-auction", name], fresh);
+
+      for (const line of items) {
+        const preview = validateItemBid(
+          fresh,
+          erpSupplierName,
+          line.item_code,
+          line.rate,
+        );
+        if (!preview.ok) {
+          throw new ReverseBiddingSubmitApiError(
+            preview.reason ?? "Invalid bid.",
+            409,
+            {
+              submittedBid: line.rate,
+              latestLowestBid: preview.currentLowest,
+              itemCode: line.item_code,
+              reasonCode: preview.reasonCode,
+              auction: fresh,
+            },
+          );
+        }
+      }
+
       // eslint-disable-next-line no-console
       console.log("[SupplierAuctionPage] Submit Item Bids clicked", {
         auctionId: name,
-        supplierId: supplierName,
-        rfqId: auction?.rfq,
+        erpSupplierId: erpSupplierName,
+        displaySupplier: supplierName,
+        rfqId: fresh.rfq,
         items,
+        frontendTotalLowest: currentLowestBid(fresh),
       });
+      const freshLowestByItem = lowestRateByItem(fresh.bid_items ?? []);
       return submitItemBids({
         auctionName: name,
-        supplier: supplierName,
         items,
+        clientSnapshot: {
+          totalLowest: currentLowestBid(fresh),
+          lowestByItem: Object.fromEntries(
+            items.map((line) => [
+              line.item_code,
+              freshLowestByItem.get(line.item_code) ??
+                toBidRate(
+                  fresh.bid_items?.find(
+                    (row) =>
+                      row.item_code === line.item_code &&
+                      sameSupplier(row.supplier, erpSupplierName),
+                  )?.current_rate,
+                ),
+            ]),
+          ),
+        },
       });
     },
-    onSuccess: () => {
+    onSuccess: (updated: ReverseBidding) => {
+      queryClient.setQueryData(["supplier-auction", name], updated);
       toast.success(t("reverseBidding.itemBidsSubmitted"));
       setItemBids({});
       invalidateAuction();
     },
-    onError: (e: unknown) =>
+    onError: (e: unknown) => {
+      if (e instanceof ReverseBiddingSubmitApiError && e.auction) {
+        queryClient.setQueryData(["supplier-auction", name], e.auction);
+      }
       toast.error(
-        toEnterpriseUserMessage(e, t("reverseBidding.bidRejected")),
-        { id: "reverse-auction-bid-error" },
-      ),
+        resolveReverseBidError(e, t("reverseBidding.bidRejected")),
+        { id: "reverse-auction-bid-error", duration: 12000 },
+      );
+    },
   });
 
   if (isReady && !isAuthenticated) {
@@ -181,7 +263,7 @@ export default function SupplierAuctionPage() {
     );
   }
 
-  if (!supplierIsInvited(auction, supplierName)) {
+  if (!supplierIsInvited(auction, erpSupplierName)) {
     return (
         <SupplierAccessDenied
           title={t("reverseBidding.notInvited")}
@@ -191,10 +273,10 @@ export default function SupplierAuctionPage() {
   }
 
   const mine = (auction.invited_suppliers ?? []).find((s) =>
-    sameSupplier(s.supplier, supplierName)
+    sameSupplier(s.supplier, erpSupplierName)
   );
   const myBids = (auction.bid_history ?? [])
-    .filter((b) => sameSupplier(b.supplier, supplierName))
+    .filter((b) => sameSupplier(b.supplier, erpSupplierName))
     .sort(
       (a, b) => (parseErpDateTime(b.bid_time) ?? 0) - (parseErpDateTime(a.bid_time) ?? 0)
     );
@@ -204,11 +286,11 @@ export default function SupplierAuctionPage() {
   const isLeader = mine?.rank === 1;
 
   const check =
-    amount !== "" ? validateBid(auction, supplierName, Number(amount)) : null;
+    amount !== "" ? validateBid(auction, erpSupplierName, Number(amount)) : null;
 
   // Item-wise: this supplier's own item rows + per-item lowest across suppliers.
   const myItems = (auction.bid_items ?? []).filter((i) =>
-    sameSupplier(i.supplier, supplierName)
+    sameSupplier(i.supplier, erpSupplierName)
   );
   const hasItems = myItems.length > 0;
   const lowestByItem = lowestRateByItem(auction.bid_items ?? []);
@@ -221,7 +303,7 @@ export default function SupplierAuctionPage() {
     .filter((b) => b.item_code && Number.isFinite(b.rate) && b.rate > 0);
 
   const anyItemInvalid = enteredItemBids.some((b) => {
-    const v = validateItemBid(auction, supplierName, b.item_code, b.rate);
+    const v = validateItemBid(auction, erpSupplierName, b.item_code, b.rate);
     return !v.ok;
   });
 
@@ -339,21 +421,34 @@ export default function SupplierAuctionPage() {
                 <tbody>
                   {myItems.map((it) => {
                     const itemLowest =
-                      lowestByItem.get(it.item_code) ?? it.current_rate ?? 0;
+                      lowestByItem.get(it.item_code) ?? toBidRate(it.current_rate);
+                    const ownRate = toBidRate(it.current_rate);
+                    const itemRules = validateItemBid(
+                      auction,
+                      erpSupplierName,
+                      it.item_code,
+                      0.01,
+                    );
+                    const itemMaxBid =
+                      itemRules.maxAllowed > 0 &&
+                      Number.isFinite(itemRules.maxAllowed)
+                        ? itemRules.maxAllowed
+                        : null;
                     const value = itemBids[it.item_code] ?? "";
                     const parsed = Number(value);
                     const v =
                       value !== "" && Number.isFinite(parsed)
                         ? validateItemBid(
                             auction,
-                            supplierName,
+                            erpSupplierName,
                             it.item_code,
                             parsed
                           )
                         : null;
                     const isLow =
-                      (it.current_rate ?? 0) > 0 &&
-                      it.current_rate === itemLowest;
+                      ownRate > 0 &&
+                      itemLowest > 0 &&
+                      ownRate <= itemLowest;
                     return (
                       <tr
                         key={it.item_code}
@@ -371,8 +466,8 @@ export default function SupplierAuctionPage() {
                           {it.qty ?? 0} {it.uom ?? ""}
                         </td>
                         <td className="py-2 text-right tabular-nums font-semibold text-neutral-900">
-                          {it.current_rate
-                            ? formatCurrencyIn(it.current_rate, auction.currency)
+                          {ownRate > 0
+                            ? formatCurrencyIn(ownRate, auction.currency)
                             : "—"}
                         </td>
                         <td
@@ -408,11 +503,24 @@ export default function SupplierAuctionPage() {
                             }
                             className="input-field w-28 text-right disabled:cursor-not-allowed disabled:bg-neutral-100"
                             placeholder={
-                              decrement > 0
-                                ? String(Math.max(0, itemLowest - decrement))
-                                : "0.00"
+                              itemMaxBid != null && itemMaxBid > 0
+                                ? String(itemMaxBid)
+                                : decrement > 0 && itemLowest > 0
+                                  ? String(Math.max(0, itemLowest - decrement))
+                                  : "0.00"
                             }
                           />
+                          {decrement > 0 &&
+                            itemMaxBid != null &&
+                            itemMaxBid > 0 &&
+                            !itemRules.isLeader &&
+                            !value && (
+                            <p className="mt-1 text-[10px] text-neutral-500">
+                              {t("reverseBidding.itemMaxBidHint", {
+                                amount: formatCurrencyIn(itemMaxBid, auction.currency),
+                              })}
+                            </p>
+                          )}
                           {v && !v.ok && (
                             <p className="mt-1 text-[10px] font-medium text-rose-600">
                               {v.reason}
@@ -517,13 +625,13 @@ export default function SupplierAuctionPage() {
           )}
           <div
             className={`rounded-xl border p-4 ${
-              sameSupplier(auction.winning_supplier, supplierName)
+              sameSupplier(auction.winning_supplier, erpSupplierName)
                 ? "border-emerald-300 bg-emerald-50 text-emerald-800"
                 : "border-neutral-200 bg-neutral-50 text-neutral-700"
             }`}
           >
             <p className="text-sm font-semibold">
-              {sameSupplier(auction.winning_supplier, supplierName)
+              {sameSupplier(auction.winning_supplier, erpSupplierName)
                 ? t("reverseBidding.congratsWon")
                 : t("reverseBidding.auctionClosedMsg")}
             </p>
@@ -556,7 +664,7 @@ export default function SupplierAuctionPage() {
               <div>
                 <dt className="text-xs text-neutral-400">{t("reverseBidding.result")}</dt>
                 <dd className="font-bold">
-                  {sameSupplier(auction.winning_supplier, supplierName)
+                  {sameSupplier(auction.winning_supplier, erpSupplierName)
                     ? t("reverseBidding.won")
                     : mine?.current_bid
                       ? t("reverseBidding.notSelected")

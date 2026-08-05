@@ -59,8 +59,8 @@ export default function ConnectionStatus() {
     return (
       <div className="flex items-center justify-center gap-2 border-b border-neutral-200 bg-neutral-50 px-6 py-2 text-sm text-neutral-600">
         <span className="min-w-0 truncate">
-          Unable to load data at the moment. Please check your connection and try
-          again.
+          Unable to reach the application server. Please try again in a few
+          seconds.
         </span>
       </div>
     );
@@ -71,8 +71,8 @@ export default function ConnectionStatus() {
     <div className="flex items-center gap-2 border-b border-warning-300 bg-warning-50 px-6 py-2 text-sm text-warning-800">
       <AlertTriangle className="h-4 w-4 flex-shrink-0 text-warning-600" />
       <span className="min-w-0 flex-1 truncate">
-        Unable to load data at the moment. Please check your connection and try
-        again.
+        Unable to reach the application server. Please try again in a few
+        seconds.
       </span>
       <button
         type="button"

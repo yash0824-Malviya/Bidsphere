@@ -440,7 +440,7 @@ export default function SupplierRFQsPage() {
             <EmptyState
               icon={AlertTriangle}
               title="Couldn't load your RFQs"
-              description="We hit an error reaching ERPNext. This is NOT the same as having no RFQs — please retry."
+              description="We hit an error loading RFQs. This is NOT the same as having no RFQs — please retry."
               action={
                 <button
                   type="button"

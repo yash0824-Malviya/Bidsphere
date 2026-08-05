@@ -21,7 +21,6 @@ import {
 
 import {
   fetchOperationalHealthErpCounts,
-  fetchProcurementCategorySpend,
   fetchProcurementDashboardKpis,
   fetchProcurementSecondaryAnalytics,
   type DashboardPoLite,
@@ -41,6 +40,7 @@ import {
 } from "../../api/legalDocs";
 import { getRFQNamesWithPO } from "../../api/purchasing";
 import { getSupplierPerformance } from "../../api/supplierPerformance";
+import { getWorkflowStages } from "../../api/admin";
 import {
   getQuoteCountsForRFQs,
   getSupplierCountsForRFQs,
@@ -51,7 +51,6 @@ import {
   buildProcurementInsights,
   buildSupplierPerformanceBars,
   computeAverageSupplierScore,
-  computeCategorySpendDistribution,
   computeEnterpriseRfqPipeline,
   computeMonthlyPoSpend,
   computePoYtdSpend,
@@ -205,15 +204,6 @@ export default function ProcurementDashboard({ greetingName }: Props) {
     ...DASHBOARD_QUERY_OPTIONS,
   });
 
-  const categoryQuery = useQuery({
-    queryKey: ["procurement-dashboard-category-spend", "po-submitted"],
-    queryFn: () =>
-      timedDashApi("Dashboard API (category spend · PO)", () =>
-        fetchProcurementCategorySpend(),
-      ),
-    ...DASHBOARD_QUERY_OPTIONS,
-  });
-
   const totalSuppliersQuery = useQuery({
     queryKey: ["procurement-dashboard-total-suppliers"],
     queryFn: () => getExactCount("Supplier"),
@@ -261,13 +251,6 @@ export default function ProcurementDashboard({ greetingName }: Props) {
   const monthlySpend = useMemo(
     () => computeMonthlyPoSpend(poSamples),
     [poSamples],
-  );
-  const categorySpend = useMemo(
-    () =>
-      computeCategorySpendDistribution(categoryQuery.data?.items ?? [], {
-        maxCategories: 8,
-      }),
-    [categoryQuery.data],
   );
   const rfqNames = useMemo(
     () => recentRfqs.map((r) => r.name).filter(Boolean),
@@ -351,23 +334,29 @@ export default function ProcurementDashboard({ greetingName }: Props) {
       topSpendSuppliers.length > 0 &&
       !supplierPerfQuery.data);
 
+  const workflowStages = useMemo(() => getWorkflowStages(), []);
+
   const rfqPipeline = useMemo(
     () =>
       computeEnterpriseRfqPipeline({
         rfqs: recentRfqs,
         openRfqsCount: kpis?.openRfqs ?? 0,
         quoteCounts: quoteCountsQuery.data,
+        supplierCounts: supplierCountsQuery.data,
         rfqsWithPo: poLinksQuery.data,
         legalPending,
         financePending,
+        workflowStages,
       }),
     [
       recentRfqs,
       kpis?.openRfqs,
       quoteCountsQuery.data,
+      supplierCountsQuery.data,
       poLinksQuery.data,
       legalPending,
       financePending,
+      workflowStages,
     ],
   );
 
@@ -605,11 +594,9 @@ export default function ProcurementDashboard({ greetingName }: Props) {
       <ProcurementExecutiveCharts
         monthlySpend={monthlySpend}
         rfqPipeline={rfqPipeline}
-        categorySpend={categorySpend}
         supplierOverview={supplierOverview}
         loading={chartsLoading}
         pipelineLoading={chartsLoading}
-        categoryLoading={categoryQuery.isPending && !categoryQuery.data}
         supplierLoading={supplierOverviewLoading}
       />
 

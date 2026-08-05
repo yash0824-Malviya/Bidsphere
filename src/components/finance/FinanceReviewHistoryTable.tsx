@@ -47,7 +47,7 @@ export default function FinanceReviewHistoryTable() {
         </div>
       ) : isError ? (
         <p className="px-4 py-6 text-center text-sm text-neutral-500">
-          Could not load review history from ERPNext.
+          Could not load review history.
         </p>
       ) : data.length === 0 ? (
         <p className="px-4 py-6 text-center text-sm text-neutral-500">

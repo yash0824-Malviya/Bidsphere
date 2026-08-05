@@ -36,6 +36,11 @@ export interface DashboardKpiCardProps {
   loading?: boolean;
   /** Extra classes on the outer shell (border highlight, etc.). */
   className?: string;
+  /**
+   * `text` = two-line ellipsis for long names (supplier labels).
+   * Default `metric` keeps single-line tabular numbers.
+   */
+  valueVariant?: "metric" | "text";
 }
 
 const SHELL_BASE =
@@ -52,6 +57,7 @@ export default function DashboardKpiCard({
   onClick,
   loading,
   className = "",
+  valueVariant = "metric",
 }: DashboardKpiCardProps) {
   const trendUp = trend != null && trend.pct > 0;
   const trendDown = trend != null && trend.pct < 0;
@@ -77,11 +83,18 @@ export default function DashboardKpiCard({
         </p>
       </div>
 
-      <div className="kpi-card-value-slot">
+      <div
+        className={`kpi-card-value-slot${
+          valueVariant === "text" ? " kpi-card-value-slot--text" : ""
+        }`}
+      >
         {loading ? (
           <Skeleton className="h-9 w-24" />
         ) : (
-          <p className="kpi-value" title={String(value)}>
+          <p
+            className={`kpi-value${valueVariant === "text" ? " kpi-value--text" : ""}`}
+            title={String(value)}
+          >
             {value}
           </p>
         )}
@@ -159,10 +172,10 @@ export function DashboardKpiGrid({
   className = "",
   columns = 5,
 }: DashboardKpiGridProps) {
-  /* Avoid orphan rows: 6-col fills evenly at 2 / 3 / 6. */
+  /* 6-col: tablet 2×3 · laptop 3×2 · desktop 1×6 (no orphan row). */
   const responsive =
     columns === 6
-      ? `kpi-grid grid grid-cols-2 md:grid-cols-3 ${DESKTOP_COLS[columns]}`
+      ? `kpi-grid grid grid-cols-2 lg:grid-cols-3 ${DESKTOP_COLS[columns]}`
       : columns === 4 || columns === 5
         ? `kpi-grid grid grid-cols-1 sm:grid-cols-2 ${DESKTOP_COLS[columns]}`
         : `kpi-grid grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 ${DESKTOP_COLS[columns]}`;

@@ -134,7 +134,7 @@ export function isHsnMandatoryError(message: string): boolean {
 }
 
 export function friendlyHsnMandatoryMessage(): string {
-  return "ERPNext requires an HSN/SAC Code for this item.";
+  return "An HSN/SAC Code is required for this item.";
 }
 
 function normalizeItemCreationError(err: unknown): Error {

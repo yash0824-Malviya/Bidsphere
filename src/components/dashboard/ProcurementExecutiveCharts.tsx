@@ -9,18 +9,14 @@ import {
   AlertTriangle,
   ArrowRight,
   Gauge,
-  PieChart as PieChartIcon,
   ShieldCheck,
   UserPlus,
   Users,
   type LucideIcon,
 } from "lucide-react";
 import {
-  Cell,
   Line,
   LineChart,
-  Pie,
-  PieChart,
   ResponsiveContainer,
   Tooltip,
   CartesianGrid,
@@ -30,12 +26,12 @@ import {
 
 import type { RfqPipelineStage } from "../../utils/dashboardUtils";
 import type {
-  CategoryDonutPoint,
   PoSpendSeriesPoint,
   SupplierOverviewMetrics,
 } from "../../utils/procurementExecutiveMetrics";
 import { formatCurrencyCompact } from "../../utils/format";
 import { Skeleton } from "../Skeleton";
+import SpendByCategoryWidget from "./SpendByCategoryWidget";
 
 const CARD =
   "flex h-full min-h-[360px] flex-col overflow-hidden rounded-xl border border-[#E5E7EB] bg-white p-4 shadow-[0_8px_24px_rgba(15,23,42,0.06)]";
@@ -49,15 +45,6 @@ const AXIS = {
   axisLine: false as const,
   tickLine: false as const,
 };
-
-const DONUT_COLORS = [
-  "#1F3A6D",
-  "#3B6BA5",
-  "#0E7C6E",
-  "#A66418",
-  "#64748B",
-  "#B45309",
-];
 
 const PIPELINE_COLOR = "#1F3A6D";
 const SUPPLIER_DETAILS_HREF = "/reports/operations/supplier-performance";
@@ -166,7 +153,7 @@ function RfqPipelineBars({
   return (
     <ChartShell
       title="RFQ Status Pipeline"
-      subtitle="Enterprise sourcing stages"
+      subtitle="Active procurement workflow stages"
       loading={loading}
     >
       <div className="flex h-full min-h-[280px] flex-col justify-center gap-2.5 overflow-y-auto py-1">
@@ -194,129 +181,6 @@ function RfqPipelineBars({
           );
         })}
       </div>
-    </ChartShell>
-  );
-}
-
-function CategoryEmptyState() {
-  return (
-    <div className="flex h-full min-h-[280px] flex-col items-center justify-center px-6 text-center">
-      <span className="mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-[#EEF3FA] text-[#1F3A6D]">
-        <PieChartIcon className="h-7 w-7" strokeWidth={1.75} />
-      </span>
-      <p className="text-[14px] font-semibold text-[#1E293B]">
-        No procurement spend available
-      </p>
-      <p className="mt-1.5 max-w-[280px] text-[13px] leading-relaxed text-[#64748B]">
-        Complete a Purchase Order to view category analytics.
-      </p>
-    </div>
-  );
-}
-
-function CategoryDonut({
-  data,
-  loading,
-}: {
-  data: CategoryDonutPoint[];
-  loading?: boolean;
-}) {
-  const totalSpend = data.reduce((s, r) => s + r.spend, 0);
-
-  return (
-    <ChartShell
-      title="Spend by Category"
-      subtitle="Spend Distribution by Category"
-      loading={loading}
-    >
-      {data.length === 0 ? (
-        <CategoryEmptyState />
-      ) : (
-        <div className="flex h-full min-h-[280px] items-center gap-3">
-          <div className="relative h-full min-h-[240px] min-w-0 flex-1">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={data}
-                  dataKey="spend"
-                  nameKey="category"
-                  cx="50%"
-                  cy="50%"
-                  innerRadius="58%"
-                  outerRadius="82%"
-                  paddingAngle={2}
-                  stroke="#fff"
-                  strokeWidth={2}
-                >
-                  {data.map((entry, i) => (
-                    <Cell
-                      key={entry.category}
-                      fill={DONUT_COLORS[i % DONUT_COLORS.length]}
-                    />
-                  ))}
-                </Pie>
-                <Tooltip
-                  content={({ active, payload }) => {
-                    if (!active || !payload?.length) return null;
-                    const row = payload[0]?.payload as CategoryDonutPoint;
-                    return (
-                      <div className="rounded-lg border border-[#E5E7EB] bg-white px-3 py-2.5 text-[12px] shadow-sm">
-                        <p className="font-semibold text-[#1E293B]">
-                          {row.category}
-                        </p>
-                        <p className="mt-1 tabular-nums text-[#475569]">
-                          Total Spend: {formatCurrencyCompact(row.spend)}
-                        </p>
-                        <p className="tabular-nums text-[#64748B]">
-                          {row.pct.toFixed(1)}% of total
-                        </p>
-                        <p className="tabular-nums text-[#64748B]">
-                          {row.orderCount} Purchase Order
-                          {row.orderCount === 1 ? "" : "s"}
-                        </p>
-                      </div>
-                    );
-                  }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-[#94A3B8]">
-                Total Spend
-              </span>
-              <span className="mt-0.5 text-[18px] font-bold tabular-nums text-[#1E293B]">
-                {formatCurrencyCompact(totalSpend)}
-              </span>
-            </div>
-          </div>
-          <ul className="w-[42%] shrink-0 space-y-2 pr-1">
-            {data.map((row, i) => (
-              <li
-                key={row.category}
-                className="flex items-start gap-2 text-[12px] text-[#475569]"
-              >
-                <span
-                  className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{
-                    backgroundColor: DONUT_COLORS[i % DONUT_COLORS.length],
-                  }}
-                />
-                <span className="min-w-0 flex-1">
-                  <span
-                    className="block truncate font-medium text-[#1E293B]"
-                    title={row.category}
-                  >
-                    {row.category}
-                  </span>
-                  <span className="mt-0.5 block tabular-nums text-[11px] text-[#64748B]">
-                    {formatCurrencyCompact(row.spend)} · {row.pct.toFixed(0)}%
-                  </span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
     </ChartShell>
   );
 }
@@ -422,29 +286,25 @@ function SupplierOverviewCard({
 interface Props {
   monthlySpend: PoSpendSeriesPoint[];
   rfqPipeline: RfqPipelineStage[];
-  categorySpend: CategoryDonutPoint[];
   supplierOverview: SupplierOverviewMetrics;
   loading?: boolean;
   pipelineLoading?: boolean;
-  categoryLoading?: boolean;
   supplierLoading?: boolean;
 }
 
 function ProcurementExecutiveCharts({
   monthlySpend,
   rfqPipeline,
-  categorySpend,
   supplierOverview,
   loading,
   pipelineLoading,
-  categoryLoading,
   supplierLoading,
 }: Props) {
   return (
     <section className="grid grid-cols-1 gap-5 xl:grid-cols-2 xl:items-stretch">
       <MonthlySpendLine data={monthlySpend} loading={loading} />
       <RfqPipelineBars stages={rfqPipeline} loading={pipelineLoading || loading} />
-      <CategoryDonut data={categorySpend} loading={categoryLoading || loading} />
+      <SpendByCategoryWidget />
       <SupplierOverviewCard
         metrics={supplierOverview}
         loading={supplierLoading || loading}

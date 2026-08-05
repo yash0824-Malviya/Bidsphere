@@ -35,6 +35,14 @@ function isSupplierPath(path: string): boolean {
   return path === "/supplier" || path.startsWith("/supplier/");
 }
 
+function isDepartmentBomPath(path: string): boolean {
+  return (
+    path === "/department/upload-bom" ||
+    path === "/department/temporary-items" ||
+    path.startsWith("/department/temporary-items/")
+  );
+}
+
 /**
  * Guards internal app routes behind authentication and role-based access.
  * Portal boundaries always validate role — never redirect on auth alone.
@@ -147,6 +155,9 @@ export default function ProtectedRoute({ children }: Props) {
   }
 
   if (isDepartmentPath(path) && role !== "department" && role !== "admin") {
+    if (role === "manufacturing" && isDepartmentBomPath(path)) {
+      // Master Data / manufacturing may review temp items and upload department BOMs.
+    } else {
     const home = getRoleHome(role);
     const key = `portal:department:${role}:${path}`;
     if (deniedRef.current !== key) {
@@ -165,6 +176,7 @@ export default function ProtectedRoute({ children }: Props) {
       });
     }
     return <Navigate to={home} replace />;
+    }
   }
 
   if (!canAccessPath(role, path, search)) {

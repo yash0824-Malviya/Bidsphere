@@ -1,5 +1,10 @@
 import { keepPreviousData } from "@tanstack/react-query";
 
+import {
+  queryRetryDelay,
+  queryRetryPolicy,
+} from "../utils/apiReliability";
+
 /**
  * Shared React Query option presets for enterprise dashboard performance.
  *
@@ -9,19 +14,18 @@ import { keepPreviousData } from "@tanstack/react-query";
  *   while a background refetch runs — no flicker / layout shift.
  * - `refetchOnWindowFocus: false` avoids surprise refetch storms when the user
  *   tabs back and forth.
+ * - Retries (max 2) apply only to network / timeout failures.
  */
 export const DASHBOARD_QUERY_OPTIONS = {
   staleTime: 5 * 60_000,
   gcTime: 10 * 60_000,
   refetchOnWindowFocus: false,
-  refetchOnReconnect: false,
-  // Mounted dashboards that already have warm cache should not re-hit the
-  // network on every remount during the stale window.
+  refetchOnReconnect: true,
   refetchOnMount: false,
   placeholderData: keepPreviousData,
-  // One retry for transient network failures; most dashboard fetches use
-  // Promise.allSettled internally and never throw, so this rarely triggers.
-  retry: 1,
+  retry: queryRetryPolicy,
+  retryDelay: queryRetryDelay,
+  throwOnError: false,
 } as const;
 
 /**

@@ -29,12 +29,40 @@
       "destination": "/api/supplier-voucher?action=$1"
     },
     {
+      "source": "/api/supplier-rfq-documents",
+      "destination": "/api/supplier-rfq-documents"
+    },
+    {
       "source": "/api/stock-check",
       "destination": "/api/stock-check"
     },
     {
+      "source": "/api/rfq-supplier-invite",
+      "destination": "/api/rfq-supplier-invite"
+    },
+    {
+      "source": "/api/rfq-quote-round",
+      "destination": "/api/rfq-quote-round"
+    },
+    {
+      "source": "/api/recommend-suppliers",
+      "destination": "/api/recommend-suppliers"
+    },
+    {
+      "source": "/api/reverse-bidding-naming",
+      "destination": "/api/reverse-bidding-naming"
+    },
+    {
+      "source": "/api/reverse-bidding-submit-item-bids",
+      "destination": "/api/reverse-bidding-submit-item-bids"
+    },
+    {
       "source": "/api/file-proxy",
       "destination": "/api/file-proxy"
+    },
+    {
+      "source": "/api/erp-server-date",
+      "destination": "/api/erp-server-date"
     },
     {
       "source": "/api/(.*)",

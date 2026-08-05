@@ -11,6 +11,7 @@ import {
   extractRawErrorMessage,
   isErpValidationUserMessage,
   stripFrappeExceptionNoise,
+  toEnterpriseUserMessage,
 } from "./enterpriseUserMessage";
 
 /** True when the error looks like a raw Frappe/Python backend exception. */
@@ -30,7 +31,7 @@ export function isFrappeBackendError(err: unknown): boolean {
  */
 export function sanitizeFrappeError(
   err: unknown,
-  userMessage = "Something went wrong. Please try again.",
+  userMessage?: string,
   context?: string,
 ): Error {
   console.error(`[Frappe error]${context ? ` ${context}` : ""}`, err);
@@ -51,8 +52,8 @@ export function sanitizeFrappeError(
     ) {
       return new Error(cleaned);
     }
-    return new Error(userMessage);
+    return new Error(toEnterpriseUserMessage(err, userMessage));
   }
   if (err instanceof Error) return err;
-  return new Error(userMessage);
+  return new Error(toEnterpriseUserMessage(err, userMessage));
 }

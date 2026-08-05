@@ -55,6 +55,7 @@ import {
   hydrateDeliveryStateFromErp,
   isPoPendingSupplierAcceptance,
   saveDeliveryState,
+  syncDeliveryStateFromERPNext,
 } from "../../api/poDeliveryWorkflow";
 import {
   fetchPoShipment,
@@ -76,6 +77,12 @@ import { useSupplierSession } from "../../hooks/useSupplierSession";
 import type { PurchaseOrder } from "../../types/erpnext";
 import type { PaymentSummary } from "../../api/supplierPortal";
 import type { TimelineStep } from "../../components/supplier-portal/ProcurementTimeline";
+import {
+  buildPOWorkflowSteps,
+  derivePOWorkflowSnapshot,
+  logPoWorkflowSnapshot,
+  toSupplierTimelineSteps,
+} from "../../utils/procurementStatusWorkflow";
 
 export default function SupplierPOPage() {
   const { poName = "" } = useParams<{ poName: string }>();
@@ -237,9 +244,27 @@ export default function SupplierPOPage() {
 
   const workflowContext = useMemo(() => {
     if (!po) return null;
+    const submittedGrns = (grnsQuery.data ?? []).filter((g) => g.docstatus === 1);
+    const submittedInvoices = (invoicesQuery.data ?? []).filter(
+      (i) => (i.docstatus ?? 0) >= 1,
+    );
+    const primaryInvoice = submittedInvoices[0];
+    const syncedDelivery =
+      deliveryState && (po.docstatus ?? 0) === 1
+        ? syncDeliveryStateFromERPNext(po.name ?? "", {
+            poSubmitted: true,
+            perReceived: po.per_received ?? 0,
+            perBilled: po.per_billed ?? 0,
+            submittedGrnCount: submittedGrns.length,
+            hasSubmittedInvoice: submittedInvoices.length > 0,
+            invoiceOutstanding: primaryInvoice?.outstanding_amount,
+            invoiceGrandTotal: primaryInvoice?.grand_total,
+          }) ?? deliveryState
+        : deliveryState;
+
     return deriveSupplierPOWorkflow({
       po,
-      deliveryState,
+      deliveryState: syncedDelivery,
       grns: grnsQuery.data ?? [],
       invoices: invoicesQuery.data ?? [],
       payments: paymentsQuery.data ?? [],
@@ -1414,8 +1439,8 @@ function deriveSupplierPOWorkflow({
 }: {
   po: PurchaseOrder;
   deliveryState: PODeliveryState | null;
-  grns: Array<{ name?: string }>;
-  invoices: Array<{ name: string; docstatus?: number }>;
+  grns: Array<{ name?: string; docstatus?: number }>;
+  invoices: Array<{ name: string; docstatus?: number; outstanding_amount?: number; grand_total?: number }>;
   payments: PaymentSummary[];
 }): SupplierPOWorkflowContext {
   const rawStatus = deliveryState?.status ?? "Pending Acceptance";
@@ -1424,42 +1449,48 @@ function deriveSupplierPOWorkflow({
   const isAccepted = rawStatus === "Accepted";
   const isInTransit = rawStatus === "In Transit";
 
-  const supplierAccepted =
-    !isPendingAcceptance &&
-    !isRejected &&
-    (deliveryState?.supplier_accepted === true ||
-      [
-        "Accepted",
-        "In Transit",
-        "Delivered",
-        "Arrived",
-        "Partially Received",
-        "Completed",
-      ].includes(rawStatus));
-
-  // PO document exists ⇒ Created. Do not require Submit for timeline progress
-  // so "Pending Supplier Acceptance" stays the single Current stage.
-  const poCreated = Boolean(po.name);
-
-  const hasGrnDocuments = grns.length > 0 || (po.per_received ?? 0) > 0;
-  const grnDone = supplierAccepted && hasGrnDocuments;
-
+  const submittedGrns = grns.filter((g) => (g.docstatus ?? 0) === 1);
   const submittedInvoices = invoices.filter((i) => (i.docstatus ?? 0) >= 1);
-  const hasInvoiceDocuments = submittedInvoices.length > 0;
-  const invoiceDone = supplierAccepted && grnDone && hasInvoiceDocuments;
+  const primaryInvoice = submittedInvoices[0];
 
   const invoiceNames = new Set(submittedInvoices.map((i) => i.name));
   const hasPaymentDocuments = payments.some((p) =>
-    invoiceNames.has(p.invoiceReference ?? "")
+    invoiceNames.has(p.invoiceReference ?? ""),
   );
-  const paymentDone = invoiceDone && hasPaymentDocuments;
 
-  const inTransitDone =
-    supplierAccepted &&
-    ["In Transit", "Partially Received", "Completed"].includes(rawStatus);
+  const workflowDocs = {
+    poSubmitted: (po.docstatus ?? 0) === 1,
+    poErpStatus: po.status,
+    perReceived: po.per_received ?? 0,
+    perBilled: po.per_billed ?? 0,
+    deliveryState,
+    submittedGrnCount: submittedGrns.length,
+    hasSubmittedInvoice: submittedInvoices.length > 0,
+    invoiceOutstanding: primaryInvoice?.outstanding_amount,
+    invoiceGrandTotal: primaryInvoice?.grand_total,
+  };
 
-  const completedDone =
-    supplierAccepted && inTransitDone && grnDone && invoiceDone && paymentDone;
+  const snapshot = derivePOWorkflowSnapshot(po.name ?? "", workflowDocs);
+  logPoWorkflowSnapshot("supplier", po.name ?? "", snapshot);
+
+  const steps = toSupplierTimelineSteps(
+    buildPOWorkflowSteps(po.name ?? "", workflowDocs),
+    {
+      deliveryState,
+      poName: po.name,
+      grnCount:
+        grns.length > 0 || (po.per_received ?? 0) > 0
+          ? Math.max(grns.length, 1)
+          : 0,
+      primaryInvoiceName: primaryInvoice?.name,
+    },
+  );
+
+  const supplierAccepted = snapshot.supplierAccepted;
+  const grnDone = snapshot.grnComplete;
+  const invoiceDone = snapshot.invoiceComplete;
+  const paymentDone = snapshot.paymentConfirmed || hasPaymentDocuments;
+  const completedDone = snapshot.workflowComplete || paymentDone;
 
   let displayStatus: string;
   if (isRejected) {
@@ -1469,65 +1500,20 @@ function deriveSupplierPOWorkflow({
   } else if (completedDone || rawStatus === "Completed") {
     displayStatus = "Completed";
   } else {
-    displayStatus = rawStatus;
+    displayStatus = snapshot.displayStatus;
   }
 
-  const displayReceivedPct = supplierAccepted ? po.per_received ?? 0 : 0;
-  const displayBilledPct = supplierAccepted && grnDone ? po.per_billed ?? 0 : 0;
+  const displayReceivedPct = supplierAccepted ? snapshot.receivedPct : 0;
+  const displayBilledPct = supplierAccepted && grnDone ? snapshot.billedPct : 0;
 
   const showDeliveryInfo =
     supplierAccepted &&
     (isAccepted ||
       isInTransit ||
       rawStatus === "Partially Received" ||
-      rawStatus === "Completed");
-
-  const acceptanceLabel = isRejected
-    ? "Supplier Rejected"
-    : supplierAccepted
-      ? "Supplier Accepted"
-      : PENDING_SUPPLIER_ACCEPTANCE;
-
-  const steps: TimelineStep[] = [
-    { label: "PO Created", done: poCreated, sublabel: po.name },
-    {
-      label: acceptanceLabel,
-      done: supplierAccepted,
-      rejected: isRejected,
-      sublabel: isRejected
-        ? deliveryState?.rejected_date
-          ? formatDate(deliveryState.rejected_date)
-          : "Rejected"
-        : deliveryState?.supplier_acceptance_date
-          ? formatDate(deliveryState.supplier_acceptance_date)
-          : isPendingAcceptance
-            ? "Awaiting response"
-            : undefined,
-    },
-    {
-      label: "In Transit",
-      done: inTransitDone,
-      sublabel: deliveryState?.tracking_number || undefined,
-    },
-    {
-      label: "GRN Received",
-      done: grnDone,
-      sublabel: grnDone ? `${grns.length || 1} receipt(s)` : undefined,
-    },
-    {
-      label: "Invoice Generated",
-      done: invoiceDone,
-      sublabel: invoiceDone ? submittedInvoices[0]?.name : undefined,
-    },
-    {
-      label: "Supplier Payment Confirmed",
-      done: paymentDone,
-    },
-    {
-      label: "Completed",
-      done: completedDone,
-    },
-  ];
+      rawStatus === "Completed" ||
+      rawStatus === "Delivered" ||
+      rawStatus === "Arrived");
 
   return {
     rawStatus,

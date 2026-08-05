@@ -118,7 +118,7 @@ export default function SupplierPOListPage() {
         <EmptyState
           icon={ShoppingCart}
           title="Supplier account not linked"
-          description="Your portal login is not linked to an ERPNext Supplier record yet, so purchase orders cannot be loaded. Contact procurement after onboarding is approved."
+          description="Your portal login is not linked to a supplier record yet, so purchase orders cannot be loaded. Contact procurement after onboarding is approved."
         />
       </>
     );

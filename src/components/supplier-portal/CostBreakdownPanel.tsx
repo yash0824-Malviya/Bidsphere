@@ -442,7 +442,7 @@ const CostBreakdownPanel = forwardRef<
 
       if (!masterHeads.length) {
         throw new Error(
-          "No active Cost Head Master records found in ERPNext. Ask an administrator to seed Cost Head Master and set is_active = 1.",
+          "No active Cost Head Master records found. Ask an administrator to seed Cost Head Master and set is_active = 1.",
         );
       }
 
@@ -664,7 +664,7 @@ const CostBreakdownPanel = forwardRef<
           <div>
             <p className="font-semibold">Cost Head Master unavailable</p>
             <p className="mt-0.5 opacity-90">
-              Active Cost Head records could not be loaded from ERPNext. Ask an
+              Active Cost Head records could not be loaded. Ask an
               administrator to seed Cost Head Master, set{" "}
               <code className="rounded bg-amber-100 px-1">is_active = 1</code>,
               and grant Supplier read access (e.g. run{" "}

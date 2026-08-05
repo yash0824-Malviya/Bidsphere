@@ -151,7 +151,7 @@ export default function GRNPage() {
       },
       {
         id: "posting_date",
-        label: "Date",
+        label: "Receipt Date",
         type: "date",
         accessor: (r) => r.posting_date,
       },
@@ -163,13 +163,13 @@ export default function GRNPage() {
       },
       {
         id: "total_qty",
-        label: "Total Qty",
+        label: "Quantity",
         type: "number",
         accessor: (r) => r.total_qty,
       },
       {
         id: "grand_total",
-        label: "Total",
+        label: "Amount",
         type: "currency",
         accessor: (r) => r.grand_total,
       },
@@ -178,7 +178,7 @@ export default function GRNPage() {
   );
 
   return (
-    <div className="flex min-h-0 flex-col gap-3">
+    <div className="grn-monitoring-page flex min-h-0 flex-col gap-3">
       <PageHeader
         title={canCreate ? "Goods Receipt Notes" : "Track Goods Receipts"}
         description={
@@ -226,161 +226,201 @@ export default function GRNPage() {
             )}
           </div>
 
-          <FilterBar>
-            <FilterField label="Search" className="min-w-[200px] flex-1">
-              <SearchInput
-                value={search}
-                onChange={setSearch}
-                placeholder="GRN number…"
-              />
-            </FilterField>
-            <FilterField label="Status" className="min-w-[150px]">
-              <select
-                value={status}
-                onChange={(e) =>
-                  setStatus(e.target.value as PurchaseReceiptStatus | "")
-                }
-                className="select-field"
-              >
-                {STATUS_OPTIONS.map((opt) => (
-                  <option key={opt} value={opt}>
-                    {opt || "All statuses"}
-                  </option>
-                ))}
-              </select>
-            </FilterField>
-          </FilterBar>
+          <div className="grn-table-panel min-w-0">
+            <FilterBar className="grn-table-filters">
+              <FilterField label="Search" className="min-w-[200px] flex-1">
+                <SearchInput
+                  value={search}
+                  onChange={setSearch}
+                  placeholder="GRN number…"
+                />
+              </FilterField>
+              <FilterField label="Status" className="min-w-[150px]">
+                <select
+                  value={status}
+                  onChange={(e) =>
+                    setStatus(e.target.value as PurchaseReceiptStatus | "")
+                  }
+                  className="select-field"
+                >
+                  {STATUS_OPTIONS.map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt || "All statuses"}
+                    </option>
+                  ))}
+                </select>
+              </FilterField>
+            </FilterBar>
 
-          <div className="table-shell min-w-0">
             {isLoading ? (
-              <TableSkeleton rows={6} columns={5} />
+              <div className="grn-table-state">
+                <TableSkeleton rows={6} columns={7} />
+              </div>
             ) : isError ? (
-              <ConnectionError
-                error={error}
-                title="Could not load goods receipts"
-                onRetry={() => void refetch()}
-              />
+              <div className="grn-table-state">
+                <ConnectionError
+                  error={error}
+                  title="Could not load goods receipts"
+                  onRetry={() => void refetch()}
+                />
+              </div>
             ) : sortedRows.length === 0 ? (
-              <EmptyState
-                icon={PackagePlus}
-                title="No goods receipts yet"
-                description={
-                  canCreate
-                    ? "Receive goods against an open PO to create a GRN."
-                    : "Warehouse receipt records will appear here once goods are received."
-                }
-              />
+              <div className="grn-table-state">
+                <EmptyState
+                  icon={PackagePlus}
+                  title="No goods receipts yet"
+                  description={
+                    canCreate
+                      ? "Receive goods against an open PO to create a GRN."
+                      : "Warehouse receipt records will appear here once goods are received."
+                  }
+                />
+              </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <SortableTableHeader label="GRN Number" sortKey="name" sort={sort} onSort={setSort} />
-                      <SortableTableHeader label="Supplier" sortKey="supplier" sort={sort} onSort={setSort} />
-                      <SortableTableHeader label="Posting Date" sortKey="date" sort={sort} onSort={setSort} />
-                      <SortableTableHeader label="Status" sortKey="status" sort={sort} onSort={setSort} />
-                      <th className="text-right">Received Qty</th>
-                      <SortableTableHeader label="Total" sortKey="total" sort={sort} onSort={setSort} className="text-right" />
-                      <th className="text-right">PDF</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedRows.map((g: PurchaseReceipt) => (
-                      <tr
-                        key={g.name}
-                        onClick={() => navigate(`/p2p/grn/${g.name}`)}
-                        className="cursor-pointer"
-                      >
-                        <td>
-                          <span className="table-link">{g.name}</span>
-                        </td>
-                        <td className="text-neutral-600">
-                          {g.supplier_name ?? g.supplier}
-                        </td>
-                        <td className="text-neutral-600">
-                          {formatDate(g.posting_date)}
-                        </td>
-                        <td onClick={(e) => e.stopPropagation()}>
-                          <div className="flex items-center gap-2">
+              <>
+                <div className="grn-table-scroll">
+                  <table className="data-table grn-monitoring-table">
+                    <colgroup>
+                      <col className="grn-col-number" />
+                      <col className="grn-col-supplier" />
+                      <col className="grn-col-date" />
+                      <col className="grn-col-status" />
+                      <col className="grn-col-qty" />
+                      <col className="grn-col-amount" />
+                      <col className="grn-col-actions" />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <SortableTableHeader label="GRN Number" sortKey="name" sort={sort} onSort={setSort} />
+                        <SortableTableHeader label="Supplier" sortKey="supplier" sort={sort} onSort={setSort} />
+                        <SortableTableHeader label="Receipt Date" sortKey="date" sort={sort} onSort={setSort} />
+                        <SortableTableHeader label="Status" sortKey="status" sort={sort} onSort={setSort} />
+                        <th className="text-right">Quantity</th>
+                        <SortableTableHeader label="Amount" sortKey="total" sort={sort} onSort={setSort} className="text-right" />
+                        <th className="col-actions text-center">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedRows.map((g: PurchaseReceipt) => (
+                        <tr
+                          key={g.name}
+                          onClick={() => navigate(`/p2p/grn/${g.name}`)}
+                          className="cursor-pointer"
+                        >
+                          <td>
+                            <span className="table-link">{g.name}</span>
+                          </td>
+                          <td className="truncate text-neutral-600">
+                            {g.supplier_name ?? g.supplier}
+                          </td>
+                          <td className="whitespace-nowrap text-neutral-600">
+                            {formatDate(g.posting_date)}
+                          </td>
+                          <td onClick={(e) => e.stopPropagation()}>
                             <StatusBadge status={g.status ?? "Draft"} />
-                            {g.status === "Draft" && canCreate && (
-                              <button
-                                onClick={async (e) => {
-                                  e.stopPropagation();
-                                  if (window.confirm(`Are you sure you want to submit GRN ${g.name}?`)) {
-                                    const loadToast = toast.loading(`Submitting GRN ${g.name}...`);
-                                    try {
-                                      // Match detail-page gate: signature required before submit.
-                                      const fresh = await getPurchaseReceipt(g.name);
-                                      if (!isWarehouseDigitalSignatureComplete(fresh)) {
-                                        toast.error(
-                                          "Warehouse Digital Signature is mandatory before submitting GRN. Open the GRN to complete E-Sign.",
+                          </td>
+                          <td className="text-right tabular-nums text-neutral-600">
+                            {g.total_qty != null
+                              ? new Intl.NumberFormat("en-US").format(g.total_qty)
+                              : "—"}
+                          </td>
+                          <td className="text-right font-medium tabular-nums">
+                            {formatCurrency(g.grand_total)}
+                          </td>
+                          <td
+                            className="col-actions"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="table-row-actions">
+                              {g.status === "Draft" && canCreate && (
+                                <button
+                                  type="button"
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    if (
+                                      window.confirm(
+                                        `Are you sure you want to submit GRN ${g.name}?`,
+                                      )
+                                    ) {
+                                      const loadToast = toast.loading(
+                                        `Submitting GRN ${g.name}...`,
+                                      );
+                                      try {
+                                        const fresh = await getPurchaseReceipt(g.name);
+                                        if (
+                                          !isWarehouseDigitalSignatureComplete(fresh)
+                                        ) {
+                                          toast.error(
+                                            "Warehouse Digital Signature is mandatory before submitting GRN. Open the GRN to complete E-Sign.",
+                                            { id: loadToast },
+                                          );
+                                          return;
+                                        }
+                                        await submitPurchaseReceipt(g.name);
+                                        try {
+                                          await reconcileProcurementReadyToIssue();
+                                        } catch (reconcileErr) {
+                                          // eslint-disable-next-line no-console
+                                          console.warn(
+                                            "[GRN submit] Ready-to-Issue reconciliation skipped:",
+                                            reconcileErr,
+                                          );
+                                        }
+                                        toast.success(
+                                          `GRN ${g.name} submitted successfully`,
                                           { id: loadToast },
                                         );
-                                        return;
+                                        invalidateWarehouseStock(queryClient);
+                                        void queryClient.invalidateQueries({
+                                          queryKey: ["grns-awaiting-invoice"],
+                                        });
+                                        invalidateFinanceDashboardMetrics(queryClient);
+                                      } catch (err) {
+                                        toast.error(
+                                          err instanceof Error
+                                            ? err.message
+                                            : "Failed to submit GRN",
+                                          { id: loadToast },
+                                        );
                                       }
-                                      await submitPurchaseReceipt(g.name);
-                                      // Goods are on-hand in ERPNext Bin now —
-                                      // advance any fully-received procurement
-                                      // MR to Ready to Issue (best-effort).
-                                      try {
-                                        await reconcileProcurementReadyToIssue();
-                                      } catch (reconcileErr) {
-                                        // eslint-disable-next-line no-console
-                                        console.warn("[GRN submit] Ready-to-Issue reconciliation skipped:", reconcileErr);
-                                      }
-                                      toast.success(`GRN ${g.name} submitted successfully`, { id: loadToast });
-                                      invalidateWarehouseStock(queryClient);
-                                      void queryClient.invalidateQueries({ queryKey: ["grns-awaiting-invoice"] });
-                                      invalidateFinanceDashboardMetrics(queryClient);
-                                    } catch (err) {
-                                      toast.error(err instanceof Error ? err.message : "Failed to submit GRN", { id: loadToast });
                                     }
-                                  }
+                                  }}
+                                  className="btn-primary shrink-0 px-2 py-1 text-xs"
+                                >
+                                  Submit
+                                </button>
+                              )}
+                              <PdfActions
+                                variant="compact"
+                                stopPropagation
+                                className="justify-center"
+                                filename={grnPdfFilename(g)}
+                                build={async () => {
+                                  const full = await getPurchaseReceipt(g.name);
+                                  return buildGrnPdf(
+                                    full,
+                                    full.status ?? g.status ?? "Draft",
+                                  );
                                 }}
-                                className="btn-primary"
-                              >
-                                Submit
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                        <td className="text-right tabular-nums text-neutral-600">
-                          {g.total_qty != null
-                            ? new Intl.NumberFormat("en-US").format(g.total_qty)
-                            : "—"}
-                        </td>
-                        <td className="text-right font-medium tabular-nums">
-                          {formatCurrency(g.grand_total)}
-                        </td>
-                        <td className="text-right">
-                          <PdfActions
-                            variant="compact"
-                            stopPropagation
-                            className="justify-end"
-                            filename={grnPdfFilename(g)}
-                            build={async () => {
-                              const full = await getPurchaseReceipt(g.name);
-                              return buildGrnPdf(full, full.status ?? g.status ?? "Draft");
-                            }}
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                              />
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
 
-            {!isLoading && !isError && sortedRows.length > 0 && (
-              <PaginationBar
-                currentPage={data?.current_page ?? page}
-                totalPages={data?.total_pages ?? 1}
-                totalRecords={data?.total_records ?? 0}
-                pageSize={pageSize}
-                onPageChange={setPage}
-                onPageSizeChange={setPageSize}
-              />
+                <PaginationBar
+                  className="grn-table-pagination"
+                  currentPage={data?.current_page ?? page}
+                  totalPages={data?.total_pages ?? 1}
+                  totalRecords={data?.total_records ?? 0}
+                  pageSize={pageSize}
+                  onPageChange={setPage}
+                  onPageSizeChange={setPageSize}
+                />
+              </>
             )}
           </div>
         </section>

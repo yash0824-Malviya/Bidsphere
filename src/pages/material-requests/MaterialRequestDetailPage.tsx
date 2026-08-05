@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 
 import {
-  approveIndirectMaterialRequest,
   checkMaterialRequestStock,
   completeMaterialRequest,
   deleteMaterialRequestWorkflow,
@@ -31,7 +30,6 @@ import {
   isMaterialRequestOwnedByUser,
   issueMaterialRequest,
   markMaterialRequestStockAvailable,
-  rejectIndirectMaterialRequest,
   rejectMaterialRequest,
   submitMaterialRequestWorkflow,
   type MaterialRequestProcurementProgress,
@@ -57,7 +55,6 @@ import {
   canCreateMaterialRequest,
   canCreateRfqFromMR,
   canDeleteMaterialRequest,
-  canReviewIndirectMaterialRequest,
   canReviewMaterialRequest,
 } from "../../config/materialRequestPermissions";
 import { ROLE_LABELS } from "../../config/roles";
@@ -84,8 +81,8 @@ const MR_BADGE: Record<
   Draft: { label: "Draft", cls: "bg-neutral-100 text-neutral-600" },
   Submitted: { label: "Submitted", cls: "bg-orange-100 text-orange-700" },
   "Admin Review": {
-    label: "Admin Review",
-    cls: "bg-purple-100 text-purple-700",
+    label: "Under Warehouse Review",
+    cls: "bg-orange-100 text-orange-700",
   },
   "Under Warehouse Review": {
     label: "Under Warehouse Review",
@@ -195,18 +192,6 @@ const PROCUREMENT_PATH_STEPS = [
   "Completed",
 ];
 
-/** Indirect procurement path — Admin approval replaces warehouse review. */
-const INDIRECT_PATH_STEPS = [
-  "Request Submitted",
-  "Admin Review",
-  "Sent to Procurement",
-  "RFQ Created",
-  "Purchase Ordered",
-  "Goods Received",
-  "Material Issued",
-  "Completed",
-];
-
 /** Whether Procurement has actually handled this request (drives the timeline). */
 function isProcurementInvolved(
   mr: MaterialRequestWorkflowRecord,
@@ -227,49 +212,14 @@ function resolveTimeline(
   procurementInvolved: boolean,
   progress?: MaterialRequestProcurementProgress | null,
   fullyIssued?: boolean,
-  isIndirect?: boolean,
 ): { steps: string[]; currentIndex: number } {
-  // Indirect requests use a fixed 8-step path where Admin Review replaces the
-  // warehouse review stage. Steps 4–6 (PO / GRN / Material Issued) advance from
-  // live linked documents just like the direct procurement path.
-  if (isIndirect) {
-    let index = (() => {
-      switch (status) {
-        case "Submitted":
-          return 0;
-        case "Admin Review":
-          return 1;
-        case "Procurement Required":
-          return 1;
-        case "Forwarded to Procurement":
-          return 2;
-        case "RFQ Created":
-          return 3;
-        case "Material Issued":
-        case "Pending Department Acceptance":
-          return 6;
-        case "Completed":
-          return 7;
-        default:
-          return 0;
-      }
-    })();
-    if (progress) {
-      if (progress.purchaseOrders.length > 0) index = Math.max(index, 4);
-      if (progress.goodsReceipts.length > 0) index = Math.max(index, 5);
-      if (progress.stockEntries.length > 0) index = Math.max(index, 6);
-    }
-    // Only department acceptance (status Completed) finishes the path.
-    if (fullyIssued && status === "Completed") index = 7;
-    return { steps: INDIRECT_PATH_STEPS, currentIndex: index };
-  }
-
   if (procurementInvolved) {
     // Base index from the stored workflow status…
     let index = (() => {
       switch (status) {
         case "Submitted":
           return 0;
+        case "Admin Review":
         case "Under Warehouse Review":
         case "Stock Available":
           return 1;
@@ -309,6 +259,7 @@ function resolveTimeline(
     switch (status) {
       case "Submitted":
         return 0;
+      case "Admin Review":
       case "Under Warehouse Review":
       case "Stock Available":
         return 1;
@@ -332,13 +283,11 @@ function WorkflowTimeline({
   procurementInvolved,
   progress,
   fullyIssued,
-  isIndirect,
 }: {
   status: MaterialRequestWorkflowStatus;
   procurementInvolved: boolean;
   progress?: MaterialRequestProcurementProgress | null;
   fullyIssued?: boolean;
-  isIndirect?: boolean;
 }) {
   if (status === "Draft") {
     return (
@@ -371,7 +320,6 @@ function WorkflowTimeline({
     procurementInvolved,
     progress,
     fullyIssued,
-    isIndirect,
   );
   const stepCount = steps.length;
   const lastIndex = stepCount - 1;
@@ -611,13 +559,8 @@ export default function MaterialRequestDetailPage() {
         name: user?.name,
         full_name: user?.full_name,
       }),
-    onSuccess: (saved) => {
-      const status = getMaterialRequestWorkflowStatus(saved);
-      toast.success(
-        status === "Admin Review"
-          ? "Submitted — assigned to Admin for review"
-          : "Submitted — assigned to Warehouse for review",
-      );
+    onSuccess: () => {
+      toast.success("Submitted — assigned to Warehouse for review");
       invalidate();
       void queryClient.invalidateQueries({
         queryKey: ["warehouse", "pending-requests"],
@@ -686,29 +629,6 @@ export default function MaterialRequestDetailPage() {
     },
     onError: (e) =>
       toast.error(e instanceof Error ? e.message : "Cancel failed"),
-  });
-
-  // Admin approval gate for Indirect Material Requests.
-  const adminApproveMutation = useMutation({
-    mutationFn: () =>
-      approveIndirectMaterialRequest(name, warehouseRemarks || undefined),
-    onSuccess: () => {
-      toast.success(t("adminReview.approved"));
-      invalidate();
-    },
-    onError: (e) =>
-      toast.error(e instanceof Error ? e.message : "Approve failed"),
-  });
-
-  const adminRejectMutation = useMutation({
-    mutationFn: () =>
-      rejectIndirectMaterialRequest(name, warehouseRemarks || undefined),
-    onSuccess: () => {
-      toast.success(t("adminReview.rejected"));
-      invalidate();
-    },
-    onError: (e) =>
-      toast.error(e instanceof Error ? e.message : "Reject failed"),
   });
 
   const backPath =
@@ -852,17 +772,23 @@ export default function MaterialRequestDetailPage() {
   const canWarehouseAct =
     canReviewMaterialRequest(role) &&
     (workflowStatus === "Under Warehouse Review" ||
+      workflowStatus === "Admin Review" ||
       workflowStatus === "Stock Available") &&
-    isSubmitted;
-  // Admin approve/reject is only for Indirect MRs sitting in "Admin Review".
-  const canAdminReview =
-    canReviewIndirectMaterialRequest(role) &&
-    procurementType === "Indirect" &&
-    workflowStatus === "Admin Review" &&
     isSubmitted;
   // Issue Material is only unlocked once stock has been confirmed available.
   const stockConfirmed =
     workflowStatus === "Stock Available" || stockConfirmedLocal;
+  // Never offer Issue when the latest stock check shows Available Qty <= 0.
+  const stockCheckBlocksIssue = Boolean(
+    checkStockMutation.data &&
+      (!(checkStockMutation.data.all_sufficient) ||
+        (checkStockMutation.data.lines ?? []).some(
+          (l) =>
+            (Number(l.required_qty) || 0) > 0 &&
+            (Number(l.available_qty) || 0) <= 0,
+        )),
+  );
+  const canIssueMaterial = stockConfirmed && !stockCheckBlocksIssue;
   // Once fully issued the request auto-shows as Completed, so the manual
   // "Mark as Completed" action is only offered while it is still Material
   // Issued but not yet fully fulfilled.
@@ -888,8 +814,6 @@ export default function MaterialRequestDetailPage() {
     issueMutation.isPending ||
     completeMutation.isPending ||
     rejectMutation.isPending ||
-    adminApproveMutation.isPending ||
-    adminRejectMutation.isPending ||
     deleteMutation.isPending;
 
   return (
@@ -931,36 +855,6 @@ export default function MaterialRequestDetailPage() {
                 )}
                 Submit Request
               </button>
-            ) : null}
-            {canAdminReview ? (
-              <>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => adminApproveMutation.mutate()}
-                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                >
-                  {adminApproveMutation.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <CheckCircle2 className="h-4 w-4" />
-                  )}
-                  {t("adminReview.approve")}
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => adminRejectMutation.mutate()}
-                  className="inline-flex items-center gap-2 rounded-lg border border-rose-300 bg-white px-3 py-2 text-sm font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-60"
-                >
-                  {adminRejectMutation.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <XCircle className="h-4 w-4" />
-                  )}
-                  {t("adminReview.reject")}
-                </button>
-              </>
             ) : null}
             {showDelete ? (
               <button
@@ -1023,7 +917,6 @@ export default function MaterialRequestDetailPage() {
         procurementInvolved={procurementInvolved}
         progress={progress}
         fullyIssued={isFullyIssued && !awaitingAcceptance && workflowStatus === "Completed"}
-        isIndirect={procurementType === "Indirect"}
       />
 
       <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-5">
@@ -1224,20 +1117,27 @@ export default function MaterialRequestDetailPage() {
               ) : null}
               Check Stock
             </button>
-            <button
-              type="button"
-              disabled={busy || !stockConfirmed}
-              title={
-                stockConfirmed
-                  ? undefined
-                  : "Run a stock check first — Issue Material unlocks once stock is confirmed available."
-              }
-              onClick={() => issueMutation.mutate()}
-              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Package className="h-4 w-4" />
-              Issue Material
-            </button>
+            {stockCheckBlocksIssue ? (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+                ⚠ No inventory available for one or more items. This request
+                must be forwarded to Procurement via Stock Decision.
+              </div>
+            ) : (
+              <button
+                type="button"
+                disabled={busy || !canIssueMaterial}
+                title={
+                  canIssueMaterial
+                    ? undefined
+                    : "Run a stock check first — Issue Material unlocks once stock is confirmed available."
+                }
+                onClick={() => issueMutation.mutate()}
+                className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Package className="h-4 w-4" />
+                Issue Material
+              </button>
+            )}
             <Link
               to={`/warehouse/material-requests/review/${encodeURIComponent(name)}`}
               className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white no-underline"

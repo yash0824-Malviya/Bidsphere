@@ -5,7 +5,7 @@
 
 import { apiPost, withSilent } from "./erpnext";
 
-export type StockDecisionAction = "issue" | "forward";
+export type StockDecisionAction = "issue" | "issue_partial" | "forward";
 
 export interface StockDecisionAuditRow {
   item_code: string;
@@ -54,10 +54,15 @@ export async function persistStockDecisionAudit(
       .filter(Boolean)
       .join("; ") || "";
 
+  const actionLabel = (action: StockDecisionAction) => {
+    if (action === "issue") return "Issue Material";
+    if (action === "issue_partial") return "Issue Partial Stock";
+    return "Forward to Procurement";
+  };
   const summary = rows
     .map(
       (r) =>
-        `${r.item_code}: recommended=${r.recommended_action}, selected=${r.selected_action}` +
+        `${r.item_code}: recommended=${actionLabel(r.recommended_action)}, selected=${actionLabel(r.selected_action)}` +
         (r.reason ? ` (reason: ${r.reason})` : ""),
     )
     .join("; ");
@@ -69,8 +74,8 @@ export async function persistStockDecisionAudit(
       {
         doc: {
           doctype: "Activity Log",
-          subject: `Stock Decision on ${mrName}`,
-          content: summary,
+          subject: `Warehouse reviewed request ${mrName}`,
+          content: `Warehouse reviewed request. ${summary}`,
           operation: "Update",
           status: "Success",
           reference_doctype: "Material Request",

@@ -84,6 +84,17 @@ function vouchersForPO(poName: string, vouchers: Voucher[] = []): Voucher[] {
   return vouchers.filter((v) => v.po_reference === poName);
 }
 
+import type { TimelineStep } from "../components/supplier-portal/ProcurementTimeline";
+
+/** True when ERPNext shows goods received (submitted GRN and/or per_received). */
+export function hasPoGrnSignal(
+  submittedGrnCount: number,
+  perReceived: number,
+  poSubmitted = true,
+): boolean {
+  return submittedGrnCount > 0 || (poSubmitted && perReceived > 0);
+}
+
 function isSupplierAccepted(deliveryState: PODeliveryState | null): boolean {
   if (!deliveryState) return false;
   if (deliveryState.supplier_accepted) return true;
@@ -185,7 +196,11 @@ export function reconcileDeliveryStatus(
 
   const receivedPct = docs.perReceived;
   const billedPct = docs.perBilled;
-  const hasGrn = docs.submittedGrnCount > 0;
+  const hasGrn = hasPoGrnSignal(
+    docs.submittedGrnCount,
+    receivedPct,
+    docs.poSubmitted,
+  );
   const hasInvoice = docs.hasSubmittedInvoice;
   const fullyReceived = receivedPct >= 100;
   const fullyBilled = billedPct >= 100;
@@ -217,7 +232,11 @@ export function derivePOWorkflowSnapshot(
 ): POWorkflowSnapshot {
   const vouchers = docs.vouchers ?? vouchersForPO(poName);
   const submittedGrnCount = docs.submittedGrnCount;
-  const hasSubmittedGRN = submittedGrnCount > 0;
+  const hasSubmittedGRN = hasPoGrnSignal(
+    submittedGrnCount,
+    docs.perReceived,
+    docs.poSubmitted,
+  );
   const billableDocument = hasBillableDocument(docs, vouchers);
   const receivedPct = docs.poSubmitted ? docs.perReceived : 0;
   const billedPct = docs.poSubmitted ? docs.perBilled : 0;
@@ -240,10 +259,16 @@ export function derivePOWorkflowSnapshot(
   const supplierAccepted =
     poCreated && isSupplierAccepted(docs.deliveryState);
 
-  // Complete only after the shipment has moved past the In Transit milestone.
+  // In Transit completes once supplier dispatches or goods are received in ERPNext.
   const inTransitComplete =
     supplierAccepted &&
-    (deliveryStatus === "Partially Received" || deliveryStatus === "Completed");
+    (deliveryStatus === "In Transit" ||
+      deliveryStatus === "Partially Received" ||
+      deliveryStatus === "Completed" ||
+      deliveryStatus === "Delivered" ||
+      deliveryStatus === "Arrived" ||
+      hasSubmittedGRN ||
+      receivedPct > 0);
 
   const grnComplete = supplierAccepted && hasSubmittedGRN;
   const invoiceComplete = grnComplete && billableDocument;
@@ -426,4 +451,79 @@ export function getProcurementStepCompletions(
     vouchers: input.vouchers,
   };
   return derivePOWorkflowSnapshot("", docs).stepCompletions;
+}
+
+/** Map shared procurement steps → supplier portal timeline (single workflow SSoT). */
+export function toSupplierTimelineSteps(
+  steps: ProcurementWorkflowStep[],
+  ctx: {
+    deliveryState?: PODeliveryState | null;
+    poName?: string;
+    grnCount?: number;
+    primaryInvoiceName?: string;
+  },
+): TimelineStep[] {
+  const rejected = ctx.deliveryState?.status === "Rejected";
+  const pendingAcceptance =
+    (ctx.deliveryState?.status ?? "Pending Acceptance") === "Pending Acceptance";
+
+  return steps.map((step) => {
+    let label = step.label;
+    if (step.id === "supplier_accepted") {
+      if (rejected) label = "Supplier Rejected";
+      else if (pendingAcceptance && step.state !== "completed") {
+        label = "Pending Supplier Acceptance";
+      }
+    }
+
+    const done = step.state === "completed";
+    let sublabel: string | undefined;
+
+    if (step.id === "po_created" && ctx.poName) sublabel = ctx.poName;
+    if (step.id === "supplier_accepted" && !rejected) {
+      if (ctx.deliveryState?.supplier_acceptance_date && done) {
+        sublabel = ctx.deliveryState.supplier_acceptance_date.slice(0, 10);
+      } else if (pendingAcceptance) {
+        sublabel = "Awaiting response";
+      }
+    }
+    if (step.id === "supplier_accepted" && rejected) {
+      sublabel = ctx.deliveryState?.rejected_date
+        ? ctx.deliveryState.rejected_date.slice(0, 10)
+        : "Rejected";
+    }
+    if (step.id === "in_transit" && ctx.deliveryState?.tracking_number) {
+      sublabel = ctx.deliveryState.tracking_number;
+    }
+    if (step.id === "grn_received" && done) {
+      sublabel = `${ctx.grnCount ?? 1} receipt(s)`;
+    }
+    if (step.id === "invoice_generated" && done && ctx.primaryInvoiceName) {
+      sublabel = ctx.primaryInvoiceName;
+    }
+
+    return {
+      label,
+      done,
+      sublabel,
+      rejected: step.id === "supplier_accepted" && rejected,
+    };
+  });
+}
+
+/** Structured debug log for PO workflow transitions (both portals). */
+export function logPoWorkflowSnapshot(
+  portal: "procurement" | "supplier",
+  poName: string,
+  snapshot: POWorkflowSnapshot,
+): void {
+  // eslint-disable-next-line no-console
+  console.log(`[PO Workflow] ${portal} timeline refresh`, {
+    poName,
+    displayStatus: snapshot.displayStatus,
+    deliveryStatus: snapshot.deliveryStatus,
+    receivedPct: snapshot.receivedPct,
+    billedPct: snapshot.billedPct,
+    steps: snapshot.stepCompletions,
+  });
 }

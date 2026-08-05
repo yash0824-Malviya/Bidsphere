@@ -283,34 +283,221 @@ export function isERPNextDateBefore(
 }
 
 /**
- * Default GRN posting date: clamp(poDate, serverToday).
+ * Calendar-day compare for GRN posting validation.
+ * Only YYYY-MM-DD strings — never DateTime / timezone-shifted Date objects.
+ */
+export function compareCalendarYmd(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
+export function isCalendarYmdAfter(a: string, b: string): boolean {
+  return compareCalendarYmd(a, b) > 0;
+}
+
+export function isCalendarYmdBefore(a: string, b: string): boolean {
+  return compareCalendarYmd(a, b) < 0;
+}
+
+export const GRN_POSTING_ADJUSTED_TO_PO_MSG =
+  "Posting Date has been adjusted to match the Purchase Order date.";
+
+export type GrnPostingDateResolution = {
+  /** Wire value for ERPNext `posting_date` (YYYY-MM-DD). */
+  postingDate: string;
+  /** Floor: PO transaction date when known. */
+  floor: string | null;
+  /** Ceiling: ERP `nowdate()` when known, else browser today. */
+  ceiling: string;
+  /** True when selected/default was clamped down to ERP/browser today. */
+  clampedToErpToday: boolean;
+  /** True when selected was raised to PO date. */
+  clampedToPoDate: boolean;
+  /** True when the raw selection was after today (before clamp). */
+  wouldBeFuture: boolean;
+  /** True when PO date is after today — no date satisfies both rules. */
+  invalidWindow: boolean;
+  /** Original user selection (YYYY-MM-DD), if any. */
+  selectedRaw: string | null;
+};
+
+/**
+ * User-facing validation copy with both PO and selected GRN dates.
+ */
+export function formatGrnPostingDateMessage(
+  kind: "adjusted_to_po" | "future_blocked" | "invalid_window",
+  opts: {
+    poDate?: string | null;
+    selectedDate?: string | null;
+    today?: string | null;
+    adjustedDate?: string | null;
+  },
+): string {
+  const po = toCalendarYmd(opts.poDate) ?? opts.poDate ?? "—";
+  const selected =
+    toCalendarYmd(opts.selectedDate) ?? opts.selectedDate ?? "—";
+  const today = toCalendarYmd(opts.today) ?? opts.today ?? "—";
+  const adjusted =
+    toCalendarYmd(opts.adjustedDate) ?? opts.adjustedDate ?? "—";
+
+  if (kind === "adjusted_to_po") {
+    return (
+      `${GRN_POSTING_ADJUSTED_TO_PO_MSG} ` +
+      `Purchase Order Date: ${po}. Selected GRN Date: ${selected}.`
+    );
+  }
+  if (kind === "future_blocked") {
+    return (
+      `Posting Date cannot be a future date. ` +
+      `Purchase Order Date: ${po}. Selected GRN Date: ${selected}. ` +
+      `Today: ${today}. Adjusted to: ${adjusted}.`
+    );
+  }
+  return (
+    `Cannot create GRN: Purchase Order Date (${po}) is after today (${today}). ` +
+    `Selected GRN Date: ${selected}. ` +
+    `GRN Posting Date must be on or after the PO date and on or before today.`
+  );
+}
+
+/**
+ * Single source of truth for GRN posting_date (YYYY-MM-DD only).
  *
- * Returns max(poDate, browserToday) capped at serverToday so the date
- * is always >= PO date AND <= the ERPNext server's date (which may
- * differ from the browser's clock due to timezone / clock skew).
+ * Rules:
+ * - Default (no selection) = PO Posting Date when present — never today when PO is later
+ * - GRN >= PO Posting Date
+ * - GRN <= Today (ERP nowdate when known)
+ * - Future dates are not allowed (clamped to today)
+ * - Selection before PO → raised to PO (`clampedToPoDate`)
  *
- * When poDate > serverToday no valid date exists — returns serverToday
- * so the form renders, and the page shows a warning to the user.
+ * When PO > Today there is no legal window (`invalidWindow`); default stays
+ * on the PO date so we never initialize to a day before the PO.
+ */
+export function normalizeGrnPostingDate(input: {
+  selected?: string | null;
+  poDate?: string | null;
+  erpToday?: string | null;
+  browserToday?: string | Date | null;
+}): GrnPostingDateResolution {
+  const browserYmd =
+    toCalendarYmd(input.browserToday ?? new Date()) ?? todayERPNextDate();
+  const erpYmd = toCalendarYmd(input.erpToday);
+  const poYmd = toCalendarYmd(input.poDate);
+  const selectedYmd = toCalendarYmd(input.selected);
+
+  const ceiling = erpYmd ?? browserYmd;
+  const floor = poYmd;
+  const invalidWindow = !!(floor && isCalendarYmdAfter(floor, ceiling));
+
+  // Default = PO date when opening from a PO; else today. Never prefer today
+  // over a later PO date (that caused "earlier than Purchase Order date").
+  let postingDate = selectedYmd ?? floor ?? ceiling;
+  let clampedToPoDate = false;
+  let clampedToErpToday = false;
+  let wouldBeFuture = false;
+
+  if (floor && isCalendarYmdBefore(postingDate, floor)) {
+    postingDate = floor;
+    clampedToPoDate = true;
+  }
+
+  if (isCalendarYmdAfter(postingDate, ceiling)) {
+    wouldBeFuture = true;
+    if (invalidWindow && floor && postingDate === floor && !selectedYmd) {
+      // Untouched default on PO-after-today: keep PO (do not silently use today).
+      postingDate = floor;
+    } else if (invalidWindow && floor && selectedYmd && selectedYmd === floor) {
+      // User explicitly kept PO date while PO > today — keep for messaging.
+      postingDate = floor;
+    } else {
+      postingDate = ceiling;
+      clampedToErpToday = true;
+      // Clamping to today may land before PO — raise again and mark invalid.
+      if (floor && isCalendarYmdBefore(postingDate, floor)) {
+        postingDate = floor;
+        clampedToPoDate = true;
+      }
+    }
+  }
+
+  return {
+    postingDate,
+    floor,
+    ceiling,
+    clampedToErpToday,
+    clampedToPoDate,
+    wouldBeFuture,
+    invalidWindow,
+    selectedRaw: selectedYmd,
+  };
+}
+
+/**
+ * Default GRN posting date when Create GRN opens from a PO:
+ * PO transaction/posting date (YYYY-MM-DD). Falls back to today only when
+ * the PO date is unknown.
  */
 export function resolveGrnPostingDate(
   poTransactionDate: string | null | undefined,
   serverToday?: string | null,
   browserTodayOverride?: string | Date
 ): string {
-  const browserToday = formatERPNextDate(browserTodayOverride ?? new Date());
-  const poIso = poTransactionDate
-    ? formatERPNextDate(poTransactionDate)
-    : null;
-  const serverIso = serverToday ? formatERPNextDate(serverToday) : null;
+  return normalizeGrnPostingDate({
+    selected: null,
+    poDate: poTransactionDate,
+    erpToday: serverToday,
+    browserToday: browserTodayOverride ?? new Date(),
+  }).postingDate;
+}
 
-  const effectiveToday = serverIso ?? browserToday;
-  if (!effectiveToday) return poIso ?? "";
-  if (!poIso) return effectiveToday;
+/** True when posting_date (YYYY-MM-DD) is strictly after ERP today. */
+export function isGrnPostingDateFuture(
+  postingDate: string | null | undefined,
+  erpToday: string | null | undefined,
+  browserToday?: string | Date | null,
+): boolean {
+  const posting = toCalendarYmd(postingDate);
+  if (!posting) return false;
+  const ceiling =
+    toCalendarYmd(erpToday) ??
+    toCalendarYmd(browserToday ?? new Date()) ??
+    todayERPNextDate();
+  return isCalendarYmdAfter(posting, ceiling);
+}
 
-  // Ideal: max(poDate, effectiveToday). But never exceed server's today.
-  const ideal = compareERPNextDates(poIso, effectiveToday) > 0 ? poIso : effectiveToday;
-  if (serverIso && compareERPNextDates(ideal, serverIso) > 0) return serverIso;
-  return ideal;
+/** Temporary debug audit for GRN posting-date investigations. */
+export function logGrnPostingDateDebug(input: {
+  browserDate: string;
+  selectedDate: string | null | undefined;
+  payloadDate: string | null | undefined;
+  serverDate: string | null | undefined;
+  erpToday: string | null | undefined;
+  poDate?: string | null;
+  comparisonResult: string;
+  resolution?: GrnPostingDateResolution;
+}): void {
+  // eslint-disable-next-line no-console
+  console.group("[GRN Posting Date Debug]");
+  // eslint-disable-next-line no-console
+  console.log("Browser Date:", input.browserDate);
+  // eslint-disable-next-line no-console
+  console.log("Selected Date:", input.selectedDate ?? "(none)");
+  // eslint-disable-next-line no-console
+  console.log("Payload Date:", input.payloadDate ?? "(none)");
+  // eslint-disable-next-line no-console
+  console.log("Server Date:", input.serverDate ?? "(unresolved)");
+  // eslint-disable-next-line no-console
+  console.log("ERP Today:", input.erpToday ?? "(unresolved)");
+  // eslint-disable-next-line no-console
+  console.log("PO Date:", input.poDate ?? "(unknown)");
+  // eslint-disable-next-line no-console
+  console.log("Comparison Result:", input.comparisonResult);
+  if (input.resolution) {
+    // eslint-disable-next-line no-console
+    console.log("Resolution:", input.resolution);
+  }
+  // eslint-disable-next-line no-console
+  console.groupEnd();
 }
 
 /** Local business calendar today as YYYY-MM-DD — never UTC / toISOString. */

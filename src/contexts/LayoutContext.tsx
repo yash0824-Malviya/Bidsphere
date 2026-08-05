@@ -37,8 +37,8 @@ const LayoutContext = createContext<LayoutContextValue | null>(null);
 
 export const SIDEBAR_WIDTH = {
   collapsed: 64,
-  compact: 252,
-  full: 272,
+  compact: 280,
+  full: 280,
 } as const;
 
 function resolveSidebarMode(width: number): SidebarMode {
@@ -115,6 +115,16 @@ export function LayoutProvider({ children }: { children: ReactNode }) {
   );
 
   const sidebarOffset = sidebarOffsetPx(sidebarMode);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      "--sidebar-width",
+      `${sidebarOffset}px`,
+    );
+    return () => {
+      document.documentElement.style.removeProperty("--sidebar-width");
+    };
+  }, [sidebarOffset]);
 
   const value = useMemo(
     () => ({

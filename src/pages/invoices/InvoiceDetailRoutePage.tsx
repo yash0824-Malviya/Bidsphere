@@ -83,7 +83,7 @@ function InvoiceNumberResolver({ invoiceNumber }: { invoiceNumber: string }) {
         description={
           error instanceof Error
             ? error.message
-            : "ERPNext returned an error while resolving this invoice. Please retry."
+            : "The server returned an error while resolving this invoice. Please retry."
         }
       />
     );

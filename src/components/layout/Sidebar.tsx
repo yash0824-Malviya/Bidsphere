@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { NavItem } from "../../utils/routes";
 import { useAuthStore } from "../../store/authStore";
-import { APP_SIDEBAR_TITLE, APP_SIDEBAR_TAGLINE } from "../../config/branding";
+import { APP_SIDEBAR_TITLE, APP_SIDEBAR_TAGLINE, APP_NAME, COMPANY_NAME } from "../../config/branding";
 import { getNavGroupsForRole } from "../../config/roles";
 import { translateNavLabel } from "../../i18n/navLabels";
 import BrandLogo from "../BrandLogo";
@@ -53,10 +53,8 @@ export default function Sidebar({
   const collapsed = variant === "collapsed";
 
   const widthClass = collapsed
-    ? "w-16"
-    : variant === "compact"
-      ? "w-[252px]"
-      : "w-[272px]";
+    ? "w-16 min-w-16 max-w-16"
+    : "w-[280px] min-w-[280px] max-w-[280px]";
 
   const mainGroups = navGroups.filter(
     (g) => g.label !== "Support" && g.label !== "Help",
@@ -67,8 +65,8 @@ export default function Sidebar({
 
   return (
     <aside
-      className={`flex flex-shrink-0 flex-col overflow-hidden bg-sidebar text-sidebar-text transition-[width] duration-300 ease-in-out ${widthClass} ${
-        fixed ? "fixed left-0 top-0 z-40 h-[100dvh] min-h-screen" : "h-full min-h-0"
+      className={`app-sidebar ${widthClass} transition-[width] duration-300 ease-in-out ${
+        fixed ? "app-sidebar-fixed" : "h-[100vh] min-h-[100vh]"
       } ${className}`}
     >
       {/* Brand */}
@@ -91,7 +89,7 @@ export default function Sidebar({
       </div>
 
       {/* Main nav */}
-      <nav className="scrollbar-hidden min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain px-2 py-1.5">
+      <nav className="app-sidebar-nav scrollbar-hidden space-y-2 px-2 py-1.5">
         {mainGroups.map((group) => (
           <div key={group.label || "main"}>
             {group.label && !collapsed ? (
@@ -141,6 +139,21 @@ export default function Sidebar({
           ))}
         </div>
       ) : null}
+
+      <div
+        className={`app-sidebar-footer ${collapsed ? "px-2 text-center" : ""}`}
+        title={collapsed ? `${COMPANY_NAME} · ${APP_NAME}` : undefined}
+      >
+        {collapsed ? (
+          <span className="text-[9px] font-semibold uppercase tracking-wider text-slate-500">
+            NL
+          </span>
+        ) : (
+          <>
+            {COMPANY_NAME} · {APP_NAME}
+          </>
+        )}
+      </div>
     </aside>
   );
 }
