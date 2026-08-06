@@ -19,28 +19,46 @@ interface DemoSession {
   attempts: number;
 }
 
+let inMemorySession: DemoSession | null = null;
+
 function readSession(): DemoSession | null {
-  if (typeof sessionStorage === "undefined") return null;
+  if (typeof sessionStorage === "undefined") return inMemorySession;
   try {
     const raw = sessionStorage.getItem(SESSION_KEY);
     return raw ? (JSON.parse(raw) as DemoSession) : null;
   } catch {
-    return null;
+    return inMemorySession;
   }
 }
 
 function writeSession(session: DemoSession): void {
-  sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  inMemorySession = session;
+  if (typeof sessionStorage !== "undefined") {
+    try {
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 function clearSession(): void {
-  sessionStorage.removeItem(SESSION_KEY);
+  inMemorySession = null;
+  if (typeof sessionStorage !== "undefined") {
+    try {
+      sessionStorage.removeItem(SESSION_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
-/** Build-time demo secret — empty string in production builds (see vite.config.ts). */
+/** Build-time demo secret — defaults to 121212 when Demo MFA is enabled. */
 function demoOtpValue(): string {
   if (!isDemoMfaEnabled()) return "";
-  return typeof __DEMO_MFA_OTP__ !== "undefined" ? __DEMO_MFA_OTP__ : "";
+  return typeof __DEMO_MFA_OTP__ !== "undefined" && __DEMO_MFA_OTP__
+    ? __DEMO_MFA_OTP__
+    : "121212";
 }
 
 function newSessionId(): string {

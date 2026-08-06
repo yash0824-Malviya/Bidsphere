@@ -52,25 +52,53 @@ function readMfaPending(): MfaPendingState | null {
   }
 }
 
+let inMemoryMfaPending: MfaPendingState | null = null;
+let inMemoryMfaRedirect: string | null = null;
+
 function writeMfaPending(pending: MfaPendingState): void {
-  sessionStorage.setItem(MFA_PENDING_KEY, JSON.stringify(pending));
+  inMemoryMfaPending = pending;
+  if (typeof sessionStorage !== "undefined") {
+    try {
+      sessionStorage.setItem(MFA_PENDING_KEY, JSON.stringify(pending));
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 function clearMfaPendingStorage(): void {
-  sessionStorage.removeItem(MFA_PENDING_KEY);
-  sessionStorage.removeItem(MFA_REDIRECT_KEY);
+  inMemoryMfaPending = null;
+  inMemoryMfaRedirect = null;
+  if (typeof sessionStorage !== "undefined") {
+    try {
+      sessionStorage.removeItem(MFA_PENDING_KEY);
+      sessionStorage.removeItem(MFA_REDIRECT_KEY);
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 export function getMfaRedirectPath(): string {
-  return sessionStorage.getItem(MFA_REDIRECT_KEY) ?? "/dashboard";
+  if (typeof sessionStorage === "undefined") {
+    return inMemoryMfaRedirect ?? "/dashboard";
+  }
+  return sessionStorage.getItem(MFA_REDIRECT_KEY) ?? inMemoryMfaRedirect ?? "/dashboard";
 }
 
 export function getActiveMfaPending(): MfaPendingState | null {
-  return useAuthStore.getState().mfaPending ?? readMfaPending();
+  return useAuthStore.getState().mfaPending ?? readMfaPending() ?? inMemoryMfaPending;
 }
 
 export function setMfaRedirectPath(path: string): void {
-  sessionStorage.setItem(MFA_REDIRECT_KEY, path);
+  inMemoryMfaRedirect = path;
+  if (typeof sessionStorage !== "undefined") {
+    try {
+      sessionStorage.setItem(MFA_REDIRECT_KEY, path);
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 function resolveSessionProof(

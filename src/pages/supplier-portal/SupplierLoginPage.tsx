@@ -586,7 +586,7 @@ export default function SupplierLoginPage() {
           style={{
             background: "#FFFFFF",
             borderRadius: "14px",
-            padding: "8px 14px",
+            padding: "5px 8px",
             boxShadow: "0 8px 24px rgba(0,0,0,0.14)",
             display: "inline-flex",
             alignItems: "center",
@@ -596,7 +596,7 @@ export default function SupplierLoginPage() {
           <img
             src={NETLINK_LOGO_PATH}
             alt={`${COMPANY_NAME} Logo`}
-            style={{ height: "38px", width: "auto", objectFit: "contain" }}
+            style={{ height: "50px", width: "auto", objectFit: "contain" }}
           />
         </div>
       </div>
@@ -656,7 +656,7 @@ export default function SupplierLoginPage() {
               src={NETLINK_LOGO_PATH}
               alt={`${COMPANY_NAME} Logo`}
               className="supplier-login-card-logo"
-              style={{ height: "36px", width: "auto", objectFit: "contain", marginBottom: "14px" }}
+              style={{ height: "50px", width: "auto", objectFit: "contain", marginBottom: "14px" }}
             />
             <h2
               className="supplier-login-card-title"
@@ -1155,7 +1155,7 @@ export default function SupplierLoginPage() {
           }
           .supplier-login-card {
             padding: 24px !important;
-            margin-top: 10px !important;
+            margin-top: -5px !important;
           }
         }
       `}</style>

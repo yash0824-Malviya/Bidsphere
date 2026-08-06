@@ -24,8 +24,26 @@ export interface SessionProof {
   nonce: string;
 }
 
+const memoryStorage: Record<string, string> = {};
+const mockStorage: Storage = {
+  getItem: (k) => memoryStorage[k] ?? null,
+  setItem: (k, v) => {
+    memoryStorage[k] = v;
+  },
+  removeItem: (k) => {
+    delete memoryStorage[k];
+  },
+  clear: () => {
+    Object.keys(memoryStorage).forEach((k) => delete memoryStorage[k]);
+  },
+  key: () => null,
+  length: 0,
+};
+
 function activeStorage(): Storage {
-  if (typeof window === "undefined") return localStorage;
+  if (typeof window === "undefined" || typeof localStorage === "undefined") {
+    return mockStorage;
+  }
   return localStorage.getItem(REMEMBER_FLAG) === "true"
     ? localStorage
     : sessionStorage;
@@ -33,6 +51,9 @@ function activeStorage(): Storage {
 
 /** Read auth payload from whichever storage actually holds it. */
 function readAuthPayload(name: string): string | null {
+  if (typeof window === "undefined" || typeof localStorage === "undefined") {
+    return mockStorage.getItem(name);
+  }
   const remembered = localStorage.getItem(REMEMBER_FLAG) === "true";
   const primary = remembered ? localStorage : sessionStorage;
   const secondary = remembered ? sessionStorage : localStorage;
@@ -43,12 +64,20 @@ export const authStorage = {
   getItem: (name: string): string | null => readAuthPayload(name),
 
   setItem: (name: string, value: string): void => {
+    if (typeof window === "undefined" || typeof localStorage === "undefined") {
+      mockStorage.setItem(name, value);
+      return;
+    }
     const target = activeStorage();
     target.setItem(name, value);
     (target === localStorage ? sessionStorage : localStorage).removeItem(name);
   },
 
   removeItem: (name: string): void => {
+    if (typeof window === "undefined" || typeof localStorage === "undefined") {
+      mockStorage.removeItem(name);
+      return;
+    }
     localStorage.removeItem(name);
     sessionStorage.removeItem(name);
   },
