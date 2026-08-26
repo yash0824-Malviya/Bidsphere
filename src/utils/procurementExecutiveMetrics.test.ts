@@ -133,6 +133,7 @@ describe("buildOperationalHealthCards", () => {
     const contracts = cards.find((c) => c.id === "expiring-contracts");
     expect(contracts?.level).toBe("unavailable");
     expect(contracts?.caption).toBe("Data not available");
+    expect(contracts?.to).toBeUndefined();
   });
 
   it("marks elevated counts as warning or critical", () => {

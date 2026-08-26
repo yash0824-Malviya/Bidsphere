@@ -68,6 +68,7 @@ const PROCUREMENT_TEAM_FILTERS: QueueFilterDefinition[] = [
 
 const PROCUREMENT_MANAGER_FILTERS: QueueFilterDefinition[] = [
   { label: "RFQ Pending", value: "rfq-pending" },
+  { label: "RFQ", value: "rfq-created" },
   { label: "All ECRs", value: "all" },
 ];
 

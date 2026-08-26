@@ -49,6 +49,47 @@ describe("server-owned ERP authentication", () => {
     });
   });
 
+  it.each([
+    ["the manager role", ["Procurement Manager"]],
+    [
+      "mixed manager and team roles",
+      ["Procurement Manager", "Procurement Team"],
+    ],
+  ] as const)(
+    "resolves and signs procurement@netlink.com as canonical procurement with %s",
+    async (_scenario, erpRoles) => {
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(jsonResponse({ message: "Logged In" }))
+        .mockResolvedValueOnce(jsonResponse({
+          data: {
+            name: "procurement@netlink.com",
+            email: "Procurement@Netlink.com",
+            enabled: 1,
+            roles: erpRoles.map((role) => ({ role })),
+          },
+        }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await authenticateWithPassword({
+        usr: "procurement@netlink.com",
+        pwd: "valid",
+      });
+
+      expect(result).toMatchObject({
+        name: "procurement@netlink.com",
+        email: "procurement@netlink.com",
+        role: "procurement",
+        erpnext_roles: [...erpRoles],
+      });
+      expect(verifyAccessToken(result.access_token)).toMatchObject({
+        typ: "internal",
+        sub: "procurement@netlink.com",
+        email: "procurement@netlink.com",
+        role: "procurement",
+      });
+    },
+  );
+
   it("fails closed when server role lookup fails", async () => {
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(jsonResponse({ message: "Logged In" }))

@@ -281,7 +281,8 @@ export interface OperationalHealthCard {
   /** Status line under the value (e.g. "✔ No overdue RFQs"). */
   caption: string;
   tooltip: string;
-  to: string;
+  /** Related work queue, omitted when the underlying feature is unavailable. */
+  to?: string;
 }
 
 /** Live ERP counts for Operational Health. `null` = feature/API unavailable. */
@@ -719,7 +720,7 @@ function healthCard(opts: {
   okCaption: string;
   issueCaption: (n: number) => string;
   tooltip: string;
-  to: string;
+  to?: string;
   warningAt?: number;
   criticalAt?: number;
 }): OperationalHealthCard {
@@ -781,7 +782,6 @@ export function buildOperationalHealthCards(
       issueCaption: (n) =>
         `${n} contract${n === 1 ? "" : "s"} expiring soon`,
       tooltip: "Contracts module is not connected in this environment",
-      to: "/contracts",
     }),
     healthCard({
       id: "high-risk",

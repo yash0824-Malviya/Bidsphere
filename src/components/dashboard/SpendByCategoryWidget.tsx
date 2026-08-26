@@ -6,11 +6,12 @@
 import { memo, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { FilePlus2, PieChart as PieChartIcon, RefreshCw } from "lucide-react";
+import { PieChart as PieChartIcon, RefreshCw } from "lucide-react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 
 import { fetchCategorySpendFiltered } from "../../api/dashboard";
 import { DASHBOARD_QUERY_OPTIONS } from "../../api/queryPresets";
+import { PROCUREMENT_DASHBOARD_LINKS } from "../../config/procurementDashboardLinks";
 import {
   buildBucketedCategorySpend,
   PROCUREMENT_SPEND_CATEGORIES,
@@ -42,14 +43,14 @@ function CategoryEmptyState() {
         No procurement spend available.
       </p>
       <p className="mt-1.5 max-w-[300px] text-[13px] leading-relaxed text-[#64748B]">
-        Create a Purchase Order to generate spend analytics.
+        Spend analytics will appear after purchasing activity is recorded.
       </p>
       <Link
-        to="/p2p/purchase-orders/create"
+        to={PROCUREMENT_DASHBOARD_LINKS.spendByCategoryReport}
         className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[#1F3A6D] px-3.5 py-2 text-[13px] font-semibold text-white no-underline hover:bg-[#17315D]"
       >
-        <FilePlus2 className="h-4 w-4" />
-        Create Purchase Order
+        <PieChartIcon className="h-4 w-4" />
+        View Spend Report
       </Link>
     </div>
   );
@@ -110,10 +111,6 @@ function SpendByCategoryWidget() {
   const displayTotal = activeCategory
     ? (chartData.find((r) => r.category === activeCategory)?.spend ?? 0)
     : totalSpend;
-
-  const filterHref = activeCategory
-    ? `/p2p/purchase-orders?category=${encodeURIComponent(activeCategory)}`
-    : "/p2p/purchase-orders";
 
   return (
     <div className={CARD}>
@@ -288,10 +285,10 @@ function SpendByCategoryWidget() {
               {activeCategory ? (
                 <div className="mt-3 flex justify-end border-t border-[#F1F5F9] pt-2">
                   <Link
-                    to={filterHref}
+                    to={PROCUREMENT_DASHBOARD_LINKS.spendByCategoryReport}
                     className="text-[12px] font-semibold text-[#1F3A6D] no-underline hover:underline"
                   >
-                    View {activeCategory} purchase orders →
+                    View spend report →
                   </Link>
                 </div>
               ) : null}

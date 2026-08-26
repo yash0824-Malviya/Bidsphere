@@ -5,6 +5,7 @@ import { useAuthStore } from "../../store/authStore";
 import AdminDashboard from "../../components/dashboard/AdminDashboard";
 import DepartmentUserDashboard from "../../components/dashboard/DepartmentUserDashboard";
 import type { AppRole } from "../../config/roles";
+import { getProcurementDashboardContent } from "./dashboardSelection";
 
 const WarehouseDashboard = lazy(
   () => import("../warehouse/WarehouseDashboardPage"),
@@ -35,8 +36,8 @@ const ProgramManagerDashboard = lazy(
 const ProcurementECRDashboard = lazy(
   () => import("../../components/ecr/dashboards/ProcurementECRDashboard"),
 );
-const ProcurementManagerECRDashboard = lazy(
-  () => import("../../components/ecr/dashboards/ProcurementManagerECRDashboard"),
+const ProcurementDashboard = lazy(
+  () => import("../../components/dashboard/ProcurementDashboard"),
 );
 
 function DashFallback() {
@@ -52,6 +53,7 @@ export default function DashboardPage() {
   const role: AppRole = user?.role ?? "admin";
   const greetingName =
     user?.full_name?.split(" ")[0] ?? user?.email?.split("@")[0] ?? "there";
+  const procurementDashboardContent = getProcurementDashboardContent(role);
 
   if (role === "warehouse") {
     return (
@@ -93,7 +95,7 @@ export default function DashboardPage() {
     return <Suspense fallback={<DashFallback />}>{ecrDashboard}</Suspense>;
   }
 
-  if (role === "procurement_team") {
+  if (procurementDashboardContent === "team-ecr-queue") {
     return (
       <Suspense fallback={<DashFallback />}>
         <ProcurementECRDashboard />
@@ -101,10 +103,10 @@ export default function DashboardPage() {
     );
   }
 
-  if (role === "procurement") {
+  if (procurementDashboardContent === "manager-overview") {
     return (
       <Suspense fallback={<DashFallback />}>
-        <ProcurementManagerECRDashboard />
+        <ProcurementDashboard greetingName={greetingName} />
       </Suspense>
     );
   }

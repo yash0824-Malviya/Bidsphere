@@ -26,6 +26,7 @@ import {
   type DashboardPoLite,
   type DashboardRfqLite,
 } from "../../api/dashboard";
+import { fetchECRList } from "../../api/ecr";
 import { dashPerfLog, timedDashApi } from "../../api/dashboardPerf";
 import {
   fetchProcurementActionCenterCounts,
@@ -45,6 +46,7 @@ import {
   getQuoteCountsForRFQs,
   getSupplierCountsForRFQs,
 } from "../../api/sourcing";
+import { PROCUREMENT_DASHBOARD_LINKS } from "../../config/procurementDashboardLinks";
 import { formatRfqOwnerLabel } from "../../config/roles";
 import {
   buildOperationalHealthCards,
@@ -59,6 +61,7 @@ import {
   type SupplierOverviewMetrics,
 } from "../../utils/procurementExecutiveMetrics";
 import { formatCurrencyCompact, formatDate } from "../../utils/format";
+import { deriveProcurementDashboardEcrMetrics } from "../../utils/procurementDashboardEcrMetrics";
 import DashboardWidgetError from "./DashboardWidgetError";
 import DashboardKpiCard, {
   DashboardKpiGrid,
@@ -147,6 +150,20 @@ export default function ProcurementDashboard({ greetingName }: Props) {
       ),
     ...DASHBOARD_QUERY_OPTIONS,
   });
+
+  const ecrSummaryQuery = useQuery({
+    queryKey: ["ecr-dashboard", "procurement", "all"],
+    queryFn: () => fetchECRList({ limit: 300 }),
+    staleTime: 30_000,
+  });
+
+  const ecrMetrics = useMemo(
+    () =>
+      ecrSummaryQuery.data
+        ? deriveProcurementDashboardEcrMetrics(ecrSummaryQuery.data)
+        : null,
+    [ecrSummaryQuery.data],
+  );
 
   useEffect(() => {
     if (kpisQuery.isSuccess && kpisQuery.data) {
@@ -243,9 +260,18 @@ export default function ProcurementDashboard({ greetingName }: Props) {
   const financePending = approvalCountsQuery.data?.financePending ?? 0;
   const pendingApprovals = legalPending + financePending;
 
-  const poSamples = analytics?.poSamples ?? [];
-  const recentRfqs = analytics?.recentRfqs ?? [];
-  const recentPos = analytics?.recentPos ?? [];
+  const poSamples = useMemo(
+    () => analytics?.poSamples ?? [],
+    [analytics?.poSamples],
+  );
+  const recentRfqs = useMemo(
+    () => analytics?.recentRfqs ?? [],
+    [analytics?.recentRfqs],
+  );
+  const recentPos = useMemo(
+    () => analytics?.recentPos ?? [],
+    [analytics?.recentPos],
+  );
 
   const poSpend = useMemo(() => computePoYtdSpend(poSamples), [poSamples]);
   const monthlySpend = useMemo(
@@ -468,7 +494,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
           : formatCurrencyCompact(poSpend.ytdSpend),
       context: "Year-to-Date Spend",
       icon: DollarSign,
-      to: "/p2p/total-spend",
+      to: PROCUREMENT_DASHBOARD_LINKS.totalSpend,
       trend: spendTrend,
     },
     {
@@ -480,7 +506,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
           ? `${overdueRfqsCount} overdue`
           : "Currently open",
       icon: FileSearch,
-      to: "/sourcing/rfq?preset=open",
+      to: PROCUREMENT_DASHBOARD_LINKS.activeRfqs,
     },
     {
       key: "quotes",
@@ -488,7 +514,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
       value: kpis ? kpis.pendingQuotations.toLocaleString() : "—",
       context: "Awaiting review",
       icon: FileText,
-      to: "/sourcing/rfq?preset=open",
+      to: PROCUREMENT_DASHBOARD_LINKS.pendingQuotes,
     },
     {
       key: "approvals",
@@ -498,7 +524,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
         : pendingApprovals.toLocaleString(),
       context: pendingApprovals > 0 ? "Legal & Finance" : "Up to date",
       icon: ClipboardCheck,
-      to: "/legal/reviews",
+      to: PROCUREMENT_DASHBOARD_LINKS.pendingApprovals,
     },
     {
       key: "suppliers",
@@ -509,7 +535,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
           ? `${pendingOnboarding} pending onboarding`
           : "Active suppliers",
       icon: Users,
-      to: "/suppliers?status=active",
+      to: PROCUREMENT_DASHBOARD_LINKS.activeSuppliers,
     },
     {
       key: "pos",
@@ -522,7 +548,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
           ? `${poSpend.releasedToday} released today`
           : "Submitted Purchase Orders",
       icon: ShoppingCart,
-      to: "/p2p/purchase-orders",
+      to: PROCUREMENT_DASHBOARD_LINKS.purchaseOrders,
     },
     {
       key: "cycle",
@@ -533,7 +559,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
           : cycleDisplay,
       context: "Target under 7 days",
       icon: Timer,
-      to: "/sourcing/rfq",
+      to: PROCUREMENT_DASHBOARD_LINKS.averageRfqCycle,
     },
     {
       key: "savings",
@@ -545,7 +571,52 @@ export default function ProcurementDashboard({ greetingName }: Props) {
           ? `${savingsPct.toFixed(1)}% vs budget`
           : "vs Budget",
       icon: TrendingDown,
-      to: "/budget",
+      to: PROCUREMENT_DASHBOARD_LINKS.costSavings,
+    },
+  ];
+
+  const ecrMetricUnavailable = ecrSummaryQuery.isError && !ecrMetrics;
+  const ecrMetricCards: Array<{
+    key: string;
+    label: string;
+    value: number | string;
+    subtitle: string;
+    icon: LucideIcon;
+    to: string;
+    iconClassName: string;
+  }> = [
+    {
+      key: "rfq-pending-creation",
+      label: "RFQs Pending Creation",
+      value: ecrMetrics?.rfqsPendingCreation ?? "—",
+      subtitle: ecrMetricUnavailable
+        ? "ECR data unavailable"
+        : "Approved ECRs ready for RFQ",
+      icon: FileSearch,
+      to: PROCUREMENT_DASHBOARD_LINKS.rfqsPendingCreation,
+      iconClassName: "bg-[#FFF7ED] text-[#C2410C]",
+    },
+    {
+      key: "approved-ecr-actions",
+      label: "Approved ECRs Awaiting Action",
+      value: ecrMetrics?.approvedEcrsAwaitingAction ?? "—",
+      subtitle: ecrMetricUnavailable
+        ? "ECR data unavailable"
+        : "In procurement review or RFQ handoff",
+      icon: ClipboardCheck,
+      to: PROCUREMENT_DASHBOARD_LINKS.approvedEcrsAwaitingAction,
+      iconClassName: "bg-[#EEF3FA] text-[#1F3A6D]",
+    },
+    {
+      key: "ecr-rfqs-created",
+      label: "ECR RFQs Created",
+      value: ecrMetrics?.ecrRfqsCreated ?? "—",
+      subtitle: ecrMetricUnavailable
+        ? "ECR data unavailable"
+        : "RFQs created from approved ECRs",
+      icon: CheckCircle2,
+      to: PROCUREMENT_DASHBOARD_LINKS.ecrRfqsCreated,
+      iconClassName: "bg-[#ECFDF5] text-[#047857]",
     },
   ];
 
@@ -553,14 +624,39 @@ export default function ProcurementDashboard({ greetingName }: Props) {
 
   return (
     <div className="proc-dash flex w-full flex-col gap-5 bg-[#F8FAFC] pb-2 font-[Inter,ui-sans-serif,system-ui,sans-serif]">
-      <header className="proc-dash-hero max-h-[120px] rounded-lg border border-[#E5E7EB] bg-white px-5 py-5 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
-        <h1 className="mb-1 text-[34px] font-bold leading-[1.15] tracking-tight text-[#1E293B]">
-          {timeGreeting()}, {greetingName || "Procurement Manager"}
+      <header className="proc-dash-hero rounded-lg border border-[#E5E7EB] bg-white px-5 py-4 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
+        <h1 className="mb-1 text-2xl font-bold leading-tight tracking-tight text-[#1E293B]">
+          Procurement Manager Dashboard
         </h1>
-        <p className="text-base leading-snug text-[#64748B]">
-          Manage procurement operations from a single dashboard.
+        <p className="text-sm leading-snug text-[#64748B]">
+          {timeGreeting()}, {greetingName || "Procurement Manager"} · Manage approved ECRs, RFQ creation, supplier responses and pending procurement actions.
         </p>
       </header>
+
+      <section aria-labelledby="procurement-ecr-summary-title">
+        <div className="mb-2">
+          <h2
+            id="procurement-ecr-summary-title"
+            className="text-sm font-semibold text-[#1E293B]"
+          >
+            ECR Sourcing Summary
+          </h2>
+        </div>
+        <DashboardKpiGrid columns={3}>
+          {ecrMetricCards.map((card) => (
+            <DashboardKpiCard
+              key={card.key}
+              label={card.label}
+              value={card.value}
+              subtitle={card.subtitle}
+              icon={card.icon}
+              iconClassName={card.iconClassName}
+              to={card.to}
+              loading={ecrSummaryQuery.isPending && !ecrSummaryQuery.data}
+            />
+          ))}
+        </DashboardKpiGrid>
+      </section>
 
       {kpisQuery.isError ? (
         <DashboardWidgetError
@@ -606,7 +702,7 @@ export default function ProcurementDashboard({ greetingName }: Props) {
             Operational Health
           </h2>
           <p className="mt-0.5 text-[13px] text-[#64748B]">
-            Live ERP signals — click a card to open the related work queue
+            Live ERP signals — available cards open the related work queue
           </p>
         </div>
         {healthLoading ? (
@@ -627,13 +723,9 @@ export default function ProcurementDashboard({ greetingName }: Props) {
                 card.level === "unavailable"
                   ? "—"
                   : (card.value ?? 0).toLocaleString();
-              return (
-                <Link
-                  key={card.id}
-                  to={card.to}
-                  title={card.tooltip}
-                  className={`kpi-card group relative flex w-full flex-col border-l-4 text-left no-underline outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] ${tone.border}`}
-                >
+              const className = `kpi-card group relative flex w-full flex-col border-l-4 text-left no-underline outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] ${tone.border}`;
+              const content = (
+                <>
                   <span
                     className={`kpi-card-icon flex shrink-0 items-center justify-center ${tone.icon}`}
                     aria-hidden
@@ -665,6 +757,30 @@ export default function ProcurementDashboard({ greetingName }: Props) {
                       {card.caption}
                     </p>
                   </div>
+                </>
+              );
+
+              if (!card.to) {
+                return (
+                  <div
+                    key={card.id}
+                    title={card.tooltip}
+                    aria-disabled="true"
+                    className={`${className} cursor-default`}
+                  >
+                    {content}
+                  </div>
+                );
+              }
+
+              return (
+                <Link
+                  key={card.id}
+                  to={card.to}
+                  title={card.tooltip}
+                  className={className}
+                >
+                  {content}
                 </Link>
               );
             })}
@@ -802,10 +918,10 @@ function RecentPosTable({
           Recent Purchase Orders
         </h3>
         <Link
-          to="/p2p/purchase-orders"
+          to={PROCUREMENT_DASHBOARD_LINKS.recentPurchaseOrders}
           className="text-[13px] font-semibold text-[#1F3A6D] no-underline hover:underline"
         >
-          View all
+          View spend report
         </Link>
       </div>
       {rows.length === 0 ? (
@@ -831,12 +947,9 @@ function RecentPosTable({
                   className="border-t border-[#F1F5F9] hover:bg-[#F8FAFC]"
                 >
                   <td className="px-4 py-2.5">
-                    <Link
-                      to={`/p2p/purchase-orders/${encodeURIComponent(po.name)}`}
-                      className="text-[13px] font-semibold text-[#1F3A6D] no-underline hover:underline"
-                    >
+                    <span className="text-[13px] font-semibold text-[#1F3A6D]">
                       {po.name}
-                    </Link>
+                    </span>
                   </td>
                   <td className="max-w-[140px] truncate px-3 py-2.5 text-[13px] text-[#475569]">
                     {po.supplier || "—"}
