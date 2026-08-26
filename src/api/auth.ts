@@ -15,6 +15,7 @@ export interface LoginResponse {
   email?: string;
   name?: string;
   access_token?: string;
+  erpnext_roles?: string[];
   exc?: string;
   exception?: string;
 }
@@ -44,8 +45,8 @@ interface ErpNextUserProfile {
  * Flow:
  * 1. POST /api/auth/login (server-side password check — no Set-Cookie)
  * 2. Validate the response indicates successful login
- * 3. Fetch the user's ERPNext roles from /api/resource/User (API key token)
- * 4. Resolve BidSphere AppRole from ERPNext roles
+ * 3. Trust the application role selected by the authenticated server
+ * 4. Fall back to client role resolution only for legacy responses without a role
  *
  * NEVER call `/api/method/login` from the browser: Frappe sets `sid` and
  * related cookies, and browsers share cookies across ports on the same host,
@@ -111,20 +112,25 @@ export async function loginWithPassword(
       ) {
         throw new Error(
           "This account has been disabled. Contact your administrator.",
+          { cause: err },
         );
       }
       throw new Error(
         "Invalid username or password. Please check your credentials.",
+        { cause: err },
       );
     }
 
     if (status === 404) {
-      throw new Error("User not found. Please verify your username or email.");
+      throw new Error("User not found. Please verify your username or email.", {
+        cause: err,
+      });
     }
 
     if (status === 403) {
       throw new Error(
         "Access denied. Your account may not have permission to log in.",
+        { cause: err },
       );
     }
 
@@ -139,6 +145,7 @@ export async function loginWithPassword(
       throw new Error(
         serverMsg ||
           "ERPNext is temporarily unavailable. Please try again in a few moments.",
+        { cause: err },
       );
     }
 
@@ -146,6 +153,7 @@ export async function loginWithPassword(
       typeof data?.message === "string"
         ? data.message
         : "Login failed. Please try again.",
+      { cause: err },
     );
   }
 
@@ -206,28 +214,22 @@ export async function loginWithPassword(
 
   const email = payload?.email || (usr.includes("@") ? usr : `${usr}@erpnext`);
 
-  // Always resolve the UI role on the client. Known role mailboxes
-  // (procurement@ vs procurement.team@) are authoritative so a stale or
-  // incomplete server role cannot collapse Team into Manager.
-  let erpnextRoles: string[] = [];
-  try {
+  let erpnextRoles = Array.isArray(payload?.erpnext_roles)
+    ? payload.erpnext_roles
+    : [];
+  if (!payload?.role && erpnextRoles.length === 0) {
     erpnextRoles = await fetchUserRoles(usr);
     if (import.meta.env.DEV) {
       // eslint-disable-next-line no-console
-      console.log("[Auth] ERPNext roles for", usr, ":", erpnextRoles);
-    }
-  } catch (roleErr) {
-    if (import.meta.env.DEV) {
-      // eslint-disable-next-line no-console
-      console.warn("[Auth] Could not fetch ERPNext roles:", roleErr);
+      console.log("[Auth] Legacy role fallback for", usr, ":", erpnextRoles);
     }
   }
 
-  const role: AppRole = resolveRoleFromUser({
-    name: payload?.name || usr,
-    email,
-    erpnext_roles: erpnextRoles,
-  });
+  const role: AppRole = payload?.role ?? resolveRoleFromUser({
+      name: payload?.name || usr,
+      email,
+      erpnext_roles: erpnextRoles,
+    });
 
   const fullName = displayNameForAuthenticatedUser({
     email,
@@ -260,6 +262,17 @@ export async function loginWithPassword(
     full_name: fullName,
     role,
     erpnext_roles: erpnextRoles,
+  };
+}
+
+/** Keep the role paired with the signed access token stable across restore. */
+export function restoreAuthenticatedUserProfile(
+  user: AuthUserProfile,
+): AuthUserProfile {
+  return {
+    ...user,
+    role: user.role,
+    full_name: displayNameForAuthenticatedUser(user),
   };
 }
 

@@ -27,7 +27,7 @@ export default function Header() {
 
   return (
     <header className="app-topbar z-30 shrink-0 border-b bg-white">
-      <div className="flex h-[52px] min-w-0 items-center gap-2 px-4 sm:gap-3 sm:px-5 lg:px-6">
+      <div className="flex h-[64px] min-w-0 items-center gap-2 px-4 sm:gap-3 sm:px-6 lg:px-8">
         {sidebarMode === "drawer" && (
           <button
             type="button"
@@ -91,7 +91,7 @@ export default function Header() {
             )}
           </button>
 
-          <div className="hidden min-w-0 md:block md:w-[min(240px,28vw)] lg:w-[min(280px,22vw)] desktop:w-[320px]">
+          <div className="hidden min-w-0 md:block md:w-[360px] lg:w-[400px]">
             <GlobalSearch />
           </div>
 

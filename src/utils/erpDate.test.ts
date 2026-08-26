@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ERP_NEXT_DATE_FORMAT,
   ERP_NEXT_DATETIME_RE,
+  formatMediumDisplayDate,
   sanitizeErpPayloadDates,
   toERPDate,
   toERPDateTime,
@@ -101,5 +102,13 @@ describe("sanitizeErpPayloadDates", () => {
 describe("ERP_NEXT_DATE_FORMAT constant", () => {
   it("is YYYY-MM-DD", () => {
     expect(ERP_NEXT_DATE_FORMAT).toBe("YYYY-MM-DD");
+  });
+});
+
+describe("formatMediumDisplayDate re-export", () => {
+  it("formats dates into DD MMM YYYY medium display format", () => {
+    expect(formatMediumDisplayDate("2026-08-30")).toBe("30 Aug 2026");
+    expect(formatMediumDisplayDate("2026-06-11")).toBe("11 Jun 2026");
+    expect(formatMediumDisplayDate(null)).toBe("—");
   });
 });

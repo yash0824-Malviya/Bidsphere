@@ -12,7 +12,7 @@ import {
 } from "./erpnext";
 import { getPurchaseOrders, getPurchaseReceipt, getPurchaseReceipts } from "./purchasing";
 import { getRFQSchema } from "./rfqSchema";
-import { getSupplierQuotationsBySupplier } from "./sourcing";
+import { getRFQ, getSupplierQuotationsBySupplier } from "./sourcing";
 import type {
   PaymentEntry,
   PurchaseReceipt,
@@ -328,10 +328,30 @@ async function fetchSupplierRfqsWithFieldFallback(
  * - Not cancelled
  */
 function buildSupplierRfqFilters(erpSupplierId: string): Filter[] {
+  const raw = String(erpSupplierId || "").trim();
+  const unquoted = raw.replace(/^["']+|["']+$/g, "").trim();
+  const noDot = unquoted.replace(/[.,]+$/g, "").trim();
+  const withDot = `${noDot}.`;
+
+  const candidates = Array.from(
+    new Set(
+      [
+        raw,
+        `"${raw}"`,
+        unquoted,
+        `"${unquoted}"`,
+        noDot,
+        `"${noDot}"`,
+        withDot,
+        `"${withDot}"`,
+      ].filter(Boolean),
+    ),
+  );
+
   return [
-    ["Request for Quotation Supplier", "supplier", "=", erpSupplierId],
     ["docstatus", "=", 1],
     ["status", "not in", ["Cancelled"]],
+    ["Request for Quotation Supplier", "supplier", "in", candidates],
   ];
 }
 
@@ -411,42 +431,29 @@ export async function getSupplierRFQs(supplierName: string): Promise<RFQRow[]> {
   // Strategy 1 — Standard resource API with child-table filter.
   // Published RFQs only (docstatus = 1); Draft / unpublished never appear.
   const first = await tryResourceApi(filters, plan);
+  if (first.rows.length > 0) {
+    // eslint-disable-next-line no-console
+    console.log(LOG, "Final RFQ count (Strategy 1: Resource API)", {
+      erp_supplier_id: erpSupplierId,
+      count: first.rows.length,
+      names: first.rows.map((r) => r.name),
+    });
+    return first.rows;
+  }
 
   // Strategy 2 — If the resource API returned nothing (child-table
   // filters can be unreliable in some Frappe builds), retry with
   // frappe.client.get_list via POST (body data is parsed more reliably).
-  if (first.rows.length === 0) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    LOG,
+    "Resource API returned 0 rows — trying frappe.client.get_list POST fallback",
+    { filters },
+  );
+  const second = await tryGetListPost(filters, plan);
+  if (second.rows.length > 0) {
     // eslint-disable-next-line no-console
-    console.warn(
-      LOG,
-      "Resource API returned 0 rows — trying frappe.client.get_list POST fallback",
-      { filters },
-    );
-    const second = await tryGetListPost(filters, plan);
-
-    if (second.rows.length === 0) {
-      await diagnoseEmptySupplierRfqs(erpSupplierId);
-    }
-
-    // Both strategies came back empty. If BOTH failed with a real error
-    // (network/permission/500), this is NOT a genuine "no RFQs" state —
-    // surface the error so the UI shows an error/retry state instead of a
-    // false "you have no RFQs" empty screen.
-    // Field-permission errors are never fatal — optional fields are stripped.
-    const firstFatal =
-      first.error && !isFieldPermissionError(first.error) ? first.error : null;
-    const secondFatal =
-      second.error && !isFieldPermissionError(second.error)
-        ? second.error
-        : null;
-    if (second.rows.length === 0 && firstFatal && secondFatal) {
-      // eslint-disable-next-line no-console
-      console.error(LOG, "Both RFQ fetch strategies failed:", firstFatal, secondFatal);
-      throw firstFatal;
-    }
-
-    // eslint-disable-next-line no-console
-    console.log(LOG, "Final RFQ count", {
+    console.log(LOG, "Final RFQ count (Strategy 2: get_list POST)", {
       erp_supplier_id: erpSupplierId,
       count: second.rows.length,
       names: second.rows.map((r) => r.name),
@@ -454,13 +461,203 @@ export async function getSupplierRFQs(supplierName: string): Promise<RFQRow[]> {
     return second.rows;
   }
 
+  // Strategy 3 — Query the "Request for Quotation Supplier" child doctype
+  // directly — bypasses unreliable parent-to-child filter syntax.
+  // eslint-disable-next-line no-console
+  console.warn(
+    LOG,
+    "get_list POST returned 0 rows — trying direct child table query fallback",
+    { erpSupplierId },
+  );
+  const third = await tryDirectSupplierRowQuery(erpSupplierId, plan);
+  if (third.rows.length > 0) {
+    // eslint-disable-next-line no-console
+    console.log(LOG, "Final RFQ count (Strategy 3: Direct child query)", {
+      erp_supplier_id: erpSupplierId,
+      count: third.rows.length,
+      names: third.rows.map((r) => r.name),
+    });
+    return third.rows;
+  }
+
+  // Strategy 4 — Inspection of published RFQs (full document scan).
+  // Ensures any RFQ containing this supplier is discovered regardless of ERPNext child-filter issues.
+  // eslint-disable-next-line no-console
+  console.warn(
+    LOG,
+    "Direct child query returned 0 rows — inspecting published RFQs",
+    { erpSupplierId },
+  );
+  const fourth = await tryPublishedRfqsInspection(erpSupplierId, plan);
+  if (fourth.rows.length > 0) {
+    // eslint-disable-next-line no-console
+    console.log(LOG, "Final RFQ count (Strategy 4: Published RFQ scan)", {
+      erp_supplier_id: erpSupplierId,
+      count: fourth.rows.length,
+      names: fourth.rows.map((r) => r.name),
+    });
+    return fourth.rows;
+  }
+
+  await diagnoseEmptySupplierRfqs(erpSupplierId);
+
+  const firstFatal =
+    first.error && !isFieldPermissionError(first.error) ? first.error : null;
+  const secondFatal =
+    second.error && !isFieldPermissionError(second.error)
+      ? second.error
+      : null;
+  if (firstFatal && secondFatal && third.error && fourth.error) {
+    // eslint-disable-next-line no-console
+    console.error(LOG, "All RFQ fetch strategies failed:", firstFatal, secondFatal, third.error, fourth.error);
+    throw firstFatal;
+  }
+
   // eslint-disable-next-line no-console
   console.log(LOG, "Final RFQ count", {
     erp_supplier_id: erpSupplierId,
-    count: first.rows.length,
-    names: first.rows.map((r) => r.name),
+    count: 0,
+    names: [],
   });
-  return first.rows;
+  return [];
+}
+
+async function tryDirectSupplierRowQuery(
+  erpSupplierId: string,
+  plan: SupplierRfqFieldPlan,
+): Promise<{ rows: RFQRow[]; error?: unknown }> {
+  try {
+    const parentNames = new Set<string>();
+    const unquoted = erpSupplierId.trim().replace(/^["']+|["']+$/g, "");
+    const doubleQuoted = `"${unquoted}"`;
+
+    const candidates = Array.from(
+      new Set([erpSupplierId, unquoted, doubleQuoted].filter(Boolean)),
+    );
+
+    const childQueries: Filter[][] = [];
+    for (const c of candidates) {
+      childQueries.push([["supplier", "=", c]]);
+      childQueries.push([["supplier_name", "=", c]]);
+    }
+
+    for (const filterSet of childQueries) {
+      try {
+        const raw = await apiGet<Array<{ parent?: string }>>(
+          buildResourceUrl("Request for Quotation Supplier"),
+          buildListConfig({
+            fields: ["parent"],
+            filters: filterSet,
+            limit_page_length: 200,
+          }),
+        );
+        const rows = Array.isArray(raw) ? raw : [];
+        for (const r of rows) {
+          const p = String(r.parent || "").trim();
+          if (p) parentNames.add(p);
+        }
+      } catch {
+        /* best effort */
+      }
+    }
+
+    if (parentNames.size === 0) {
+      return { rows: [] };
+    }
+
+    const rfqList = [...parentNames];
+    const rfqFilters: Filter[] = [
+      ["name", "in", rfqList],
+      ["docstatus", "=", 1],
+      ["status", "not in", ["Cancelled"]],
+    ];
+
+    return fetchSupplierRfqsWithFieldFallback(
+      plan.fields,
+      plan,
+      async (fields) => {
+        const raw = await apiGet<Record<string, unknown>[]>(
+          buildResourceUrl("Request for Quotation"),
+          buildListConfig({
+            fields,
+            filters: rfqFilters,
+            order_by: "modified desc",
+            limit_page_length: 100,
+          }),
+        );
+        return Array.isArray(raw) ? raw : [];
+      },
+    );
+  } catch (err) {
+    return { rows: [], error: err };
+  }
+}
+
+async function tryPublishedRfqsInspection(
+  erpSupplierId: string,
+  plan: SupplierRfqFieldPlan,
+): Promise<{ rows: RFQRow[]; error?: unknown }> {
+  try {
+    const normKey = erpSupplierId
+      .trim()
+      .replace(/^["']+|["']+$/g, "")
+      .replace(/[.,]+$/g, "")
+      .trim()
+      .toLowerCase();
+    if (!normKey) return { rows: [] };
+
+    const rawList = await apiGet<Record<string, unknown>[]>(
+      buildResourceUrl("Request for Quotation"),
+      buildListConfig({
+        fields: plan.fields,
+        filters: [
+          ["docstatus", "=", 1],
+          ["status", "not in", ["Cancelled"]],
+        ],
+        order_by: "modified desc",
+        limit_page_length: 100,
+      }),
+    );
+    const published = Array.isArray(rawList) ? rawList : [];
+    if (published.length === 0) return { rows: [] };
+
+    const fullDocs = await Promise.allSettled(
+      published.map((r) => getRFQ(String(r.name))),
+    );
+
+    const matchedNames = new Set<string>();
+    fullDocs.forEach((res) => {
+      if (res.status === "fulfilled" && res.value) {
+        const doc = res.value;
+        const isInvited = (doc.suppliers ?? []).some((s) => {
+          const supp = String(s.supplier || "")
+            .trim()
+            .replace(/^["']+|["']+$/g, "")
+            .replace(/[.,]+$/g, "")
+            .trim()
+            .toLowerCase();
+          const name = String(s.supplier_name || "")
+            .trim()
+            .replace(/^["']+|["']+$/g, "")
+            .replace(/[.,]+$/g, "")
+            .trim()
+            .toLowerCase();
+          return supp === normKey || (!!name && name === normKey);
+        });
+        if (isInvited) {
+          matchedNames.add(doc.name);
+        }
+      }
+    });
+
+    const matchingRows = published
+      .filter((r) => matchedNames.has(String(r.name)))
+      .map((r) => normalizeSupplierRfqRow(r, plan));
+
+    return { rows: matchingRows };
+  } catch (err) {
+    return { rows: [], error: err };
+  }
 }
 
 async function tryResourceApi(

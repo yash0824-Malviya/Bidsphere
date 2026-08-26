@@ -42,8 +42,40 @@ const NewRequisitionPage = lazy(() => import("./pages/p2p/NewRequisitionPage"));
 const RequisitionDetailPage = lazy(
   () => import("./pages/p2p/RequisitionDetailPage")
 );
+// Enterprise Business Intake Module
+const PendingBusinessCasesDashboardPage = lazy(
+  () => import("./pages/intake/PendingBusinessCasesDashboardPage")
+);
+const BusinessNeedsListPage = lazy(
+  () => import("./pages/intake/BusinessNeedsListPage")
+);
+const BusinessNeedCreatePage = lazy(
+  () => import("./pages/intake/BusinessNeedCreatePage")
+);
+const BusinessNeedDetailPage = lazy(
+  () => import("./pages/intake/BusinessNeedDetailPage")
+);
+const BusinessCasesListPage = lazy(
+  () => import("./pages/intake/BusinessCasesListPage")
+);
+const BusinessCaseDetailPage = lazy(
+  () => import("./pages/intake/BusinessCaseDetailPage")
+);
+const BusinessIntakeDashboardPage = lazy(
+  () => import("./pages/intake/BusinessIntakeDashboardPage")
+);
 const MaterialRequestDashboardPage = lazy(
   () => import("./pages/material-requests/MaterialRequestDashboardPage")
+);
+// Engineering Changes (ECR) Module
+const ECRListPage = lazy(() => import("./pages/ecr/ECRListPage"));
+const NewECRPage = lazy(() => import("./pages/ecr/NewECRPage"));
+const ECRDetailPage = lazy(() => import("./pages/ecr/ECRDetailPage"));
+const PurchaseRequisitionListPage = lazy(
+  () => import("./pages/ecr/PurchaseRequisitionListPage")
+);
+const PurchaseRequisitionDetailPage = lazy(
+  () => import("./pages/ecr/PurchaseRequisitionDetailPage")
 );
 const MaterialRequestsListPage = lazy(
   () => import("./pages/material-requests/MaterialRequestsListPage")
@@ -548,6 +580,55 @@ function App() {
             <Route element={<MainLayout />}>
             <Route index element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<DashboardPage />} />
+
+            {/* Enterprise Business Intake Module */}
+            <Route
+              path="/intake/pending-business-cases"
+              element={<PendingBusinessCasesDashboardPage />}
+            />
+            <Route
+              path="/intake/business-needs"
+              element={<BusinessNeedsListPage />}
+            />
+            <Route
+              path="/intake/business-needs/new"
+              element={<BusinessNeedCreatePage />}
+            />
+            <Route
+              path="/intake/business-needs/:id/edit"
+              element={<BusinessNeedCreatePage />}
+            />
+            <Route
+              path="/intake/business-needs/:id"
+              element={<BusinessNeedDetailPage />}
+            />
+            <Route
+              path="/intake/business-cases"
+              element={<BusinessCasesListPage />}
+            />
+            <Route
+              path="/intake/business-cases/:id"
+              element={<BusinessCaseDetailPage />}
+            />
+            <Route
+              path="/intake/dashboard"
+              element={<BusinessIntakeDashboardPage />}
+            />
+
+            {/* Engineering Changes (ECR) Module */}
+            <Route path="/ecr" element={<ECRListPage />} />
+            <Route path="/ecr/new" element={<NewECRPage />} />
+            <Route path="/ecr/:name" element={<ECRDetailPage />} />
+            <Route path="/ecr/:name/review" element={<ECRDetailPage />} />
+            <Route path="/ecr/:name/edit" element={<NewECRPage />} />
+            <Route
+              path="/ecr/purchase-requisitions"
+              element={<PurchaseRequisitionListPage />}
+            />
+            <Route
+              path="/ecr/purchase-requisitions/:name"
+              element={<PurchaseRequisitionDetailPage />}
+            />
 
             {/* P2P Core */}
             <Route path="/p2p" element={<P2PIndexRedirect />} />

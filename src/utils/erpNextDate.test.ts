@@ -6,6 +6,7 @@ import {
   ERP_NEXT_ISO_DATE_RE,
   formatERPNextDate,
   formatGrnPostingDateMessage,
+  formatMediumDisplayDate,
   formatUsDisplayDate,
   GRN_POSTING_ADJUSTED_TO_PO_MSG,
   isERPNextDateBefore,
@@ -65,6 +66,20 @@ describe("formatUsDisplayDate", () => {
   it("formats ISO to MM/DD/YYYY", () => {
     expect(formatUsDisplayDate("2026-06-13")).toBe("06/13/2026");
     expect(formatUsDisplayDate("2026-06-11")).toBe("06/11/2026");
+  });
+});
+
+describe("formatMediumDisplayDate", () => {
+  it("formats ISO to 'D MMM YYYY' (e.g. 30 Aug 2026)", () => {
+    expect(formatMediumDisplayDate("2026-08-30")).toBe("30 Aug 2026");
+    expect(formatMediumDisplayDate("2026-06-11")).toBe("11 Jun 2026");
+    expect(formatMediumDisplayDate("06/13/2026")).toBe("13 Jun 2026");
+  });
+
+  it("handles empty or null values gracefully", () => {
+    expect(formatMediumDisplayDate(null)).toBe("—");
+    expect(formatMediumDisplayDate("")).toBe("—");
+    expect(formatMediumDisplayDate(undefined)).toBe("—");
   });
 });
 

@@ -62,6 +62,7 @@ export const erpnextClient = erpnext;
 
 type RetryableAxiosConfig = InternalAxiosRequestConfig & {
   __retryCount?: number;
+  _disableNetworkRetry?: boolean;
 };
 
 /**
@@ -75,6 +76,8 @@ export interface SilentRequestConfig {
   _silent?: boolean;
   /** Return the raw axios response body (used by login/logout). */
   _preserveResponse?: boolean;
+  /** Disable the shared network retry loop for explicitly controlled writes. */
+  _disableNetworkRetry?: boolean;
 }
 
 /** Merge `_silent: true` so callers handle toasts locally (avoids duplicates). */
@@ -82,6 +85,13 @@ export function withSilent(
   config?: AxiosRequestConfig
 ): AxiosRequestConfig & SilentRequestConfig {
   return { ...config, _silent: true };
+}
+
+/** Defense in depth for writes whose replay policy is owned by their endpoint. */
+export function withoutNetworkRetry(
+  config?: AxiosRequestConfig,
+): AxiosRequestConfig & SilentRequestConfig {
+  return { ...config, _disableNetworkRetry: true };
 }
 
 erpnext.interceptors.request.use(
@@ -277,7 +287,7 @@ erpnext.interceptors.response.use(
   async (error: AxiosError<ErpNextErrorPayload>) => {
     const config = error.config as RetryableAxiosConfig | undefined;
 
-    if (config && isRetryableNetworkError(error)) {
+    if (config && !config._disableNetworkRetry && isRetryableNetworkError(error)) {
       const attempt = config.__retryCount ?? 0;
       if (attempt < MAX_NETWORK_RETRIES) {
         config.__retryCount = attempt + 1;
@@ -463,6 +473,8 @@ erpnext.interceptors.response.use(
     } else if (parsedValidation) {
       // ValidationError (often HTTP 417) and any other Frappe business error.
       message = parsedValidation;
+    } else if (typeof data?.error === "string" && data.error) {
+      message = data.error;
     } else if (data?.exception) {
       message = String(data.exception);
     } else if (typeof data?.message === "string" && data.message) {
@@ -472,6 +484,10 @@ erpnext.interceptors.response.use(
     }
 
     message = cleanErpValidationMessage(String(message));
+    if (data?.field_errors && typeof data.field_errors === "object") {
+      (error as AxiosError & { fieldErrors?: Record<string, string> }).fieldErrors =
+        data.field_errors;
+    }
 
     // Keep the friendly mapping for connection-level errors (timeout /
     // 502 / 503 / 504 / network) so users see actionable hints instead
@@ -1035,6 +1051,8 @@ export async function fetchPagedList<T = unknown>(
 
 interface ErpNextErrorPayload {
   message?: string | { message?: string };
+  error?: string;
+  field_errors?: Record<string, string>;
   /** ERPNext attaches the full Python traceback as a JSON-encoded list. */
   exc?: string | string[];
   exception?: string;

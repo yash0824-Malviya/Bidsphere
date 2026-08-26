@@ -2,6 +2,42 @@ import { defineConfig, loadEnv, type Plugin } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type multiparty from "multiparty";
 import react from "@vitejs/plugin-react";
+import {
+  isProtectedChildDoctype,
+  protectedChildAccessDenial,
+  protectedChildAccessMessage,
+  protectedChildRequestDoctypeFromMany,
+  protectedChildResourceDoctype,
+} from "./api/protectedChildGuard.ts";
+import {
+  canonicalizeProxyApiPath,
+  isVersionedErpApiPath,
+} from "./api/proxyPathGuard.ts";
+import {
+  hasFrappeResourceDataWrapper,
+  isDirectEcrWorkflowRequest,
+  requestDoctypeFromBodyOrQuery,
+  requestDoctypesFromBodyOrQuery,
+} from "./api/ecrDirectWorkflowGuard.ts";
+import { multipartProxyPolicy } from "./api/multipartProxyGuard.ts";
+import { assertErpProxySecurityBoundary } from "./api/erpProxySecurityGuard.ts";
+import {
+  assertSecureEcrUpload,
+  isTemporaryQuotationDocname,
+  parseSecureUpload,
+  supplierOwnsUploadTarget,
+} from "./api/secureUploadGuard.ts";
+import {
+  assertNoGenericFileAccess,
+  authorizeFileResourceRequest,
+  authorizePersistedFileRead,
+} from "./api/fileResourceGuard.ts";
+import type { AccessPrincipal } from "./api/rbacAuth.ts";
+import {
+  assertSafeProxyBody,
+  assertSafeProxyQuery,
+} from "./api/proxyRequestGuard.ts";
+import { buildEngineerEcrReadScope } from "./api/ecrReadScope.ts";
 
 /**
  * Server-side login/logout that never forwards ERPNext `Set-Cookie` to the
@@ -805,7 +841,14 @@ function recommendSuppliersDevMiddleware(): Plugin {
           console.error("[recommend-suppliers-dev] FAILED:", message);
           res.statusCode = status >= 400 && status < 600 ? status : 500;
           res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ success: false, message }));
+          const fieldErrors = err && typeof err === "object" && "fieldErrors" in err
+            ? (err as { fieldErrors?: Record<string, string> }).fieldErrors
+            : undefined;
+          res.end(JSON.stringify({
+            success: false,
+            message,
+            ...(fieldErrors ? { field_errors: fieldErrors } : {}),
+          }));
         }
       });
     },
@@ -1990,7 +2033,7 @@ function fileProxyDevMiddleware(
               headers: Record<string, unknown>,
               body?: Record<string, unknown>,
               query?: Record<string, unknown>,
-            ) => unknown;
+            ) => AccessPrincipal;
             RbacError: new (message: string, status?: number) => Error & {
               status?: number;
             };
@@ -1999,13 +2042,38 @@ function fileProxyDevMiddleware(
           query.forEach((v, k) => {
             queryObj[k] = v;
           });
+          let principal: AccessPrincipal;
+          let supplierRfqAuthorized = false;
           try {
-            const principal = rbac.requireAnyAuth(
+            principal = rbac.requireAnyAuth(
               req.headers as Record<string, unknown>,
               undefined,
               queryObj,
-            ) as { typ?: string; supplier?: string; sub?: string };
-            if (principal?.typ === "supplier") {
+            );
+            if (query.getAll("path").length !== 1) {
+              res.statusCode = 400;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({
+                success: false,
+                message: "Exactly one 'path' query parameter is required.",
+                status: 400,
+              }));
+              return;
+            }
+            if (
+              query.getAll("rfq").length > 1 ||
+              query.getAll("erp_supplier_id").length > 1
+            ) {
+              res.statusCode = 400;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({
+                success: false,
+                message: "Duplicate supplier authorization parameters are not allowed.",
+                status: 400,
+              }));
+              return;
+            }
+            if (principal.typ === "supplier") {
               const rfqName = query.get("rfq")?.trim() || "";
               if (rfqName && filePath) {
                 const docsCore = (await server.ssrLoadModule(
@@ -2035,6 +2103,7 @@ function fileProxyDevMiddleware(
                     supplierCandidates,
                     filePath,
                   });
+                  supplierRfqAuthorized = true;
                 } catch (aclErr) {
                   const status =
                     aclErr &&
@@ -2086,10 +2155,18 @@ function fileProxyDevMiddleware(
             fetchErpFile: (opts: {
               baseUrl: string;
               filePath: string;
+              fileId?: string;
               apiKey?: string;
               apiSecret?: string;
               cookie?: string;
               method?: "GET" | "HEAD";
+              authorizeFile: (file: {
+                name: string;
+                file_url: string;
+                attached_to_doctype?: string;
+                attached_to_name?: string;
+                attached_to_field?: string;
+              }) => Promise<void>;
             }) => Promise<
               | {
                   ok: true;
@@ -2133,13 +2210,50 @@ function fileProxyDevMiddleware(
           }
 
           const cookieHeader = req.headers.cookie;
+          const base = proxyTarget.replace(/\/+$/, "").replace(/\/api$/, "");
+          const loadDocument = async (
+            doctype: string,
+            name: string,
+          ): Promise<Record<string, unknown>> => {
+            const response = await fetch(
+              `${base}/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`,
+              {
+                headers: {
+                  Authorization: `token ${apiKey}:${apiSecret}`,
+                  Accept: "application/json",
+                },
+              },
+            );
+            if (!response.ok) {
+              const error = new Error(`${doctype} not found.`) as Error & { status?: number };
+              error.status = 403;
+              throw error;
+            }
+            const payload = await response.json() as { data?: Record<string, unknown> };
+            if (!payload.data) {
+              const error = new Error(`${doctype} not found.`) as Error & { status?: number };
+              error.status = 403;
+              throw error;
+            }
+            return payload.data;
+          };
+          const rawFileId = query.get("file_id") || query.get("fileId");
+          const fileId = typeof rawFileId === "string" ? rawFileId : undefined;
+
           const result = await core.fetchErpFile({
             baseUrl: proxyTarget,
             filePath,
+            fileId,
             apiKey,
             apiSecret,
             cookie: typeof cookieHeader === "string" ? cookieHeader : undefined,
             method: req.method === "HEAD" ? "HEAD" : "GET",
+            authorizeFile: (file) => authorizePersistedFileRead({
+              principal,
+              file,
+              loadDocument,
+              supplierContextAuthorized: supplierRfqAuthorized,
+            }),
           });
 
           if (!result.ok) {
@@ -2179,11 +2293,7 @@ function fileProxyDevMiddleware(
   };
 }
 
-/**
- * Dev parity for production `api/proxy.ts` finance-payables RBAC.
- * Blocks Procurement/Warehouse from creating invoices or payment entries
- * even when Vite proxies `/api` straight to ERPNext.
- */
+/** Dev parity for production ERP proxy mutation and ECR RBAC. */
 function payablesRbacDevMiddleware(): Plugin {
   return {
     name: "payables-rbac-dev-middleware",
@@ -2196,17 +2306,135 @@ function payablesRbacDevMiddleware(): Plugin {
           return;
         }
         const method = (req.method ?? "GET").toUpperCase();
-        if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
-          next();
+        if (method === "OPTIONS") { next(); return; }
+        let apiPath: string;
+        try {
+          apiPath = decodeURIComponent(
+            canonicalizeProxyApiPath(pathOnly.replace(/^\/api\//, "")),
+          );
+        } catch (error) {
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({
+            error: error instanceof Error ? error.message : "Invalid ERPNext API path.",
+          }));
           return;
         }
-        const apiPath = decodeURIComponent(pathOnly.replace(/^\/api\//, ""));
+        if (isVersionedErpApiPath(apiPath)) {
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: "Unsupported ERPNext API namespace." }));
+          return;
+        }
+        const parsedUrl = new URL(url, "http://local");
+        const guardedQuery: Record<string, string | string[]> = {};
+        for (const key of new Set(parsedUrl.searchParams.keys())) {
+          const values = parsedUrl.searchParams.getAll(key);
+          guardedQuery[key] = values.length > 1 ? values : values[0] || "";
+        }
+        try {
+          assertSafeProxyQuery({ apiPath, method, query: guardedQuery });
+        } catch (error) {
+          res.statusCode = 400;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({
+            error: error instanceof Error ? error.message : "Invalid ERP query parameters.",
+          }));
+          return;
+        }
         const maybePayables =
           apiPath.startsWith("resource/Voucher") ||
           apiPath.startsWith("resource/Purchase Invoice") ||
           apiPath.startsWith("resource/Payment Entry") ||
           apiPath.includes("make_purchase_invoice");
-        if (!maybePayables) {
+        const maybeEcrResource = apiPath.startsWith("resource/Engineering Change Request");
+        const maybeRfqResource =
+          apiPath === "resource/Request for Quotation" ||
+          apiPath.startsWith("resource/Request for Quotation/");
+        const maybePurchaseOrderResource =
+          apiPath === "resource/Purchase Order" ||
+          apiPath.startsWith("resource/Purchase Order/");
+        const maybeProtectedChildResource = Boolean(
+          protectedChildResourceDoctype(apiPath),
+        );
+        const maybeEcrWorkflow = apiPath === "method/frappe.model.workflow.apply_workflow";
+        const maybeEcrTransitions = apiPath === "method/frappe.model.workflow.get_transitions";
+        const maybeEcrComment = apiPath === "resource/Comment";
+        const maybeFileUpload = apiPath === "method/upload_file";
+        const maybeFileResource =
+          apiPath === "resource/File" || apiPath.startsWith("resource/File/");
+        const maybePurchaseRequisition = apiPath.startsWith("resource/Purchase Requisition");
+        const maybeGenericDocumentMethod =
+          apiPath.startsWith("method/") &&
+          ![
+            "method/frappe.model.workflow.apply_workflow",
+            "method/frappe.model.workflow.get_transitions",
+            "method/upload_file",
+          ].includes(apiPath);
+        const queryDoctype =
+          parsedUrl.searchParams.get("doctype") ||
+          parsedUrl.searchParams.get("dt") ||
+          "";
+        const shouldInspectGenericDocumentMethod =
+          maybeGenericDocumentMethod &&
+          (
+            !["GET", "HEAD"].includes(method) ||
+            [
+              "Engineering Change Request",
+              "File",
+              "Request for Quotation",
+              "Purchase Order",
+              "Purchase Requisition",
+            ].includes(queryDoctype) ||
+            isProtectedChildDoctype(queryDoctype)
+          );
+        let commentReadDoctype = "";
+        let commentReadName = "";
+        if (maybeEcrComment && method === "GET") {
+          try {
+            const filters = JSON.parse(
+              parsedUrl.searchParams.get("filters") || "[]",
+            ) as unknown[];
+            for (const filter of filters) {
+              if (!Array.isArray(filter)) continue;
+              const field = String(filter.length >= 4 ? filter[1] : filter[0] || "");
+              const operator = String(filter.length >= 4 ? filter[2] : filter[1] || "");
+              const value = String(filter.length >= 4 ? filter[3] : filter[2] || "");
+              if (operator !== "=") continue;
+              if (field === "reference_doctype") commentReadDoctype = value;
+              if (field === "reference_name") commentReadName = value;
+            }
+          } catch {
+            // The authenticated guard returns a consistent denial below.
+          }
+        }
+        const ecrCommentRead = commentReadDoctype === "Engineering Change Request";
+        const prCommentRead = commentReadDoctype === "Purchase Requisition";
+        const isTargetProtectedEndpoint =
+          maybePayables ||
+          maybeEcrResource ||
+          maybeProtectedChildResource ||
+          maybeEcrWorkflow ||
+          maybeEcrTransitions ||
+          maybeEcrComment ||
+          maybeFileUpload ||
+          maybeFileResource ||
+          maybePurchaseRequisition ||
+          shouldInspectGenericDocumentMethod;
+
+        if (!isTargetProtectedEndpoint) {
+          next();
+          return;
+        }
+
+        if (
+          ["GET", "HEAD"].includes(method) &&
+          !maybeEcrResource &&
+          !maybeProtectedChildResource &&
+          !maybeEcrComment &&
+          !maybeFileResource &&
+          !maybePurchaseRequisition
+        ) {
           next();
           return;
         }
@@ -2214,21 +2442,650 @@ function payablesRbacDevMiddleware(): Plugin {
           const rbac = (await server.ssrLoadModule("/api/rbacAuth.ts")) as {
             requireAnyAuth: (
               headers: Record<string, unknown>,
-            ) => { typ: string; role?: string };
+            ) => AccessPrincipal;
             enforcePayablesMutationRbac: (
               principal: unknown,
               path: string,
               method: string,
               body?: unknown,
             ) => void;
+            requireInternalAuth: (
+              headers: Record<string, unknown>,
+              body?: Record<string, unknown>,
+            ) => { typ: "internal"; sub: string; email: string; role: string };
+            requireRoles: (
+              principal: unknown,
+              roles: string[],
+            ) => void;
+            enforceEcrMutationRbac: (
+              principal: unknown,
+              path: string,
+              method: string,
+              body?: unknown,
+              currentStatus?: string,
+              currentDocument?: Record<string, unknown> | null,
+            ) => void;
+            enforcePrMutationRbac: (
+              principal: unknown,
+              path: string,
+              method: string,
+              body?: unknown,
+              currentStatus?: string,
+            ) => void;
             RbacError: new (message: string, status?: number) => Error & {
               status?: number;
             };
           };
-          const principal = rbac.requireAnyAuth(
-            req.headers as Record<string, unknown>,
+
+          const procurementValidation = (await server.ssrLoadModule(
+            "/api/ecrProcurementValidation.ts",
+          )) as {
+            purchaseRequisitionEcrReferenceForCreate: (
+              apiPath: string,
+              method: string,
+              payload: Record<string, unknown>,
+              document: Record<string, unknown>,
+            ) => string | null;
+            assertEcrLinkedPrUsesTrustedEndpoint: (
+              ecrReference: string,
+            ) => void;
+            assertEcrProcurementRelationships: (
+              ecr: Record<string, unknown>,
+              loadDocument: (
+                doctype: "Request for Quotation" | "Purchase Order",
+                name: string,
+              ) => Promise<Record<string, unknown>>,
+            ) => Promise<void>;
+          };
+          const rfqTraceGuard = (await server.ssrLoadModule(
+            "/api/rfqTraceGuard.ts",
+          )) as {
+            hasProtectedRfqTraceMutation: (...values: unknown[]) => boolean;
+            PROTECTED_RFQ_TRACE_MUTATION_MESSAGE: string;
+          };
+          const procurementReadScope = (await server.ssrLoadModule(
+            "/api/procurementReadScope.ts",
+          )) as {
+            isReadOnlyGenericDocumentMethod: (path: string) => boolean;
+            supplierScopedProcurementFilters: (
+              doctype: "Request for Quotation" | "Purchase Order",
+              supplier: string,
+              filters: unknown,
+            ) => unknown[];
+            supplierSafeProcurementFields: (
+              doctype: "Request for Quotation" | "Purchase Order",
+              requested: unknown,
+            ) => string[];
+            supplierOwnsProcurementDocument: (
+              doctype: "Request for Quotation" | "Purchase Order",
+              document: Record<string, unknown>,
+              supplier: string,
+            ) => boolean;
+            sanitizeSupplierProcurementDocument: (
+              doctype: "Request for Quotation" | "Purchase Order",
+              document: Record<string, unknown>,
+              supplier: string,
+            ) => Record<string, unknown>;
+          };
+
+          const contentType = String(req.headers["content-type"] || "");
+          const multipartPolicy = multipartProxyPolicy(apiPath, contentType);
+          if (multipartPolicy === "reject") {
+            throw new rbac.RbacError(
+              "Multipart payloads are allowed only for the authenticated file upload endpoint.",
+              403,
+            );
+          }
+          if (multipartPolicy === "authenticated-upload") {
+            const uploadPrincipal = rbac.requireAnyAuth(
+              req.headers as Record<string, unknown>,
+            );
+            const chunks: Buffer[] = [];
+            for await (const chunk of req) {
+              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            }
+            const rawUpload = Buffer.concat(chunks);
+            const upload = await parseSecureUpload(
+              new Uint8Array(rawUpload),
+              contentType,
+            );
+            assertErpProxySecurityBoundary({
+              apiPath,
+              method,
+              principalRole: uploadPrincipal.typ === "internal"
+                ? uploadPrincipal.role
+                : undefined,
+              requestDoctypes: upload.doctype ? [upload.doctype] : [],
+            });
+
+            const base = String(process.env.ERPNEXT_URL || "").replace(/\/+$/, "");
+            const key = process.env.ERP_API_KEY || "";
+            const secret = process.env.ERP_API_SECRET || "";
+            const loadUploadTarget = async () => {
+              const response = await fetch(
+                `${base}/api/resource/${encodeURIComponent(upload.doctype)}/${encodeURIComponent(upload.docname)}`,
+                { headers: { Authorization: `token ${key}:${secret}`, Accept: "application/json" } },
+              );
+              if (!response.ok) {
+                throw new rbac.RbacError(`${upload.doctype} not found.`, 403);
+              }
+              const payload = await response.json() as { data?: Record<string, unknown> };
+              if (!payload.data) throw new rbac.RbacError(`${upload.doctype} not found.`, 403);
+              return payload.data;
+            };
+
+            if (upload.doctype === "Engineering Change Request") {
+              if (uploadPrincipal.typ !== "internal") {
+                throw new rbac.RbacError(
+                  "Forbidden. Internal authentication required for ECR uploads.",
+                  403,
+                );
+              }
+              assertSecureEcrUpload(upload);
+              const snapshot = await loadUploadTarget();
+              rbac.enforceEcrMutationRbac(
+                uploadPrincipal,
+                `resource/Engineering Change Request/${encodeURIComponent(upload.docname)}`,
+                "PUT",
+                { [upload.fieldname]: `/private/files/${upload.fileName}` },
+                String(snapshot.select_pxfp || ""),
+                snapshot,
+              );
+            } else if (upload.doctype && uploadPrincipal.typ === "supplier") {
+              const isolatedTemporaryQuotation =
+                upload.doctype === "Supplier Quotation" &&
+                isTemporaryQuotationDocname(
+                  upload.docname,
+                  String(uploadPrincipal.supplier || ""),
+                );
+              const target = isolatedTemporaryQuotation ? null : await loadUploadTarget();
+              if (!supplierOwnsUploadTarget(
+                String(uploadPrincipal.supplier || ""),
+                upload,
+                target,
+              )) {
+                throw new rbac.RbacError(
+                  "Access denied. This upload target is not assigned to your supplier account.",
+                  403,
+                );
+              }
+            } else if (upload.doctype) {
+              await loadUploadTarget();
+            }
+
+            const upstream = await fetch(`${base}/api/method/upload_file`, {
+              method: "POST",
+              headers: {
+                Authorization: `token ${key}:${secret}`,
+                Accept: "application/json",
+                "Content-Type": contentType,
+              },
+              body: rawUpload,
+            });
+            const responseBody = Buffer.from(await upstream.arrayBuffer());
+            res.statusCode = upstream.status;
+            res.setHeader(
+              "Content-Type",
+              upstream.headers.get("content-type") || "application/json",
+            );
+            res.end(responseBody);
+            return;
+          }
+
+          let rawBody = "";
+          let body: Record<string, unknown> = {};
+          if (!["GET", "HEAD"].includes(method)) {
+            const chunks: Buffer[] = [];
+            for await (const chunk of req) chunks.push(chunk as Buffer);
+            rawBody = Buffer.concat(chunks).toString("utf8");
+            if (rawBody) {
+              try {
+                body = JSON.parse(rawBody) as Record<string, unknown>;
+              } catch {
+                body = {};
+              }
+            }
+            if (rawBody && body && typeof body === "object" && Object.keys(body).length > 0) {
+              (req as IncomingMessage & { __bidsphereRawBody?: string }).__bidsphereRawBody = rawBody;
+            }
+          }
+
+          assertSafeProxyBody({ apiPath, method, body });
+
+          if (
+            maybeEcrResource &&
+            !["GET", "HEAD"].includes(method) &&
+            hasFrappeResourceDataWrapper(
+              body,
+              Object.fromEntries(parsedUrl.searchParams.entries()),
+            )
+          ) {
+            throw new rbac.RbacError(
+              "Wrapped data payloads are not allowed for Engineering Change Request mutations.",
+              403,
+            );
+          }
+
+          const principal = rbac.requireAnyAuth(req.headers as Record<string, unknown>);
+          if (maybeEcrComment && method === "GET" && principal.typ === "supplier") {
+            throw new rbac.RbacError(
+              "Supplier comment access must use a supplier-scoped portal endpoint.",
+              403,
+            );
+          }
+          if (
+            maybeEcrComment &&
+            method === "GET" &&
+            (!commentReadDoctype || !commentReadName)
+          ) {
+            throw new rbac.RbacError(
+              "Comment reads require exact reference_doctype and reference_name filters.",
+              403,
+            );
+          }
+          if (maybePayables && !["GET", "HEAD"].includes(method)) {
+            rbac.enforcePayablesMutationRbac(principal, apiPath, method, body);
+          }
+
+          let doc: Record<string, unknown> = {};
+          if (body.doc && typeof body.doc === "object") {
+            doc = body.doc as Record<string, unknown>;
+          } else if (typeof body.doc === "string") {
+            try {
+              const parsedDoc = JSON.parse(body.doc) as unknown;
+              if (parsedDoc && typeof parsedDoc === "object") {
+                doc = parsedDoc as Record<string, unknown>;
+              }
+            } catch {
+              doc = {};
+            }
+          }
+          let transitionDoc: { doctype?: string; name?: string } = {};
+          if (parsedUrl.searchParams.has("doc")) {
+            try {
+              transitionDoc = JSON.parse(
+                parsedUrl.searchParams.get("doc") || "{}",
+              ) as { doctype?: string; name?: string };
+            } catch {
+              transitionDoc = {};
+            }
+          }
+          const genericDoctypes = requestDoctypesFromBodyOrQuery(
+            body,
+            Object.fromEntries(parsedUrl.searchParams.entries()),
           );
-          rbac.enforcePayablesMutationRbac(principal, apiPath, method, undefined);
+          const genericDoctype = requestDoctypeFromBodyOrQuery(
+            body,
+            Object.fromEntries(parsedUrl.searchParams.entries()),
+          ) || String(transitionDoc.doctype || "");
+          assertNoGenericFileAccess(apiPath, [genericDoctype, ...genericDoctypes]);
+          if (
+            !maybeFileResource &&
+            !["GET", "HEAD", "OPTIONS"].includes(method)
+          ) {
+            assertErpProxySecurityBoundary({
+              apiPath,
+              method,
+              principalRole: principal.typ === "internal" ? principal.role : undefined,
+              requestDoctypes: [genericDoctype, ...genericDoctypes],
+            });
+          }
+          if (isDirectEcrWorkflowRequest(
+            apiPath,
+            body,
+            Object.fromEntries(parsedUrl.searchParams.entries()),
+          )) {
+            throw new rbac.RbacError(
+              "ECR workflow actions must use the secured /api/ecr-workflow-action endpoint.",
+              403,
+            );
+          }
+          const isEcrGenericRequest =
+            maybeGenericDocumentMethod &&
+            (genericDoctype === "Engineering Change Request" ||
+              genericDoctypes.includes("Engineering Change Request"));
+          const isRfqGenericRequest =
+            maybeGenericDocumentMethod && genericDoctype === "Request for Quotation";
+          const isPurchaseOrderGenericRequest =
+            maybeGenericDocumentMethod && genericDoctype === "Purchase Order";
+          const isReadOnlyGenericDocumentRequest =
+            procurementReadScope.isReadOnlyGenericDocumentMethod(apiPath);
+          const protectedChildDoctype = protectedChildRequestDoctypeFromMany(
+            apiPath,
+            [genericDoctype, ...genericDoctypes],
+          );
+          if (protectedChildDoctype) {
+            const denial = protectedChildAccessDenial({
+              apiPath,
+              requestDoctype: protectedChildDoctype,
+              method,
+              principalType: principal.typ,
+            });
+            if (denial) {
+              throw new rbac.RbacError(protectedChildAccessMessage(denial), 403);
+            }
+          }
+          const isPrWorkflow =
+            maybeEcrWorkflow && genericDoctype === "Purchase Requisition";
+          const isPrGenericRequest =
+            maybeGenericDocumentMethod && genericDoctype === "Purchase Requisition";
+          const isPrTransitions =
+            maybeEcrTransitions && genericDoctype === "Purchase Requisition";
+          const isPrCommentMutation =
+            maybeEcrComment &&
+            method !== "GET" &&
+            body.reference_doctype === "Purchase Requisition";
+
+          const base = String(process.env.ERPNEXT_URL || "").replace(/\/+$/, "");
+          const key = process.env.ERP_API_KEY || "";
+          const secret = process.env.ERP_API_SECRET || "";
+          const loadErpDocument = async (
+            doctype: string,
+            documentName: string,
+          ): Promise<Record<string, unknown>> => {
+            const response = await fetch(
+              `${base}/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(documentName)}`,
+              { headers: { Authorization: `token ${key}:${secret}`, Accept: "application/json" } },
+            );
+            if (!response.ok) {
+              const error = new Error(`${doctype} not found.`) as Error & { status?: number };
+              error.status = doctype === "Engineering Change Request" ? 403 : 422;
+              throw error;
+            }
+            const payload = (await response.json()) as { data?: Record<string, unknown> };
+            if (!payload.data) throw new Error(`${doctype} not found.`);
+            return payload.data;
+          };
+
+          if (maybeFileResource) {
+            await authorizeFileResourceRequest({
+              apiPath,
+              method,
+              principal,
+              body,
+              query: guardedQuery,
+              loadDocument: loadErpDocument,
+            });
+          }
+
+          if (
+            maybePurchaseRequisition ||
+            isPrWorkflow ||
+            isPrGenericRequest ||
+            isPrTransitions ||
+            isPrCommentMutation ||
+            prCommentRead
+          ) {
+            const internal = rbac.requireInternalAuth(
+              req.headers as Record<string, unknown>,
+              body,
+            );
+            rbac.requireRoles(
+              internal,
+              ["GET", "HEAD"].includes(method)
+                ? [
+                    "engineer",
+                    "engineering",
+                    "operations",
+                    "quality",
+                    "program_manager",
+                    "procurement_team",
+                    "procurement",
+                  ]
+                : ["procurement_team", "procurement"],
+            );
+            if (!["GET", "HEAD"].includes(method)) {
+              const sourceEcrName =
+                procurementValidation.purchaseRequisitionEcrReferenceForCreate(
+                  apiPath,
+                  method,
+                  body,
+                  doc,
+                );
+              if (sourceEcrName) {
+                procurementValidation.assertEcrLinkedPrUsesTrustedEndpoint(
+                  sourceEcrName,
+                );
+              }
+
+              let currentPrStatus: string | undefined;
+              if (isPrWorkflow) {
+                const prName = String(doc.name || "").trim();
+                if (!prName) {
+                  throw new rbac.RbacError("Purchase Requisition is required.", 403);
+                }
+                const currentPr = await loadErpDocument("Purchase Requisition", prName);
+                currentPrStatus = String(currentPr.status || "");
+              } else if (["PUT", "PATCH", "DELETE"].includes(method)) {
+                const prefix = "resource/Purchase Requisition/";
+                const prName = apiPath.startsWith(prefix)
+                  ? apiPath.slice(prefix.length).split("/")[0] || ""
+                  : "";
+                if (!prName) {
+                  throw new rbac.RbacError("Purchase Requisition is required.", 403);
+                }
+                const currentPr = await loadErpDocument("Purchase Requisition", prName);
+                currentPrStatus = String(currentPr.status || "");
+              }
+              rbac.enforcePrMutationRbac(
+                internal,
+                apiPath,
+                method,
+                body,
+                currentPrStatus,
+              );
+            }
+          }
+
+          const isProcurementRead =
+            (["GET", "HEAD"].includes(method) &&
+              (maybeRfqResource || maybePurchaseOrderResource)) ||
+            (isReadOnlyGenericDocumentRequest &&
+              ["Request for Quotation", "Purchase Order"].includes(genericDoctype));
+          if (isProcurementRead && principal.typ === "supplier") {
+            const doctype =
+              maybeRfqResource || genericDoctype === "Request for Quotation"
+                ? "Request for Quotation"
+                : "Purchase Order";
+            const prefix = `resource/${doctype}/`;
+            const resourceName = apiPath.startsWith(prefix)
+              ? apiPath.slice(prefix.length).split("/")[0] || ""
+              : "";
+            const genericName = isReadOnlyGenericDocumentRequest
+              ? String(body.name || parsedUrl.searchParams.get("name") || "").trim()
+              : "";
+            const documentName = resourceName || genericName;
+            if (documentName) {
+              const document = await loadErpDocument(doctype, documentName);
+              if (!procurementReadScope.supplierOwnsProcurementDocument(
+                doctype,
+                document,
+                principal.supplier || "",
+              )) {
+                throw new rbac.RbacError(
+                  "Access denied. This procurement document is not assigned to your supplier account.",
+                  403,
+                );
+              }
+              const sanitized = procurementReadScope.sanitizeSupplierProcurementDocument(
+                doctype,
+                document,
+                principal.supplier || "",
+              );
+              res.statusCode = 200;
+              res.setHeader("Content-Type", "application/json");
+              if (method === "HEAD") {
+                res.end();
+              } else if (resourceName) {
+                res.end(JSON.stringify({ data: sanitized }));
+              } else {
+                res.end(JSON.stringify({ message: sanitized }));
+              }
+              return;
+            } else {
+              const filters = procurementReadScope.supplierScopedProcurementFilters(
+                doctype,
+                principal.supplier || "",
+                ["GET", "HEAD"].includes(method)
+                  ? parsedUrl.searchParams.get("filters")
+                  : body.filters,
+              );
+              const requestedFields = ["GET", "HEAD"].includes(method)
+                ? parsedUrl.searchParams.get("fields") || parsedUrl.searchParams.get("fieldname")
+                : body.fields || body.fieldname;
+              const safeFields = procurementReadScope.supplierSafeProcurementFields(
+                doctype,
+                requestedFields,
+              );
+              if (["GET", "HEAD"].includes(method)) {
+                parsedUrl.searchParams.set("filters", JSON.stringify(filters));
+                if (apiPath === "method/frappe.client.get_value") {
+                  parsedUrl.searchParams.set("fieldname", JSON.stringify(safeFields));
+                } else if (apiPath !== "method/frappe.client.get_count") {
+                  parsedUrl.searchParams.set("fields", JSON.stringify(safeFields));
+                }
+                req.url = `${parsedUrl.pathname}${parsedUrl.search}`;
+              } else {
+                body.filters = filters;
+                if (apiPath === "method/frappe.client.get_value") {
+                  body.fieldname = safeFields.length === 1 ? safeFields[0] : safeFields;
+                } else if (apiPath !== "method/frappe.client.get_count") {
+                  body.fields = safeFields;
+                }
+                rawBody = JSON.stringify(body);
+                (req as IncomingMessage & { __bidsphereRawBody?: string }).__bidsphereRawBody = rawBody;
+              }
+            }
+          }
+
+          if (
+            (maybeRfqResource && !["GET", "HEAD"].includes(method)) ||
+            (isRfqGenericRequest && !isReadOnlyGenericDocumentRequest)
+          ) {
+            const internal = rbac.requireInternalAuth(
+              req.headers as Record<string, unknown>,
+              body,
+            );
+            rbac.requireRoles(internal, ["procurement", "procurement_team", "admin"]);
+            const rfqPayload = Object.keys(doc).length > 0 ? doc : body;
+            if (rfqTraceGuard.hasProtectedRfqTraceMutation(
+              body,
+              rfqPayload,
+              Object.fromEntries(parsedUrl.searchParams.entries()),
+            )) {
+              throw new rbac.RbacError(
+                rfqTraceGuard.PROTECTED_RFQ_TRACE_MUTATION_MESSAGE,
+                403,
+              );
+            }
+          }
+          if (
+            (maybePurchaseOrderResource && !["GET", "HEAD"].includes(method)) ||
+            (isPurchaseOrderGenericRequest && !isReadOnlyGenericDocumentRequest)
+          ) {
+            const internal = rbac.requireInternalAuth(
+              req.headers as Record<string, unknown>,
+              body,
+            );
+            rbac.requireRoles(internal, ["procurement_team", "admin"]);
+          }
+          let ecrName = "";
+          if (maybeEcrResource && apiPath.includes("resource/Engineering Change Request/")) {
+            ecrName = apiPath.slice("resource/Engineering Change Request/".length).split("/")[0] || "";
+          } else if (maybeEcrWorkflow && doc.doctype === "Engineering Change Request") {
+            ecrName = String(doc.name || "");
+          } else if (maybeEcrTransitions) {
+            if (transitionDoc.doctype === "Engineering Change Request") ecrName = transitionDoc.name || "";
+          } else if (maybeEcrComment && body.reference_doctype === "Engineering Change Request") {
+            ecrName = String(body.reference_name || "");
+          } else if (ecrCommentRead) {
+            ecrName = commentReadName;
+          }
+
+          const touchesEcr = maybeEcrResource || Boolean(ecrName) || ecrCommentRead || isEcrGenericRequest;
+          if (touchesEcr) {
+            const internal = rbac.requireInternalAuth(req.headers as Record<string, unknown>, body);
+            rbac.requireRoles(internal, ["engineer", "engineering", "operations", "quality", "program_manager", "procurement_team", "procurement"]);
+            if (isEcrGenericRequest) {
+              throw new rbac.RbacError(
+                "Generic ERP document methods are disabled for Engineering Change Requests. Use the secured ECR resource endpoint.",
+                403,
+              );
+            }
+            type DevEcrSnapshot = {
+              select_pxfp?: string;
+              ecr_owner?: string;
+              amended_from?: string;
+              owner?: string;
+            };
+            let snapshot: DevEcrSnapshot | null = null;
+            let existingEcrDocument: Record<string, unknown> | null = null;
+            if (ecrName) {
+              existingEcrDocument = await loadErpDocument(
+                "Engineering Change Request",
+                ecrName,
+              );
+              snapshot = existingEcrDocument as DevEcrSnapshot;
+              if (internal.role === "engineer") {
+                const identities = new Set([internal.sub, internal.email].map((value) => value.toLowerCase()));
+                if (![snapshot?.ecr_owner, snapshot?.amended_from, snapshot?.owner].filter(Boolean).some((value) => identities.has(String(value).trim().toLowerCase()))) {
+                  throw new Error("Access denied. Engineers can access only their own ECRs.");
+                }
+              }
+            }
+            if (maybeEcrResource && method === "GET" && !ecrName && internal.role === "engineer") {
+              const scope = buildEngineerEcrReadScope(
+                parsedUrl.searchParams.get("filters"),
+                internal,
+              );
+              parsedUrl.searchParams.set("filters", scope.filters);
+              parsedUrl.searchParams.set("or_filters", scope.orFilters);
+              req.url = `${parsedUrl.pathname}${parsedUrl.search}`;
+            }
+            if (!["GET", "HEAD"].includes(method)) {
+              if (maybeEcrResource && method === "POST" && internal.role === "engineer") {
+                const owner = (internal.email || internal.sub).trim();
+                body.ecr_owner = owner.includes("@") ? owner.toLowerCase() : owner;
+                delete body.amended_from;
+                rawBody = JSON.stringify(body);
+                (req as IncomingMessage & { __bidsphereRawBody?: string }).__bidsphereRawBody = rawBody;
+              }
+              rbac.enforceEcrMutationRbac(
+                internal,
+                apiPath,
+                method,
+                body,
+                snapshot?.select_pxfp,
+                snapshot,
+              );
+
+              const isEcrDocumentWrite =
+                maybeEcrResource && ["POST", "PUT", "PATCH"].includes(method);
+              if (isEcrDocumentWrite) {
+                await procurementValidation.assertEcrProcurementRelationships(
+                  existingEcrDocument ? { ...existingEcrDocument, ...body } : body,
+                  (doctype, documentName) => loadErpDocument(doctype, documentName),
+                );
+              }
+
+              const workflowAction = typeof body.action === "string" ? body.action : "";
+              if (
+                ecrName &&
+                maybeEcrWorkflow &&
+                ["Submit ECR", "Re-Submit after Revision"].includes(workflowAction)
+              ) {
+                await procurementValidation.assertEcrProcurementRelationships(
+                  existingEcrDocument || await loadErpDocument(
+                    "Engineering Change Request",
+                    ecrName,
+                  ),
+                  (doctype, documentName) => loadErpDocument(doctype, documentName),
+                );
+              }
+            }
+          } else if (!["GET", "HEAD"].includes(method)) {
+            rbac.enforceEcrMutationRbac(principal, apiPath, method, body);
+          }
           next();
         } catch (err) {
           const status =
@@ -2239,9 +3096,532 @@ function payablesRbacDevMiddleware(): Plugin {
             err instanceof Error
               ? err.message
               : "Access denied. You don't have permission to perform this action.";
+          const fieldErrors =
+            err && typeof err === "object" && "fieldErrors" in err
+              ? (err as { fieldErrors?: Record<string, string> }).fieldErrors
+              : undefined;
           res.statusCode = status >= 400 && status < 600 ? status : 403;
           res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ error: message }));
+          res.end(JSON.stringify({ error: message, message, ...(fieldErrors ? { field_errors: fieldErrors } : {}) }));
+        }
+      });
+    },
+  };
+}
+
+/** Dev parity for the scoped Business Need -> Business Case File link endpoint. */
+function fileLinkCopyDevMiddleware(): Plugin {
+  return {
+    name: "file-link-copy-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+        const pathOnly = (req.url ?? "").split("?")[0];
+        if (pathOnly !== "/api/file-link-copy") {
+          next();
+          return;
+        }
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ success: false, message: "Method Not Allowed." }));
+          return;
+        }
+
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(chunk as Buffer);
+          const raw = Buffer.concat(chunks).toString("utf8");
+          let payload: Record<string, unknown>;
+          try {
+            const parsed = raw ? JSON.parse(raw) as unknown : {};
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+              throw new Error("JSON object required.");
+            }
+            payload = parsed as Record<string, unknown>;
+          } catch {
+            throw Object.assign(new Error("Invalid JSON body."), {
+              status: 400,
+              code: "validation",
+            });
+          }
+          const rbac = (await server.ssrLoadModule("/api/rbacAuth.ts")) as {
+            requireInternalAuth: (headers: Record<string, unknown>) => unknown;
+          };
+          const core = (await server.ssrLoadModule("/api/fileLinkCopyCore.ts")) as {
+            copyBusinessNeedFileToCaseCore: (input: {
+              payload: Record<string, unknown>;
+              principal: unknown;
+            }) => Promise<{ created?: boolean }>;
+          };
+          const principal = rbac.requireInternalAuth(req.headers as Record<string, unknown>);
+          const result = await core.copyBusinessNeedFileToCaseCore({ payload, principal });
+          res.statusCode = result.created ? 201 : 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ data: result }));
+        } catch (error) {
+          const status = error && typeof error === "object" && "status" in error
+            ? Number((error as { status?: number }).status) || 500
+            : 500;
+          const message = error instanceof Error
+            ? error.message
+            : "Unable to link the Business Need attachment to the Business Case.";
+          const fieldErrors = error && typeof error === "object" && "fieldErrors" in error
+            ? (error as { fieldErrors?: Record<string, string> }).fieldErrors
+            : undefined;
+          const code = error && typeof error === "object" && "code" in error
+            ? String((error as { code?: string }).code ?? "")
+            : "";
+          res.statusCode = status >= 400 && status < 600 ? status : 500;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({
+            success: false,
+            message,
+            ...(code ? { code } : {}),
+            ...(fieldErrors ? { field_errors: fieldErrors } : {}),
+          }));
+        }
+      });
+    },
+  };
+}
+
+/** Dev parity for the trusted Engineer/Admin ECR Draft creation endpoint. */
+function ecrCreateDevMiddleware(): Plugin {
+  return {
+    name: "ecr-create-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+        const pathOnly = (req.url ?? "").split("?")[0];
+        if (pathOnly !== "/api/ecr-create") {
+          next();
+          return;
+        }
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ success: false, message: "Method Not Allowed." }));
+          return;
+        }
+
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(chunk as Buffer);
+          const raw = Buffer.concat(chunks).toString("utf8");
+          let payload: Record<string, unknown>;
+          try {
+            payload = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+          } catch {
+            throw Object.assign(new Error("Invalid JSON body."), { status: 400 });
+          }
+          const rbac = (await server.ssrLoadModule("/api/rbacAuth.ts")) as {
+            requireInternalAuth: (headers: Record<string, unknown>) => unknown;
+          };
+          const core = (await server.ssrLoadModule("/api/ecrCreateCore.ts")) as {
+            createEcrDraftCore: (input: {
+              payload: Record<string, unknown>;
+              principal: unknown;
+            }) => Promise<unknown>;
+          };
+          const principal = rbac.requireInternalAuth(req.headers as Record<string, unknown>);
+          const result = await core.createEcrDraftCore({ payload, principal });
+          res.statusCode = 201;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ data: result }));
+        } catch (error) {
+          const status = error && typeof error === "object" && "status" in error
+            ? Number((error as { status?: number }).status) || 500
+            : 500;
+          const message = error instanceof Error
+            ? error.message
+            : "Unable to create the Engineering Change Request.";
+          const fieldErrors = error && typeof error === "object" && "fieldErrors" in error
+            ? (error as { fieldErrors?: Record<string, string> }).fieldErrors
+            : undefined;
+          const code = error && typeof error === "object" && "code" in error
+            ? String((error as { code?: string }).code ?? "")
+            : "";
+          res.statusCode = status >= 400 && status < 600 ? status : 500;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({
+            success: false,
+            message,
+            ...(code ? { code } : {}),
+            ...(fieldErrors ? { field_errors: fieldErrors } : {}),
+          }));
+        }
+      });
+    },
+  };
+}
+
+/** Dev parity for the secured, idempotent ECR → PR server endpoint. */
+function createPrFromEcrDevMiddleware(): Plugin {
+  return {
+    name: "create-pr-from-ecr-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+        const pathOnly = (req.url ?? "").split("?")[0];
+        if (pathOnly !== "/api/create-pr-from-ecr") {
+          next();
+          return;
+        }
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ success: false, message: "Method Not Allowed." }));
+          return;
+        }
+
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          const raw = Buffer.concat(chunks).toString("utf8");
+          let body: Record<string, unknown>;
+          try {
+            body = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+          } catch {
+            throw Object.assign(new Error("Invalid JSON body."), { status: 400 });
+          }
+          const rbac = (await server.ssrLoadModule("/api/rbacAuth.ts")) as {
+            requireInternalAuth: (headers: Record<string, unknown>) => {
+              typ: "internal";
+              sub: string;
+              email: string;
+              role: string;
+              iat: number;
+              exp: number;
+            };
+            requireRoles: (principal: { role: string }, roles: string[]) => void;
+          };
+          const core = (await server.ssrLoadModule("/api/createPrFromEcrCore.ts")) as {
+            createPrFromEcrCore: (input: {
+              ecrName: unknown;
+              principal: {
+                typ: "internal";
+                sub: string;
+                email: string;
+                role: string;
+                iat: number;
+                exp: number;
+              };
+            }) => Promise<{ created?: boolean }>;
+          };
+          const principal = rbac.requireInternalAuth(req.headers as Record<string, unknown>);
+          rbac.requireRoles(principal, ["procurement", "procurement_team", "admin"]);
+          const result = await core.createPrFromEcrCore({
+            ecrName: body.ecr_name ?? body.ecrName,
+            principal,
+          });
+          res.statusCode = result.created ? 201 : 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ data: result }));
+        } catch (error) {
+          const status = error && typeof error === "object" && "status" in error
+            ? Number((error as { status?: number }).status) || 500
+            : 500;
+          const message = error instanceof Error
+            ? error.message
+            : "Unable to create a Purchase Requisition from this ECR.";
+          const fieldErrors = error && typeof error === "object" && "fieldErrors" in error
+            ? (error as { fieldErrors?: Record<string, string> }).fieldErrors
+            : undefined;
+          const prName = error && typeof error === "object" && "prName" in error
+            ? String((error as { prName?: string }).prName ?? "")
+            : "";
+          res.statusCode = status >= 400 && status < 600 ? status : 500;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({
+            success: false,
+            message,
+            ...(fieldErrors ? { field_errors: fieldErrors } : {}),
+            ...(prName ? { pr_name: prName } : {}),
+          }));
+        }
+      });
+    },
+  };
+}
+
+/** Dev parity for the secured, idempotent direct ECR → RFQ endpoint. */
+function createRfqFromEcrDevMiddleware(): Plugin {
+  return {
+    name: "create-rfq-from-ecr-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+        const pathOnly = (req.url ?? "").split("?")[0];
+        if (pathOnly !== "/api/create-rfq-from-ecr") {
+          next();
+          return;
+        }
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ success: false, message: "Method Not Allowed." }));
+          return;
+        }
+
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) {
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          }
+          const raw = Buffer.concat(chunks).toString("utf8");
+          let body: Record<string, unknown>;
+          try {
+            const parsed = raw ? JSON.parse(raw) as unknown : {};
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+              throw new Error("JSON object required.");
+            }
+            body = parsed as Record<string, unknown>;
+          } catch {
+            throw Object.assign(new Error("Invalid JSON body."), { status: 400 });
+          }
+          const rbac = (await server.ssrLoadModule("/api/rbacAuth.ts")) as {
+            requireInternalAuth: (headers: Record<string, unknown>) => {
+              typ: "internal";
+              sub: string;
+              email: string;
+              role: string;
+              iat: number;
+              exp: number;
+            };
+            requireRoles: (principal: { role: string }, roles: string[]) => void;
+          };
+          const core = (await server.ssrLoadModule("/api/createRfqFromEcrCore.ts")) as {
+            createRfqFromEcrCore: (input: {
+              ecrName: unknown;
+              principal: {
+                typ: "internal";
+                sub: string;
+                email: string;
+                role: string;
+                iat: number;
+                exp: number;
+              };
+            }) => Promise<{ created?: boolean }>;
+          };
+          const principal = rbac.requireInternalAuth(req.headers as Record<string, unknown>);
+          if (principal.role !== "procurement") {
+            throw Object.assign(
+              new Error("Only Procurement Manager can create an RFQ from an ECR."),
+              { status: 403 },
+            );
+          }
+          const result = await core.createRfqFromEcrCore({
+            ecrName: body.ecr_name ?? body.ecrName,
+            principal,
+          });
+          res.statusCode = result.created ? 201 : 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ data: result }));
+        } catch (error) {
+          const status = error && typeof error === "object" && "status" in error
+            ? Number((error as { status?: number }).status) || 500
+            : 500;
+          const message = error instanceof Error
+            ? error.message
+            : "Unable to create an RFQ from this Engineering Change Request.";
+          const code = error && typeof error === "object" && "code" in error
+            ? String((error as { code?: string }).code ?? "")
+            : "";
+          const fieldErrors = error && typeof error === "object" && "fieldErrors" in error
+            ? (error as { fieldErrors?: Record<string, string> }).fieldErrors
+            : undefined;
+          const rfqName = error && typeof error === "object" && "rfqName" in error
+            ? String((error as { rfqName?: string }).rfqName ?? "")
+            : "";
+          res.statusCode = status >= 400 && status < 600 ? status : 500;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({
+            success: false,
+            message,
+            ...(code ? { code } : {}),
+            ...(fieldErrors ? { field_errors: fieldErrors } : {}),
+            ...(rfqName ? { rfq_name: rfqName } : {}),
+          }));
+        }
+      });
+    },
+  };
+}
+
+/** Dev parity for the secured, idempotent PR → RFQ server endpoint. */
+function createRfqFromPrDevMiddleware(): Plugin {
+  return {
+    name: "create-rfq-from-pr-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+        const pathOnly = (req.url ?? "").split("?")[0];
+        if (pathOnly !== "/api/create-rfq-from-pr") {
+          next();
+          return;
+        }
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ success: false, message: "Method Not Allowed." }));
+          return;
+        }
+
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(chunk as Buffer);
+          const raw = Buffer.concat(chunks).toString("utf8");
+          const body = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+          const rbac = (await server.ssrLoadModule("/api/rbacAuth.ts")) as {
+            requireInternalAuth: (headers: Record<string, unknown>) => { role: string };
+            requireRoles: (principal: { role: string }, roles: string[]) => void;
+          };
+          const core = (await server.ssrLoadModule("/api/createRfqFromPrCore.ts")) as {
+            createRfqFromPrCore: (input: {
+              prName: string;
+              suppliers: string[];
+              title?: string;
+              scheduleDate?: string;
+            }) => Promise<unknown>;
+          };
+          const principal = rbac.requireInternalAuth(req.headers as Record<string, unknown>);
+          rbac.requireRoles(principal, ["procurement", "procurement_team", "admin"]);
+          const suppliers = Array.isArray(body.suppliers)
+            ? body.suppliers.map((supplier) => String(supplier ?? ""))
+            : [];
+          const result = await core.createRfqFromPrCore({
+            prName: String(body.pr_name ?? body.prName ?? ""),
+            suppliers,
+            title: String(body.title ?? "") || undefined,
+            scheduleDate: String(body.schedule_date ?? body.scheduleDate ?? "") || undefined,
+          });
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ data: result }));
+        } catch (error) {
+          const status = error && typeof error === "object" && "status" in error
+            ? Number((error as { status?: number }).status) || 500
+            : 500;
+          const message = error instanceof Error
+            ? error.message
+            : "Unable to create RFQ from Purchase Requisition.";
+          const rfqName = error && typeof error === "object" && "rfqName" in error
+            ? String((error as { rfqName?: string }).rfqName ?? "")
+            : "";
+          res.statusCode = status >= 400 && status < 600 ? status : 500;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({
+            success: false,
+            message,
+            ...(rfqName ? { rfq_name: rfqName } : {}),
+          }));
+        }
+      });
+    },
+  };
+}
+
+/** Dev parity for the trusted ECR workflow + approval-task endpoint. */
+function ecrWorkflowActionDevMiddleware(): Plugin {
+  return {
+    name: "ecr-workflow-action-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+        const pathOnly = (req.url ?? "").split("?")[0];
+        if (pathOnly !== "/api/ecr-workflow-action") {
+          next();
+          return;
+        }
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ success: false, message: "Method Not Allowed." }));
+          return;
+        }
+
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(chunk as Buffer);
+          const raw = Buffer.concat(chunks).toString("utf8");
+          const body = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+          const rbac = (await server.ssrLoadModule("/api/rbacAuth.ts")) as {
+            requireInternalAuth: (headers: Record<string, unknown>) => {
+              typ: "internal";
+              sub: string;
+              email: string;
+              role: string;
+              iat: number;
+              exp: number;
+            };
+          };
+          const core = (await server.ssrLoadModule("/api/ecrWorkflowCore.ts")) as {
+            applyEcrWorkflowActionCore: (input: {
+              name: unknown;
+              action: unknown;
+              comment?: unknown;
+              reviewFields?: Record<string, unknown>;
+              principal: {
+                typ: "internal";
+                sub: string;
+                email: string;
+                role: string;
+                iat: number;
+                exp: number;
+              };
+            }) => Promise<unknown>;
+          };
+          const principal = rbac.requireInternalAuth(req.headers as Record<string, unknown>);
+          const ecrIdentifier =
+            body.name ?? body.ecr_name ?? body.ecrId ?? body.ecr_number ?? body.id;
+          const result = await core.applyEcrWorkflowActionCore({
+            name: ecrIdentifier,
+            action: body.action,
+            comment: body.comment,
+            reviewFields:
+              body.reviewFields && typeof body.reviewFields === "object" && !Array.isArray(body.reviewFields)
+                ? body.reviewFields as Record<string, unknown>
+                : {},
+            principal,
+          });
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ data: result }));
+        } catch (error) {
+          const status = error && typeof error === "object" && "status" in error
+            ? Number((error as { status?: number }).status) || 500
+            : 500;
+          const message = error instanceof Error
+            ? error.message
+            : "Unable to apply the ECR workflow action.";
+          res.statusCode = status >= 400 && status < 600 ? status : 500;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ success: false, message }));
         }
       });
     },
@@ -2265,7 +3645,6 @@ export default defineConfig(({ mode }) => {
   const erpApiKey = env.ERP_API_KEY || env.VITE_API_KEY || "";
   const erpApiSecret = env.ERP_API_SECRET || env.VITE_API_SECRET || "";
 
-  // eslint-disable-next-line no-console
   console.log(`[vite] ERP proxy target → ${proxyTarget}`);
 
   // `api/legalReviewCore.ts` reads credentials from `process.env` (matching
@@ -2303,7 +3682,12 @@ export default defineConfig(({ mode }) => {
     plugins: [
       react(),
       authSessionDevMiddleware(),
-      payablesRbacDevMiddleware(),
+      fileLinkCopyDevMiddleware(),
+      ecrCreateDevMiddleware(),
+      ecrWorkflowActionDevMiddleware(),
+      createPrFromEcrDevMiddleware(),
+      createRfqFromEcrDevMiddleware(),
+      createRfqFromPrDevMiddleware(),
       legalReviewDevMiddleware(),
       bomDevMiddleware(),
       poShipmentDevMiddleware(),
@@ -2317,6 +3701,9 @@ export default defineConfig(({ mode }) => {
       supplierVoucherDevMiddleware(),
       supplierRfqDocumentsDevMiddleware(),
       supplierOnboardingDevMiddleware(),
+      // The generic ERP gateway consumes and re-streams mutation bodies, so it
+      // must run after every purpose-built local API endpoint.
+      payablesRbacDevMiddleware(),
       fileProxyDevMiddleware(proxyTarget, erpApiKey, erpApiSecret),
     ],
     define: {
@@ -2388,6 +3775,15 @@ export default defineConfig(({ mode }) => {
               }
               proxyReq.removeHeader("cookie");
               proxyReq.removeHeader("Cookie");
+
+              // RBAC middleware may parse ECR mutation bodies before the
+              // proxy. Re-stream that exact JSON payload to ERPNext.
+              const rawBody = (req as IncomingMessage & { __bidsphereRawBody?: string }).__bidsphereRawBody;
+              if (rawBody !== undefined) {
+                proxyReq.setHeader("Content-Type", "application/json");
+                proxyReq.setHeader("Content-Length", Buffer.byteLength(rawBody));
+                if (rawBody) proxyReq.write(rawBody);
+              }
 
               // Log ERP resource list queries (DocType / fields / filters).
               try {

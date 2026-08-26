@@ -18,8 +18,20 @@ export type FileProxyErrorBody = {
     is_private?: number | boolean;
     attached_to_doctype?: string;
     attached_to_name?: string;
+    attached_to_field?: string;
     exists: boolean;
   };
+};
+
+export type FileProxyFileRecord = {
+  name: string;
+  file_name?: string;
+  file_url: string;
+  is_private?: number | boolean;
+  is_folder?: number | boolean;
+  attached_to_doctype?: string;
+  attached_to_name?: string;
+  attached_to_field?: string;
 };
 
 export type FileProxySuccess = {
@@ -37,13 +49,51 @@ export type FileProxyFailure = {
   targetUrl: string;
 };
 
-function normalizeFilePath(filePath: string): string {
-  const normalized = filePath.startsWith("/") ? filePath : `/${filePath}`;
+export function canonicalErpFilePath(filePath: string): string | null {
+  if (typeof filePath !== "string" || !filePath || filePath !== filePath.trim()) return null;
+  let decoded = filePath;
+  let stable = false;
   try {
-    return decodeURIComponent(normalized);
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) {
+        stable = true;
+        break;
+      }
+      decoded = next;
+    }
   } catch {
-    return normalized;
+    return null;
   }
+  if (!stable) return null;
+  let normalized = decoded.startsWith("/") ? decoded : `/${decoded}`;
+  if (
+    /[\\?#\0\r\n]/.test(normalized) ||
+    !(/^\/files\//i.test(normalized) || /^\/private\/files\//i.test(normalized))
+  ) {
+    return null;
+  }
+  if (/^\/private\/files\//i.test(normalized)) {
+    normalized = `/private/files/${normalized.slice(15)}`;
+  } else if (/^\/files\//i.test(normalized)) {
+    normalized = `/files/${normalized.slice(7)}`;
+  }
+
+  const segments = normalized.split("/");
+  const fileSegments = normalized.startsWith("/private/files/")
+    ? segments.slice(3)
+    : segments.slice(2);
+  if (
+    fileSegments.length === 0 ||
+    fileSegments.some((segment) => !segment || segment === "." || segment === "..")
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+function normalizeFilePath(filePath: string): string {
+  return canonicalErpFilePath(filePath) || "";
 }
 
 /** Encode path segments for an HTTP request URL (not for ERP file_url params). */
@@ -387,12 +437,45 @@ async function fetchOnce(
   return { status: upstream.status, headers: upstream.headers, buffer };
 }
 
-async function lookupFileDoc(
+class FileProxyLookupError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "FileProxyLookupError";
+    this.status = status;
+  }
+}
+
+export async function resolveExactErpFileRecord(
   base: string,
   filePath: string,
   headers: Record<string, string>,
-): Promise<FileProxyErrorBody["file"]> {
+  fileId?: string,
+): Promise<FileProxyFileRecord> {
   try {
+    // If explicit persistent fileId is provided, resolve directly by primary key
+    if (
+      fileId &&
+      typeof fileId === "string" &&
+      fileId.trim() &&
+      !fileId.startsWith("/") &&
+      !fileId.startsWith("att-") &&
+      !fileId.startsWith("direct-")
+    ) {
+      const idUrl = `${base}/api/resource/File/${encodeURIComponent(fileId.trim())}`;
+      const idRes = await fetch(idUrl, {
+        headers: { ...headers, Accept: "application/json" },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (idRes.ok) {
+        const json = (await idRes.json()) as { data?: FileProxyFileRecord };
+        if (json.data?.name && json.data?.file_url) {
+          return json.data;
+        }
+      }
+    }
+
     const filters = encodeURIComponent(
       JSON.stringify([["file_url", "=", filePath]]),
     );
@@ -402,42 +485,42 @@ async function lookupFileDoc(
         "file_name",
         "file_url",
         "is_private",
+        "is_folder",
         "attached_to_doctype",
         "attached_to_name",
+        "attached_to_field",
       ]),
     );
     const url =
       `${base}/api/resource/File?filters=${filters}&fields=${fields}` +
-      `&limit_page_length=1`;
+      `&limit_page_length=2`;
     const res = await fetch(url, {
       headers: { ...headers, Accept: "application/json" },
+      signal: AbortSignal.timeout(10_000),
     });
-    const json = (await res.json()) as {
-      data?: Array<{
-        name?: string;
-        file_name?: string;
-        file_url?: string;
-        is_private?: number | boolean;
-        attached_to_doctype?: string;
-        attached_to_name?: string;
-      }>;
-    };
-    const row = Array.isArray(json.data) ? json.data[0] : undefined;
-    if (!row) {
-      return { exists: false, file_url: filePath };
+    if (!res.ok) {
+      throw new FileProxyLookupError(
+        "Unable to verify the requested File record.",
+        res.status >= 500 ? 502 : res.status,
+      );
     }
-    return {
-      exists: true,
-      name: row.name,
-      file_name: row.file_name,
-      file_url: row.file_url,
-      is_private: row.is_private,
-      attached_to_doctype: row.attached_to_doctype,
-      attached_to_name: row.attached_to_name,
+    const json = (await res.json()) as {
+      data?: FileProxyFileRecord[];
     };
+    const rows = (Array.isArray(json.data) ? json.data : []).filter((row) =>
+      canonicalErpFilePath(String(row.file_url || "")) === filePath
+    );
+    if (rows.length === 0) {
+      throw new FileProxyLookupError("File is no longer available.", 404);
+    }
+    if (rows.length !== 1 || !rows[0]?.name) {
+      throw new FileProxyLookupError("The requested file path is ambiguous.", 403);
+    }
+    return rows[0];
   } catch (err) {
+    if (err instanceof FileProxyLookupError) throw err;
     console.warn("[file-proxy] File DocType lookup failed:", err);
-    return { exists: false, file_url: filePath };
+    throw new FileProxyLookupError("Unable to verify the requested File record.", 502);
   }
 }
 
@@ -449,16 +532,30 @@ async function lookupFileDoc(
 export async function fetchErpFile(opts: {
   baseUrl: string;
   filePath: string;
+  fileId?: string;
   apiKey?: string;
   apiSecret?: string;
   cookie?: string;
   method?: "GET" | "HEAD";
+  authorizeFile: (file: FileProxyFileRecord) => Promise<void>;
 }): Promise<FileProxySuccess | FileProxyFailure> {
   const base = opts.baseUrl.replace(/\/+$/, "").replace(/\/api$/, "");
   const rawPath = normalizeFilePath(opts.filePath);
-  const httpPath = encodeFilePathForHttp(rawPath);
   const headers = buildUpstreamHeaders(opts);
   const method = opts.method || "GET";
+  if (!rawPath) {
+    return {
+      ok: false,
+      status: 400,
+      targetUrl: "",
+      body: {
+        success: false,
+        status: 400,
+        message: "Invalid file path.",
+      },
+    };
+  }
+  const httpPath = encodeFilePathForHttp(rawPath);
   const isPrivate = rawPath.startsWith("/private/files/");
 
   const directUrl = `${base}${httpPath}`;
@@ -466,12 +563,39 @@ export async function fetchErpFile(opts: {
 
   console.info("[file-proxy] incoming", {
     filePath: rawPath,
+    fileId: opts.fileId,
     isPrivate,
     isPublicFiles: rawPath.startsWith("/files/"),
     hasApiKey: Boolean(opts.apiKey && opts.apiSecret),
     hasSidCookie: Boolean(opts.cookie && /\bsid=/.test(opts.cookie)),
     method,
   });
+
+  let file: FileProxyFileRecord;
+  try {
+    file = await resolveExactErpFileRecord(base, rawPath, headers, opts.fileId);
+    await opts.authorizeFile(file);
+  } catch (err) {
+    const status = err && typeof err === "object" && "status" in err
+      ? Number((err as { status?: number }).status) || 403
+      : 403;
+    const safeStatus = status >= 400 && status < 600 ? status : 403;
+    return {
+      ok: false,
+      status: safeStatus,
+      targetUrl,
+      body: {
+        success: false,
+        status: safeStatus,
+        message: safeStatus === 404
+          ? "Document not found."
+          : safeStatus >= 500
+            ? "Unable to verify the requested file."
+            : "You do not have permission to view this document.",
+        detail: err instanceof Error ? err.message : "File authorization failed.",
+      },
+    };
+  }
 
   try {
     let result = await fetchOnce(directUrl, headers, method);
@@ -545,12 +669,10 @@ export async function fetchErpFile(opts: {
           classifyType,
           classifyPreview,
         );
-        const file = await lookupFileDoc(base, rawPath, headers);
-        console.info("[file-proxy] File DocType", file);
         return {
           ok: false,
           status: body.status,
-          body: { ...body, file },
+          body: { ...body, file: { ...file, exists: true } },
           targetUrl,
         };
       }
@@ -608,6 +730,7 @@ export async function fetchErpPdf(opts: {
   apiSecret?: string;
   cookie?: string;
   method?: "GET" | "HEAD";
+  authorizeFile: (file: FileProxyFileRecord) => Promise<void>;
 }): Promise<FileProxySuccess | FileProxyFailure> {
   const result = await fetchErpFile(opts);
   if (!result.ok) return result;
@@ -624,5 +747,5 @@ export async function fetchErpPdf(opts: {
 }
 
 export function isValidErpFilePath(filePath: string): boolean {
-  return /^\/?(private\/)?files\//.test(filePath);
+  return canonicalErpFilePath(filePath) !== null;
 }

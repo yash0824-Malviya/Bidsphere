@@ -438,30 +438,37 @@ export async function submitRFQ(name: string): Promise<RequestForQuotation> {
 /* -------------------------------------------------------------------------- */
 
 /** List Purchase Orders, optionally filtered. */
+export async function getPurchaseOrdersStrict(
+  filters?: ListParams
+): Promise<PurchaseOrder[]> {
+  return apiGet<PurchaseOrder[]>(
+    buildResourceUrl(PO_DOCTYPE),
+    buildListConfig({
+      fields: [
+        "name",
+        "supplier",
+        "status",
+        "transaction_date",
+        "schedule_date",
+        "grand_total",
+        "currency",
+        "per_received",
+        "per_billed",
+        "modified",
+      ],
+      order_by: "modified desc",
+      limit_page_length: 50,
+      ...filters,
+    })
+  );
+}
+
+/** Tolerant list used by dashboards that should degrade to an empty state. */
 export async function getPurchaseOrders(
   filters?: ListParams
 ): Promise<PurchaseOrder[]> {
   try {
-    return await apiGet<PurchaseOrder[]>(
-      buildResourceUrl(PO_DOCTYPE),
-      buildListConfig({
-        fields: [
-          "name",
-          "supplier",
-          "status",
-          "transaction_date",
-          "schedule_date",
-          "grand_total",
-          "currency",
-          "per_received",
-          "per_billed",
-          "modified",
-        ],
-        order_by: "modified desc",
-        limit_page_length: 50,
-        ...filters,
-      })
-    );
+    return await getPurchaseOrdersStrict(filters);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn("[Purchase Orders] 403/Error:", message);

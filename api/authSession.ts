@@ -247,6 +247,8 @@ export async function authenticateWithPassword(
 
   const { key, secret } = readErpAuthConfig();
   let erpnextRoles: string[] = [];
+  let canonicalUserName = "";
+  let canonicalEmail = "";
   try {
     const userUrl =
       `${baseUrl}/api/resource/User/${encodeURIComponent(usr)}` +
@@ -259,9 +261,22 @@ export async function authenticateWithPassword(
     });
     if (userRes.ok) {
       const userJson = (await userRes.json()) as {
-        data?: { enabled?: number; roles?: Array<{ role?: string }> };
+        data?: {
+          name?: string;
+          email?: string;
+          enabled?: number;
+          roles?: Array<{ role?: string }>;
+        };
       };
       const userData = userJson.data;
+      canonicalUserName = String(userData?.name || "").trim();
+      canonicalEmail = String(userData?.email || "").trim().toLowerCase();
+      if (!canonicalUserName) {
+        throw new AuthSessionError(
+          "Unable to verify the canonical ERPNext user identity.",
+          502,
+        );
+      }
       if (userData?.enabled === 0) {
         throw new AuthSessionError(
           "This account has been disabled. Contact your administrator.",
@@ -271,20 +286,37 @@ export async function authenticateWithPassword(
       erpnextRoles = (userData?.roles ?? [])
         .map((r) => String(r.role || ""))
         .filter(Boolean);
+    } else {
+      throw new AuthSessionError(
+        "Unable to verify ERPNext account roles. Please try again.",
+        userRes.status >= 500 ? 502 : 403,
+      );
     }
   } catch (err) {
     if (err instanceof AuthSessionError) throw err;
-    // Role fetch failure is non-fatal — email map still resolves known users.
+    throw new AuthSessionError(
+      "Unable to verify ERPNext account roles. Please try again.",
+      502,
+      { cause: err instanceof Error ? err.message : String(err) },
+    );
   }
 
-  const email = usr.includes("@") ? usr : `${usr}@erpnext`;
+  const email = canonicalEmail || (canonicalUserName.includes("@")
+    ? canonicalUserName.toLowerCase()
+    : "");
   const role = resolveServerRole({
-    name: usr,
+    name: canonicalUserName,
     email,
     erpnext_roles: erpnextRoles,
   });
+  if (!role) {
+    throw new AuthSessionError(
+      "This account does not have a BidSphere application role. Contact your administrator.",
+      403,
+    );
+  }
   const access_token = issueInternalAccessToken({
-    sub: usr,
+    sub: canonicalUserName,
     email,
     role,
   });
@@ -308,7 +340,7 @@ export async function authenticateWithPassword(
       typeof data.home_page === "string" ? data.home_page : undefined,
     role,
     email,
-    name: usr,
+    name: canonicalUserName,
     access_token,
     erpnext_roles: erpnextRoles,
   };

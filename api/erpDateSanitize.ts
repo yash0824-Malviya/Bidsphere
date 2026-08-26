@@ -71,6 +71,9 @@ const DATETIME_FIELDS = new Set([
   "updated_at",
 ]);
 
+/** Frappe optimistic-lock/audit stamps must be echoed byte-for-byte. */
+const PASSTHROUGH_LOCK_FIELDS = new Set(["modified", "creation"]);
+
 function looksLikeIsoDatetime(value: string): boolean {
   const v = value.trim();
   if (ERP_DATETIME_SAFE.test(v) || ERP_DATE_SAFE.test(v)) return false;
@@ -87,6 +90,7 @@ export function sanitizeErpPayloadDates<T>(input: T, keyHint = ""): T {
   if (input == null) return input;
 
   if (typeof input === "string") {
+    if (PASSTHROUGH_LOCK_FIELDS.has(keyHint)) return input;
     if (!looksLikeIsoDatetime(input)) return input;
     if (DATE_ONLY_FIELDS.has(keyHint)) {
       return (formatERPNextDate(input) ??
@@ -103,6 +107,10 @@ export function sanitizeErpPayloadDates<T>(input: T, keyHint = ""): T {
   if (typeof input === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+      if (PASSTHROUGH_LOCK_FIELDS.has(k)) {
+        out[k] = v;
+        continue;
+      }
       // Already calendar YYYY-MM-DD — never run through Date/UTC (GRN posting_date).
       if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.trim())) {
         out[k] = v.trim();

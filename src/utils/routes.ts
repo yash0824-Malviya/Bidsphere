@@ -12,6 +12,7 @@ import { APP_NAME } from "../config/branding";
 import type { AppRole } from "../config/roles";
 
 import { FEATURE_FLAGS } from "../config/featureFlags";
+import { formatECRNumber } from "../config/ecrRoles";
 
 export interface NavChild {
   label: string;
@@ -99,6 +100,16 @@ export const NAV_ITEMS: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 
 export const ROUTE_TITLES: Record<string, string> = {
   "/dashboard": "Dashboard",
+  "/ecr": "ECR",
+  "/ecr/new": "New Change Request",
+  "/ecr/purchase-requisitions": "Purchase Requisitions",
+  "/ecr/rfq-master": "RFQ Master",
+  "/intake": "Business Intake",
+  "/intake/pending-business-cases": "Pending Business Cases",
+  "/intake/business-needs": "Business Needs",
+  "/intake/business-needs/new": "Business Need Intake",
+  "/intake/business-cases": "Business Cases",
+  "/intake/dashboard": "Intake Dashboard",
   "/p2p": "P2P Core",
   "/p2p/requisitions": "Material Requests",
   "/p2p/requisitions/new": "New Material Request",
@@ -221,13 +232,17 @@ export function getBreadcrumbs(pathname: string): Breadcrumb[] {
   const segments = pathname.split("/").filter(Boolean);
   const crumbs: Breadcrumb[] = [];
   let acc = "";
-  for (const seg of segments) {
+  for (let idx = 0; idx < segments.length; idx++) {
+    const seg = segments[idx];
     acc += `/${seg}`;
     const decoded = decodePathSegment(seg);
     let label: string;
     if (ROUTE_TITLES[acc]) {
-      // Prefer static module titles (e.g. /sourcing → "Sourcing (RFx)").
+      // Prefer static module titles (e.g. /sourcing → "Sourcing (RFx)", /ecr → "ECR").
       label = ROUTE_TITLES[acc];
+    } else if (segments[0] === "ecr" && idx === 1 && decoded !== "new" && decoded !== "purchase-requisitions" && decoded !== "rfq-master") {
+      // Format dynamic ECR business numbers (e.g. ECR-2026-85517) instead of raw DB id
+      label = formatECRNumber(decoded);
     } else if (looksLikeDocumentId(seg)) {
       // Keep ERPNext document names intact (PUR-RFQ-2026-00067, MAT-MR-…).
       label = decoded;

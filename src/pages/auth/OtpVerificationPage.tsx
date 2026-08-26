@@ -17,17 +17,17 @@ import {
 import AuthShell from "../../components/auth/AuthShell";
 import BrandLogo from "../../components/BrandLogo";
 import { APP_NAME } from "../../config/branding";
+import { POST_LOGIN_DESTINATION } from "../../utils/authRedirect";
 import {
   isDemoMfaEnabled,
   MFA_MAX_ATTEMPTS,
   MFA_OTP_LENGTH,
 } from "../../config/mfaConfig";
-import { getRoleHome, canAccessPath, type AppRole } from "../../config/roles";
+import { type AppRole } from "../../config/roles";
 import { prefetchDashboardForRole } from "../../api/prefetchDashboard";
 import { sendOTP, verifyOTP } from "../../services/mfa/otpService";
 import {
   getActiveMfaPending,
-  getMfaRedirectPath,
   useAuthStore,
 } from "../../store/authStore";
 import {
@@ -202,7 +202,7 @@ export default function OtpVerificationPage() {
         navigate(loginPath, { replace: true });
         return;
       }
-      const target = role ? getRoleHome(role) : getMfaRedirectPath();
+      const target = POST_LOGIN_DESTINATION;
       const previousPortal = getActivePortal();
       const newPortal = portalForRole(role) ?? requested;
       setActivePortal(newPortal);
@@ -428,13 +428,7 @@ export default function OtpVerificationPage() {
         return;
       }
 
-      const saved = getMfaRedirectPath();
-      const target =
-        role && canAccessPath(role, saved)
-          ? saved
-          : role
-            ? getRoleHome(role)
-            : "/dashboard";
+      const target = POST_LOGIN_DESTINATION;
 
       if (role) prefetchDashboardForRole(role);
 

@@ -1,9 +1,14 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { RbacError, requireAnyAuth } from "./rbacAuth.js";
+import {
+  RbacError,
+  requireAnyAuth,
+  type AccessPrincipal,
+} from "./rbacAuth.js";
 import {
   fetchErpFile,
   isValidErpFilePath,
 } from "./fileProxyCore.js";
+import { authorizePersistedFileRead } from "./fileResourceGuard.js";
 import {
   assertSupplierMayDownloadRfqFile,
   buildSupplierAccessCandidates,
@@ -59,53 +64,13 @@ export default async function handler(
     return;
   }
 
+  let principal: AccessPrincipal;
   try {
-    const principal = requireAnyAuth(
+    principal = requireAnyAuth(
       req.headers as Record<string, unknown>,
       undefined,
       req.query as Record<string, unknown>,
     );
-
-    /* Supplier downloads with an RFQ context: enforce visibility server-side. */
-    if (principal.typ === "supplier") {
-      const rawRfq = req.query.rfq;
-      const rfqName = Array.isArray(rawRfq) ? rawRfq[0] : rawRfq;
-      if (typeof rfqName === "string" && rfqName.trim()) {
-        const rawExplicit = req.query.erp_supplier_id;
-        const explicitSupplier = Array.isArray(rawExplicit)
-          ? rawExplicit[0]
-          : rawExplicit;
-        const supplierCandidates = buildSupplierAccessCandidates({
-          explicitSupplierId:
-            typeof explicitSupplier === "string" ? explicitSupplier : undefined,
-          jwtSupplier: principal.supplier,
-          jwtSub: principal.sub,
-        });
-        const supplierId = supplierCandidates[0] || "";
-        const rawPath = req.query.path;
-        const filePath = Array.isArray(rawPath) ? rawPath[0] : rawPath;
-        if (typeof filePath === "string" && filePath.trim()) {
-          try {
-            await assertSupplierMayDownloadRfqFile({
-              rfqName: rfqName.trim(),
-              supplierId,
-              supplierCandidates,
-              filePath: filePath.trim(),
-            });
-          } catch (aclErr) {
-            if (aclErr instanceof SupplierRfqDocumentsError) {
-              res.status(aclErr.status).json({
-                success: false,
-                message: aclErr.message,
-                status: aclErr.status,
-              });
-              return;
-            }
-            throw aclErr;
-          }
-        }
-      }
-    }
   } catch (err) {
     if (err instanceof RbacError) {
       res.status(err.status).json({
@@ -128,15 +93,17 @@ export default async function handler(
   }
 
   const rawPath = req.query.path;
-  const filePath = Array.isArray(rawPath) ? rawPath[0] : rawPath;
-  if (!filePath || typeof filePath !== "string") {
+  if (Array.isArray(rawPath) || !rawPath || typeof rawPath !== "string") {
     res.status(400).json({
       success: false,
-      message: "Missing 'path' query parameter.",
+      message: Array.isArray(rawPath)
+        ? "Duplicate 'path' query parameters are not allowed."
+        : "Missing 'path' query parameter.",
       status: 400,
     });
     return;
   }
+  const filePath = rawPath;
   if (!isValidErpFilePath(filePath)) {
     res.status(400).json({
       success: false,
@@ -144,6 +111,56 @@ export default async function handler(
       status: 400,
     });
     return;
+  }
+
+  let supplierRfqAuthorized = false;
+  if (principal.typ === "supplier") {
+    const rawRfq = req.query.rfq;
+    const rawExplicit = req.query.erp_supplier_id;
+    if (Array.isArray(rawRfq) || Array.isArray(rawExplicit)) {
+      res.status(400).json({
+        success: false,
+        message: "Duplicate supplier authorization parameters are not allowed.",
+        status: 400,
+      });
+      return;
+    }
+    const rfqName = typeof rawRfq === "string" ? rawRfq.trim() : "";
+    if (rfqName) {
+      const supplierCandidates = buildSupplierAccessCandidates({
+        explicitSupplierId:
+          typeof rawExplicit === "string" ? rawExplicit : undefined,
+        jwtSupplier: principal.supplier,
+        jwtSub: principal.sub,
+      });
+      try {
+        await assertSupplierMayDownloadRfqFile({
+          rfqName,
+          supplierId: supplierCandidates[0] || "",
+          supplierCandidates,
+          filePath,
+        });
+        supplierRfqAuthorized = true;
+      } catch (aclErr) {
+        if (aclErr instanceof SupplierRfqDocumentsError) {
+          res.status(aclErr.status).json({
+            success: false,
+            message: aclErr.message,
+            status: aclErr.status,
+          });
+          return;
+        }
+        const status = aclErr && typeof aclErr === "object" && "status" in aclErr
+          ? Number((aclErr as { status?: number }).status) || 403
+          : 403;
+        res.status(status >= 400 && status < 600 ? status : 403).json({
+          success: false,
+          message: "You do not have permission to view this document.",
+          status: status >= 400 && status < 600 ? status : 403,
+        });
+        return;
+      }
+    }
   }
 
   let base: string;
@@ -171,13 +188,43 @@ export default async function handler(
     return;
   }
 
+  const loadDocument = async (
+    doctype: string,
+    name: string,
+  ): Promise<Record<string, unknown>> => {
+    const response = await fetch(
+      `${base}/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`,
+      {
+        headers: {
+          Accept: "application/json",
+          Authorization: `token ${creds.key}:${creds.secret}`,
+        },
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+    if (!response.ok) throw new RbacError(`${doctype} not found.`, 403);
+    const payload = await response.json() as { data?: Record<string, unknown> };
+    if (!payload.data) throw new RbacError(`${doctype} not found.`, 403);
+    return payload.data;
+  };
+
+  const rawFileId = req.query.file_id || req.query.fileId;
+  const fileId = typeof rawFileId === "string" ? rawFileId : undefined;
+
   const result = await fetchErpFile({
     baseUrl: base,
     filePath,
+    fileId,
     apiKey: creds.key,
     apiSecret: creds.secret,
     cookie: extractCookie(req),
     method: req.method === "HEAD" ? "HEAD" : "GET",
+    authorizeFile: (file) => authorizePersistedFileRead({
+      principal,
+      file,
+      loadDocument,
+      supplierContextAuthorized: supplierRfqAuthorized,
+    }),
   });
 
   // Narrow FileProxyFailure before reading `.body`.

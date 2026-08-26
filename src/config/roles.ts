@@ -1,6 +1,7 @@
 import {
   Bell,
   Boxes,
+  Briefcase,
   ClipboardCheck,
   ClipboardList,
   Factory,
@@ -29,7 +30,14 @@ export type AppRole =
   | "warehouse"
   | "legal"
   | "department"
-  | "manufacturing";
+  | "executive"
+  | "manufacturing"
+  // ECR roles
+  | "engineer"
+  | "engineering"
+  | "operations"
+  | "quality"
+  | "program_manager";
 
 export const ROLE_LABELS: Record<AppRole, string> = {
   admin: "Administrator",
@@ -40,25 +48,34 @@ export const ROLE_LABELS: Record<AppRole, string> = {
   warehouse: "Warehouse Manager",
   legal: "Legal Reviewer",
   department: "Department User",
+  executive: "Executive Management",
   manufacturing: "Manufacturing Manager",
+  // ECR roles
+  engineer: "Engineer",
+  engineering: "Engineering Manager",
+  operations: "Operations Manager",
+  quality: "Quality Manager",
+  program_manager: "Program Manager",
 };
 
 /** Default landing route after login per role. */
 export const ROLE_HOME: Record<AppRole, string> = {
-  admin: "/admin",
+  admin: "/dashboard",
   procurement: "/dashboard",
   procurement_team: "/dashboard",
   finance: "/dashboard",
-  finance_executive: "/budget",
-  warehouse: "/warehouse/dashboard",
-  // The Legal Reviewer dashboard (KPI counts + pending queue) lives at
-  // /dashboard and reads the "Legal Document Review" DocType — the single
-  // source of truth. It must NOT land on the legacy /sourcing/legal-reviews
-  // page, which reads RFQ workflow custom fields instead.
+  finance_executive: "/dashboard",
+  warehouse: "/dashboard",
   legal: "/dashboard",
   department: "/dashboard",
-  // Manufacturing / Production Manager — BOM Management is the primary workspace.
-  manufacturing: "/manufacturing/boms",
+  executive: "/dashboard",
+  manufacturing: "/dashboard",
+  // ECR roles
+  engineer: "/dashboard",
+  engineering: "/dashboard",
+  operations: "/dashboard",
+  quality: "/dashboard",
+  program_manager: "/dashboard",
 };
 
 /** Known role users (email → role). Comparison is case-insensitive. */
@@ -71,6 +88,9 @@ export const ROLE_USER_EMAILS: Record<string, AppRole> = {
   "warehouse@netlink.com": "warehouse",
   "legal@netlink.com": "legal",
   "department@netlink.com": "department",
+  // department.head is merged into department — per spec, no Department Head role.
+  "department.head@netlink.com": "department",
+  "executive@netlink.com": "executive",
   "manufacturing@netlink.com": "manufacturing",
   "production@netlink.com": "manufacturing",
 };
@@ -87,6 +107,7 @@ export const ERPNEXT_ROLE_MAP: Record<string, AppRole> = {
   "Purchase Manager": "procurement",
   /** Operational PO ownership after Manager approves the RFQ → PO path. */
   "Procurement Team": "procurement_team",
+  "Procurement User": "procurement_team",
   "Purchase User": "procurement_team",
   "Finance Manager": "finance",
   "Finance Executive": "finance_executive",
@@ -101,7 +122,58 @@ export const ERPNEXT_ROLE_MAP: Record<string, AppRole> = {
   "Manufacturing Manager": "manufacturing",
   "Manufacturing User": "manufacturing",
   "Production Manager": "manufacturing",
+  "Engineer": "engineer",
+  "engineer": "engineer",
+  "Engineering Manager": "engineering",
+  "engineering manager": "engineering",
+  "Operations Manager": "operations",
+  "operations manager": "operations",
+  "Quality Manager": "quality",
+  "quality manager": "quality",
+  "Program Manager": "program_manager",
+  "program manager": "program_manager",
 };
+
+/**
+ * Case-insensitive role normalizer that converts any representation
+ * (e.g. "Engineer", "engineer", "ENGINEER", "Engineering Manager", etc.)
+ * to the canonical AppRole.
+ */
+export function normalizeAppRole(role?: string | null): AppRole {
+  if (!role) return "procurement";
+  const trimmed = role.trim();
+  const lower = trimmed.toLowerCase();
+
+  // If already a valid lowercase AppRole key
+  if (lower in ROLE_LABELS) {
+    return lower as AppRole;
+  }
+
+  // Check ERPNEXT_ROLE_MAP case-insensitively
+  for (const [erpKey, appRole] of Object.entries(ERPNEXT_ROLE_MAP)) {
+    if (erpKey.toLowerCase() === lower) {
+      return appRole;
+    }
+  }
+
+  // Canonical role naming mappings
+  if (lower === "engineer") return "engineer";
+  if (lower === "engineering manager" || lower === "engineering_manager" || lower === "engineering") return "engineering";
+  if (lower === "operations manager" || lower === "operations_manager" || lower === "operations") return "operations";
+  if (lower === "quality manager" || lower === "quality_manager" || lower === "quality") return "quality";
+  if (lower === "program manager" || lower === "program_manager") return "program_manager";
+  if (lower === "system manager" || lower === "administrator" || lower === "admin") return "admin";
+  if (lower === "procurement manager" || lower === "purchase manager" || lower === "procurement") return "procurement";
+  if (lower === "procurement team" || lower === "purchase user" || lower === "procurement_team") return "procurement_team";
+  if (lower === "finance manager" || lower === "accounts manager" || lower === "finance") return "finance";
+  if (lower === "finance executive" || lower === "accounts user" || lower === "finance_executive") return "finance_executive";
+  if (lower === "warehouse manager" || lower === "stock manager" || lower === "warehouse") return "warehouse";
+  if (lower === "legal reviewer" || lower === "legal") return "legal";
+  if (lower === "department user" || lower === "department") return "department";
+  if (lower === "manufacturing manager" || lower === "production manager" || lower === "manufacturing") return "manufacturing";
+
+  return "procurement";
+}
 
 /* ──────────────────────────────────────────────────────────────────────────
  * Centralized role-based navigation registry
@@ -115,6 +187,7 @@ export const ERPNEXT_ROLE_MAP: Record<string, AppRole> = {
 
 type NavModuleId =
   | "dashboard"
+  | "intake"
   | "sourcing"
   | "p2p"
   | "material_requests"
@@ -122,7 +195,8 @@ type NavModuleId =
   | "inventory"
   | "budget"
   | "reports"
-  | "admin-audit";
+  | "admin-audit"
+  | "engineering_changes";
 
 type P2PChildId =
   | "requisitions"
@@ -254,6 +328,7 @@ const SUPPLIERS_CHILDREN_TEAM: NavChild[] = [
 
 const MODULE_ICONS: Record<NavModuleId, LucideIcon> = {
   dashboard: LayoutDashboard,
+  intake: Briefcase,
   sourcing: FileSearch,
   p2p: ShoppingCart,
   material_requests: ClipboardList,
@@ -262,6 +337,7 @@ const MODULE_ICONS: Record<NavModuleId, LucideIcon> = {
   budget: Wallet,
   reports: ClipboardCheck,
   "admin-audit": Shield,
+  engineering_changes: Factory,
 };
 
 /** Department User — My Requests only (create via dashboard). */
@@ -290,15 +366,15 @@ interface RoleNavConfig {
 const ROLE_NAV_CONFIG: Record<AppRole, RoleNavConfig> = {
   // Admin — governance, user access, audit, and system administration only.
   admin: {
-    modules: ["admin-audit"],
+    modules: ["admin-audit", "intake", "engineering_changes"],
     p2pChildren: [],
   },
-  // Procurement Manager — RFQ lifecycle through PO Approval only.
-  // Operational Purchase Order work is owned by Procurement Team.
-  // Reports → Total Spend (KPI drill-down + financial reporting).
+  // Procurement Manager — Business Intake Queue, RFQ lifecycle through PO Approval.
   procurement: {
     modules: [
       "dashboard",
+      "engineering_changes",
+      "intake",
       "sourcing",
       "material_requests",
       "suppliers",
@@ -307,43 +383,57 @@ const ROLE_NAV_CONFIG: Record<AppRole, RoleNavConfig> = {
     ],
     p2pChildren: [],
   },
-  // Procurement Team — PO create/manage + read-only GRN. No invoices/vouchers/
-  // onboarding; amendments / confirmation / delivery tracking stay omitted.
   procurement_team: {
-    modules: ["dashboard", "p2p", "suppliers", "reports"],
+    modules: ["dashboard", "engineering_changes", "intake", "p2p", "suppliers", "reports"],
     p2pChildren: ["new-po", "purchase-orders", "grn"],
   },
-  // Warehouse Manager — module under redevelopment; dashboard placeholder only.
   warehouse: {
     modules: ["dashboard"],
     p2pChildren: [],
   },
-  // Finance Manager — payables + budget approval. GRN access is needed so
-  // Finance can open a goods receipt from the voucher queue and create a
-  // voucher (suppliers create invoices in the Supplier Portal).
   finance: {
-    modules: ["dashboard", "p2p", "budget"],
+    modules: ["intake", "dashboard", "p2p", "budget"],
     p2pChildren: ["vouchers", "invoices", "payments", "grn"],
   },
-  // Finance Executive — budget module only; home dashboard lives at /budget.
   finance_executive: {
-    modules: ["budget"],
+    modules: ["intake", "budget"],
     p2pChildren: [],
   },
-  // Legal Reviewer — sourcing only (Legal Reviews page).
   legal: {
-    modules: ["dashboard", "sourcing"],
+    modules: ["intake", "dashboard", "sourcing"],
     p2pChildren: [],
   },
   department: {
-    modules: ["dashboard", "material_requests"],
+    modules: ["intake", "dashboard", "material_requests"],
     p2pChildren: [],
   },
-  // Manufacturing / Production Manager — Manufacturing (BOM) workspace. The
-  // sidebar is produced by a dedicated branch in getNavGroupsForRole; access is
-  // granted to the "/manufacturing" prefix in canAccessPath.
+  executive: {
+    modules: ["intake", "dashboard", "reports", "budget"],
+    p2pChildren: [],
+  },
   manufacturing: {
     modules: ["dashboard"],
+    p2pChildren: [],
+  },
+  // ECR roles
+  engineer: {
+    modules: ["dashboard", "engineering_changes"],
+    p2pChildren: [],
+  },
+  engineering: {
+    modules: ["dashboard", "engineering_changes"],
+    p2pChildren: [],
+  },
+  operations: {
+    modules: ["dashboard", "engineering_changes"],
+    p2pChildren: [],
+  },
+  quality: {
+    modules: ["dashboard", "engineering_changes"],
+    p2pChildren: [],
+  },
+  program_manager: {
+    modules: ["dashboard", "engineering_changes"],
     p2pChildren: [],
   },
 };
@@ -397,21 +487,21 @@ export function resolveRoleFromUser(user: {
     return "admin";
   }
 
-  // Known role mailboxes always win (keeps Manager vs Team distinct).
-  const emailRole = ROLE_USER_EMAILS[email] ?? ROLE_USER_EMAILS[name];
-  if (emailRole) return emailRole;
-
-  // Try resolving from ERPNext roles (supports any new user without code changes)
+  // ERPNext roles are authoritative. This keeps the application role-driven
+  // for every account rather than coupling ECR behavior to login addresses.
   if (user.erpnext_roles && user.erpnext_roles.length > 0) {
     const roleFromErp = resolveFromErpNextRoles(user.erpnext_roles);
     if (roleFromErp) {
-      // eslint-disable-next-line no-console
       console.log(`[Auth] Resolved role "${roleFromErp}" from ERPNext roles:`, user.erpnext_roles);
       return roleFromErp;
     }
   }
 
-  // eslint-disable-next-line no-console
+  // Compatibility fallback for installations whose role child table could
+  // not be fetched during login. Product permissions never inspect email.
+  const emailRole = ROLE_USER_EMAILS[email] ?? ROLE_USER_EMAILS[name];
+  if (emailRole) return emailRole;
+
   console.warn(`[Auth] No role mapping found for "${email}", defaulting to "procurement"`);
   return "procurement";
 }
@@ -423,6 +513,13 @@ export function resolveRoleFromUser(user: {
 export function resolveFromErpNextRoles(erpRoles: string[]): AppRole | null {
   const priorityOrder: AppRole[] = [
     "admin",
+    // Dedicated ECR roles outrank broad Purchase/User roles that may be
+    // granted only for ERP document access.
+    "program_manager",
+    "engineering",
+    "operations",
+    "quality",
+    "engineer",
     "legal",
     "finance",
     "finance_executive",
@@ -435,7 +532,10 @@ export function resolveFromErpNextRoles(erpRoles: string[]): AppRole | null {
   const resolved = new Set<AppRole>();
 
   for (const erpRole of erpRoles) {
-    const mapped = ERPNEXT_ROLE_MAP[erpRole];
+    const normalized = erpRole.trim().toLowerCase();
+    const mapped = Object.entries(ERPNEXT_ROLE_MAP).find(
+      ([erpName]) => erpName.toLowerCase() === normalized,
+    )?.[1];
     if (mapped) resolved.add(mapped);
   }
 
@@ -448,8 +548,9 @@ export function resolveFromErpNextRoles(erpRoles: string[]): AppRole | null {
   return null;
 }
 
-export function getRoleHome(role: AppRole): string {
-  return ROLE_HOME[role];
+export function getRoleHome(role: AppRole | string): string {
+  const normRole = normalizeAppRole(role);
+  return ROLE_HOME[normRole] ?? "/dashboard";
 }
 
 /**
@@ -564,6 +665,58 @@ function buildNavItem(id: NavModuleId, role: AppRole): NavItem {
         to: "/dashboard",
         icon: MODULE_ICONS.dashboard,
       };
+    case "intake": {
+      let children: NavChild[];
+      let defaultTo: string;
+
+      if (role === "admin") {
+        // Admin sees all Business Intake routes.
+        defaultTo = "/intake/business-needs";
+        children = [
+          { label: "Business Needs", to: "/intake/business-needs" },
+          { label: "Business Cases", to: "/intake/business-cases" },
+          { label: "Pending Business Cases", to: "/intake/pending-business-cases" },
+          { label: "Dashboard", to: "/intake/dashboard" },
+        ];
+      } else if (role === "procurement" || role === "procurement_team") {
+        // Procurement: queue + cases only — no Business Needs link in sidebar.
+        defaultTo = "/intake/pending-business-cases";
+        children = [
+          { label: "Business Cases", to: "/intake/business-cases" },
+          { label: "Pending Business Cases", to: "/intake/pending-business-cases" },
+        ];
+      } else if (role === "finance" || role === "legal") {
+        // Finance / Legal: Business Cases only — they access needs via linked records.
+        defaultTo = "/intake/business-cases";
+        children = [
+          { label: "Business Cases", to: "/intake/business-cases" },
+        ];
+      } else if (role === "executive") {
+        // Executive: dashboard as primary landing.
+        defaultTo = "/intake/dashboard";
+        children = [
+          { label: "Dashboard", to: "/intake/dashboard" },
+        ];
+      } else if (role === "department") {
+        // Department User: Business Needs only (no Cases in sidebar).
+        defaultTo = "/intake/business-needs";
+        children = [
+          { label: "Business Needs", to: "/intake/business-needs" },
+        ];
+      } else {
+        defaultTo = "/intake/business-needs";
+        children = [
+          { label: "Business Needs", to: "/intake/business-needs" },
+        ];
+      }
+
+      return {
+        label: "Business Intake",
+        to: defaultTo,
+        icon: MODULE_ICONS.intake,
+        children,
+      };
+    }
     case "sourcing": {
       const sourcingChildren =
         role === "legal"
@@ -675,18 +828,73 @@ function buildNavItem(id: NavModuleId, role: AppRole): NavItem {
           { label: "System Settings", to: "/admin/settings" },
         ],
       };
+    case "engineering_changes": {
+      const ecrChildren: NavChild[] = [];
+
+      if (role === "engineer") {
+        ecrChildren.push(
+          { label: "My ECRs", to: "/ecr" },
+          { label: "New ECR", to: "/ecr/new" },
+        );
+      } else if (role === "engineering") {
+        ecrChildren.push(
+          { label: "Engineering Review", to: "/ecr?filter=engineering" },
+          { label: "All ECRs", to: "/ecr" },
+        );
+      } else if (role === "operations") {
+        ecrChildren.push({ label: "All ECRs", to: "/ecr" });
+      } else if (role === "quality") {
+        ecrChildren.push({ label: "All ECRs", to: "/ecr" });
+      } else if (role === "program_manager") {
+        ecrChildren.push({ label: "All ECRs", to: "/ecr" });
+      } else if (role === "procurement_team") {
+        ecrChildren.push(
+          { label: "Procurement Review", to: "/ecr?filter=procurement-review" },
+          { label: "All ECRs", to: "/ecr" },
+        );
+      } else if (role === "procurement") {
+        ecrChildren.push(
+          { label: "RFQ Pending", to: "/ecr?filter=rfq-pending" },
+          { label: "All ECRs", to: "/ecr" },
+        );
+      } else {
+        ecrChildren.push({ label: "All ECRs", to: "/ecr" });
+      }
+
+      return {
+        label: "Engineering Changes",
+        to: "/ecr",
+        icon: MODULE_ICONS.engineering_changes,
+        children: ecrChildren,
+      };
+    }
   }
 }
 
+/** Keep one canonical Dashboard entry at the top of every internal sidebar. */
+function withDashboardFirst(items: NavItem[]): NavItem[] {
+  return [
+    {
+      label: "Dashboard",
+      to: "/dashboard",
+      icon: MODULE_ICONS.dashboard,
+    },
+    ...items.filter(
+      (item) => item.to !== "/dashboard" && item.label !== "Dashboard",
+    ),
+  ];
+}
+
 /** Sidebar navigation generated dynamically from the signed-in role. */
-export function getNavGroupsForRole(role: AppRole): NavGroup[] {
+export function getNavGroupsForRole(role: AppRole | string): NavGroup[] {
+  const normRole = normalizeAppRole(role);
   const supportGroup = NAV_GROUPS.find((g) => g.label === "Support");
 
-  if (role === "warehouse") {
+  if (normRole === "warehouse") {
     return [
       {
         label: "Warehouse",
-        items: [
+        items: withDashboardFirst([
           {
             label: "Dashboard",
             to: "/warehouse/dashboard",
@@ -749,18 +957,18 @@ export function getNavGroupsForRole(role: AppRole): NavGroup[] {
               { label: "Item Master", to: "/warehouse/inventory/items" },
             ],
           },
-        ],
+        ]),
       },
       ...(supportGroup ? [supportGroup] : []),
     ];
   }
 
-  // Department User — BOM upload, material requests, issued items.
-  if (role === "department") {
+  // Department User — BOM upload, material requests, issued items, Business Intake.
+  if (normRole === "department") {
     return [
       {
         label: "",
-        items: [
+        items: withDashboardFirst([
           { label: "Dashboard", to: "/dashboard", icon: LayoutDashboard },
           {
             label: "Department",
@@ -788,19 +996,29 @@ export function getNavGroupsForRole(role: AppRole): NavGroup[] {
               },
             ],
           },
+          {
+            // Business Intake — Department User sees only their own Business Needs.
+            // Business Cases are accessed via links from Need records, not sidebar.
+            label: "Business Intake",
+            to: "/intake/business-needs",
+            icon: Briefcase,
+            children: [
+              { label: "Business Needs", to: "/intake/business-needs" },
+            ],
+          },
           { label: "Notifications", to: "/notifications", icon: Bell },
-        ],
+        ]),
       },
       ...(supportGroup ? [supportGroup] : []),
     ];
   }
 
   // Manufacturing / Production Manager — BOM Management + Master Data review.
-  if (role === "manufacturing") {
+  if (normRole === "manufacturing") {
     return [
       {
         label: "",
-        items: [
+        items: withDashboardFirst([
           { label: "Dashboard", to: "/dashboard", icon: LayoutDashboard },
           {
             label: "Manufacturing",
@@ -826,22 +1044,30 @@ export function getNavGroupsForRole(role: AppRole): NavGroup[] {
             ],
           },
           { label: "Notifications", to: "/notifications", icon: Bell },
-        ],
+        ]),
       },
       ...(supportGroup ? [supportGroup] : []),
     ];
   }
 
-  // Finance Manager — Dashboard and the RFQ Financial Review are primary,
-  // top-level operational items (RFQ Financial Review sits directly below the
-  // Dashboard, out of any Budget submenu). Budget approval/monitoring/history
-  // live under the Budget group; payables under P2P Core.
-  if (role === "finance") {
+  // Finance Manager — Dashboard, Business Intake review (Cases only), RFQ Financial Review.
+  // Budget approval/monitoring/history live under the Budget group;
+  // payables under P2P Core.
+  // Finance accesses Business Needs via linked records from Business Cases — not sidebar.
+  if (normRole === "finance") {
     return [
       {
         label: "",
-        items: [
+        items: withDashboardFirst([
           { label: "Dashboard", to: "/dashboard", icon: LayoutDashboard },
+          {
+            label: "Business Intake",
+            to: "/intake/business-cases",
+            icon: Briefcase,
+            children: [
+              { label: "Business Cases", to: "/intake/business-cases" },
+            ],
+          },
           {
             label: "RFQ Financial Review",
             to: "/budget/pending-reviews",
@@ -859,14 +1085,16 @@ export function getNavGroupsForRole(role: AppRole): NavGroup[] {
             icon: ShoppingCart,
             children: buildP2PChildren("finance"),
           },
-        ],
+        ]),
       },
       ...(supportGroup ? [supportGroup] : []),
     ];
   }
 
-  const config = ROLE_NAV_CONFIG[role] ?? ROLE_NAV_CONFIG.procurement;
-  const mainItems = config.modules.map((id) => buildNavItem(id, role));
+  const config = ROLE_NAV_CONFIG[normRole] ?? ROLE_NAV_CONFIG.procurement;
+  const mainItems = withDashboardFirst(
+    config.modules.map((id) => buildNavItem(id, normRole)),
+  );
 
   return [
     { label: "", items: mainItems },
@@ -909,6 +1137,9 @@ function getAccessPrefixesForRole(role: AppRole): string[] {
         break;
       case "material_requests":
         prefixes.add("/material-requests");
+        break;
+      case "engineering_changes":
+        prefixes.add("/ecr");
         break;
       case "budget":
         prefixes.add("/budget");
@@ -1053,10 +1284,11 @@ const PROCUREMENT_TEAM_BLOCKED_PO_FOCUS = new Set([
  * Optional `search` (e.g. `?focus=confirmation`) is checked for Team deep-link denials.
  */
 export function canAccessPath(
-  role: AppRole,
+  role: AppRole | string,
   pathname: string,
   search = "",
 ): boolean {
+  const normRole = normalizeAppRole(role);
   const path = pathname.split("?")[0];
   const query =
     search ||
@@ -1068,7 +1300,7 @@ export function canAccessPath(
   }
 
   // Admin may access every internal route
-  if (role === "admin") return true;
+  if (normRole === "admin") return true;
 
   // Account / profile module — available to every authenticated internal role
   if (path === "/account" || path.startsWith("/account/")) return true;
@@ -1076,16 +1308,16 @@ export function canAccessPath(
   // Hard prefix denials — prevent cross-role URL access even if nav drifts
   if (path === "/admin" || path.startsWith("/admin/")) return false;
   if (path === "/warehouse" || path.startsWith("/warehouse/")) {
-    return role === "warehouse";
+    return normRole === "warehouse";
   }
   if (path === "/manufacturing" || path.startsWith("/manufacturing/")) {
-    return role === "manufacturing";
+    return normRole === "manufacturing";
   }
   if (path === "/department" || path.startsWith("/department/")) {
     if (path === "/department/projects" || path === "/department/programs") {
-      return role === "department" || role === "manufacturing";
+      return normRole === "department" || normRole === "manufacturing";
     }
-    if (role === "department") {
+    if (normRole === "department") {
       return (
         path === "/department/upload-bom" ||
         path === "/department/temporary-items" ||
@@ -1094,7 +1326,7 @@ export function canAccessPath(
         path.startsWith("/department/issued-items/")
       );
     }
-    if (role === "manufacturing") {
+    if (normRole === "manufacturing") {
       return (
         path === "/department/temporary-items" ||
         path.startsWith("/department/temporary-items/") ||
@@ -1107,10 +1339,27 @@ export function canAccessPath(
     return false;
   }
   if (path === "/finance" || path.startsWith("/finance/")) {
-    return role === "finance";
+    return normRole === "finance";
   }
   if (path === "/legal" || path.startsWith("/legal/")) {
-    return role === "legal";
+    return normRole === "legal";
+  }
+
+  // Engineering Changes (ECR) — route-level permission is more specific than
+  // the sidebar module so direct URLs cannot expose creator/procurement actions.
+  if (path === "/ecr" || path.startsWith("/ecr/")) {
+    const config = ROLE_NAV_CONFIG[normRole];
+    if (!config?.modules.includes("engineering_changes")) return false;
+    if (path === "/ecr/new") {
+      return normRole === "engineer";
+    }
+    if (/^\/ecr\/[^/]+\/edit$/.test(path)) {
+      return normRole === "engineer";
+    }
+    if (path === "/ecr/purchase-requisitions") {
+      return normRole === "procurement" || normRole === "procurement_team";
+    }
+    return true;
   }
 
   // Procurement Manager — financial Total Spend only under /p2p; no PO ops pages.
@@ -1232,7 +1481,9 @@ export function canAccessPath(
     return false;
   }
 
-  // Department User — dashboard + department portal + material requests.
+  // Department User — dashboard + department portal + material requests + Business Intake.
+  // Business Intake access: Business Needs (list + detail) and Business Cases (read-only).
+  // Explicitly denied: Procurement Queue (/intake/pending-business-cases), Intake Dashboard.
   if (role === "department") {
     if (
       path.startsWith("/support") ||
@@ -1241,6 +1492,17 @@ export function canAccessPath(
     ) {
       return true;
     }
+    // Business Intake access — Department User primary use-case.
+    if (path === "/intake/business-needs" || path.startsWith("/intake/business-needs/")) {
+      return true;
+    }
+    // Business Cases: read-only via linked Need records (e.g. from detail page).
+    if (path === "/intake/business-cases" || path.startsWith("/intake/business-cases/")) {
+      return true;
+    }
+    // Hard denials for intake routes not permitted to Department User.
+    if (path === "/intake/pending-business-cases") return false;
+    if (path === "/intake/dashboard") return false;
     if (path === "/department" || path.startsWith("/department/")) {
       if (path === "/department/temporary-items" || path.startsWith("/department/temporary-items/")) {
         return true;
@@ -1264,9 +1526,14 @@ export function canAccessPath(
   // Legal can view /sourcing/legal-reviews and individual RFQ detail
   // pages (read-only), but NOT create RFQs, manage templates, or view
   // the RFQ list.
-  // Finance Executive — budget module only (no finance manager pages).
+  // Finance Executive — budget module + read-only Business Intake.
   if (role === "finance_executive") {
     if (path === "/dashboard" || path.startsWith("/support") || path.startsWith("/notifications")) {
+      return true;
+    }
+    // Business Intake: read-only access to Business Cases and Needs.
+    if (path.startsWith("/intake/")) {
+      if (path === "/intake/pending-business-cases") return false;
       return true;
     }
     const allowed = [
@@ -1279,6 +1546,13 @@ export function canAccessPath(
     // Detail view for own budgets
     if (path.startsWith("/budget/detail/")) return true;
     return false;
+  }
+
+  // Finance — Business Intake access (all Business Cases for Finance gate approval).
+  if (role === "finance" && path.startsWith("/intake/")) {
+    // Finance sees Business Cases and Business Needs but not Procurement-only queue.
+    if (path === "/intake/pending-business-cases") return false;
+    return true;
   }
 
   // Finance Manager may approve/monitor budgets but not create them.
@@ -1306,6 +1580,11 @@ export function canAccessPath(
       path.startsWith("/notifications")
     )
       return true;
+    // Business Intake: Legal sees Business Cases for Legal gate approval.
+    if (path.startsWith("/intake/")) {
+      if (path === "/intake/pending-business-cases") return false;
+      return true;
+    }
     // Legacy RFQ-workflow page — kept reachable for old bookmarks/links but
     // no longer the primary nav target (see LEGAL_SOURCING_CHILDREN).
     if (path === "/sourcing/legal-reviews") return true;
@@ -1323,25 +1602,25 @@ export function canAccessPath(
 
   // GRN creation is Warehouse-only. Block direct navigation to the create
   // screen for every other role, even though they may view GRN records.
-  if (path === "/p2p/grn/new") return canCreateGRN(role);
+  if (path === "/p2p/grn/new") return canCreateGRN(normRole);
 
   // Voucher creation is Finance-only. Block the create screen for every other
   // role (Procurement / Warehouse view vouchers read-only) so it can't be
   // reached by URL manipulation.
-  if (path === "/p2p/vouchers/new") return canManageVouchers(role);
+  if (path === "/p2p/vouchers/new") return canManageVouchers(normRole);
 
   // `/p2p` is a pure redirect to the role's first P2P child. Allow the bare
   // index for any role that has the P2P module, without granting siblings.
-  if (path === "/p2p") return hasP2PModule(role);
+  if (path === "/p2p") return hasP2PModule(normRole);
 
   // Payment Processing page lives at /payments/process/:id (outside /p2p/),
   // but should be accessible to any role that can manage payments.
-  if (path.startsWith("/payments/")) return canManageVouchers(role);
+  if (path.startsWith("/payments/")) return canManageVouchers(normRole);
 
   // Linked PO drill-down from GRN / receipt workflows: roles with GRN or PO
   // module access may open a specific PO detail page (read-only for Warehouse).
   if (isPurchaseOrderDetailPath(path)) {
-    const config = ROLE_NAV_CONFIG[role] ?? ROLE_NAV_CONFIG.procurement;
+    const config = ROLE_NAV_CONFIG[normRole] ?? ROLE_NAV_CONFIG.procurement;
     if (
       config.p2pChildren.includes("purchase-orders") ||
       config.p2pChildren.includes("grn")
@@ -1350,17 +1629,34 @@ export function canAccessPath(
     }
   }
 
-  // Material Request routes — role-scoped; procurement sees forwarded queue only.
-  if (path.startsWith("/material-requests")) {
-    return canAccessMaterialRequestPath(role, path);
-  }
-
-  // Procurement may create RFQs (including from forwarded MRs).
-  if (role === "procurement" && path === "/sourcing/rfq/new") {
+  // Enterprise Business Intake module — route-level permissions for roles without early-return blocks.
+  // Note: department, finance, finance_executive, and legal roles are handled inline above
+  // (they have early-return blocks that preclude reaching this point).
+  if (path.startsWith("/intake")) {
+    // Procurement Queue — Procurement Manager only.
+    // (admin is handled by the early-return guard above and never reaches here)
+    if (path === "/intake/pending-business-cases") {
+      return normRole === "procurement";
+    }
+    // Executive Dashboard — Executive and Procurement (read-only).
+    if (path === "/intake/dashboard") {
+      return normRole === "executive" || normRole === "procurement";
+    }
+    // All other /intake routes accessible to procurement, executive, finance_executive, etc.
     return true;
   }
 
-  return getAccessPrefixesForRole(role).some(
+  // Material Request routes — role-scoped; procurement sees forwarded queue only.
+  if (path.startsWith("/material-requests")) {
+    return canAccessMaterialRequestPath(normRole, path);
+  }
+
+  // Procurement may create RFQs (including from forwarded MRs / approved Business Cases).
+  if (normRole === "procurement" && path === "/sourcing/rfq/new") {
+    return true;
+  }
+
+  return getAccessPrefixesForRole(normRole).some(
     (prefix) => path === prefix || path.startsWith(`${prefix}/`)
   );
 }

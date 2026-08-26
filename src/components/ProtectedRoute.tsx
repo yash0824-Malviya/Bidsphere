@@ -1,8 +1,9 @@
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { useEffect, useRef } from "react";
+import AccessDenied from "./AccessDenied";
 
-import { canAccessPath, getRoleHome, type AppRole } from "../config/roles";
+import { canAccessPath, getRoleHome, normalizeAppRole } from "../config/roles";
 import { authLog } from "../store/authStorage";
 import { useAuthStore } from "../store/authStore";
 import { hydrateAccessTokenFromRemember } from "../utils/accessToken";
@@ -106,7 +107,7 @@ export default function ProtectedRoute({ children }: Props) {
     return <Navigate to={loginForPath} replace state={{ from: location }} />;
   }
 
-  const role = (user.role ?? "procurement") as AppRole;
+  const role = normalizeAppRole(user.role);
   const active = portalForRole(role);
   if (active && getActivePortal() !== active) {
     setActivePortal(active);
@@ -179,8 +180,16 @@ export default function ProtectedRoute({ children }: Props) {
     }
   }
 
+  if (import.meta.env.DEV) {
+    authLog("access check", {
+      role,
+      path,
+      search,
+      allowed: canAccessPath(role, path, search),
+    });
+  }
+
   if (!canAccessPath(role, path, search)) {
-    const home = getRoleHome(role);
     const key = `role:${role}:${path}${search}`;
     if (deniedRef.current !== key) {
       deniedRef.current = key;
@@ -190,15 +199,15 @@ export default function ProtectedRoute({ children }: Props) {
         erpRoles: user.erpnext_roles ?? null,
         previousPortal: getActivePortal(),
         newPortal: portalForRole(role),
-        redirectTarget: home,
+        redirectTarget: "(access-denied-ui)",
         currentUrl: `${path}${search}`,
         currentRole: role,
         authSource: detectAuthSource(),
         reason: "rbac-path-denied",
       });
+      authLog("access denied", `ProtectedRoute → AccessDenied UI (role=${role}, path=${path})`);
     }
-    authLog("redirect decision", `ProtectedRoute → ${home} (RBAC deny)`);
-    return <Navigate to={home} replace />;
+    return <AccessDenied />;
   }
 
   return <>{children ?? <Outlet />}</>;

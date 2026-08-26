@@ -47,7 +47,7 @@ function FinanceKpiRow({ kpis, loading }: Props) {
     {
       label: "Pending RFQ Reviews",
       value: kpis.pendingRfqReviews.toLocaleString(),
-      hint: "Legal-approved RFQs awaiting finance",
+      hint: "Awaiting finance review",
       icon: FileSearch,
       to: "/budget/pending-reviews",
       accent: "text-amber-600 bg-amber-50",
@@ -81,7 +81,7 @@ function FinanceKpiRow({ kpis, loading }: Props) {
     {
       label: "GRNs Awaiting Voucher",
       value: kpis.grnsAwaitingVoucher.toLocaleString(),
-      hint: "Receipts pending voucher creation",
+      hint: "Receipts awaiting voucher",
       icon: FileClock,
       to: "/p2p/vouchers",
       accent: "text-primary-600 bg-primary-50",
@@ -90,7 +90,7 @@ function FinanceKpiRow({ kpis, loading }: Props) {
     {
       label: "Financial Exposure",
       value: formatCurrencyCompact(kpis.totalFinancialExposure),
-      hint: "Open POs, payables and commitments",
+      hint: "Open financial commitments",
       icon: CheckCircle2,
       to: "/budget",
       accent: "text-violet-600 bg-violet-50",
@@ -109,7 +109,7 @@ function FinanceKpiRow({ kpis, loading }: Props) {
           icon={c.icon}
           iconClassName={c.accent}
           to={c.to}
-          className={c.highlight ? "border-amber-200" : undefined}
+          className={c.highlight ? "kpi-card--attention" : undefined}
         />
       ))}
     </div>

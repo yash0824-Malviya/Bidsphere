@@ -4,6 +4,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -18,6 +19,7 @@ import {
   Boxes,
   Building2,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   ClipboardCheck,
   Clock,
@@ -30,6 +32,7 @@ import {
   Gavel,
   Landmark,
   Mail,
+  MoreHorizontal,
   Package,
   PackageCheck,
   Scale,
@@ -154,10 +157,24 @@ function backlogTone(count: number): Tone {
 export default function AdminDashboardPage() {
   const { t } = useTranslation();
   const layout = useOptionalLayout();
+  const moreActionsRef = useRef<HTMLDivElement>(null);
+  const [moreActionsOpen, setMoreActionsOpen] = useState(false);
+
   useLayoutEffect(() => {
     layout?.registerPageHeader();
     return () => layout?.unregisterPageHeader();
   }, [layout]);
+
+  // Close More Actions dropdown on outside click
+  useEffect(() => {
+    function handleOutside(e: MouseEvent) {
+      if (moreActionsRef.current && !moreActionsRef.current.contains(e.target as Node)) {
+        setMoreActionsOpen(false);
+      }
+    }
+    if (moreActionsOpen) document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, [moreActionsOpen]);
 
   // Ticker for live countdowns (auctions + SLA) — 30s cadence, efficient.
   const [now, setNow] = useState(() => Date.now());
@@ -318,42 +335,70 @@ export default function AdminDashboardPage() {
     { label: t("adminDashboard.pipeline.payment"), count: counts?.pendingPayments ?? 0, to: "/p2p/payments" },
   ];
 
-  const quickActions: Array<{ label: string; to: string; icon: LucideIcon }> = [
-    { label: t("adminDashboard.quickActions.createRfq"), to: "/sourcing/rfq/new", icon: FilePlus2 },
-    { label: t("adminDashboard.quickActions.createSupplier"), to: "/suppliers/new", icon: Building2 },
-    { label: t("adminDashboard.quickActions.createUser"), to: "/admin/users", icon: UserPlus },
-    { label: t("adminDashboard.quickActions.startAuction"), to: "/sourcing/reverse-bidding", icon: Gavel },
-    { label: t("adminDashboard.quickActions.viewReports"), to: "/admin/reports", icon: BarChart3 },
-    { label: t("adminDashboard.quickActions.manageWorkflow"), to: "/admin/workflows", icon: Workflow },
-    { label: t("adminDashboard.quickActions.manageSla"), to: "/admin/sla-configuration", icon: Timer },
-  ];
-
   const financeDash = financeDashQ.data;
 
   return (
-    <div className="admin-enterprise-dash -mt-1 pb-5">
-      {/* ── Header + Quick Actions ─────────────────────────────────────────── */}
-      <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 shadow-md">
-            <ShieldCheck className="h-5 w-5 text-white" />
+    <div className="admin-enterprise-dash -mt-1 pb-6">
+      {/* ── Compact Admin Header ────────────────────────────────────── */}
+      <header className="flex items-start justify-between gap-4">
+        {/* Breadcrumb + title */}
+        <div>
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <span style={{ fontSize: '12px', color: '#94A3B8', fontWeight: 400 }}>Home</span>
+            <ChevronRight className="h-3 w-3" style={{ color: '#CBD5E1' }} />
+            <span style={{ fontSize: '12px', color: '#64748B', fontWeight: 500 }}>Admin Dashboard</span>
           </div>
-          <div>
-            <h1 className="text-xl font-bold leading-tight text-neutral-900">{t("adminDashboard.title")}</h1>
-            <p className="text-sm text-neutral-500">{t("adminDashboard.subtitle")}</p>
-          </div>
+          <h1 style={{ fontSize: '24px', fontWeight: 700, lineHeight: '1.2', color: '#0F172A', margin: 0 }}>
+            Administration Center
+          </h1>
+          <p style={{ fontSize: '13px', color: '#94A3B8', marginTop: '3px', fontWeight: 400 }}>
+            Governance · Monitoring · Executive Visibility
+          </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {quickActions.map((qa) => (
-            <Link
-              key={qa.to + qa.label}
-              to={qa.to}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-xs font-semibold text-neutral-700 no-underline shadow-sm transition hover:-translate-y-0.5 hover:border-primary-300 hover:text-primary-700 hover:shadow-md"
+
+        {/* Compact actions — single icon button with dropdown */}
+        <div ref={moreActionsRef} className="relative flex-shrink-0 mt-1">
+          <button
+            type="button"
+            onClick={() => setMoreActionsOpen((o) => !o)}
+            className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors"
+            style={{ background: '#FFFFFF', borderColor: '#E2E8F0', color: '#334155', fontSize: '13px', cursor: 'pointer', height: '34px' }}
+            aria-label="Quick actions"
+            aria-expanded={moreActionsOpen}
+          >
+            <MoreHorizontal className="h-4 w-4 text-neutral-500" />
+            <span>Actions</span>
+            <ChevronDown className="h-3 w-3 text-neutral-400" />
+          </button>
+          {moreActionsOpen && (
+            <div
+              className="absolute right-0 z-50 mt-1 min-w-[196px] overflow-hidden rounded-lg border"
+              style={{ background: '#FFFFFF', borderColor: '#E2E8F0', boxShadow: '0 8px 24px rgba(15,23,42,0.10)' }}
             >
-              <qa.icon className="h-3.5 w-3.5 text-primary-500" />
-              {qa.label}
-            </Link>
-          ))}
+              {[
+                { label: t("adminDashboard.quickActions.createRfq"), to: "/sourcing/rfq/new", icon: FilePlus2 },
+                { label: t("adminDashboard.quickActions.createSupplier"), to: "/suppliers/new", icon: Building2 },
+                { label: t("adminDashboard.quickActions.createUser"), to: "/admin/users", icon: UserPlus },
+                { label: t("adminDashboard.quickActions.startAuction"), to: "/sourcing/reverse-bidding", icon: Gavel },
+                { label: t("adminDashboard.quickActions.viewReports"), to: "/admin/reports", icon: BarChart3 },
+                { label: t("adminDashboard.quickActions.manageWorkflow"), to: "/admin/workflows", icon: Workflow },
+                { label: t("adminDashboard.quickActions.manageSla"), to: "/admin/sla-configuration", icon: Timer },
+              ].map((item) => (
+                <Link
+                  key={item.to}
+                  to={item.to}
+                  onClick={() => setMoreActionsOpen(false)}
+                  className="flex items-center gap-2.5 px-3.5 py-2 no-underline transition-colors"
+                  style={{ color: '#334155', fontSize: '13px', fontWeight: 400 }}
+                  onMouseEnter={e => { e.currentTarget.style.background = '#F8FAFC'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                >
+                  <item.icon className="h-3.5 w-3.5" style={{ color: '#64748B' }} />
+                  {item.label}
+                </Link>
+              ))}
+            </div>
+          )}
         </div>
       </header>
 
@@ -372,7 +417,7 @@ export default function AdminDashboardPage() {
         {coreLoading ? (
           <DashboardKpiGrid columns={5} className="admin-primary-kpis">
             {Array.from({ length: 10 }).map((_, i) => (
-              <Skeleton key={i} className="h-[176px] rounded-2xl" />
+              <Skeleton key={i} className="h-[118px] rounded-xl" />
             ))}
           </DashboardKpiGrid>
         ) : (
@@ -396,7 +441,8 @@ export default function AdminDashboardPage() {
               icon={Wallet}
               iconClassName={toneIconClass(typeof budgetUtil === "number" && budgetUtil >= 90 ? "rose" : typeof budgetUtil === "number" && budgetUtil >= 75 ? "amber" : "emerald")}
               label={t("adminDashboard.kpi.budgetUtilization")}
-              value={typeof budgetUtil === "number" ? `${Math.round(budgetUtil)}%` : "—"}
+              value={typeof budgetUtil === "number" ? `${Math.round(budgetUtil)}%` : "N/A"}
+              subtitle={typeof budgetUtil !== "number" ? "No budget configured" : undefined}
               to="/admin/budget"
             />
             <DashboardKpiCard icon={AlertTriangle} iconClassName={toneIconClass(slaBreaches > 0 ? "rose" : "emerald")} label={t("adminDashboard.kpi.slaBreaches")} value={slaBreaches} to="/admin/sla-reports" />
@@ -740,22 +786,22 @@ export default function AdminDashboardPage() {
           >
             <div className="admin-inventory-grid">
               <div className="admin-inv-status-card">
-                <p className="text-sm font-semibold text-neutral-700">
+                <p style={{ fontSize: '12px', fontWeight: 600, color: '#334155', margin: 0 }}>
                   {t("adminDashboard.inventory.statusBreakdown")}
                 </p>
                 {warehouseQ.isLoading ? (
                   <Skeleton className="h-[160px] rounded-xl" />
                 ) : (
                   <>
-                    <div className="h-[140px] w-full">
+                    <div className="h-[120px] w-full">
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                           <Pie
                             data={inventoryStatusChart}
                             dataKey="value"
                             nameKey="name"
-                            innerRadius={42}
-                            outerRadius={62}
+                            innerRadius={38}
+                            outerRadius={56}
                             paddingAngle={2}
                             stroke="#fff"
                             strokeWidth={2}
@@ -932,7 +978,7 @@ function SectionHeader({
   return (
     <div className="admin-section-header">
       <h2>
-        <Icon className="h-3.5 w-3.5" />
+        <Icon className="h-3.5 w-3.5 text-neutral-400" />
         {title}
       </h2>
       {action}
@@ -955,7 +1001,7 @@ function Panel({
     <div className="admin-panel">
       <div className="admin-panel-head">
         <h2>
-          <Icon className="h-4 w-4 text-neutral-400" />
+          <Icon className="h-3.5 w-3.5 text-neutral-400" />
           {title}
         </h2>
         {action}
@@ -981,14 +1027,14 @@ function InventoryTile({
   loading?: boolean;
 }) {
   const c = TONE[tone];
-  if (loading) return <Skeleton className="h-[112px] rounded-xl" />;
+  if (loading) return <Skeleton className="h-[88px] rounded-xl" />;
   return (
     <Link to={to} className="admin-inv-kpi-tile">
       <div className="flex items-start justify-between gap-2">
         <span
-          className={`flex h-8 w-8 items-center justify-center rounded-lg ${c.iconBg}`}
+          className={`flex h-7 w-7 items-center justify-center rounded-lg ${c.iconBg}`}
         >
-          <Icon className={`h-[18px] w-[18px] ${c.icon}`} />
+          <Icon className={`h-[15px] w-[15px] ${c.icon}`} />
         </span>
         <span
           className="admin-inv-dot mt-1"
@@ -1005,10 +1051,10 @@ function InventoryTile({
         />
       </div>
       <div>
-        <p className="text-2xl font-bold tabular-nums leading-none text-neutral-900">
+        <p style={{ fontSize: '20px', fontWeight: 700, lineHeight: 1, letterSpacing: '-0.02em', color: '#0F172A' }}>
           {value}
         </p>
-        <p className="mt-1.5 line-clamp-2 text-sm font-medium text-neutral-500" title={label}>
+        <p style={{ marginTop: '4px', fontSize: '11px', fontWeight: 500, color: '#64748B' }} className="line-clamp-2" title={label}>
           {label}
         </p>
       </div>
@@ -1052,8 +1098,8 @@ function ApprovalKpi({
         </span>
         <span className={`admin-approval-kpi-status ${statusDot}`} />
       </div>
-      <p className="admin-approval-kpi-count">{count}</p>
       <p className="admin-approval-kpi-label">{label}</p>
+      <p className="admin-approval-kpi-count">{count}</p>
       <div className="admin-approval-kpi-meta">
         <span className="admin-approval-kpi-badge">
           {t("adminDashboard.approval.pendingBadge", { count })}
@@ -1074,9 +1120,9 @@ function SlaTile({ label, value, tone }: { label: string; value: number; tone: S
     <div className="rounded-lg border border-neutral-100 bg-neutral-50/60 px-2.5 py-2">
       <div className="flex items-center gap-1.5">
         <span className={`h-1.5 w-1.5 rounded-full ${s.dot}`} />
-        <span className="text-[9px] font-semibold uppercase tracking-wider text-neutral-400">{label}</span>
+        <span style={{ fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#94a3b8' }}>{label}</span>
       </div>
-      <p className="mt-1 text-lg font-bold leading-none tabular-nums text-neutral-900">{value}</p>
+      <p style={{ marginTop: '4px', fontSize: '18px', fontWeight: 700, lineHeight: 1, color: '#0F172A', fontVariantNumeric: 'tabular-nums' }}>{value}</p>
     </div>
   );
 }

@@ -585,9 +585,9 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
   ] as const;
 
   return (
-    <div className="dashboard-stack gap-4 xl:gap-5">
+    <div className="dashboard-stack px-6 py-1 gap-5">
       {/* 1. Header */}
-      <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 pb-1">
         <DashboardHeader config={config} greetingName={greetingName} />
         <div className="flex flex-wrap gap-2">
           <Link
@@ -730,8 +730,8 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
       </Panel>
 
       {/* 4 + 5. Recent Requests + Pending Actions */}
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-12 xl:gap-5">
-        <div className="xl:col-span-8">
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[2fr_1fr]">
+        <div>
           <Panel
             title="Recent Requests"
             action={
@@ -848,7 +848,7 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
           </Panel>
         </div>
 
-        <div className="xl:col-span-4">
+        <div>
           <Panel title="Pending Actions" bodyClassName="space-y-2">
             {pendingActions.length === 0 ? (
               <div className="rounded-lg border border-emerald-100 bg-emerald-50/60 px-3 py-6 text-center">
@@ -879,8 +879,8 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
       </div>
 
       {/* 6 + 7 + 8. Charts row */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-12 xl:gap-5">
-        <div className="xl:col-span-5">
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-12">
+        <div className="md:col-span-2 xl:col-span-5">
           <Panel title="Monthly Request Trend" bodyClassName="pt-2">
             <div className="h-[200px] w-full">
               {rowsQuery.isLoading ? (
@@ -1016,7 +1016,7 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
       </Panel>
 
       {/* Activity + Quick Access */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:gap-5">
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
         <div>
           <Panel title="Activity Timeline" bodyClassName="max-h-[260px] space-y-0 overflow-y-auto p-0">
             {rowsQuery.isLoading ? (

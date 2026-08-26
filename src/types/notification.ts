@@ -111,7 +111,13 @@ export const ROLE_ALLOWED_MODULES: Record<
     "Material Issue Receipt",
   ]),
   department: new Set(["Purchase Order", "Material Issue Receipt"]),
+  executive: new Set(["System", "Audit", "Workflow", "Budget"]),
   manufacturing: new Set(["Inventory"]),
+  engineer: new Set(["Workflow", "System"]),
+  engineering: new Set(["Workflow", "System"]),
+  operations: new Set(["Workflow", "System"]),
+  quality: new Set(["Workflow", "System"]),
+  program_manager: new Set(["Workflow", "System"]),
 };
 
 export const SUPPLIER_ALLOWED_MODULES = new Set<NotificationModule>([

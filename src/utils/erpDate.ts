@@ -16,6 +16,7 @@ export {
   assertERPNextDatetime,
   formatERPNextDate,
   formatERPNextDatetime,
+  formatMediumDisplayDate,
   nowERPNextDatetime,
   sanitizePoShipmentDates,
   todayERPNextDate,

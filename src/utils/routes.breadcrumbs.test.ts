@@ -34,4 +34,24 @@ describe("getBreadcrumbs", () => {
       "ACC-PAY-2026-00001",
     );
   });
+
+  it("builds ECR detail breadcrumb with formatted business ECR Number", () => {
+    // Dynamic generated ID like 1j3b9i4moj resolves to ECR-2026-85517
+    expect(getBreadcrumbs("/ecr/1j3b9i4moj")).toEqual([
+      { label: "ECR", to: "/ecr" },
+      { label: "ECR-2026-85517", to: "/ecr/1j3b9i4moj" },
+    ]);
+
+    // Already valid ECR Number
+    expect(getBreadcrumbs("/ecr/ECR-2026-00042")).toEqual([
+      { label: "ECR", to: "/ecr" },
+      { label: "ECR-2026-00042", to: "/ecr/ECR-2026-00042" },
+    ]);
+
+    // New ECR page
+    expect(getBreadcrumbs("/ecr/new")).toEqual([
+      { label: "ECR", to: "/ecr" },
+      { label: "New Change Request", to: "/ecr/new" },
+    ]);
+  });
 });

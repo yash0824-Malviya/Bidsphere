@@ -77,31 +77,24 @@ async function _fetchSchema(): Promise<RFQSchemaInfo> {
 
   let fields: DocField[] = [];
 
+  // The /api/doctype/<DocType> endpoint is not available on this Frappe
+  // installation (returns 404). Use /api/resource/DocField directly — this
+  // is the authoritative source (42 fields confirmed working).
   try {
-    const resp = await apiGet<{ fields?: DocField[] }>(
-      `/api/doctype/${encodeURIComponent(RFQ_DOCTYPE)}`
+    const fallback = await apiGet<DocField[]>(
+      `/api/resource/DocField`,
+      {
+        params: {
+          filters: JSON.stringify([["parent", "=", RFQ_DOCTYPE]]),
+          fields: JSON.stringify(["fieldname", "fieldtype", "label", "options", "reqd"]),
+          limit_page_length: 200,
+        },
+      }
     );
-    fields = resp?.fields ?? [];
+    fields = fallback ?? [];
   } catch (err) {
     // eslint-disable-next-line no-console
-    console.warn("[RFQSchema] /api/doctype failed, trying fallback:", err);
-
-    try {
-      const fallback = await apiGet<DocField[]>(
-        `/api/resource/DocField`,
-        {
-          params: {
-            filters: JSON.stringify([["parent", "=", RFQ_DOCTYPE]]),
-            fields: JSON.stringify(["fieldname", "fieldtype", "label", "options", "reqd"]),
-            limit_page_length: 200,
-          },
-        }
-      );
-      fields = fallback ?? [];
-    } catch (err2) {
-      // eslint-disable-next-line no-console
-      console.error("[RFQSchema] Both schema endpoints failed:", err2);
-    }
+    console.error("[RFQSchema] Schema fetch failed:", err);
   }
 
   const allFields = fields.map((f) => f.fieldname);

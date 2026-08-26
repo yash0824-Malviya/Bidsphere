@@ -161,7 +161,7 @@ export default function SupplierPortalSidebar({
   return (
     <aside
       className={`app-sidebar w-[280px] min-w-[280px] max-w-[280px] border-r border-neutral-800 ${
-        fixed ? "app-sidebar-fixed" : "h-[100vh] min-h-[100vh]"
+        fixed ? "app-sidebar-fixed z-[100]" : "h-[100vh] min-h-[100vh]"
       } ${className}`}
     >
       <div className="flex h-[52px] shrink-0 items-center border-b border-white/5 px-4">

@@ -38,6 +38,7 @@ import {
   hasItemMasterUom,
   resolveStockUomFromItem,
 } from "../utils/itemMasterUom";
+import { appendRfqInviteAudit } from "./rfqSupplierInviteAudit";
 import {
   assembleCompatibleUomOptions,
   erpConversionFactorForUom,
@@ -442,7 +443,9 @@ export async function lookupDefaultWarehouse(company: string): Promise<string> {
     const list: { name: string }[] = Array.isArray(result)
       ? result
       : ((result as { data?: { name: string }[] }).data ?? []);
-    if (list.length === 0) return "";
+    if (list.length === 0) {
+      return company.toLowerCase().includes("bid") ? "Finished Goods - B" : "Stores - NSGAI";
+    }
     const stores = list.find((w) =>
       w.name.toLowerCase().startsWith("stores"),
     );
@@ -453,7 +456,7 @@ export async function lookupDefaultWarehouse(company: string): Promise<string> {
       company,
       err instanceof Error ? err.message : err,
     );
-    return "";
+    return company.toLowerCase().includes("bid") ? "Finished Goods - B" : "Stores - NSGAI";
   }
 }
 
@@ -706,6 +709,20 @@ export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
       status: created.status,
       method: API_METHOD,
     });
+
+    if (created?.name && data.suppliers?.length) {
+      appendRfqInviteAudit(
+        created.name,
+        data.suppliers.map((s) => ({
+          supplier: s.supplier,
+          supplierId: s.supplier,
+          supplier_name: s.supplier_name || s.supplier,
+          supplierName: s.supplier_name || s.supplier,
+          invited_by: "Procurement",
+          status: "Pending",
+        })),
+      );
+    }
 
     return created;
   } catch (err: unknown) {
@@ -1250,6 +1267,59 @@ export async function updateSupplierQuotationLegalDoc(
   });
 }
 
+export async function updateSupplierQuotation(
+  name: string,
+  data: Partial<CreateSQInput>
+): Promise<SupplierQuotation> {
+  const company = data.company || DEFAULT_COMPANY;
+  const warehouse = await lookupDefaultWarehouse(company);
+  const payload: Record<string, unknown> = {};
+  if (data.items) {
+    payload.items = data.items.map((item) => {
+      const rate = num(item.rate ?? item.unit_price, 0);
+      const qty = num(item.qty, 1);
+      const row: Record<string, unknown> = {
+        item_code: item.item_code,
+        item_name: item.item_name || item.item_code,
+        description: item.item_name || item.item_code,
+        qty,
+        uom: item.uom || "Nos",
+        rate,
+        amount: qty * rate,
+        price_list_rate: rate,
+        warehouse,
+      };
+      if (data.rfq_no) row.request_for_quotation = data.rfq_no;
+      if (item.rfq_item_name) row.request_for_quotation_item = item.rfq_item_name;
+      return row;
+    });
+  }
+  if (data.legal_documents) {
+    const ld = data.legal_documents;
+    payload.custom_terms__condition = ld.terms_conditions_pdf ?? "";
+    payload.custom_terms_note = ld.terms_conditions_note ?? "";
+    payload.custom_warenty_certificate = ld.warranty_certificate_pdf ?? "";
+    payload.custom_warranty_note = ld.warranty_certificate_note ?? "";
+    payload.custom_insurance_certificate = ld.insurance_certificate_pdf ?? "";
+    payload.custom_insurance_note = ld.insurance_certificate_note ?? "";
+  }
+  return apiPut<SupplierQuotation>(buildResourceUrl(SQ_DOCTYPE, name), payload);
+}
+
+export async function saveDraftSupplierQuotation(
+  data: CreateSQInput,
+  existingName?: string | null,
+): Promise<SupplierQuotation> {
+  if (existingName) {
+    try {
+      return await updateSupplierQuotation(existingName, data);
+    } catch {
+      // If update fails (e.g. document deleted or draft changed), create a new draft
+    }
+  }
+  return createSupplierQuotation(data);
+}
+
 export async function getSupplierQuotation(
   name: string
 ): Promise<SupplierQuotation> {
@@ -1508,6 +1578,25 @@ export async function getSupplierQuotationsBySupplier(
   // `request_for_quotation` (the parent-level RFQ link) triggers 417
   // EXPECTATION FAILED on this instance — the RFQ reference is recovered
   // later by hydrating each full SQ doc in the details query.
+  const raw = String(supplierName || "").trim();
+  const unquoted = raw.replace(/^["']+|["']+$/g, "").trim();
+  const noDot = unquoted.replace(/[.,]+$/g, "").trim();
+  const withDot = `${noDot}.`;
+  const candidates = Array.from(
+    new Set(
+      [
+        raw,
+        `"${raw}"`,
+        unquoted,
+        `"${unquoted}"`,
+        noDot,
+        `"${noDot}"`,
+        withDot,
+        `"${withDot}"`,
+      ].filter(Boolean),
+    ),
+  );
+
   const result = await apiGet<
     Array<{
       name: string;
@@ -1529,7 +1618,7 @@ export async function getSupplierQuotationsBySupplier(
         "status",
         "modified",
       ]),
-      filters: JSON.stringify([["supplier", "=", supplierName]]),
+      filters: JSON.stringify([["supplier", "in", candidates]]),
       order_by: "transaction_date desc, modified desc, name desc",
       limit_page_length: 50,
     },

@@ -234,6 +234,15 @@ export function formatUkDisplayDate(
   return parsed?.isValid() ? parsed.format(UK_DISPLAY_DATE_FORMAT) : "";
 }
 
+/** Format ISO / API date for enterprise medium display (D MMM YYYY, e.g. "30 Aug 2026"). */
+export function formatMediumDisplayDate(
+  value: string | Date | null | undefined
+): string {
+  if (!value) return "—";
+  const parsed = parseERPNextDateInput(value);
+  return parsed?.isValid() ? parsed.format("D MMM YYYY") : (typeof value === "string" ? value : "—");
+}
+
 /** Parse US display input (MM/DD/YYYY) to ISO (YYYY-MM-DD). */
 export function parseUsDisplayDate(value: string): string | null {
   return formatERPNextDate(value);

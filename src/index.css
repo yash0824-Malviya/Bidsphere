@@ -150,7 +150,7 @@
   --color-sidebar-text: #94a3b8;
   --shadow-card: var(--ds-shadow);
   --shadow-card-hover: 0 2px 6px rgba(15, 23, 42, 0.06);
-  --radius-card: 18px;
+  --radius-card: 12px;
   --radius-control: 12px;
   --space-1: 8px;
   --space-2: 16px;
@@ -160,17 +160,17 @@
   --page-padding: 32px;
   --page-padding-top: 24px;
   --page-padding-bottom: 32px;
-  --page-max-width: 1600px;
+  --page-max-width: 1920px;
   --card-padding: 24px;
-  --card-radius: 18px;
+  --card-radius: 12px;
   --gap: 24px;
   --card-gap: 20px;
-  --header-height: 52px;
-  --sidebar-width: 280px;
+  --header-height: 64px;
+  --sidebar-width: 272px;
   --sidebar-width-collapsed: 64px;
-  --sidebar-width-expanded: 280px;
-  --sidebar-width-laptop: 280px;
-  --sidebar-width-desktop: 280px;
+  --sidebar-width-expanded: 272px;
+  --sidebar-width-laptop: 272px;
+  --sidebar-width-desktop: 272px;
   --card-min-width: 260px;
   --form-max-width: 960px;
   --chart-height: 200px;
@@ -813,6 +813,7 @@ input[type="number"] {
   @media (min-width: 1024px) {
     .page-container {
       width: min(var(--page-max-width), calc(100% - 64px));
+
     }
   }
 
@@ -1073,7 +1074,7 @@ input[type="number"] {
   }
 
   .app-drawer-panel {
-    @apply flex h-[100dvh] max-h-[100dvh] w-[min(100vw,280px)] max-w-[100vw] flex-col overflow-hidden;
+    @apply flex h-[100dvh] max-h-[100dvh] w-[min(100vw,272px)] max-w-[100vw] flex-col overflow-hidden;
   }
 
   /* Full-height application sidebar shell (staff + supplier portals). */
@@ -1085,10 +1086,11 @@ input[type="number"] {
     position: fixed;
     top: 0;
     left: 0;
-    z-index: 40;
+    z-index: 100;
     height: 100vh;
     min-height: 100vh;
     max-height: 100dvh;
+    isolation: isolate;
   }
 
   .app-sidebar-nav {
@@ -3607,77 +3609,93 @@ a.spd-list-item:hover {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Admin Enterprise Dashboard — SAP / Coupa / Fusion-style layout tokens
+   Admin Enterprise Dashboard — Compact enterprise procurement console.
    Scoped under .admin-enterprise-dash so other role dashboards are unchanged.
+   Design: SAP/Coupa/ServiceNow aesthetic — professional, compact, data-focused.
    ═══════════════════════════════════════════════════════════════════════════ */
 
 .admin-enterprise-dash {
-  --admin-kpi-h: 176px;
-  --admin-gap: 14px;
-  --admin-section-gap: 12px;
-  --admin-radius: 12px;
-  --admin-shadow: 0 2px 10px rgba(15, 23, 42, 0.04);
-  --admin-shadow-hover: 0 6px 16px rgba(15, 23, 42, 0.07);
+  /* Spacing */
+  --admin-kpi-h: 118px;
+  --admin-gap: 12px;
+  --admin-section-gap: 20px;
+  --admin-radius: 10px;
+  /* Shadows: whisper-soft */
+  --admin-shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --admin-shadow-hover: 0 4px 12px rgba(15, 23, 42, 0.08), 0 1px 3px rgba(15, 23, 42, 0.04);
+  /* Color system */
+  --admin-bg: #F8FAFC;
+  --admin-border: #E2E8F0;
+  --admin-border-light: #F1F5F9;
+  --admin-text-primary: #0F172A;
+  --admin-text-secondary: #334155;
+  --admin-text-muted: #64748B;
+  --admin-card-bg: #FFFFFF;
+  --admin-primary: #173B72;
+  --admin-primary-hover: #122E5A;
+  --admin-primary-light: #EFF6FF;
 }
 
 .admin-enterprise-dash {
   display: flex;
   flex-direction: column;
   gap: var(--admin-section-gap);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  padding-top: 24px;
 }
 
+/* ── Section header: 15px / 600 ── */
 .admin-enterprise-dash .admin-section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 
 .admin-enterprise-dash .admin-section-header h2 {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   margin: 0;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #64748b;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--admin-text-secondary);
+  letter-spacing: -0.01em;
 }
 
 .admin-enterprise-dash .admin-section-link {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #1f3a6d;
+  gap: 3px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--admin-text-muted);
   text-decoration: none;
   white-space: nowrap;
+  transition: color 150ms ease;
 }
 
 .admin-enterprise-dash .admin-section-link:hover {
-  color: #15294d;
-  text-decoration: underline;
+  color: var(--admin-primary);
+  text-decoration: none;
 }
 
 .admin-enterprise-dash .admin-panel {
   display: flex;
   flex-direction: column;
   height: 100%;
-  border: 1px solid #e8ecf1;
+  border: 1px solid var(--admin-border);
   border-radius: var(--admin-radius);
-  background: #ffffff;
+  background: var(--admin-card-bg);
   box-shadow: var(--admin-shadow);
   transition:
-    box-shadow 180ms ease,
-    transform 180ms ease,
-    border-color 180ms ease;
+    box-shadow 150ms ease,
+    border-color 150ms ease;
 }
 
 .admin-enterprise-dash .admin-panel:hover {
-  border-color: #dde3ec;
+  border-color: #CBD5E1;
   box-shadow: var(--admin-shadow-hover);
 }
 
@@ -3687,37 +3705,37 @@ a.spd-list-item:hover {
   justify-content: space-between;
   gap: 12px;
   padding: 10px 14px;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--admin-border-light);
 }
 
+/* Panel title: 13px / 500 */
 .admin-enterprise-dash .admin-panel-head h2 {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   margin: 0;
-  font-size: 14px;
-  font-weight: 650;
-  color: #1e293b;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--admin-text-secondary);
 }
 
 .admin-enterprise-dash .admin-panel-body {
   flex: 1 1 auto;
   min-height: 0;
-  padding: 10px 12px;
+  padding: 12px 14px;
 }
 
-/* Continuous procurement pipeline */
+/* ── Procurement Pipeline ── */
 .admin-enterprise-dash .admin-pipeline {
   display: flex;
   align-items: stretch;
   gap: 0;
   overflow-x: auto;
-  padding: 2px 0;
   scrollbar-width: none;
-  border: 1px solid #e8ecf1;
+  border: 1px solid var(--admin-border);
   border-radius: var(--admin-radius);
-  background: linear-gradient(180deg, #fafbfc 0%, #ffffff 100%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  background: var(--admin-card-bg);
+  box-shadow: var(--admin-shadow);
 }
 
 .admin-enterprise-dash .admin-pipeline::-webkit-scrollbar {
@@ -3728,7 +3746,7 @@ a.spd-list-item:hover {
   display: flex;
   align-items: stretch;
   flex: 1 1 0;
-  min-width: 74px;
+  min-width: 68px;
 }
 
 .admin-enterprise-dash .admin-pipeline-stage {
@@ -3738,80 +3756,82 @@ a.spd-list-item:hover {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  min-width: 74px;
+  min-width: 68px;
   padding: 10px 6px;
   text-align: center;
   text-decoration: none;
   color: inherit;
+  border-radius: 6px;
   transition: background 140ms ease;
 }
 
 .admin-enterprise-dash .admin-pipeline-stage:hover {
-  background: rgba(31, 58, 109, 0.04);
+  background: transparent;
 }
 
 .admin-enterprise-dash .admin-pipeline-count {
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
-  color: #0f172a;
+  color: var(--admin-text-primary);
+  letter-spacing: -0.02em;
 }
 
 .admin-enterprise-dash .admin-pipeline-label {
-  font-size: 9px;
-  font-weight: 550;
-  line-height: 1.2;
-  color: #64748b;
-  max-width: 4.8rem;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--admin-text-muted);
+  max-width: 5rem;
+  text-align: center;
 }
 
 .admin-enterprise-dash .admin-pipeline-dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 999px;
-  margin-top: 1px;
+  flex-shrink: 0;
 }
 
 .admin-enterprise-dash .admin-pipeline-connector {
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 14px;
-  color: #cbd5e1;
-  opacity: 0.85;
+  flex: 0 0 10px;
+  color: #E2E8F0;
 }
 
-/* Compact Approval Center KPI row */
+/* ── Approval Center KPI row ── */
 .admin-enterprise-dash .admin-approval-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
+/* Compact approval card: 110px */
 .admin-enterprise-dash .admin-approval-kpi {
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  height: 100px;
-  min-height: 100px;
-  max-height: 100px;
-  padding: 10px 12px;
-  border: 1px solid #e8ecf1;
+  justify-content: flex-start;
+  gap: 8px;
+  height: 110px;
+  min-height: 110px;
+  max-height: 110px;
+  padding: 12px 14px;
+  border: 1px solid var(--admin-border);
   border-radius: var(--admin-radius);
-  background: #fff;
+  background: var(--admin-card-bg);
   box-shadow: var(--admin-shadow);
   text-decoration: none;
   color: inherit;
   transition:
-    transform 140ms ease,
-    box-shadow 140ms ease,
-    border-color 140ms ease;
+    box-shadow 150ms ease,
+    border-color 150ms ease;
 }
 
 .admin-enterprise-dash .admin-approval-kpi:hover {
-  transform: translateY(-1px);
-  border-color: #d5dbe6;
+  border-color: #CBD5E1;
   box-shadow: var(--admin-shadow-hover);
 }
 
@@ -3832,53 +3852,56 @@ a.spd-list-item:hover {
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: 7px;
 }
 
 .admin-enterprise-dash .admin-approval-kpi-status {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 999px;
   flex-shrink: 0;
 }
 
 .admin-enterprise-dash .admin-approval-kpi-count {
-  margin: 2px 0 0;
-  font-size: 22px;
+  margin: 0;
+  font-size: 24px;
   font-weight: 700;
   line-height: 1;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
-  color: #0f172a;
+  color: var(--admin-text-primary);
 }
 
 .admin-enterprise-dash .admin-approval-kpi-label {
-  margin: 2px 0 0;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.2;
-  color: #475569;
-  white-space: nowrap;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--admin-text-secondary);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
 }
 
 .admin-enterprise-dash .admin-approval-kpi-meta {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 18px;
+  min-height: 14px;
+  margin-top: auto;
 }
 
 .admin-enterprise-dash .admin-approval-kpi-badge {
   display: inline-flex;
   align-items: center;
-  padding: 1px 7px;
+  padding: 1px 6px;
   border-radius: 999px;
-  background: #f1f5f9;
-  color: #64748b;
+  background: #F1F5F9;
+  color: var(--admin-text-muted);
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.4;
   white-space: nowrap;
 }
@@ -3888,10 +3911,10 @@ a.spd-list-item:hover {
   align-items: center;
   padding: 1px 6px;
   border-radius: 999px;
-  background: #fff1f2;
-  color: #e11d48;
+  background: #FFF1F2;
+  color: #E11D48;
   font-size: 10px;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.4;
   white-space: nowrap;
 }
@@ -3908,92 +3931,105 @@ a.spd-list-item:hover {
   }
 }
 
+/* ── Primary KPI grid — compact executive cards ── */
 .admin-enterprise-dash .admin-primary-kpis.kpi-grid {
   gap: var(--admin-gap);
   align-items: stretch;
 }
 
+/* 120px executive KPI card */
 .admin-enterprise-dash .admin-primary-kpis .kpi-card {
-  height: var(--admin-kpi-h);
-  min-height: var(--admin-kpi-h);
-  max-height: var(--admin-kpi-h);
-  padding: 18px;
-  padding-right: calc(18px + 44px + 10px);
+  height: 120px;
+  min-height: 120px;
+  max-height: 120px;
+  padding: 14px;
+  padding-right: calc(14px + 36px + 8px);
   border-radius: var(--admin-radius);
-  border: 1px solid #e8ecf1;
-  border-left: 4px solid #1f3a6d;
+  border: 1px solid var(--admin-border);
   box-shadow: var(--admin-shadow);
+  background: var(--admin-card-bg);
 }
 
 .admin-enterprise-dash .admin-primary-kpis a.kpi-card:hover,
 .admin-enterprise-dash .admin-primary-kpis button.kpi-card:hover {
-  transform: translateY(-2px);
+  border-color: #CBD5E1;
   box-shadow: var(--admin-shadow-hover);
-  border-color: #d0d7e3;
-  border-left-color: #1f3a6d;
 }
 
+/* Icon: 36×36, radius 8 */
 .admin-enterprise-dash .admin-primary-kpis .kpi-card-icon {
-  top: 18px;
-  right: 18px;
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
+  top: 14px;
+  right: 14px;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
 }
 
 .admin-enterprise-dash .admin-primary-kpis .kpi-card-icon-svg {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 
+/* Label: 13px / 500 / muted */
 .admin-enterprise-dash .admin-primary-kpis .kpi-card-title-slot {
   flex: 0 0 auto;
-  max-height: calc(18px * 1.3 * 2);
-  min-height: 24px;
+  max-height: calc(13px * 1.4 * 2);
+  min-height: 20px;
 }
 
 .admin-enterprise-dash .admin-primary-kpis .kpi-card-label {
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 1.3;
-  color: #475569;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--admin-text-muted);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  overflow: hidden;
+  white-space: normal;
 }
 
+/* Value slot */
 .admin-enterprise-dash .admin-primary-kpis .kpi-card-value-slot {
   flex: 1 1 auto;
   height: auto;
-  min-height: 52px;
+  min-height: 34px;
   max-height: none;
   align-items: flex-end;
 }
 
+/* KPI value: 32px — compact, professional */
 .admin-enterprise-dash .admin-primary-kpis .kpi-value {
-  font-size: 40px;
+  font-size: 32px;
   font-weight: 700;
   line-height: 1;
   letter-spacing: -0.03em;
-  color: #0f172a;
+  color: var(--admin-text-primary);
   max-height: none;
+  overflow: visible;
+  white-space: nowrap;
 }
 
 .admin-enterprise-dash .admin-primary-kpis .kpi-card-caption-slot {
   flex: 0 0 auto;
-  min-height: 20px;
+  min-height: 14px;
   max-height: none;
 }
 
 .admin-enterprise-dash .admin-primary-kpis .kpi-card-caption {
-  font-size: 14px;
+  font-size: 11px;
   font-weight: 400;
   line-height: 1.35;
-  color: #64748b;
+  color: var(--admin-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* Supplier / text values — two-line ellipsis (not 48px metrics) */
+/* Text-variant values (supplier names) */
 .admin-enterprise-dash .kpi-card-value-slot--text {
   align-items: flex-start;
-  min-height: 48px;
+  min-height: 34px;
 }
 
 .admin-enterprise-dash .kpi-value--text {
@@ -4003,7 +4039,7 @@ a.spd-list-item:hover {
   -webkit-line-clamp: 2;
   white-space: normal;
   word-break: break-word;
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 700;
   line-height: 1.25;
   letter-spacing: -0.01em;
@@ -4011,46 +4047,62 @@ a.spd-list-item:hover {
   font-variant-numeric: normal;
 }
 
+/* ── Supplier KPI grid ── */
 .admin-enterprise-dash .admin-supplier-grid.kpi-grid {
   gap: var(--admin-gap);
 }
 
 .admin-enterprise-dash .admin-supplier-grid .kpi-card {
-  height: 140px;
-  min-height: 140px;
-  max-height: 140px;
-  padding: 14px;
-  padding-right: calc(14px + 40px + 8px);
+  height: 118px;
+  min-height: 118px;
+  max-height: 118px;
+  padding: 12px;
+  padding-right: calc(12px + 34px + 8px);
   border-radius: var(--admin-radius);
-  border-color: #e8ecf1;
+  border: 1px solid var(--admin-border);
   box-shadow: var(--admin-shadow);
 }
 
+.admin-enterprise-dash .admin-supplier-grid .kpi-card-icon {
+  top: 12px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+}
+
+.admin-enterprise-dash .admin-supplier-grid .kpi-card-icon-svg {
+  width: 16px;
+  height: 16px;
+}
+
 .admin-enterprise-dash .admin-supplier-grid .kpi-card-label {
-  font-size: 15px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--admin-text-muted);
 }
 
 .admin-enterprise-dash .admin-supplier-grid .kpi-value:not(.kpi-value--text) {
-  font-size: 32px;
+  font-size: 24px;
 }
 
+/* ── Inventory section ── */
 .admin-enterprise-dash .admin-inventory-grid {
   display: grid;
   gap: var(--admin-gap);
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.4fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
   align-items: stretch;
 }
 
 .admin-enterprise-dash .admin-inv-status-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   height: 100%;
-  min-height: 200px;
   padding: 12px;
-  border: 1px solid #e8ecf1;
+  border: 1px solid var(--admin-border);
   border-radius: var(--admin-radius);
-  background: #fff;
+  background: var(--admin-card-bg);
   box-shadow: var(--admin-shadow);
 }
 
@@ -4058,15 +4110,14 @@ a.spd-list-item:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: #f8fafc;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #F8FAFC;
 }
 
 .admin-enterprise-dash .admin-inv-dot {
-  width: 10px;
-  height: 10px;
+  height: 9px;
   border-radius: 999px;
   flex-shrink: 0;
 }
@@ -4077,23 +4128,24 @@ a.spd-list-item:hover {
   justify-content: space-between;
   min-height: 100px;
   height: 100%;
-  padding: 12px;
-  border: 1px solid #e8ecf1;
+  padding: 12px 14px;
+  border: 1px solid var(--admin-border);
   border-radius: var(--admin-radius);
-  background: #fff;
+  background: var(--admin-card-bg);
   box-shadow: var(--admin-shadow);
   text-decoration: none;
   color: inherit;
   transition:
-    transform 160ms ease,
-    box-shadow 160ms ease;
+    box-shadow 150ms ease,
+    border-color 150ms ease;
 }
 
 .admin-enterprise-dash .admin-inv-kpi-tile:hover {
-  transform: translateY(-1px);
+  border-color: #CBD5E1;
   box-shadow: var(--admin-shadow-hover);
 }
 
+/* ── Layout ── */
 .admin-enterprise-dash .admin-sidebar {
   display: flex;
   flex-direction: column;
@@ -4107,9 +4159,22 @@ a.spd-list-item:hover {
   align-items: start;
 }
 
+/* ── Responsive ── */
 @media (min-width: 1280px) {
+  /* Max KPI value at xl: 34px — still compact */
   .admin-enterprise-dash .admin-primary-kpis .kpi-value {
-    font-size: 48px;
+    font-size: 34px;
+  }
+
+  .admin-enterprise-dash .admin-main-grid {
+    grid-template-columns: minmax(0, 1fr) 300px;
+  }
+}
+
+@media (min-width: 1440px) {
+  .admin-enterprise-dash {
+    --admin-gap: 14px;
+    --admin-section-gap: 22px;
   }
 
   .admin-enterprise-dash .admin-main-grid {
@@ -4117,20 +4182,9 @@ a.spd-list-item:hover {
   }
 }
 
-@media (min-width: 1440px) {
-  .admin-enterprise-dash {
-    --admin-gap: 16px;
-    --admin-section-gap: 14px;
-  }
-
-  .admin-enterprise-dash .admin-main-grid {
-    grid-template-columns: minmax(0, 1fr) 340px;
-  }
-}
-
 @media (min-width: 1920px) {
   .admin-enterprise-dash .admin-main-grid {
-    grid-template-columns: minmax(0, 1fr) 360px;
+    grid-template-columns: minmax(0, 1fr) 340px;
   }
 }
 
@@ -4140,23 +4194,41 @@ a.spd-list-item:hover {
   }
 
   .admin-enterprise-dash .admin-primary-kpis .kpi-card {
-    height: 160px;
-    min-height: 160px;
-    max-height: 160px;
+    height: 120px;
+    min-height: 120px;
+    max-height: 120px;
   }
 
   .admin-enterprise-dash .admin-primary-kpis .kpi-value {
-    font-size: 36px;
+    font-size: 28px;
   }
 
   .admin-enterprise-dash .admin-primary-kpis .kpi-card-label {
-    font-size: 16px;
+    font-size: 12px;
   }
+}
+
+@media (max-width: 768px) {
+  .admin-enterprise-dash .admin-primary-kpis .kpi-card {
+    height: 115px;
+    min-height: 115px;
+    max-height: 115px;
+  }
+
+  .admin-enterprise-dash .admin-primary-kpis .kpi-value {
+    font-size: 26px;
+  }
+}
+
+/* ── Business Need Intake (Enterprise alignment & spacing) ── */
+.page-container:has(.business-need-intake-page) {
+  --page-max-width: 100%;
+  padding-top: 24px;
+  padding-bottom: 0;
 }
 
 /* ── Finance Manager Dashboard (enterprise AP command center) ── */
 .page-container:has(.finance-dashboard) {
-  /* Wide enough for 6 × ~240px cards + gaps without clipping */
   --page-max-width: min(1920px, 100%);
   overflow-x: visible;
 }
@@ -4171,7 +4243,7 @@ a.spd-list-item:hover {
 }
 
 /*
- * Finance KPI grid — auto-fit so cards never clip off the right edge.
+ * Finance KPI grid — auto-fit so cards fill the available width.
  * Each track is at least 240px; wraps to 3×2 / 2×3 as the viewport narrows.
  */
 .finance-dashboard .finance-kpi-grid.kpi-grid {
@@ -4185,42 +4257,60 @@ a.spd-list-item:hover {
   box-sizing: border-box;
 }
 
+/* ── Finance KPI card — compact enterprise style ── */
 .finance-dashboard .finance-kpi-grid .kpi-card {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  height: 142px;
-  min-height: 142px;
-  max-height: 142px;
+  height: 150px;
+  min-height: 150px;
+  max-height: 150px;
   border-radius: 12px;
-  padding: 20px;
-  padding-right: calc(20px + 44px + 12px);
+  border: 1px solid #E2E8F0;
+  padding: 18px;
+  padding-right: calc(18px + 40px + 12px);
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
   gap: 0;
   overflow: hidden;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 14px rgba(15, 23, 42, 0.05);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.04), 0 1px 2px rgba(16, 24, 40, 0.04);
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    border-color 180ms ease;
+}
+
+.finance-dashboard .finance-kpi-grid a.kpi-card:hover,
+.finance-dashboard .finance-kpi-grid button.kpi-card:hover {
+  border-color: #CBD5E1;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+}
+
+/* Pending / attention cards: subtle left accent instead of full border */
+.finance-dashboard .finance-kpi-grid .kpi-card.kpi-card--attention {
+  border-left: 3px solid #D97706;
 }
 
 .finance-dashboard .finance-kpi-grid .kpi-card-icon {
-  top: 20px;
-  right: 20px;
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
+  top: 18px;
+  right: 18px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
 }
 
 .finance-dashboard .finance-kpi-grid .kpi-card-icon-svg {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 
 .finance-dashboard .finance-kpi-grid .kpi-card-title-slot {
   flex: 0 0 auto;
   margin: 0;
-  max-height: calc(18px * 1.3 * 2);
+  max-height: calc(14px * 1.35 * 2);
   max-width: 100%;
   align-items: flex-start;
   overflow: hidden;
@@ -4234,7 +4324,7 @@ a.spd-list-item:hover {
   text-overflow: ellipsis;
   white-space: normal;
   font-size: 14px;
-  line-height: 1.3;
+  line-height: 1.35;
   font-weight: 600;
   color: #334155;
 }
@@ -4244,7 +4334,7 @@ a.spd-list-item:hover {
   flex: 0 0 auto;
   display: flex;
   height: auto;
-  min-height: 44px;
+  min-height: 40px;
   max-height: none;
   width: 100%;
   min-width: 0;
@@ -4255,8 +4345,9 @@ a.spd-list-item:hover {
 .finance-dashboard .finance-kpi-grid .kpi-value {
   font-size: 28px;
   font-weight: 700;
-  line-height: 1.05;
+  line-height: 36px;
   letter-spacing: -0.025em;
+  color: #0F2745;
   overflow: visible;
   text-overflow: clip;
   white-space: nowrap;
@@ -4267,7 +4358,7 @@ a.spd-list-item:hover {
 .finance-dashboard .finance-kpi-grid .kpi-card-caption-slot {
   flex: 0 0 auto;
   min-height: 18px;
-  max-height: 18px;
+  max-height: 20px;
   margin-top: 10px;
   overflow: hidden;
 }
@@ -4277,31 +4368,31 @@ a.spd-list-item:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 400;
-  line-height: 1.35;
-  color: #64748b;
+  line-height: 1.4;
+  color: #64748B;
 }
 
-/* Compact Quick Actions — 64px equal-width tiles */
+/* ── Compact Quick Actions ── */
 .finance-quick-actions {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .finance-quick-actions__title {
   margin: 0;
-  font-size: 14px;
-  font-weight: 650;
-  letter-spacing: 0.01em;
-  color: #334155;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: #0F2745;
 }
 
 .finance-quick-actions__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 16px;
 }
 
 @media (min-width: 768px) {
@@ -4313,18 +4404,18 @@ a.spd-list-item:hover {
 .finance-quick-action {
   box-sizing: border-box;
   display: flex;
-  height: 64px;
-  min-height: 64px;
-  max-height: 64px;
+  height: 62px;
+  min-height: 62px;
+  max-height: 62px;
   width: 100%;
   align-items: center;
   gap: 12px;
-  border: 1px solid #e5eaf2;
+  border: 1px solid #E2E8F0;
   border-radius: 12px;
   background: #fff;
   padding: 0 16px;
   text-decoration: none;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 2px 8px rgba(15, 23, 42, 0.03);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(15, 23, 42, 0.03);
   transition:
     border-color 160ms ease,
     box-shadow 160ms ease,
@@ -4332,7 +4423,7 @@ a.spd-list-item:hover {
 }
 
 .finance-quick-action:hover {
-  border-color: #c7d4ea;
+  border-color: #CBD5E1;
   box-shadow: 0 2px 8px rgba(31, 58, 109, 0.08);
   transform: translateY(-1px);
 }
@@ -4352,27 +4443,28 @@ a.spd-list-item:hover {
 .finance-quick-action__label {
   font-size: 14px;
   font-weight: 600;
-  color: #1e293b;
+  color: #1E293B;
   line-height: 1.25;
 }
 
+/* ── Finance Analytics Grid ── */
 .finance-dashboard-grid {
   display: flex;
   width: 100%;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
 }
 
 .finance-dashboard-grid__charts {
   display: grid;
   grid-template-columns: 1fr;
   align-items: stretch;
-  gap: 24px;
+  gap: 20px;
 }
 
 @media (min-width: 1024px) {
   .finance-dashboard-grid__charts {
-    grid-template-columns: minmax(0, 1.85fr) minmax(280px, 1fr);
+    grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
   }
 }
 
@@ -4380,7 +4472,7 @@ a.spd-list-item:hover {
   display: grid;
   grid-template-columns: 1fr;
   align-items: stretch;
-  gap: 24px;
+  gap: 20px;
 }
 
 @media (min-width: 1024px) {
@@ -4390,10 +4482,10 @@ a.spd-list-item:hover {
 }
 
 .finance-panel {
-  border: 1px solid #e5eaf2;
+  border: 1px solid #E2E8F0;
   border-radius: 12px;
   background: #fff;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 14px rgba(15, 23, 42, 0.04);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.04), 0 1px 2px rgba(16, 24, 40, 0.04);
 }
 
 .finance-panel--payment {
@@ -4428,7 +4520,7 @@ a.spd-list-item:hover {
   min-width: 0;
   font-size: 12px;
   font-weight: 500;
-  color: #64748b;
+  color: #64748B;
 }
 
 .finance-payment-legend__value {
@@ -4436,7 +4528,7 @@ a.spd-list-item:hover {
   font-size: 12px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  color: #1e293b;
+  color: #1E293B;
   white-space: nowrap;
 }
 
@@ -5181,4 +5273,3 @@ a.spd-list-item:hover {
   border-radius: 0 0 var(--card-radius) var(--card-radius);
   padding: 16px 20px;
 }
-

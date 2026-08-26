@@ -250,11 +250,47 @@ export const DASHBOARD_BY_ROLE: Record<AppRole, RoleDashboardConfig> = {
     roleLabel: ROLE_LABELS.department,
     statusLabel: "Department User",
   },
+  executive: {
+    title: "Executive Intake Dashboard",
+    subtitle: "Enterprise Business Intake executive analytics",
+    roleLabel: ROLE_LABELS.executive,
+    statusLabel: "Executive",
+  },
   manufacturing: {
     title: "Manufacturing Dashboard",
     subtitle: "Manage Bills of Materials and finished products",
     roleLabel: ROLE_LABELS.manufacturing,
     statusLabel: "Manufacturing",
+  },
+  engineer: {
+    title: "Engineering Change Requests",
+    subtitle: "Create, track and manage your engineering change requests.",
+    roleLabel: ROLE_LABELS.engineer,
+    statusLabel: "Engineering",
+  },
+  engineering: {
+    title: "Engineering Review",
+    subtitle: "Review technical feasibility and engineering impact of change requests.",
+    roleLabel: ROLE_LABELS.engineering,
+    statusLabel: "Engineering Manager",
+  },
+  operations: {
+    title: "Operations Review",
+    subtitle: "Review manufacturing, plant, tooling and capacity impact of engineering changes.",
+    roleLabel: ROLE_LABELS.operations,
+    statusLabel: "Operations Manager",
+  },
+  quality: {
+    title: "Quality Review",
+    subtitle: "Review quality, validation, PPAP and supplier quality requirements.",
+    roleLabel: ROLE_LABELS.quality,
+    statusLabel: "Quality Manager",
+  },
+  program_manager: {
+    title: "Program Review",
+    subtitle: "Review program impact, timing, milestones and customer requirements.",
+    roleLabel: ROLE_LABELS.program_manager,
+    statusLabel: "Program Manager",
   },
 };
 
@@ -266,10 +302,7 @@ export const SUPPLIER_DASHBOARD_CONFIG: RoleDashboardConfig = {
   statusLabel: "Supplier Portal",
 };
 
-const EXECUTIVE_LAYOUT_BY_ROLE: Record<
-  Exclude<AppRole, "warehouse" | "legal" | "department" | "manufacturing">,
-  ExecutiveDashboardLayout
-> = {
+const EXECUTIVE_LAYOUT_BY_ROLE: Record<string, ExecutiveDashboardLayout> = {
   admin: {
     kpiKeys: EXECUTIVE_KPI_KEYS,
     quickActions: ADMIN_QUICK_ACTIONS,
@@ -329,6 +362,17 @@ const EXECUTIVE_LAYOUT_BY_ROLE: Record<
     showSavings: false,
     showAlerts: false,
   },
+  executive: {
+    kpiKeys: EXECUTIVE_KPI_KEYS,
+    quickActions: ADMIN_QUICK_ACTIONS,
+    showSpendCharts: true,
+    showActivity: true,
+    activityTitle: "Executive Activity",
+    activityTypes: "all",
+    showTopSuppliers: true,
+    showSavings: true,
+    showAlerts: true,
+  },
 };
 
 export function getDashboardConfig(role: AppRole): RoleDashboardConfig {
@@ -338,7 +382,7 @@ export function getDashboardConfig(role: AppRole): RoleDashboardConfig {
 export function getExecutiveDashboardLayout(
   role: Exclude<AppRole, "warehouse" | "legal" | "department" | "manufacturing">,
 ): ExecutiveDashboardLayout {
-  return EXECUTIVE_LAYOUT_BY_ROLE[role] ?? EXECUTIVE_LAYOUT_BY_ROLE.admin;
+  return (EXECUTIVE_LAYOUT_BY_ROLE as Record<string, ExecutiveDashboardLayout>)[role] ?? EXECUTIVE_LAYOUT_BY_ROLE.admin;
 }
 
 export function filterActivityByRole(

@@ -37,6 +37,26 @@
       "destination": "/api/stock-check"
     },
     {
+      "source": "/api/create-rfq-from-pr",
+      "destination": "/api/create-rfq-from-pr"
+    },
+    {
+      "source": "/api/create-rfq-from-ecr",
+      "destination": "/api/create-rfq-from-ecr"
+    },
+    {
+      "source": "/api/create-pr-from-ecr",
+      "destination": "/api/create-pr-from-ecr"
+    },
+    {
+      "source": "/api/ecr-workflow-action",
+      "destination": "/api/ecr-workflow-action"
+    },
+    {
+      "source": "/api/ecr-create",
+      "destination": "/api/ecr-create"
+    },
+    {
       "source": "/api/rfq-supplier-invite",
       "destination": "/api/rfq-supplier-invite"
     },
@@ -59,6 +79,10 @@
     {
       "source": "/api/file-proxy",
       "destination": "/api/file-proxy"
+    },
+    {
+      "source": "/api/file-link-copy",
+      "destination": "/api/file-link-copy"
     },
     {
       "source": "/api/erp-server-date",

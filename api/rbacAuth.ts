@@ -6,6 +6,7 @@
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { getEcrWorkflowTransition } from "./ecrWorkflowPolicy.js";
 
 export type AppRole =
   | "admin"
@@ -16,7 +17,12 @@ export type AppRole =
   | "warehouse"
   | "legal"
   | "department"
-  | "manufacturing";
+  | "manufacturing"
+  | "engineer"
+  | "engineering"
+  | "operations"
+  | "quality"
+  | "program_manager";
 
 export type AccessPrincipal =
   | {
@@ -46,18 +52,13 @@ export class RbacError extends Error {
   }
 }
 
-const ROLE_USER_EMAILS: Record<string, AppRole> = {
-  "admin@netlink.com": "admin",
-  "procurement@netlink.com": "procurement",
-  "procurement.team@netlink.com": "procurement_team",
-  "finance@netlink.com": "finance",
-  "finance.executive@netlink.com": "finance_executive",
-  "warehouse@netlink.com": "warehouse",
-  "legal@netlink.com": "legal",
-  "department@netlink.com": "department",
-  "manufacturing@netlink.com": "manufacturing",
-  "production@netlink.com": "manufacturing",
-};
+export interface EcrMutationSnapshot {
+  name?: string;
+  select_pxfp?: string;
+  ecr_owner?: string;
+  amended_from?: string;
+  owner?: string;
+}
 
 const ERPNEXT_ROLE_MAP: Record<string, AppRole> = {
   Administrator: "admin",
@@ -67,6 +68,7 @@ const ERPNEXT_ROLE_MAP: Record<string, AppRole> = {
   "Procurement Manager": "procurement",
   /** Operational PO ownership — distinct from Procurement Manager. */
   "Procurement Team": "procurement_team",
+  "Procurement User": "procurement_team",
   "Purchase User": "procurement_team",
   "Accounts Manager": "finance",
   "Accounts Payable": "finance",
@@ -80,6 +82,11 @@ const ERPNEXT_ROLE_MAP: Record<string, AppRole> = {
   "Department User": "department",
   "Manufacturing Manager": "manufacturing",
   "Production Manager": "manufacturing",
+  Engineer: "engineer",
+  "Engineering Manager": "engineering",
+  "Operations Manager": "operations",
+  "Quality Manager": "quality",
+  "Program Manager": "program_manager",
 };
 
 /** Finance Manager / Accounts Payable / Finance Admin (admin bypass). */
@@ -185,18 +192,20 @@ export function resolveServerRole(user: {
   name: string;
   email: string;
   erpnext_roles?: string[];
-}): AppRole {
+}): AppRole | null {
   const name = user.name.trim().toLowerCase();
   const email = user.email.trim().toLowerCase();
   if (name === "administrator" || email === "administrator@example.com") {
     return "admin";
   }
-  const mapped = ROLE_USER_EMAILS[email] ?? ROLE_USER_EMAILS[name];
-  if (mapped) return mapped;
-
-  if (user.erpnext_roles?.length) {
+  if (Array.isArray(user.erpnext_roles)) {
     const priority: AppRole[] = [
       "admin",
+      "program_manager",
+      "engineering",
+      "operations",
+      "quality",
+      "engineer",
       "legal",
       "finance",
       "finance_executive",
@@ -208,14 +217,495 @@ export function resolveServerRole(user: {
     ];
     const resolved = new Set<AppRole>();
     for (const r of user.erpnext_roles) {
-      const m = ERPNEXT_ROLE_MAP[r];
+      const normalized = r.trim().toLowerCase();
+      const m = Object.entries(ERPNEXT_ROLE_MAP).find(
+        ([erpRole]) => erpRole.toLowerCase() === normalized,
+      )?.[1];
       if (m) resolved.add(m);
     }
     for (const role of priority) {
       if (resolved.has(role)) return role;
     }
+    // An explicit empty/unrecognized ERP role list is authoritative. Never
+    // resurrect a revoked role from a hard-coded email address.
+    return null;
   }
-  return "procurement";
+  return null;
+}
+
+const ECR_ROLES: AppRole[] = [
+  "engineer",
+  "engineering",
+  "operations",
+  "quality",
+  "program_manager",
+  "procurement_team",
+  "procurement",
+];
+
+type PrActionRule = { roles: AppRole[]; statuses: string[] };
+
+const PR_WORKFLOW_ACTION_RULES: Record<string, PrActionRule> = {
+  "Submit Requisition": {
+    roles: ["procurement_team", "procurement"],
+    statuses: ["Draft"],
+  },
+  "Re-Submit after Revision": {
+    roles: ["procurement_team", "procurement"],
+    statuses: ["Needs Revision"],
+  },
+  "Cancel Requisition": {
+    roles: ["procurement_team", "procurement"],
+    statuses: ["Submitted"],
+  },
+  "Start Review": {
+    roles: ["procurement"],
+    statuses: ["Submitted"],
+  },
+  "Approve Requisition": {
+    roles: ["procurement"],
+    statuses: ["Under Review"],
+  },
+  "Send Back": {
+    roles: ["procurement"],
+    statuses: ["Under Review"],
+  },
+  "Reject Requisition": {
+    roles: ["procurement"],
+    statuses: ["Under Review"],
+  },
+  "Close Requisition": {
+    roles: ["procurement"],
+    statuses: ["RFQ Created"],
+  },
+};
+
+const ECR_DOWNSTREAM_TRACE_FIELDS = new Set([
+  "supplier_quotation",
+  "selected_supplier",
+  "purchase_order",
+]);
+
+const ECR_ENGINEER_EDIT_FIELDS = new Set([
+  "ecr_title",
+  "ecr_type",
+  "priority",
+  "requesting_department",
+  "plant",
+  "program",
+  "project",
+  "target_implementation_date",
+  "chnage_description",
+  "reason_for_change",
+  "business_justification",
+  "current_state",
+  "proposed_state",
+  "affected_parts",
+  "product_impact",
+  "material_impact",
+  "manufacturing_impact",
+  "tooling_impact",
+  "quality_impact",
+  "cost_impact",
+  "supplier_impact",
+  "delivery_impact",
+  "customer_impact",
+  "contract_impact",
+  "supplier_response_required",
+  "supplier_response_type",
+  "suggested_supplier",
+  "procurement_reference_type",
+  "existing_rfq_reference",
+  "existing_purchase_order_reference",
+  "required_quantity",
+  "quantity_uom",
+  "supplier_response_requirements",
+  "engineering_notes",
+  "engineering_drawing",
+  "3d_cad_file",
+  "specification",
+  "supporting_documents",
+  "implementation_notes",
+  "implementation_date",
+  "validation_status",
+  "validation_notes",
+  "validation_documents",
+]);
+
+const ECR_WORKFLOW_OWNED_FIELDS = new Set([
+  "approval_requirements",
+  "ecr_number",
+  "bidsphere_create_idempotency_key",
+  "select_pxfp",
+  "status",
+  "docstatus",
+  "ecr_owner",
+  "amended_from",
+  "company",
+  "owner",
+  "creation",
+  "modified",
+  "modified_by",
+  "purchase_requisition",
+  "rfq",
+]);
+
+const ECR_CREATE_PROTECTED_FIELDS = new Set([
+  "approval_requirements",
+  "owner",
+  "creation",
+  "modified",
+  "modified_by",
+]);
+
+/** Server-side counterpart to the client action matrix. */
+export function assertEcrWorkflowPermission(
+  principal: Extract<AccessPrincipal, { typ: "internal" }>,
+  action: string,
+  status: string,
+): void {
+  const transition = getEcrWorkflowTransition(status, action);
+  if (!transition || !transition.roles.includes(principal.role)) {
+    throw new RbacError(
+      "Access denied. Your role cannot perform this action at the current ECR status.",
+      403,
+    );
+  }
+}
+
+/** Server-side counterpart to the Purchase Requisition workflow. */
+export function assertPrWorkflowPermission(
+  principal: Extract<AccessPrincipal, { typ: "internal" }>,
+  action: string,
+  status: string,
+): void {
+  const rule = PR_WORKFLOW_ACTION_RULES[action];
+  if (!rule || !rule.statuses.includes(status)) {
+    throw new RbacError(
+      "Access denied. Your role cannot perform this Purchase Requisition action at the current status.",
+      403,
+    );
+  }
+  if (principal.role === "admin") return;
+  if (!rule.roles.includes(principal.role)) {
+    throw new RbacError(
+      "Access denied. Your role cannot perform this Purchase Requisition action at the current status.",
+      403,
+    );
+  }
+}
+
+function normalizedApiPath(apiPath: string): string {
+  try {
+    return decodeURIComponent(apiPath.replace(/^\/+/, "").replace(/\+/g, " "));
+  } catch {
+    return apiPath.replace(/^\/+/, "");
+  }
+}
+
+function recordBody(body: unknown): Record<string, unknown> {
+  if (typeof body === "string") {
+    try {
+      const parsed = JSON.parse(body) as unknown;
+      return parsed && typeof parsed === "object"
+        ? parsed as Record<string, unknown>
+        : {};
+    } catch {
+      return {};
+    }
+  }
+  return body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+}
+
+/**
+ * Enforce ECR mutation ownership at the trusted ERP proxy. `currentStatus` is
+ * loaded server-side by the proxy, never accepted from the browser.
+ */
+export function enforceEcrMutationRbac(
+  principal: AccessPrincipal,
+  apiPath: string,
+  method: string,
+  body?: unknown,
+  currentStatus?: string,
+  currentDocument?: EcrMutationSnapshot | null,
+): void {
+  const m = method.toUpperCase();
+  if (["GET", "HEAD", "OPTIONS"].includes(m)) return;
+  const path = normalizedApiPath(apiPath);
+  const payload = recordBody(body);
+  const doc = recordBody(payload.doc);
+  const doctype = String(doc.doctype || payload.doctype || "");
+  const isEcrResource =
+    path === "resource/Engineering Change Request" ||
+    path.startsWith("resource/Engineering Change Request/");
+  const isEcrWorkflow =
+    path === "method/frappe.model.workflow.apply_workflow" &&
+    doctype === "Engineering Change Request";
+  const isEcrComment =
+    path === "resource/Comment" &&
+    String(payload.reference_doctype || "") === "Engineering Change Request";
+  const isEcrGenericMutation =
+    path.startsWith("method/") &&
+    !isEcrWorkflow &&
+    doctype === "Engineering Change Request";
+
+  if (!isEcrResource && !isEcrWorkflow && !isEcrComment && !isEcrGenericMutation) return;
+  if (principal.typ !== "internal") {
+    throw new RbacError("Forbidden. Internal authentication required.", 403);
+  }
+  if (isEcrGenericMutation) {
+    throw new RbacError(
+      "Generic ERP document mutations are disabled for Engineering Change Requests.",
+      403,
+    );
+  }
+  if (isEcrResource && path === "resource/Engineering Change Request" && m === "POST") {
+    throw new RbacError(
+      "New ECRs must use the secured /api/ecr-create endpoint.",
+      403,
+    );
+  }
+  if (
+    isEcrResource &&
+    ["PUT", "PATCH"].includes(m) &&
+    (
+      Object.prototype.hasOwnProperty.call(payload, "select_pxfp") ||
+      Object.prototype.hasOwnProperty.call(payload, "docstatus")
+    )
+  ) {
+    throw new RbacError(
+      "ECR status can only be changed through an authorized workflow action.",
+      403,
+    );
+  }
+  if (
+    isEcrResource &&
+    m === "POST" &&
+    (
+      (Object.prototype.hasOwnProperty.call(payload, "select_pxfp") &&
+        String(payload.select_pxfp || "Draft") !== "Draft") ||
+      Number(payload.docstatus || 0) !== 0
+    )
+  ) {
+    throw new RbacError("New ECRs must be created in Draft status.", 403);
+  }
+  if (
+    isEcrResource &&
+    m === "POST" &&
+    Object.keys(payload).some((field) => ECR_CREATE_PROTECTED_FIELDS.has(field))
+  ) {
+    throw new RbacError(
+      "New ECR approval tasks and audit metadata are server-managed.",
+      403,
+    );
+  }
+  if (isEcrResource && ["PUT", "PATCH"].includes(m)) {
+    const protectedFields = Object.keys(payload).filter((field) =>
+      ECR_WORKFLOW_OWNED_FIELDS.has(field),
+    );
+    if (protectedFields.length > 0) {
+      throw new RbacError(
+        "ECR workflow tasks, business number, and audit metadata are server-managed.",
+        403,
+      );
+    }
+  }
+  if (isEcrWorkflow) {
+    throw new RbacError(
+      "ECR workflow actions must use the secured /api/ecr-workflow-action endpoint.",
+      403,
+    );
+  }
+
+  if (principal.role === "admin") return;
+
+  if (!ECR_ROLES.includes(principal.role)) {
+    throw new RbacError("Access denied. Engineering Change access is required.", 403);
+  }
+
+  if (isEcrComment) return;
+
+  if (isEcrResource && m === "POST") {
+    requireRoles(principal, ["engineer"]);
+    const requestedOwner = String(payload.ecr_owner || "").trim().toLowerCase();
+    const identities = new Set([principal.sub, principal.email].map((value) => value.trim().toLowerCase()));
+    if (requestedOwner && !identities.has(requestedOwner)) {
+      throw new RbacError("Engineers can create ECRs only for themselves.", 403);
+    }
+    return;
+  }
+
+  if (isEcrResource && ["PUT", "PATCH", "DELETE"].includes(m)) {
+    if (m === "DELETE") {
+      throw new RbacError("Only an administrator can delete an ECR.", 403);
+    }
+    requireRoles(principal, ["engineer", "procurement_team", "procurement"]);
+    if (principal.role === "engineer" && !["Draft", "Sent Back", "Needs Revision"].includes(currentStatus || "")) {
+      throw new RbacError("Engineers can edit only Draft or Sent Back ECRs.", 403);
+    }
+    if (principal.role === "engineer") {
+      const identities = new Set([principal.sub, principal.email].map((value) => value.trim().toLowerCase()));
+      const owners = [currentDocument?.ecr_owner, currentDocument?.amended_from, currentDocument?.owner]
+        .filter(Boolean)
+        .map((value) => String(value).trim().toLowerCase());
+      if (owners.length === 0 || !owners.some((owner) => identities.has(owner))) {
+        throw new RbacError("Access denied. Engineers can edit only their own ECRs.", 403);
+      }
+      const disallowed = Object.keys(payload).filter(
+        (field) => field !== "access_token" && !ECR_ENGINEER_EDIT_FIELDS.has(field),
+      );
+      if (disallowed.length > 0) {
+        throw new RbacError(
+          `Engineers cannot update server-managed ECR fields: ${disallowed.join(", ")}.`,
+          403,
+        );
+      }
+    }
+    if (
+      (principal.role === "procurement" || principal.role === "procurement_team") &&
+      !["Procurement Review", "RFQ Pending", "RFQ"].includes(currentStatus || "")
+    ) {
+      throw new RbacError("Procurement can update ECR traceability only during the procurement and RFQ stages.", 403);
+    }
+    if (principal.role === "procurement" || principal.role === "procurement_team") {
+      const disallowed = Object.keys(payload).filter(
+        (field) => field !== "access_token" && !ECR_DOWNSTREAM_TRACE_FIELDS.has(field),
+      );
+      if (disallowed.length > 0) {
+        throw new RbacError(
+          "Procurement can update only downstream ECR traceability fields.",
+          403,
+        );
+      }
+    }
+  }
+}
+
+/** Enforce trusted Purchase Requisition resource and workflow mutations. */
+export function enforcePrMutationRbac(
+  principal: AccessPrincipal,
+  apiPath: string,
+  method: string,
+  body?: unknown,
+  currentStatus?: string,
+): void {
+  const m = method.toUpperCase();
+  if (["GET", "HEAD", "OPTIONS"].includes(m)) return;
+  const path = normalizedApiPath(apiPath);
+  const payload = recordBody(body);
+  const doc = recordBody(payload.doc);
+  const doctype = String(doc.doctype || payload.doctype || payload.dt || "");
+  const isPrResource =
+    path === "resource/Purchase Requisition" ||
+    path.startsWith("resource/Purchase Requisition/");
+  const isPrWorkflow =
+    path === "method/frappe.model.workflow.apply_workflow" &&
+    doctype === "Purchase Requisition";
+  const isPrGenericMutation =
+    path.startsWith("method/") &&
+    !isPrWorkflow &&
+    doctype === "Purchase Requisition";
+
+  if (!isPrResource && !isPrWorkflow && !isPrGenericMutation) return;
+  if (principal.typ !== "internal") {
+    throw new RbacError("Forbidden. Internal authentication required.", 403);
+  }
+  if (isPrGenericMutation) {
+    throw new RbacError(
+      "Generic ERP document mutations are disabled for Purchase Requisitions.",
+      403,
+    );
+  }
+  if (
+    isPrResource &&
+    Object.prototype.hasOwnProperty.call(payload, "data")
+  ) {
+    throw new RbacError(
+      "Wrapped data payloads are not allowed for Purchase Requisition mutations.",
+      403,
+    );
+  }
+  if (
+    isPrResource &&
+    ["PUT", "PATCH"].includes(m) &&
+    (
+      Object.prototype.hasOwnProperty.call(payload, "status") ||
+      Object.prototype.hasOwnProperty.call(payload, "docstatus")
+    )
+  ) {
+    throw new RbacError(
+      "Purchase Requisition status can only be changed through an authorized workflow action.",
+      403,
+    );
+  }
+  if (
+    isPrResource &&
+    m === "POST" &&
+    (
+      (Object.prototype.hasOwnProperty.call(payload, "status") &&
+        String(payload.status || "Draft") !== "Draft") ||
+      Number(payload.docstatus || 0) !== 0
+    )
+  ) {
+    throw new RbacError("New Purchase Requisitions must be created in Draft status.", 403);
+  }
+  if (
+    isPrResource &&
+    m === "POST" &&
+    (
+      String(payload.ecr_reference || "").trim() ||
+      String(payload.custom_bidsphere_ecr_idempotency_key || "").trim()
+    )
+  ) {
+    throw new RbacError(
+      "ECR-linked Purchase Requisitions must use the secured /api/create-pr-from-ecr endpoint.",
+      403,
+    );
+  }
+  if (
+    isPrResource &&
+    ["PUT", "PATCH"].includes(m) &&
+    (
+      Object.prototype.hasOwnProperty.call(payload, "ecr_reference") ||
+      Object.prototype.hasOwnProperty.call(
+        payload,
+        "custom_bidsphere_ecr_idempotency_key",
+      )
+    )
+  ) {
+    throw new RbacError(
+      "Purchase Requisition ECR traceability is server-managed.",
+      403,
+    );
+  }
+  if (isPrWorkflow) {
+    if (!currentStatus) {
+      throw new RbacError("Unable to verify the current Purchase Requisition status.", 403);
+    }
+    assertPrWorkflowPermission(principal, String(payload.action || ""), currentStatus);
+    return;
+  }
+
+  if (principal.role === "admin") return;
+
+  requireRoles(principal, ["procurement_team", "procurement"]);
+  if (m === "DELETE") {
+    throw new RbacError("Only an administrator can delete a Purchase Requisition.", 403);
+  }
+  if (["PUT", "PATCH"].includes(m)) {
+    if (!currentStatus) {
+      throw new RbacError("Unable to verify the current Purchase Requisition status.", 403);
+    }
+    if (
+      principal.role !== "procurement_team" ||
+      !["Draft", "Needs Revision"].includes(currentStatus)
+    ) {
+      throw new RbacError(
+        "Purchase Requisition details can be edited only by Procurement Team while Draft or Needs Revision.",
+        403,
+      );
+    }
+  }
 }
 
 /** Header names the SPA / portal send. */

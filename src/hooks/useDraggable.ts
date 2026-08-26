@@ -12,26 +12,30 @@ function clamp(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, val));
 }
 
+function defaultPosition(): Position {
+  return {
+    x: Math.max(16, window.innerWidth - FAB_SIZE - 24),
+    y: Math.max(20, window.innerHeight - FAB_SIZE - 92),
+  };
+}
+
 function loadPosition(): Position | null {
   try {
     const raw = localStorage.getItem(POSITION_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Position;
     if (typeof parsed.x === "number" && typeof parsed.y === "number") {
+      // If position is near middle of screen or off-screen, reset to bottom right
+      if (parsed.x < window.innerWidth * 0.4 || parsed.y > window.innerHeight - FAB_SIZE - 40) {
+        return defaultPosition();
+      }
       return {
-        x: clamp(parsed.x, 0, window.innerWidth - FAB_SIZE),
-        y: clamp(parsed.y, 0, window.innerHeight - FAB_SIZE),
+        x: clamp(parsed.x, 16, window.innerWidth - FAB_SIZE - 16),
+        y: clamp(parsed.y, 20, window.innerHeight - FAB_SIZE - 80),
       };
     }
   } catch { /* corrupted */ }
   return null;
-}
-
-function defaultPosition(): Position {
-  return {
-    x: window.innerWidth - FAB_SIZE - 24,
-    y: window.innerHeight - FAB_SIZE - 24,
-  };
 }
 
 /**

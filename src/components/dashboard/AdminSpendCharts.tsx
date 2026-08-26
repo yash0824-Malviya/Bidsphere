@@ -16,6 +16,7 @@ import { formatCurrency } from "../../utils/format";
 
 /** Category donut + filters — load after the spend trend paints. */
 const CategorySpendBreakdown = lazy(() => import("./CategorySpendBreakdown"));
+const ProcurementSummaryPanel = lazy(() => import("./ProcurementSummaryPanel"));
 
 interface Props {
   monthlySpend: MonthlySpendPoint[];
@@ -60,69 +61,74 @@ function AdminSpendCharts({ monthlySpend, loading }: Props) {
   const momPct = lastMonth?.momChangePct;
 
   return (
-    <div className="dashboard-grid-2">
-      <ChartCard title="Monthly Spend Trend" subtitle="Last 12 months">
-        <div className="flex h-full flex-col">
-          {momPct != null && (
-            <div className="mb-1 flex items-center gap-1">
-              <span className="text-[10px] text-neutral-400">MoM</span>
-              <span
-                className={`inline-flex items-center gap-0.5 text-[11px] font-semibold tabular-nums ${
-                  momPct >= 0 ? "text-emerald-600" : "text-red-500"
-                }`}
-              >
-                {momPct >= 0 ? (
-                  <ArrowUpRight className="h-3 w-3" />
-                ) : (
-                  <ArrowDownRight className="h-3 w-3" />
-                )}
-                {momPct > 0 ? "+" : ""}
-                {momPct.toFixed(1)}%
-              </span>
+    <div className="flex flex-col gap-4">
+      <div className="dashboard-grid-2">
+        <ChartCard title="Monthly Spend Trend" subtitle="Last 12 months">
+          <div className="flex h-full flex-col">
+            {momPct != null && (
+              <div className="mb-1 flex items-center gap-1">
+                <span className="text-[10px] text-neutral-400">MoM</span>
+                <span
+                  className={`inline-flex items-center gap-0.5 text-[11px] font-semibold tabular-nums ${
+                    momPct >= 0 ? "text-emerald-600" : "text-red-500"
+                  }`}
+                >
+                  {momPct >= 0 ? (
+                    <ArrowUpRight className="h-3 w-3" />
+                  ) : (
+                    <ArrowDownRight className="h-3 w-3" />
+                  )}
+                  {momPct > 0 ? "+" : ""}
+                  {momPct.toFixed(1)}%
+                </span>
+              </div>
+            )}
+            <div className="h-[220px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={monthlySpend} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
+                  <CartesianGrid stroke="#f1f5f9" vertical={false} />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fontSize: 10, fill: "#94a3b8" }}
+                    axisLine={false}
+                    tickLine={false}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis
+                    tick={{ fontSize: 10, fill: "#94a3b8" }}
+                    axisLine={false}
+                    tickLine={false}
+                    width={40}
+                    tickFormatter={(v: number) =>
+                      new Intl.NumberFormat("en-US", {
+                        notation: "compact",
+                        maximumFractionDigits: 0,
+                      }).format(v)
+                    }
+                  />
+                  <Tooltip
+                    contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                    formatter={(v) => formatCurrency(typeof v === "number" ? v : 0)}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="spend"
+                    stroke="#1F3A6D"
+                    strokeWidth={2}
+                    dot={{ r: 2, fill: "#1F3A6D" }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
-          )}
-          <div className="h-[220px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={monthlySpend} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
-                <CartesianGrid stroke="#f1f5f9" vertical={false} />
-                <XAxis
-                  dataKey="label"
-                  tick={{ fontSize: 10, fill: "#94a3b8" }}
-                  axisLine={false}
-                  tickLine={false}
-                  interval="preserveStartEnd"
-                />
-                <YAxis
-                  tick={{ fontSize: 10, fill: "#94a3b8" }}
-                  axisLine={false}
-                  tickLine={false}
-                  width={40}
-                  tickFormatter={(v: number) =>
-                    new Intl.NumberFormat("en-US", {
-                      notation: "compact",
-                      maximumFractionDigits: 0,
-                    }).format(v)
-                  }
-                />
-                <Tooltip
-                  contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                  formatter={(v) => formatCurrency(typeof v === "number" ? v : 0)}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="spend"
-                  stroke="#1F3A6D"
-                  strokeWidth={2}
-                  dot={{ r: 2, fill: "#1F3A6D" }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
           </div>
-        </div>
-      </ChartCard>
+        </ChartCard>
 
-      <Suspense fallback={<Skeleton className="min-h-[280px] rounded-card" />}>
-        <CategorySpendBreakdown />
+        <Suspense fallback={<Skeleton className="min-h-[280px] rounded-card" />}>
+          <CategorySpendBreakdown />
+        </Suspense>
+      </div>
+      <Suspense fallback={<Skeleton className="min-h-[240px] rounded-card" />}>
+        <ProcurementSummaryPanel />
       </Suspense>
     </div>
   );

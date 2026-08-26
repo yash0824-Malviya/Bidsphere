@@ -17,7 +17,7 @@ import {
 
 import AuthShell from "../../components/auth/AuthShell";
 import BrandLogo from "../../components/BrandLogo";
-import { safeInternalDestination } from "../../utils/rbacNavigate";
+import { POST_LOGIN_DESTINATION } from "../../utils/authRedirect";
 import { logMfaEnvDiagnostics } from "../../config/mfaConfig";
 import { prefetchDashboardForRole } from "../../api/prefetchDashboard";
 import { useAuthStore, setMfaRedirectPath } from "../../store/authStore";
@@ -47,10 +47,6 @@ import {
  * official Microsoft / Google brand marks, which must use their trademarked
  * palettes.
  */
-
-interface LocationState {
-  from?: { pathname?: string };
-}
 
 interface LoginPageProps {
   /** When set, only matching roles may complete sign-in on this page. */
@@ -92,15 +88,14 @@ export default function LoginPage({ portal }: LoginPageProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const locationState = location.state as LocationState | null;
-  const savedFromPath = locationState?.from?.pathname ?? null;
-
   useEffect(() => {
-    if (sessionRestoreError) {
+    if (!sessionRestoreError) return;
+    const timer = window.setTimeout(() => {
       setFormError(sessionRestoreError);
       toast.error(sessionRestoreError);
       clearSessionRestoreError();
-    }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [sessionRestoreError, clearSessionRestoreError]);
 
   useEffect(() => {
@@ -119,7 +114,7 @@ export default function LoginPage({ portal }: LoginPageProps) {
         replacePreviousStaffSession("replace-staff-session-for-portal-login");
         return;
       }
-      const target = safeInternalDestination(role, savedFromPath);
+      const target = POST_LOGIN_DESTINATION;
       const previousPortal = getActivePortal() ?? portalForRole(role);
       const newPortal = portalForRole(role) ?? portalAffinity;
       setActivePortal(newPortal);
@@ -152,7 +147,6 @@ export default function LoginPage({ portal }: LoginPageProps) {
     isAuthenticated,
     isVerifying,
     mfaPending,
-    savedFromPath,
     navigate,
     user,
     portalAffinity,
@@ -218,7 +212,7 @@ export default function LoginPage({ portal }: LoginPageProps) {
 
       const destination = requiresMFA
         ? "/verify-otp"
-        : safeInternalDestination(role, savedFromPath);
+        : POST_LOGIN_DESTINATION;
 
       logPortalAuthDecision({
         username: username.trim(),
@@ -234,12 +228,7 @@ export default function LoginPage({ portal }: LoginPageProps) {
       });
 
       if (outcome === "mfa") {
-        setMfaRedirectPath(
-          safeInternalDestination(
-            useAuthStore.getState().mfaPending?.user.role ?? "procurement",
-            savedFromPath,
-          ),
-        );
+        setMfaRedirectPath(POST_LOGIN_DESTINATION);
         toast.success(t("login.credentialsVerified"));
         navigate("/verify-otp", { replace: true });
       } else {

@@ -273,6 +273,12 @@ export interface RFQItem extends ErpDoc {
 /** ERPNext "Request for Quotation" doctype. */
 export interface RequestForQuotation extends ErpDoc {
   transaction_date: string;
+  /** Link back to the originating ECR when this is a direct ECR RFQ. */
+  custom_ecr_reference?: string;
+  /** Hidden unique key owned by the trusted direct ECR → RFQ endpoint. */
+  custom_bidsphere_ecr_idempotency_key?: string;
+  /** Optional legacy/configured Purchase Requisition trace. */
+  custom_purchase_requisition_reference?: string;
   /**
    * Custom field used by the Smart RFQ module so suppliers know how long
    * their quote has to be returned. Standard ERPNext stores `valid_till`
@@ -1103,3 +1109,300 @@ export interface FinanceReviewItem {
   finance_rejection_reason?: string;
 }
 
+/* -------------------------------------------------------------------------- */
+/*  Engineering Change Request (ECR)                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * ECR status values — stored in the `select_pxfp` field (quirky auto-generated
+ * fieldname from ERPNext). The Frappe workflow "ECR Approval Workflow" controls
+ * transitions between these states.
+ */
+export type ECRStatus =
+  | "Draft"
+  | "Engineering Review"
+  | "Operations Review"
+  | "Quality Review"
+  | "Program Review"
+  | "Sent Back"
+  | "Approved"
+  | "Procurement"
+  | "Purchase Requisition"
+  | "RFQ"
+  | "Supplier Selection"
+  | "Submitted"
+  | "Needs Revision"
+  | "Under Review"
+  | "Cross-Functional Review"
+  | "ECR Approved"
+  | "Requisition Creation"
+  | "Procurement Review"
+  | "RFQ Pending"
+  | "RFQ Created"
+  | "Supplier Response"
+  | "Supplier Evaluation"
+  | "Supplier Selected"
+  | "Implementation"
+  | "Validation"
+  | "Closed"
+  | "Rejected"
+  | "Cancelled";
+
+export type ECRType =
+  | "Part Change"
+  | "Design Change"
+  | "Material Change"
+  | "Process Change"
+  | "Tooling Change"
+  | "Supplier Change"
+  | "Quality Change"
+  | "Packaging Change"
+  | "Cost Change"
+  | "Other"
+  | "Regulatory"
+  | "Cost Reduction"
+  | "Quality Issue";
+
+export type ECRPriority = "Low" | "Medium" | "High" | "Critical";
+
+export type ECRSupplierResponseType =
+  | "Feasibility"
+  | "Quotation"
+  | "Tooling"
+  | "Capacity"
+  | "Lead Time"
+  | "Quality Validation"
+  | "Technical Compliance"
+  | "Commercial + Technical"
+  | "Full Response"
+  | "New Part Quotation"
+  | "Tooling Quotation"
+  | "Feasibility Study"
+  | "Prototype"
+  | "PPAP Submission";
+
+export type ECRValidationStatus = "Not Started" | "Pending" | "In Progress" | "Passed" | "Failed";
+
+/** Existing procurement document used as the source for ECR affected parts. */
+export type ECRProcurementReferenceType = "None" | "RFQ" | "Purchase Order";
+
+/** Row in the `affected_parts` child table on ECR. */
+export interface ECRAffectedPart extends ErpDoc {
+  /** Link → Item */
+  partitem?: string;
+  part_description?: string;
+  current_revision?: string;
+  new_revision?: string;
+  quantity?: number;
+  /** Link → UOM */
+  uom?: string;
+  program?: string;
+  /** Link → Plant Floor */
+  plant?: string;
+  /** Link → Supplier */
+  current_supplier?: string;
+  /** Link → Supplier */
+  proposed_supplier?: string;
+  effective_date?: string;
+  change_required?: string;
+  technical_notes?: string;
+  /** RFQ or PO selected as the authoritative source for this line. */
+  source_reference_type?: Exclude<ECRProcurementReferenceType, "None">;
+  /** Actual ERPNext RFQ / PO document name returned by the backend. */
+  source_document_reference?: string;
+  /** Actual ERPNext RFQ Item / Purchase Order Item child-row name. */
+  source_item_reference?: string;
+}
+
+/** Row in the `supplier_response_requirements` child table on ECR. */
+export interface ECRSupplierResponseRequirement extends ErpDoc {
+  response_type?: string;
+  requirement?: string;
+  mandatory?: 0 | 1;
+  target_value?: string;
+  unit?: string;
+  notes?: string;
+}
+
+/** Trusted workflow decision row maintained by the secured ECR transition API. */
+export interface ECRApprovalRequirement extends ErpDoc {
+  department?: string;
+  approval_role: string;
+  approver?: string;
+  required?: 0 | 1;
+  status?: "Pending" | "Approved" | "Rejected" | "Sent Back" | "Completed";
+  approval_date?: string;
+  comments?: string;
+}
+
+/**
+ * ERPNext "Engineering Change Request" DocType.
+ *
+ * IMPORTANT fieldname quirks (confirmed from live instance):
+ *   - Workflow state is stored in `select_pxfp`; `status` is kept in sync for
+ *     list/report compatibility.
+ *   - "ECR Owner" is stored in `ecr_owner` (Link → User)
+ *   - `amended_from` is retained only for legacy records/Frappe amendment semantics
+ *   - "Change Description" has a typo: `chnage_description`
+ *   - Plant fields on child tables link to `Plant Floor` DocType (not Warehouse)
+ */
+export interface EngineeringChangeRequest extends ErpDoc {
+  /** Auto-generated ECR number (e.g. ECR-2026-0001) */
+  ecr_number?: string;
+  ecr_title: string;
+  ecr_type?: ECRType;
+  priority: ECRPriority;
+  /** ECR Owner. Link → User. */
+  ecr_owner?: string;
+  /** Legacy owner fallback / Frappe amendment link. */
+  amended_from?: string;
+  /** Link → Department */
+  requesting_department: string;
+  /** Link → Warehouse */
+  plant: string;
+  program?: string;
+  project?: string;
+  target_implementation_date: string;
+  /** Note: fieldname has a typo — `chnage_description` */
+  chnage_description: string;
+  reason_for_change: string;
+  business_justification?: string;
+  current_state?: string;
+  proposed_state?: string;
+
+  /** Child table — Affected Parts */
+  affected_parts?: ECRAffectedPart[];
+
+  // Impact Assessment checkboxes
+  product_impact?: 0 | 1;
+  material_impact?: 0 | 1;
+  manufacturing_impact?: 0 | 1;
+  tooling_impact?: 0 | 1;
+  quality_impact?: 0 | 1;
+  cost_impact?: 0 | 1;
+  supplier_impact?: 0 | 1;
+  delivery_impact?: 0 | 1;
+  customer_impact?: 0 | 1;
+  contract_impact?: 0 | 1;
+
+  // Supplier Requirement
+  supplier_response_required?: "Yes" | "No";
+  supplier_response_type?: ECRSupplierResponseType;
+  /** Link → Supplier */
+  suggested_supplier?: string;
+  /** Existing procurement source; separate from downstream documents created after approval. */
+  procurement_reference_type?: ECRProcurementReferenceType;
+  /** Link → Request for Quotation (existing source reference). */
+  existing_rfq_reference?: string;
+  /** Link → Purchase Order (existing source reference). */
+  existing_purchase_order_reference?: string;
+  required_quantity?: number;
+  /** Link → UOM */
+  quantity_uom?: string;
+  /** Child table — Supplier Response Requirements */
+  supplier_response_requirements?: ECRSupplierResponseRequirement[];
+
+  /** Child table — sequential review assignments and completed decisions. */
+  approval_requirements?: ECRApprovalRequirement[];
+
+  // Attachments
+  engineering_drawing?: string;
+  "3d_cad_file"?: string;
+  specification?: string;
+  supporting_documents?: string;
+  engineering_notes?: string;
+
+  // Procurement integration (read-only, set by automation)
+  /** Link → Purchase Requisition */
+  purchase_requisition?: string;
+  /** Link → Request for Quotation */
+  rfq?: string;
+  /** Link → Supplier Quotation */
+  supplier_quotation?: string;
+  /** Link → Supplier */
+  selected_supplier?: string;
+  /** Link → Purchase Order */
+  purchase_order?: string;
+
+  // Implementation & Validation
+  implementation_notes?: string;
+  implementation_date?: string;
+  validation_status?: ECRValidationStatus;
+  validation_notes?: string;
+  validation_documents?: string;
+
+  /**
+   * The workflow status field. Frappe auto-named this `select_pxfp`.
+   * Values are the ECRStatus union above or workflow state string.
+   */
+  select_pxfp?: ECRStatus | string;
+  /** Synchronized display/report status; server workflow actions update both. */
+  status?: ECRStatus | string;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Purchase Requisition (Custom — ECR-driven)                                 */
+/* -------------------------------------------------------------------------- */
+
+export type PRStatus =
+  | "Draft"
+  | "Submitted"
+  | "Needs Revision"
+  | "Under Review"
+  | "Approved"
+  | "Rejected"
+  | "RFQ Created"
+  | "Closed"
+  | "Cancelled";
+
+export type PRSourceType = "ECR" | "Business Request" | "Manual";
+export type PRPriority = "Low" | "Medium" | "High" | "Critical";
+
+/** Row in the `requisition_items` child table on Purchase Requisition. */
+export interface PurchaseRequisitionItem extends ErpDoc {
+  /** Link → Item */
+  partitem?: string;
+  description?: string;
+  revision?: string;
+  quantity: number;
+  /** Link → UOM */
+  uom: string;
+  required_date?: string;
+  /** Link → Plant Floor */
+  plant?: string;
+  /** Link → Supplier */
+  supplier?: string;
+  technical_requirement?: string;
+  ecr_change_required?: 0 | 1;
+}
+
+/** ERPNext "Purchase Requisition" custom DocType. */
+export interface CustomPurchaseRequisition extends ErpDoc {
+  requisition_title: string;
+  source_type: PRSourceType;
+  /** Link → Engineering Change Request */
+  ecr_reference?: string;
+  /** Hidden unique key owned by the trusted ECR → PR endpoint. */
+  custom_bidsphere_ecr_idempotency_key?: string;
+  /** Link → User */
+  requester: string;
+  /** Link → Department */
+  requesting_department: string;
+  /** Link → Warehouse */
+  plant: string;
+  program?: string;
+  project?: string;
+  required_date: string;
+  priority: PRPriority;
+  purpose__requirement?: string;
+  procurement_category?: string;
+  procurement_notes?: string;
+  /** Child table — Requisition Items */
+  requisition_items?: PurchaseRequisitionItem[];
+  /** Link → Supplier */
+  suggested_supplier?: string;
+  /** Link → Request for Quotation */
+  rfq?: string;
+  status: PRStatus;
+  amended_from?: string;
+}

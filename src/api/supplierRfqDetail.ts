@@ -81,7 +81,12 @@ function messageOf(err: unknown): string {
 }
 
 function normalizeSupplierKey(value: string): string {
-  return value.trim().toLowerCase();
+  return value
+    .trim()
+    .replace(/^["']+|["']+$/g, "")
+    .replace(/[.,]+$/g, "")
+    .trim()
+    .toLowerCase();
 }
 
 function isSupplierInvited(rfq: RFQ, supplierId: string): boolean {

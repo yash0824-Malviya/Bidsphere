@@ -100,7 +100,7 @@ function PanelHeader({
   badge?: string | number;
 }) {
   return (
-    <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[#EEF2F7] px-5 py-3.5 sm:px-6">
+    <div className="flex shrink-0 items-start justify-between gap-3 border-b border-[#E2E8F0] px-5 py-3.5 sm:px-6">
       <div className="flex min-w-0 items-start gap-2.5">
         {Icon ? (
           <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-[#EEF3FA] text-[#1F3A6D]">
@@ -109,7 +109,7 @@ function PanelHeader({
         ) : null}
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-[15px] font-semibold leading-tight text-[#1E293B]">
+            <h3 className="text-[16px] font-semibold leading-tight text-[#0F2745]">
               {title}
             </h3>
             {badge != null && Number(badge) > 0 ? (
@@ -119,14 +119,14 @@ function PanelHeader({
             ) : null}
           </div>
           {subtitle ? (
-            <p className="mt-0.5 text-[12px] text-[#64748B]">{subtitle}</p>
+            <p className="mt-0.5 text-[13px] text-[#64748B]">{subtitle}</p>
           ) : null}
         </div>
       </div>
       {to ? (
         <Link
           to={to}
-          className="inline-flex shrink-0 items-center gap-1 text-[12px] font-semibold text-[#1F3A6D] no-underline hover:underline"
+          className="inline-flex shrink-0 items-center gap-1 text-[13px] font-semibold text-[#1F3A6D] no-underline hover:underline"
         >
           View all <ArrowRight className="h-3 w-3" />
         </Link>

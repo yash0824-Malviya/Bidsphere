@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useCallback, useRef, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { NavItem } from "../../utils/routes";
@@ -8,6 +8,7 @@ import { APP_SIDEBAR_TITLE, APP_SIDEBAR_TAGLINE, APP_NAME, COMPANY_NAME } from "
 import { getNavGroupsForRole } from "../../config/roles";
 import { translateNavLabel } from "../../i18n/navLabels";
 import BrandLogo from "../BrandLogo";
+import { isChildNavActive } from "./sidebarNavState";
 
 function isItemActive(pathname: string, to: string): boolean {
   if (!to) return false;
@@ -23,8 +24,11 @@ function isParentNavActive(
   item: NavItem,
 ): boolean {
   if (item.children?.length) {
-    return item.children.some((child) =>
-      isChildNavActive(pathname, search, child.to),
+    return (
+      isItemActive(pathname, item.to) ||
+      item.children.some((child) =>
+        isChildNavActive(pathname, search, child.to, child.label),
+      )
     );
   }
   return isItemActive(pathname, item.to);
@@ -158,30 +162,6 @@ export default function Sidebar({
   );
 }
 
-function isChildNavActive(
-  pathname: string,
-  search: string,
-  to: string,
-): boolean {
-  const [toPath, toQuery = ""] = to.split("?");
-  if (pathname !== toPath) return false;
-
-  const current = new URLSearchParams(search);
-  if (toQuery) {
-    const expected = new URLSearchParams(toQuery);
-    for (const [key, value] of expected.entries()) {
-      if (current.get(key) !== value) return false;
-    }
-    return true;
-  }
-
-  if (toPath === "/suppliers" && current.get("tab") === "performance") {
-    return false;
-  }
-
-  return true;
-}
-
 interface SidebarItemProps {
   item: NavItem;
   pathname: string;
@@ -198,19 +178,32 @@ function SidebarItem({
   onNavigate,
 }: SidebarItemProps) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const label = translateNavLabel(t, item.label);
   const hasChildren = (item.children?.length ?? 0) > 0;
   const active = isParentNavActive(pathname, search, item);
-  const [open, setOpen] = useState(active && hasChildren);
+  const routeDrivenExpansion = item.to === "/ecr";
+  const expansionKey = `${pathname}${search}`;
+  const [manualExpansion, setManualExpansion] = useState<{
+    key: string;
+    open: boolean;
+  } | null>(null);
   const itemRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (active && hasChildren) setOpen(true);
-  }, [active, hasChildren]);
+  const expanded = routeDrivenExpansion
+    ? active
+    : manualExpansion?.key === expansionKey
+      ? manualExpansion.open
+      : active;
 
   const handleToggle = useCallback(() => {
-    setOpen((prev) => {
-      const next = !prev;
+    if (routeDrivenExpansion) {
+      navigate(item.to);
+      onNavigate?.();
+      return;
+    }
+
+    setManualExpansion(() => {
+      const next = !expanded;
       if (next) {
         requestAnimationFrame(() => {
           itemRef.current?.scrollIntoView({
@@ -219,9 +212,16 @@ function SidebarItem({
           });
         });
       }
-      return next;
+      return { key: expansionKey, open: next };
     });
-  }, []);
+  }, [
+    expanded,
+    expansionKey,
+    item.to,
+    navigate,
+    onNavigate,
+    routeDrivenExpansion,
+  ]);
 
   const Icon = item.icon;
 
@@ -275,7 +275,7 @@ function SidebarItem({
       >
         <Icon className={iconClass(active)} />
         <span className="flex-1 truncate">{label}</span>
-        {open ? (
+        {expanded ? (
           <ChevronDown className="h-3 w-3 opacity-70" />
         ) : (
           <ChevronRight className="h-3 w-3 opacity-70" />
@@ -284,7 +284,7 @@ function SidebarItem({
 
       <div
         className={`grid transition-[grid-template-rows] duration-200 ease-out ${
-          open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+          expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
         }`}
       >
         <div className="overflow-hidden">
@@ -296,6 +296,7 @@ function SidebarItem({
                     pathname,
                     search,
                     child.to,
+                    child.label,
                   );
                   return (
                     <div key={child.to}>

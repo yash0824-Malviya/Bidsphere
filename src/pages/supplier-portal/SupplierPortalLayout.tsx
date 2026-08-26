@@ -185,11 +185,11 @@ export default function SupplierPortalLayout({
       ) : null}
 
       <div
-        className={`app-shell-main transition-[margin,width] duration-300 ease-in-out ${
+        className={`app-shell-main relative z-[1] transition-[margin,width] duration-300 ease-in-out ${
           supplierName ? "lg:ml-[280px] lg:w-[calc(100%-280px)]" : "w-full"
         }`}
       >
-        <header className="z-30 shrink-0 bg-white shadow-sm">
+        <header className="relative z-30 shrink-0 bg-white border-b border-neutral-200/80 shadow-sm">
             <div
               className={`flex min-w-0 items-center justify-between gap-2 px-4 py-3 sm:gap-4 sm:px-5 ${
                 isRfqQuotationPage ? "lg:px-6" : "lg:px-8"

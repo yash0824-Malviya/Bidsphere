@@ -1,17 +1,42 @@
 import { lazy, Suspense } from "react";
 import { Loader2 } from "lucide-react";
-import { Navigate } from "react-router-dom";
 
 import { useAuthStore } from "../../store/authStore";
 import AdminDashboard from "../../components/dashboard/AdminDashboard";
 import DepartmentUserDashboard from "../../components/dashboard/DepartmentUserDashboard";
 import type { AppRole } from "../../config/roles";
 
+const WarehouseDashboard = lazy(
+  () => import("../warehouse/WarehouseDashboardPage"),
+);
+const ManufacturingDashboard = lazy(
+  () => import("../manufacturing/BomManagementPage"),
+);
+const FinanceExecutiveDashboard = lazy(
+  () => import("../budget/BudgetDashboardPage"),
+);
 const FinanceDashboard = lazy(() => import("../../components/dashboard/FinanceDashboard"));
 const LegalDashboard = lazy(() => import("../../components/dashboard/LegalDashboard"));
-const ProcurementDashboard = lazy(() => import("../../components/dashboard/ProcurementDashboard"));
-const ProcurementTeamDashboard = lazy(
-  () => import("../../components/dashboard/ProcurementTeamDashboard"),
+const EngineerDashboard = lazy(
+  () => import("../../components/ecr/dashboards/EngineerDashboard"),
+);
+const EngineeringManagerDashboard = lazy(
+  () => import("../../components/ecr/dashboards/EngineeringManagerDashboard"),
+);
+const OperationsManagerDashboard = lazy(
+  () => import("../../components/ecr/dashboards/OperationsManagerDashboard"),
+);
+const QualityManagerDashboard = lazy(
+  () => import("../../components/ecr/dashboards/QualityManagerDashboard"),
+);
+const ProgramManagerDashboard = lazy(
+  () => import("../../components/ecr/dashboards/ProgramManagerDashboard"),
+);
+const ProcurementECRDashboard = lazy(
+  () => import("../../components/ecr/dashboards/ProcurementECRDashboard"),
+);
+const ProcurementManagerECRDashboard = lazy(
+  () => import("../../components/ecr/dashboards/ProcurementManagerECRDashboard"),
 );
 
 function DashFallback() {
@@ -29,25 +54,49 @@ export default function DashboardPage() {
     user?.full_name?.split(" ")[0] ?? user?.email?.split("@")[0] ?? "there";
 
   if (role === "warehouse") {
-    return <Navigate to="/warehouse/dashboard" replace />;
+    return (
+      <Suspense fallback={<DashFallback />}>
+        <WarehouseDashboard />
+      </Suspense>
+    );
   }
 
   if (role === "manufacturing") {
-    return <Navigate to="/manufacturing/boms" replace />;
+    return (
+      <Suspense fallback={<DashFallback />}>
+        <ManufacturingDashboard />
+      </Suspense>
+    );
   }
 
   if (role === "finance_executive") {
-    return <Navigate to="/budget" replace />;
+    return (
+      <Suspense fallback={<DashFallback />}>
+        <FinanceExecutiveDashboard />
+      </Suspense>
+    );
   }
 
   if (role === "department") {
     return <DepartmentUserDashboard greetingName={greetingName} />;
   }
 
+  const ecrDashboard =
+    role === "engineer" ? <EngineerDashboard />
+    : role === "engineering" ? <EngineeringManagerDashboard />
+    : role === "operations" ? <OperationsManagerDashboard />
+    : role === "quality" ? <QualityManagerDashboard />
+    : role === "program_manager" ? <ProgramManagerDashboard />
+    : null;
+
+  if (ecrDashboard) {
+    return <Suspense fallback={<DashFallback />}>{ecrDashboard}</Suspense>;
+  }
+
   if (role === "procurement_team") {
     return (
       <Suspense fallback={<DashFallback />}>
-        <ProcurementTeamDashboard />
+        <ProcurementECRDashboard />
       </Suspense>
     );
   }
@@ -55,7 +104,7 @@ export default function DashboardPage() {
   if (role === "procurement") {
     return (
       <Suspense fallback={<DashFallback />}>
-        <ProcurementDashboard greetingName={greetingName} />
+        <ProcurementManagerECRDashboard />
       </Suspense>
     );
   }

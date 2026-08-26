@@ -1,21 +1,13 @@
 import { useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
 import {
-  Bar,
-  BarChart,
-  CartesianGrid,
   Cell,
   Pie,
   PieChart,
   ResponsiveContainer,
   Tooltip,
-  XAxis,
-  YAxis,
 } from "recharts";
 import {
-  BarChart3,
-  FilePlus2,
   Layers,
   PieChart as PieIcon,
   Receipt,
@@ -26,9 +18,7 @@ import {
   fetchCategorySpendFiltered,
   fetchCompanyOptions,
   fetchCostCenterOptions,
-  fetchProcurementSummary,
   type CategorySpendBreakdownFilters,
-  type ProcurementSummary,
 } from "../../api/dashboard";
 import { Skeleton } from "../Skeleton";
 import { formatCurrencyCompactIn, formatCurrencyIn } from "../../utils/format";
@@ -167,18 +157,6 @@ export default function CategorySpendBreakdown() {
   const hasData = total > 0 && spendQuery.data?.basis !== "none";
   const filtersActive = !!company || !!fromDate || !!toDate || !!costCenter;
 
-  // Fallback: only fetched once the spend query has resolved with no chartable
-  // data, so a populated dashboard never pays for the extra round-trip.
-  const showFallback = !spendQuery.isLoading && !spendQuery.isError && !hasData;
-  const summaryQuery = useQuery({
-    queryKey: ["dashboard-procurement-summary"],
-    queryFn: fetchProcurementSummary,
-    enabled: showFallback,
-    staleTime: 5 * 60_000,
-    gcTime: 10 * 60_000,
-    refetchOnWindowFocus: false,
-  });
-
   return (
     <div className="dashboard-panel">
       <div className="dashboard-panel-header flex-col items-start gap-2 border-b border-neutral-100">
@@ -188,6 +166,20 @@ export default function CategorySpendBreakdown() {
             <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
               Category Spend Breakdown
             </h3>
+            {filtersActive && (
+              <button
+                type="button"
+                onClick={() => {
+                  setCompany("");
+                  setCostCenter("");
+                  setFromDate("");
+                  setToDate("");
+                }}
+                className="ml-2 text-[11px] font-semibold text-primary-600 hover:underline"
+              >
+                Clear
+              </button>
+            )}
           </div>
           {spendQuery.data?.basis === "po" && (
             <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
@@ -197,14 +189,14 @@ export default function CategorySpendBreakdown() {
         </div>
 
         {/* Filters (task 10) */}
-        <div className="flex w-full flex-wrap items-center gap-2">
+        <div className="grid w-full grid-cols-2 gap-2 sm:grid-cols-4">
           <select
             value={company}
             onChange={(e) => {
               setCompany(e.target.value);
               setCostCenter("");
             }}
-            className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700"
+            className="h-[34px] w-full rounded-[7px] border border-neutral-200 bg-white px-2 text-[12px] text-neutral-700 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
           >
             <option value="">All Companies</option>
             {(companyQuery.data ?? []).map((c) => (
@@ -216,7 +208,7 @@ export default function CategorySpendBreakdown() {
           <select
             value={costCenter}
             onChange={(e) => setCostCenter(e.target.value)}
-            className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-700"
+            className="h-[34px] w-full rounded-[7px] border border-neutral-200 bg-white px-2 text-[12px] text-neutral-700 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
           >
             <option value="">All Cost Centers</option>
             {(costCenterQuery.data ?? []).map((c) => (
@@ -225,36 +217,28 @@ export default function CategorySpendBreakdown() {
               </option>
             ))}
           </select>
-          <input
-            type="date"
-            value={fromDate}
-            max={toDate || undefined}
-            onChange={(e) => setFromDate(e.target.value)}
-            className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-600"
-            aria-label="From date"
-          />
-          <input
-            type="date"
-            value={toDate}
-            min={fromDate || undefined}
-            onChange={(e) => setToDate(e.target.value)}
-            className="rounded-md border border-neutral-200 bg-white px-2 py-1 text-xs text-neutral-600"
-            aria-label="To date"
-          />
-          {filtersActive && (
-            <button
-              type="button"
-              onClick={() => {
-                setCompany("");
-                setCostCenter("");
-                setFromDate("");
-                setToDate("");
-              }}
-              className="text-[11px] font-semibold text-primary-600 hover:underline"
-            >
-              Clear
-            </button>
-          )}
+          <div className="relative h-[34px] w-full">
+            <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 bg-white pr-1 text-[10px] font-medium text-neutral-400">From</span>
+            <input
+              type="date"
+              value={fromDate}
+              max={toDate || undefined}
+              onChange={(e) => setFromDate(e.target.value)}
+              className="h-full w-full rounded-[7px] border border-neutral-200 bg-transparent pl-[38px] pr-2 text-[12px] text-neutral-600 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              aria-label="From date"
+            />
+          </div>
+          <div className="relative h-[34px] w-full">
+            <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 bg-white pr-1 text-[10px] font-medium text-neutral-400">To</span>
+            <input
+              type="date"
+              value={toDate}
+              min={fromDate || undefined}
+              onChange={(e) => setToDate(e.target.value)}
+              className="h-full w-full rounded-[7px] border border-neutral-200 bg-transparent pl-[28px] pr-2 text-[12px] text-neutral-600 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+              aria-label="To date"
+            />
+          </div>
         </div>
       </div>
 
@@ -275,11 +259,11 @@ export default function CategorySpendBreakdown() {
             </button>
           </div>
         ) : !hasData ? (
-          <SpendFallback
-            loading={summaryQuery.isLoading}
-            summary={summaryQuery.data}
-            filtersActive={filtersActive}
-          />
+          <div className="flex h-[240px] flex-col items-center justify-center text-center">
+            <PieIcon className="mb-2 h-6 w-6 text-neutral-300" />
+            <p className="text-sm font-medium text-neutral-600">No Spend Data</p>
+            <p className="text-xs text-neutral-400">Try adjusting your filters</p>
+          </div>
         ) : (
           <>
             <div className="flex flex-col items-center gap-4 sm:flex-row">
@@ -409,139 +393,7 @@ export default function CategorySpendBreakdown() {
         )}
       </div>
     </div>
-  );
-}
-
-/**
- * Shown when Category Spend has no submitted PO/PI data. Degrades in two steps:
- *   1. Live Procurement Summary (KPIs + RFQ funnel bar chart), then
- *   2. a professional empty state with a Create RFQ call-to-action.
- * Keeps the widget the same height so the dashboard never shows blank space.
- */
-function SpendFallback({
-  loading,
-  summary,
-  filtersActive,
-}: {
-  loading: boolean;
-  summary?: ProcurementSummary;
-  filtersActive: boolean;
-}) {
-  if (loading || !summary) {
-    return <Skeleton className="h-[240px] w-full rounded-lg" />;
-  }
-
-  if (!summary.hasActivity) {
-    return (
-      <div className="flex min-h-[240px] flex-col items-center justify-center gap-2 px-4 text-center">
-        <span className="flex h-11 w-11 items-center justify-center rounded-full bg-primary-50 text-primary-600">
-          <BarChart3 className="h-5 w-5" />
-        </span>
-        <p className="text-sm font-semibold text-neutral-800">Procurement Analytics</p>
-        <p className="max-w-xs text-xs text-neutral-500">
-          No purchasing transactions have been completed yet. Analytics will
-          automatically appear after RFQs, Purchase Orders or Purchase Invoices
-          are processed.
-        </p>
-        <Link
-          to="/sourcing/rfq/new"
-          className="mt-1 inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white no-underline shadow-sm hover:bg-primary-700"
-        >
-          <FilePlus2 className="h-3.5 w-3.5" />
-          Create RFQ
-        </Link>
-      </div>
-    );
-  }
-
-  const c = summary.currency;
-  const funnelData = [
-    { name: "Open", value: summary.funnel.open, color: "#1F3A6D" },
-    { name: "Under Review", value: summary.funnel.underReview, color: "#f59e0b" },
-    { name: "Approved", value: summary.funnel.approved, color: "#6366f1" },
-    { name: "Completed", value: summary.funnel.completed, color: "#10b981" },
-  ];
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-1.5">
-        <BarChart3 className="h-3.5 w-3.5 text-primary-600" />
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
-          Procurement Summary
-        </p>
-        {filtersActive && (
-          <span className="ml-auto text-[10px] text-neutral-400">Account-wide</span>
-        )}
-      </div>
-
-      {/* KPIs */}
-      <div className="grid grid-cols-3 gap-1.5">
-        <SummaryKpi label="Total RFQs" value={String(summary.totalRfqs)} />
-        <SummaryKpi label="Quotations" value={String(summary.totalQuotations)} />
-        <SummaryKpi label="Active Suppliers" value={String(summary.activeSuppliers)} />
-        <SummaryKpi label="Purchase Orders" value={String(summary.totalPos)} />
-        <SummaryKpi label="Pending RFQs" value={String(summary.pendingRfqs)} />
-        <SummaryKpi label="Completed RFQs" value={String(summary.completedRfqs)} />
-        <SummaryKpi
-          label="Avg RFQ Value"
-          value={formatCurrencyCompactIn(summary.avgRfqValue, c)}
-        />
-        <SummaryKpi
-          label="Highest RFQ"
-          value={formatCurrencyCompactIn(summary.maxRfqValue, c)}
-        />
-        <SummaryKpi
-          label="Lowest RFQ"
-          value={formatCurrencyCompactIn(summary.minRfqValue, c)}
-        />
-      </div>
-
-      {/* RFQ funnel bar chart */}
-      <div className="h-[130px] w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={funnelData} margin={{ top: 4, right: 8, bottom: 0, left: -18 }}>
-            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-            <XAxis
-              dataKey="name"
-              tick={{ fontSize: 10, fill: "#64748b" }}
-              tickLine={false}
-              axisLine={false}
-            />
-            <YAxis
-              allowDecimals={false}
-              tick={{ fontSize: 10, fill: "#94a3b8" }}
-              tickLine={false}
-              axisLine={false}
-              width={28}
-            />
-            <Tooltip
-              cursor={{ fill: "#f8fafc" }}
-              contentStyle={{ fontSize: 12, borderRadius: 8 }}
-            />
-            <Bar dataKey="value" name="RFQs" radius={[4, 4, 0, 0]} maxBarSize={44}>
-              {funnelData.map((d) => (
-                <Cell key={d.name} fill={d.color} />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-}
-
-function SummaryKpi({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg bg-neutral-50 px-2 py-1.5">
-      <p className="truncate text-[9px] font-medium uppercase tracking-wide text-neutral-500">
-        {label}
-      </p>
-      <p className="mt-0.5 truncate text-sm font-bold tabular-nums text-neutral-900" title={value}>
-        {value}
-      </p>
-    </div>
-  );
-}
+  );}
 
 function Total({
   icon: Icon,

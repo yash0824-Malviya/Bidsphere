@@ -215,7 +215,7 @@ export const uploadFileToERPNext = async (
  * every module. Route through `/api/file-proxy`, which attaches the API
  * key server-side and streams the bytes back.
  */
-export const getFullFileUrl = (relativeUrl: string): string => {
+export const getFullFileUrl = (relativeUrl: string, fileId?: string): string => {
   if (!relativeUrl) return "";
 
   let path = relativeUrl;
@@ -229,7 +229,7 @@ export const getFullFileUrl = (relativeUrl: string): string => {
 
   // Only ERPNext's own file namespaces need proxying; anything else
   // (external URLs unrelated to ERPNext file storage) passes through as-is.
-  if (!/^\/?(private\/)?files\//.test(path)) {
+  if (!/^\/?(private\/)?files\//i.test(path)) {
     console.info("[LegalPdf] getFullFileUrl passthrough (non-ERP file path)", {
       relativeUrl,
       path,
@@ -239,6 +239,15 @@ export const getFullFileUrl = (relativeUrl: string): string => {
 
   if (!path.startsWith("/")) path = `/${path}`;
   let url = `/api/file-proxy?path=${encodeURIComponent(path)}`;
+  if (
+    fileId &&
+    typeof fileId === "string" &&
+    !fileId.startsWith("/") &&
+    !fileId.startsWith("att-") &&
+    !fileId.startsWith("direct-")
+  ) {
+    url += `&file_id=${encodeURIComponent(fileId)}`;
+  }
   try {
     // Supplier Portal uses a dedicated JWT key; staff uses the shared key.
     // Prefer whichever is available so engineering / legal previews work in both apps.

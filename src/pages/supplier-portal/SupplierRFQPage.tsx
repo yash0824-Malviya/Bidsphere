@@ -26,7 +26,14 @@ import {
   Upload,
 } from "lucide-react";
 
-import { checkQuotationStatus, createSupplierQuotation } from "../../api/sourcing";
+import {
+  checkQuotationStatus,
+  createSupplierQuotation,
+  saveDraftSupplierQuotation,
+  updateSupplierQuotation,
+  updateSupplierQuotationLegalDoc,
+  submitSupplierQuotation,
+} from "../../api/sourcing";
 import {
   attachCostBreakdownToQuotation,
   rfqRequiresCostBreakdown,
@@ -502,7 +509,60 @@ export default function SupplierRFQPage() {
     warranty_file_url: "", warranty_file_name: "", warranty_note: "",
     insurance_file_url: "", insurance_file_name: "", insurance_note: "",
   });
+  const [draftQuoteName, setDraftQuoteName] = useState<string | null>(null);
   const [uploading, setUploading] = useState<string | null>(null);
+
+  const saveDraftQuotation = async (showToast = false): Promise<string | null> => {
+    if (!rfq || !supplierName) return null;
+    const rfqSupplierRow = (rfq.suppliers ?? []).find((s) => {
+      const suppKey = (s.supplier || "").trim().replace(/^["']+|["']+$/g, "").replace(/[.,]+$/g, "").toLowerCase();
+      const inputKey = supplierName.trim().replace(/^["']+|["']+$/g, "").replace(/[.,]+$/g, "").toLowerCase();
+      const nameKey = (s.supplier_name || "").trim().replace(/^["']+|["']+$/g, "").replace(/[.,]+$/g, "").toLowerCase();
+      return suppKey === inputKey || nameKey === inputKey || s.supplier === supplierName;
+    });
+
+    const payload = {
+      supplier: rfqSupplierRow?.supplier || supplierName,
+      company: rfq.company,
+      rfq_no: rfq.name,
+      rfq_supplier_name: rfqSupplierRow?.name,
+      rfq_round: rfq.custom_active_rfq_round,
+      items: lines.map((l) => {
+        const rfqItem = (rfq.items ?? []).find((it) => it.item_code === l.item_code);
+        return {
+          item_code: l.item_code,
+          item_name: l.item_name || l.item_code,
+          qty: Number(l.qty) || 1,
+          uom: l.uom || "Nos",
+          rate: parseFloat(String(l.unit_price)) || 0,
+          rfq_item_name: rfqItem?.name,
+        };
+      }),
+      legal_documents: {
+        terms_conditions_pdf: legalDraft.terms_file_url || null,
+        terms_conditions_note: legalDraft.terms_note,
+        warranty_certificate_pdf: legalDraft.warranty_file_url || null,
+        warranty_certificate_note: legalDraft.warranty_note,
+        insurance_certificate_pdf: legalDraft.insurance_file_url || null,
+        insurance_certificate_note: legalDraft.insurance_note,
+      },
+    };
+
+    try {
+      const result = await saveDraftSupplierQuotation(payload, draftQuoteName);
+      const name = (result as { name?: string }).name || (result as { data?: { name?: string } }).data?.name || null;
+      if (name) {
+        setDraftQuoteName(name);
+        setDraftSavedAt(new Date().toISOString());
+        if (showToast) toast.success("Draft saved");
+        return name;
+      }
+    } catch (err) {
+      console.warn("[SupplierRFQPage] Backend draft save error:", err);
+      if (showToast) toast.error("Could not save draft to server");
+    }
+    return draftQuoteName;
+  };
 
   const handleLegalUpload = async (
     field: "terms_pdf" | "warranty_pdf" | "insurance_pdf",
@@ -515,10 +575,34 @@ export default function SupplierRFQPage() {
     }
 
     const base = field === "terms_pdf" ? "terms" : field === "warranty_pdf" ? "warranty" : "insurance";
+    const erpFieldName =
+      field === "terms_pdf"
+        ? "custom_terms__condition"
+        : field === "warranty_pdf"
+          ? "custom_warenty_certificate"
+          : "custom_insurance_certificate";
+
     setUploading(field);
     try {
-      const tempDocName = `temp-${supplierName}-${Date.now()}`.replace(/\s+/g, "_");
-      const fileUrl = await uploadFileToERPNext(file, "Supplier Quotation", tempDocName);
+      let quoteName = draftQuoteName;
+      if (!quoteName) {
+        quoteName = await saveDraftQuotation(false);
+      }
+      if (!quoteName) {
+        throw new Error("Could not create Supplier Quotation draft on server.");
+      }
+
+      const fileUrl = await uploadFileToERPNext(file, "Supplier Quotation", quoteName);
+      if (!fileUrl) {
+        throw new Error("Upload did not return a file URL.");
+      }
+
+      try {
+        await updateSupplierQuotationLegalDoc(quoteName, erpFieldName, fileUrl);
+      } catch (linkErr) {
+        console.warn("[SupplierRFQPage] Link legal doc to SQ warning:", linkErr);
+      }
+
       setLegalDraft((prev) => ({
         ...prev,
         [`${base}_file_url`]: fileUrl,
@@ -631,7 +715,11 @@ export default function SupplierRFQPage() {
             insurance_certificate_name?: string;
           };
           saved_at?: string;
+          draft_quote_name?: string;
         };
+        if (draft.draft_quote_name) {
+          setDraftQuoteName(draft.draft_quote_name);
+        }
         if (draft.items?.length) {
           const targetByItem = new Map(
             items.map((it) => {
@@ -783,10 +871,10 @@ export default function SupplierRFQPage() {
         })
       );
       setDraftSavedAt(saved_at);
-      if (showToast) toast.success("Draft saved");
     } catch {
       if (showToast) toast.error("Could not save draft locally");
     }
+    void saveDraftQuotation(showToast);
   }
 
   useEffect(() => {
@@ -1041,15 +1129,19 @@ export default function SupplierRFQPage() {
     try {
       // Look up the RFQ Supplier row name for this supplier so ERPNext can
       // flip quote_status "Pending" → "Received" on submit.
-      const rfqSupplierRow = (rfq.suppliers ?? []).find(
-        (s) => s.supplier === supplierName
-      );
+      const rfqSupplierRow = (rfq.suppliers ?? []).find((s) => {
+        const suppKey = (s.supplier || "").trim().replace(/^["']+|["']+$/g, "").replace(/[.,]+$/g, "").toLowerCase();
+        const inputKey = supplierName.trim().replace(/^["']+|["']+$/g, "").replace(/[.,]+$/g, "").toLowerCase();
+        const nameKey = (s.supplier_name || "").trim().replace(/^["']+|["']+$/g, "").replace(/[.,]+$/g, "").toLowerCase();
+        return suppKey === inputKey || nameKey === inputKey || s.supplier === supplierName;
+      });
 
-      const result = await createSupplierQuotation({
-        supplier: supplierName,
+      const payload = {
+        supplier: rfqSupplierRow?.supplier || supplierName,
         rfq_no: rfq.name,
         rfq_supplier_name: rfqSupplierRow?.name,
         rfq_round: rfq.custom_active_rfq_round,
+        company: rfq.company,
         items: lines.map((l) => {
           const rfqItem = (rfq.items ?? []).find(
             (it) => it.item_code === l.item_code
@@ -1063,9 +1155,6 @@ export default function SupplierRFQPage() {
             rfq_item_name: rfqItem?.name,
           };
         }),
-        // Attach the uploaded legal documents to the real ERPNext record —
-        // these are what the Legal Document Review is built from once this
-        // supplier is selected as the winner.
         legal_documents: {
           terms_conditions_pdf: legalDraft.terms_file_url || null,
           terms_conditions_note: legalDraft.terms_note,
@@ -1074,9 +1163,28 @@ export default function SupplierRFQPage() {
           insurance_certificate_pdf: legalDraft.insurance_file_url || null,
           insurance_certificate_note: legalDraft.insurance_note,
         },
-      });
-      const quoteName = (result as { name?: string }).name ?? "";
-      const quoteStatus = (result as { status?: string }).status ?? "Draft";
+      };
+
+      let quoteName = draftQuoteName;
+      let quoteStatus = "Submitted";
+
+      if (draftQuoteName) {
+        try {
+          await updateSupplierQuotation(draftQuoteName, payload);
+          const submitResult = await submitSupplierQuotation(draftQuoteName);
+          quoteName = (submitResult as { name?: string }).name || draftQuoteName;
+          quoteStatus = (submitResult as { status?: string }).status || "Submitted";
+        } catch {
+          const result = await createSupplierQuotation(payload);
+          quoteName = (result as { name?: string }).name ?? "";
+          quoteStatus = (result as { status?: string }).status ?? "Submitted";
+        }
+      } else {
+        const result = await createSupplierQuotation(payload);
+        quoteName = (result as { name?: string }).name ?? "";
+        quoteStatus = (result as { status?: string }).status ?? "Submitted";
+      }
+
       setSubmittedQuote({ name: quoteName, status: quoteStatus });
 
       if (quoteName && requiresCostBreakdown) {
