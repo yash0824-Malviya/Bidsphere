@@ -4,6 +4,7 @@ import toast from "react-hot-toast";
 import { CLM_BUTTON, CLM_INPUT, CLM_PRIMARY } from "./ClmFields";
 import { clmError, uploadClmSupportingDocument, type ClmAction, type ClmSupportingDocument } from "../../api/clm";
 import { evaluateContractEffectivePeriod } from "../../utils/contractEffectivePeriod";
+import { generateId } from "../../utils/id";
 
 export default function ClmActionPanel({ actions, busy, onAction, terms, contractName, expectedModified, onDocumentsUploaded, riskOptions = [], contractRecord }: {
   actions: ClmAction[]; busy: boolean; terms?: string; contractName?: string; expectedModified?: string;
@@ -25,7 +26,7 @@ export default function ClmActionPanel({ actions, busy, onAction, terms, contrac
     : null;
 
   return <section aria-label="Contract workflow actions" className="rounded-xl border border-blue-200 bg-blue-50/40 p-5"><h2 className="font-semibold text-slate-900">Actions available to you</h2>
-    <div className="mt-3 flex flex-wrap gap-2">{transitions.map(action => ["finalize_procurement", "create_purchase_order"].includes(action.action) ? <Link key={action.action} className={CLM_PRIMARY} to={`/p2p/purchase-orders/new?${new URLSearchParams({ contract: contractName! })}`}>Create Purchase Order</Link> : <button key={action.action} type="button" disabled={busy || uploading} className={action.action === "approve" ? CLM_PRIMARY : CLM_BUTTON} onClick={() => { setSelected(action); setComment(""); setContent(terms || ""); setConsent(false); setSupportingDocuments([]); setRiskLevel(""); setUploadRefreshFailed(false); setRequestId(globalThis.crypto.randomUUID()); }}>{action.label}</button>)}</div>
+    <div className="mt-3 flex flex-wrap gap-2">{transitions.map(action => ["finalize_procurement", "create_purchase_order"].includes(action.action) ? <Link key={action.action} className={CLM_PRIMARY} to={`/p2p/purchase-orders/new?${new URLSearchParams({ contract: contractName! })}`}>Create Purchase Order</Link> : <button key={action.action} type="button" disabled={busy || uploading} className={action.action === "approve" ? CLM_PRIMARY : CLM_BUTTON} onClick={() => { setSelected(action); setComment(""); setContent(terms || ""); setConsent(false); setSupportingDocuments([]); setRiskLevel(""); setUploadRefreshFailed(false); setRequestId(generateId()); }}>{action.label}</button>)}</div>
     {selected && <form className="mt-4 space-y-4 rounded-lg border border-blue-100 bg-white p-4" onSubmit={async event => {
       event.preventDefault();
       if (selected.action === "activate" && activationEval && !activationEval.valid) {

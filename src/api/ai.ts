@@ -25,6 +25,7 @@ import {
 import { evaluateQuotationCompleteness } from "../utils/quotationCompleteness";
 
 import { ANTHROPIC_MODEL } from "../config/aiConfig";
+import { generateId } from "../utils/id";
 
 const OPENAI_ENDPOINT = "https://api.openai.com/v1/chat/completions";
 
@@ -1405,7 +1406,7 @@ export async function resolveAIRecommendation(
   payload: AIRequest,
   weights?: AnalysisWeights
 ): Promise<ResolvedAIAnalysis | null> {
-  payload = { ...payload, evaluation_run_id: payload.evaluation_run_id ?? crypto.randomUUID() };
+  payload = { ...payload, evaluation_run_id: payload.evaluation_run_id ?? generateId() };
   // eslint-disable-next-line no-console
   if (import.meta.env.DEV) console.log("AI Request", payload);
 

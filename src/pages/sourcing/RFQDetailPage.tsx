@@ -118,6 +118,7 @@ import type { ReverseBiddingQuotationSelection } from "../../types/reverseBiddin
 import { reverseBiddingSelectionForRow, selectedReverseBiddingQuotations, validateReverseBiddingSelection } from "../../utils/reverseBiddingSelection";
 import { resolveRfqQuotationIdentity, type RfqQuotationIdentity } from "../../utils/rfqQuotationIdentity";
 import { formatDate, isoDateOffset } from "../../utils/format";
+import { generateId } from "../../utils/id";
 import RejectedReviewActions from "../../components/sourcing/RejectedReviewActions";
 import CheckBudgetModal from "../../components/sourcing/CheckBudgetModal";
 import ViewQuotationModal from "../../components/sourcing/ViewQuotationModal";
@@ -1563,142 +1564,6 @@ export default function RFQDetailPage() {
 
   async function runAIAnalysis() {
     if (!rfq) return;
-    if ((comparison?.submittedCount ?? 0) < 2) {
-      toast.error("Need at least 2 quotations for an AI recommendation.");
-      return;
-    }
-
-    /* ── Build the invited-supplier allow-list ───────────────────────── */
-
-    // eslint-disable-next-line no-console
-    console.log("[AI] ══════ Starting AI Analysis ══════");
-    // eslint-disable-next-line no-console
-    console.log("[AI] Current RFQ ID:", rfq.name);
-
-    // Suppliers who explicitly declined ("No Quote") are excluded from the
-    // comparison / AI recommendation — only quoting suppliers are evaluated.
-    const invitedSuppliers = new Set(
-      (rfq.suppliers ?? [])
-        .map(
-          (s: { supplier?: string; supplier_name?: string }) =>
-            (s.supplier ?? s.supplier_name ?? "").trim().toLowerCase()
-        )
-        .filter((key) => !declineBySupplier.has(key))
-    );
-
-    // eslint-disable-next-line no-console
-    console.log("[AI] Invited suppliers (excluding declines):", [...invitedSuppliers]);
-
-    /* ── Filter quotations: only invited + submitted (deduplicated) ─── */
-
-    const normInvitedSuppliers = new Set(
-      Array.from(invitedSuppliers).map(normalizeSupplierKey)
-    );
-    const seenEligible = new Set<string>();
-    const eligibleQuotes: SubmittedQuote[] = [];
-    for (const q of localQuotes.values()) {
-      const rawKey = (q.supplier ?? q.supplier_name ?? "").trim().toLowerCase();
-      const normKey = normalizeSupplierKey(rawKey);
-      if (
-        !seenEligible.has(normKey) &&
-        (invitedSuppliers.has(rawKey) || normInvitedSuppliers.has(normKey))
-      ) {
-        seenEligible.add(normKey);
-        eligibleQuotes.push(q);
-      }
-    }
-
-    // eslint-disable-next-line no-console
-    console.log("[AI] Submitted suppliers:", [...localQuotes.keys()]);
-    // eslint-disable-next-line no-console
-    console.log(
-      "[AI] Eligible suppliers (invited ∩ submitted):",
-      eligibleQuotes.map((q) => q.supplier_name)
-    );
-
-    if (eligibleQuotes.length < 2) {
-      toast.error(
-        eligibleQuotes.length === 0
-          ? "Waiting for supplier quotations from invited suppliers."
-          : "Need at least 2 quotations from invited suppliers for AI analysis."
-      );
-      return;
-    }
-
-    /* ── Build AI request from eligible suppliers ONLY ───────────────── */
-
-    const evaluationRunId = crypto.randomUUID();
-    const aiRequest = {
-      evaluation_run_id: evaluationRunId,
-      rfq_name: rfq.name,
-      rfq_title: parsedMessage.title || rfq.name,
-      items_requested: (rfq.items ?? []).map((it) => ({
-        item: it.item_name ?? it.item_code,
-        qty: it.qty,
-        uom: it.uom,
-      })),
-      quotations: eligibleQuotes.map<AIQuotation>((q) => {
-        const lines: AIQuotationLine[] = (rfq.items ?? []).map((it) => {
-          const itemCodeKey = it.item_code?.trim().toLowerCase();
-          const itemNameKey = it.item_name?.trim().toLowerCase();
-          const cell =
-            (it.item_code ? q.byItem.get(it.item_code) : undefined) ??
-            (itemCodeKey ? q.byItem.get(itemCodeKey) : undefined) ??
-            (it.item_name ? q.byItem.get(it.item_name) : undefined) ??
-            (itemNameKey ? q.byItem.get(itemNameKey) : undefined) ??
-            Array.from(q.byItem.entries()).find(([k]) => {
-              const lk = k.toLowerCase();
-              return (
-                (itemCodeKey && lk.includes(itemCodeKey)) ||
-                (itemNameKey && lk.includes(itemNameKey))
-              );
-            })?.[1];
-
-          const unitPrice = cell?.unit_price ?? null;
-          const qty = it.qty ?? 1;
-          const lineTotal =
-            cell?.total ?? (unitPrice !== null ? unitPrice * qty : null);
-
-          const cellDelivery =
-            cell?.delivery_days && cell.delivery_days > 0
-              ? cell.delivery_days
-              : undefined;
-
-          return {
-            item: it.item_name ?? it.item_code,
-            requested_qty: qty,
-            unit_price: unitPrice,
-            total: lineTotal,
-            delivery_days: cellDelivery,
-            delivery_date: (cell as unknown as { expected_delivery_date?: string })?.expected_delivery_date,
-            expected_delivery_date: (cell as unknown as { expected_delivery_date?: string })?.expected_delivery_date,
-            notes: "",
-          };
-        });
-
-        let totalValue = q.total;
-        if (totalValue === null) {
-          const sumLines = priceFromLines(lines);
-          if (sumLines !== null) totalValue = sumLines;
-        }
-
-        return {
-          quotation_id: q.sqName,
-          supplier_id: q.supplier,
-          supplier_name: q.supplier_name,
-          items: lines,
-          total_value: totalValue,
-          price_status: isSubmittedQuoteAmount(totalValue) ? "submitted" : q.priceStatus,
-          payment_terms: q.payment_terms || undefined,
-          notes: q.notes,
-          documents: {
-            warranty_certificate: q.warrantyCertificate,
-            terms_conditions: q.termsCondition,
-            insurance_certificate: q.insuranceCertificate,
-          },
-        };
-      }),
-    };
 
     setAiLoading(true);
     setAiLoadingStep(0);
@@ -1720,6 +1585,141 @@ export default function RFQDetailPage() {
     }, 900);
 
     try {
+      if ((comparison?.submittedCount ?? 0) < 2) {
+        throw new Error("Need at least 2 quotations for an AI recommendation.");
+      }
+
+      /* ── Build the invited-supplier allow-list ───────────────────────── */
+
+      // eslint-disable-next-line no-console
+      console.log("[AI] ══════ Starting AI Analysis ══════");
+      // eslint-disable-next-line no-console
+      console.log("[AI] Current RFQ ID:", rfq.name);
+
+      // Suppliers who explicitly declined ("No Quote") are excluded from the
+      // comparison / AI recommendation — only quoting suppliers are evaluated.
+      const invitedSuppliers = new Set(
+        (rfq.suppliers ?? [])
+          .map(
+            (s: { supplier?: string; supplier_name?: string }) =>
+              (s.supplier ?? s.supplier_name ?? "").trim().toLowerCase()
+          )
+          .filter((key) => !declineBySupplier.has(key))
+      );
+
+      // eslint-disable-next-line no-console
+      console.log("[AI] Invited suppliers (excluding declines):", [...invitedSuppliers]);
+
+      /* ── Filter quotations: only invited + submitted (deduplicated) ─── */
+
+      const normInvitedSuppliers = new Set(
+        Array.from(invitedSuppliers).map(normalizeSupplierKey)
+      );
+      const seenEligible = new Set<string>();
+      const eligibleQuotes: SubmittedQuote[] = [];
+      for (const q of localQuotes.values()) {
+        const rawKey = (q.supplier ?? q.supplier_name ?? "").trim().toLowerCase();
+        const normKey = normalizeSupplierKey(rawKey);
+        if (
+          !seenEligible.has(normKey) &&
+          (invitedSuppliers.has(rawKey) || normInvitedSuppliers.has(normKey))
+        ) {
+          seenEligible.add(normKey);
+          eligibleQuotes.push(q);
+        }
+      }
+
+      // eslint-disable-next-line no-console
+      console.log("[AI] Submitted suppliers:", [...localQuotes.keys()]);
+      // eslint-disable-next-line no-console
+      console.log(
+        "[AI] Eligible suppliers (invited ∩ submitted):",
+        eligibleQuotes.map((q) => q.supplier_name)
+      );
+
+      if (eligibleQuotes.length < 2) {
+        throw new Error(
+          eligibleQuotes.length === 0
+            ? "Waiting for supplier quotations from invited suppliers."
+            : "Need at least 2 quotations from invited suppliers for AI analysis."
+        );
+      }
+
+      /* ── Build AI request from eligible suppliers ONLY ───────────────── */
+
+      const evaluationRunId = generateId();
+      const aiRequest = {
+        evaluation_run_id: evaluationRunId,
+        rfq_name: rfq.name,
+        rfq_title: parsedMessage.title || rfq.name,
+        items_requested: (rfq.items ?? []).map((it) => ({
+          item: it.item_name ?? it.item_code,
+          qty: it.qty,
+          uom: it.uom,
+        })),
+        quotations: eligibleQuotes.map<AIQuotation>((q) => {
+          const lines: AIQuotationLine[] = (rfq.items ?? []).map((it) => {
+            const itemCodeKey = it.item_code?.trim().toLowerCase();
+            const itemNameKey = it.item_name?.trim().toLowerCase();
+            const cell =
+              (it.item_code ? q.byItem.get(it.item_code) : undefined) ??
+              (itemCodeKey ? q.byItem.get(itemCodeKey) : undefined) ??
+              (it.item_name ? q.byItem.get(it.item_name) : undefined) ??
+              (itemNameKey ? q.byItem.get(itemNameKey) : undefined) ??
+              Array.from(q.byItem.entries()).find(([k]) => {
+                const lk = k.toLowerCase();
+                return (
+                  (itemCodeKey && lk.includes(itemCodeKey)) ||
+                  (itemNameKey && lk.includes(itemNameKey))
+                );
+              })?.[1];
+
+            const unitPrice = cell?.unit_price ?? null;
+            const qty = it.qty ?? 1;
+            const lineTotal =
+              cell?.total ?? (unitPrice !== null ? unitPrice * qty : null);
+
+            const cellDelivery =
+              cell?.delivery_days && cell.delivery_days > 0
+                ? cell.delivery_days
+                : undefined;
+
+            return {
+              item: it.item_name ?? it.item_code,
+              requested_qty: qty,
+              unit_price: unitPrice,
+              total: lineTotal,
+              delivery_days: cellDelivery,
+              delivery_date: (cell as unknown as { expected_delivery_date?: string })?.expected_delivery_date,
+              expected_delivery_date: (cell as unknown as { expected_delivery_date?: string })?.expected_delivery_date,
+              notes: "",
+            };
+          });
+
+          let totalValue = q.total;
+          if (totalValue === null) {
+            const sumLines = priceFromLines(lines);
+            if (sumLines !== null) totalValue = sumLines;
+          }
+
+          return {
+            quotation_id: q.sqName,
+            supplier_id: q.supplier,
+            supplier_name: q.supplier_name,
+            items: lines,
+            total_value: totalValue,
+            price_status: isSubmittedQuoteAmount(totalValue) ? "submitted" : q.priceStatus,
+            payment_terms: q.payment_terms || undefined,
+            notes: q.notes,
+            documents: {
+              warranty_certificate: q.warrantyCertificate,
+              terms_conditions: q.termsCondition,
+              insurance_certificate: q.insuranceCertificate,
+            },
+          };
+        }),
+      };
+
       const scoringConfig = await getScoringConfig();
       const analysisWeights: AnalysisWeights = {
         price: scoringConfig.price_weight,

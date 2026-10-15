@@ -7,6 +7,7 @@ import ClmDocuments from "./ClmDocuments";
 import ClmPdfPreview from "./ClmPdfPreview";
 import ContractPdfPreviewModal from "./ContractPdfPreviewModal";
 import { CLM_BUTTON, CLM_INPUT, CLM_PRIMARY } from "./ClmFields";
+import { generateId } from "../../utils/id";
 
 const text = (value: unknown) => value == null || value === "" ? "—" : String(value).replace(/<[^>]*>/g, "");
 type Props = { detail: ClmDetail; fields: ClmField[]; busy: boolean; onAction: (action: string, comment: string, payload?: Record<string, unknown>, expectedModified?: string) => Promise<void> };
@@ -51,7 +52,7 @@ export function SigningWorkspace({ detail, fields, busy, canSign, onAction, onCl
   const [error, setError] = useState(""); const [attempt, setAttempt] = useState(0);
   const [actionError, setActionError] = useState("");
   const [fullLegalName, setFullLegalName] = useState(""); const [consent, setConsent] = useState(false); const [comment, setComment] = useState("");
-  const [requestId] = useState(() => globalThis.crypto.randomUUID());
+  const [requestId] = useState(() => generateId());
   const [previewOpen, setPreviewOpen] = useState(false);
   const [signerEmail, setSignerEmail] = useState("");
   const [signatoryRole, setSignatoryRole] = useState("");
