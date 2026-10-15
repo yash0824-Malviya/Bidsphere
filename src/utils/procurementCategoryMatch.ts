@@ -8,6 +8,7 @@ import {
   CATEGORY_SUPPLIER_GROUP_KEYWORDS,
   procurementCategoriesForType,
   isProcurementCategory,
+  normalizeProcurementCategoryValue,
   type ProcurementCategory,
 } from "../config/procurementCategory";
 import type { MaterialRequestProcurementType } from "../types/materialRequestWorkflow";
@@ -33,19 +34,29 @@ export function labelMatchesKeywords(
 
 export function itemGroupMatchesCategory(
   itemGroup: string,
-  category: ProcurementCategory,
+  category: ProcurementCategory | string,
 ): boolean {
-  const keywords = CATEGORY_ITEM_GROUP_KEYWORDS[category] ?? [];
+  const normCat = (
+    isProcurementCategory(category)
+      ? category
+      : normalizeProcurementCategoryValue(category) || category
+  ) as ProcurementCategory;
+  const keywords = CATEGORY_ITEM_GROUP_KEYWORDS[normCat] ?? [];
   return labelMatchesKeywords(itemGroup, keywords);
 }
 
 export function supplierSignalMatchesCategory(
   signal: string,
-  category: ProcurementCategory,
+  category: ProcurementCategory | string,
 ): boolean {
   const direct = norm(signal) === norm(category);
   if (direct) return true;
-  const keywords = CATEGORY_SUPPLIER_GROUP_KEYWORDS[category] ?? [];
+  const normCat = (
+    isProcurementCategory(category)
+      ? category
+      : normalizeProcurementCategoryValue(category) || category
+  ) as ProcurementCategory;
+  const keywords = CATEGORY_SUPPLIER_GROUP_KEYWORDS[normCat] ?? [];
   return labelMatchesKeywords(signal, keywords);
 }
 

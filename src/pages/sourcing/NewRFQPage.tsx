@@ -68,6 +68,7 @@ import { formatRfqOwnerLabel } from "../../config/roles";
 import {
   procurementCategoriesForType,
   procurementCategoryBelongsToType,
+  procurementTypeForCategory,
 } from "../../config/procurementCategory";
 import { useAuthStore } from "../../store/authStore";
 import type { Supplier } from "../../types/erpnext";
@@ -227,12 +228,30 @@ export default function NewRFQPage() {
     setApplyingTemplate(true);
     try {
       setTitle(template.template_name);
-      if (template.procurement_type) {
-        setProcurementType(template.procurement_type);
+
+      const targetProcurementType =
+        template.procurement_type ||
+        (template.category ? procurementTypeForCategory(template.category) : "") ||
+        "Direct";
+      setProcurementType(targetProcurementType);
+
+      const rawCategory = template.category?.trim();
+      if (!rawCategory) {
+        setProcurementCategory("");
+        toast.error(
+          `Template "${template.template_name}" is missing a Procurement Category. Please select a valid category.`,
+          { duration: 6000 }
+        );
+      } else if (!procurementCategoryBelongsToType(rawCategory, targetProcurementType)) {
+        setProcurementCategory("");
+        toast.error(
+          `Procurement Category "${rawCategory}" from template "${template.template_name}" is not valid for ${targetProcurementType} items. Please select a valid category.`,
+          { duration: 6000 }
+        );
+      } else {
+        setProcurementCategory(rawCategory);
       }
-      if (template.category) {
-        setProcurementCategory(template.category);
-      }
+
       if (template.cost_breakdown_required !== undefined) {
         setRequireCostBreakdown(template.cost_breakdown_required);
       }
@@ -299,6 +318,11 @@ export default function NewRFQPage() {
             tplItem.item_name ||
             "";
           const tplTarget = Number(tplItem.target_price);
+          const rawDeliveryDate =
+            (tplItem as Record<string, unknown>).schedule_date ||
+            (tplItem as Record<string, unknown>).delivery_date ||
+            (tplItem as Record<string, unknown>).required_by ||
+            "";
           return {
             id: generateId(),
             item_group: detail?.item_group ?? "",
@@ -310,7 +334,7 @@ export default function NewRFQPage() {
             target_price:
               Number.isFinite(tplTarget) && tplTarget > 0 ? tplTarget : null,
             show_to_supplier: false,
-            required_by: "",
+            required_by: String(rawDeliveryDate ?? "").trim(),
           };
         });
 
@@ -689,6 +713,18 @@ export default function NewRFQPage() {
     if (contractRequired !== "Yes" && contractRequired !== "No") {
       toast.error("Select Yes or No for Contract Required before creating the RFQ.");
       return;
+    }
+    if (isDirectRfq) {
+      if (!procurementCategory.trim()) {
+        toast.error("Procurement Category is required.");
+        return;
+      }
+      if (!procurementCategoryBelongsToType(procurementCategory, procurementType)) {
+        toast.error(
+          `Procurement Category "${procurementCategory}" is not valid for ${procurementType} items.`
+        );
+        return;
+      }
     }
     if (!step1Valid || !step2Valid || !step3Valid) {
       toast.error("Please complete all steps.");
@@ -1347,7 +1383,17 @@ function Step1({
   requireCostBreakdown,
   setRequireCostBreakdown,
 }: Step1Props) {
-  const categoryOptions = procurementCategoriesForType(procurementType);
+  const baseCategoryOptions = procurementCategoriesForType(procurementType);
+  const categoryOptions = useMemo(() => {
+    if (
+      procurementCategory &&
+      procurementCategoryBelongsToType(procurementCategory, procurementType) &&
+      !baseCategoryOptions.includes(procurementCategory as any)
+    ) {
+      return [procurementCategory, ...baseCategoryOptions];
+    }
+    return baseCategoryOptions;
+  }, [baseCategoryOptions, procurementCategory, procurementType]);
 
   return (
     <div className="space-y-5 p-5">

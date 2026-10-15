@@ -118,6 +118,42 @@ export const LEGACY_CATEGORY_TO_PROCUREMENT_CATEGORY: Record<
   production: "Production",
   engineering: "Engineering",
   facility: "Facility",
+  // RFQ Template categories mapped to canonical category keywords
+  "raw materials procurement": "Raw Material",
+  "raw materials": "Raw Material",
+  "spare parts & maintenance": "Production",
+  "electrical & industrial components": "Engineering",
+  "manufacturing components": "Production",
+  "electrical components": "Engineering",
+  "packaging materials": "Packaging",
+  "mro supplies": "MRO",
+  "warehouse consumables": "MRO",
+  "general procurement": "OPEX",
+  "logistics & transportation": "Services",
+};
+
+/**
+ * Mapping of RFQ template categories to their Procurement Type (Direct vs Indirect).
+ * Preserves the template's saved category as the source of truth while validating
+ * that Direct templates are valid for Direct items and Indirect for Indirect.
+ */
+export const TEMPLATE_CATEGORY_TO_PROCUREMENT_TYPE: Record<
+  string,
+  MaterialRequestProcurementType
+> = {
+  "raw materials procurement": "Direct",
+  "raw materials": "Direct",
+  "spare parts & maintenance": "Direct",
+  "electrical & industrial components": "Direct",
+  "manufacturing components": "Direct",
+  "electrical components": "Direct",
+  "packaging materials": "Direct",
+  "office supplies": "Indirect",
+  "general procurement": "Indirect",
+  "mro supplies": "Indirect",
+  "warehouse consumables": "Indirect",
+  "it equipment": "Indirect",
+  "logistics & transportation": "Indirect",
 };
 
 export function procurementCategoriesForType(
@@ -161,9 +197,26 @@ export function procurementCategoryBelongsToType(
 ): boolean {
   const normalized = normCategory(category);
   if (!normalized) return false;
-  return (procurementCategoriesForType(type) as readonly string[]).some(
-    (c) => normCategory(c) === normalized,
-  );
+  // 1. Direct or Indirect master category check
+  if (
+    (procurementCategoriesForType(type) as readonly string[]).some(
+      (c) => normCategory(c) === normalized,
+    )
+  ) {
+    return true;
+  }
+  // 2. RFQ Template category check
+  if (TEMPLATE_CATEGORY_TO_PROCUREMENT_TYPE[normalized] === type) {
+    return true;
+  }
+  // 3. Legacy mapped category check
+  const mapped = LEGACY_CATEGORY_TO_PROCUREMENT_CATEGORY[normalized];
+  if (mapped) {
+    return (procurementCategoriesForType(type) as readonly string[]).some(
+      (c) => normCategory(c) === normCategory(mapped),
+    );
+  }
+  return false;
 }
 
 /** Throw if category is missing or does not belong to type (save/API guard). */
@@ -171,8 +224,7 @@ export function assertProcurementTypeCategory(
   type: MaterialRequestProcurementType,
   category: string,
 ): void {
-  const cat =
-    normalizeProcurementCategoryValue(category) || category.trim();
+  const cat = category?.trim();
   if (!cat) {
     throw new Error("Procurement Category is required.");
   }
@@ -210,9 +262,10 @@ export function normalizeProcurementCategoryValue(
 export function procurementTypeForCategory(
   category: string,
 ): MaterialRequestProcurementType | "" {
-  const normalized = normalizeProcurementCategoryValue(category) || category;
-  if (procurementCategoryBelongsToType(normalized, "Direct")) return "Direct";
-  if (procurementCategoryBelongsToType(normalized, "Indirect")) return "Indirect";
+  const trimmed = category?.trim() || "";
+  if (!trimmed) return "";
+  if (procurementCategoryBelongsToType(trimmed, "Direct")) return "Direct";
+  if (procurementCategoryBelongsToType(trimmed, "Indirect")) return "Indirect";
   return "";
 }
 

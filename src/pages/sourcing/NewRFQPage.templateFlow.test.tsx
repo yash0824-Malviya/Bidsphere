@@ -2,15 +2,15 @@ import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const harness = vi.hoisted(() => {
-  const mockRawMaterialsTemplate = {
+  const defaultTemplate = {
     name: "TPL-RAW-MATERIALS-PROCUREMENT",
     template_name: "Raw Materials Procurement",
     category: "Raw Materials Procurement",
-    procurement_type: "Direct",
+    procurement_type: "Direct" as const,
     cost_breakdown_required: true,
     contract_required: true,
     supplier_terms: "Custom raw material delivery terms",
-    status: "Active",
+    status: "Active" as const,
     items: [
       { item_code: "DIR-ALU-001", item_name: "Aluminum Sheet 6061-T6", qty: 10, uom: "Sheet" },
       { item_code: "DIR-ALU-002", item_name: "Aluminum Sheet 5052-H32", qty: 10, uom: "Sheet" },
@@ -27,6 +27,8 @@ const harness = vi.hoisted(() => {
     cursor: 0,
     slots: [] as unknown[],
     query: "",
+    defaultTemplate,
+    mockTemplate: { ...defaultTemplate },
     create: vi.fn().mockResolvedValue({ name: "PUR-RFQ-2026-00999" }),
     createMr: vi.fn(),
     navigate: vi.fn(),
@@ -34,7 +36,6 @@ const harness = vi.hoisted(() => {
     success: vi.fn(),
     pricing: vi.fn(),
     invalidate: vi.fn(),
-    mockTemplate: mockRawMaterialsTemplate,
   };
 });
 
@@ -189,6 +190,7 @@ describe("Create RFQ from Template Workflow", () => {
     harness.cursor = 0;
     harness.slots = [];
     harness.query = "";
+    harness.mockTemplate = { ...harness.defaultTemplate };
   });
 
   it("allows selecting a template, sets fresh Valid Till requirement, and saves new RFQ", async () => {
@@ -225,13 +227,13 @@ describe("Create RFQ from Template Workflow", () => {
     expect(step1Props.procurementCategory).toBe("Raw Materials Procurement");
     expect(step1Props.requireCostBreakdown).toBe(true);
 
-    // Requirement 6: Fresh Valid Till date required
+    // Fresh Valid Till date required
     expect(step1Props.validTill).toBe("");
 
     // Set fresh Valid Till date
     step1Props.setValidTill("2026-11-15");
 
-    // Click Next to step 2
+    // Click Next to step 2 (Items)
     const nextBtn = elements(render()).find(
       (element) => element.type === "button" && text(element).trim() === "Next"
     );
@@ -248,5 +250,195 @@ describe("Create RFQ from Template Workflow", () => {
     };
     expect(step2Props.items.length).toBe(3);
     expect(step2Props.items.map((i) => i.item_code)).toEqual(["DIR-ALU-001", "DIR-ALU-002", "201"]);
+
+    // Click Next to step 3 (Suppliers)
+    const nextBtn2 = elements(render()).find(
+      (element) => element.type === "button" && text(element).trim() === "Next"
+    );
+    expect(nextBtn2).toBeDefined();
+    nextBtn2!.props.onClick!();
+
+    // Click Next to step 4 (Review)
+    const nextBtn3 = elements(render()).find(
+      (element) => element.type === "button" && text(element).trim() === "Next"
+    );
+    expect(nextBtn3).toBeDefined();
+    nextBtn3!.props.onClick!();
+
+    // In step 4, click Create RFQ
+    const createBtn = elements(render()).find(
+      (element) => element.type === "button" && text(element).includes("Create RFQ")
+    );
+    expect(createBtn).toBeDefined();
+    await createBtn!.props.onClick!();
+
+    // Verify createRFQ payload contains the template's procurement category and type
+    expect(harness.create).toHaveBeenCalledTimes(1);
+    const payload = harness.create.mock.calls[0][0];
+    expect(payload.custom_procurement_type).toBe("Direct");
+    expect(payload.custom_procurement_category).toBe("Raw Materials Procurement");
+    expect(payload.contract_required).toBe(true);
+    expect(payload.items.length).toBe(3);
+  });
+
+  it("supports manual RFQ creation from scratch with user selected category", async () => {
+    // Initial render: click Create from Scratch
+    const scratchBtn = elements(render()).find(
+      (element) => element.type === "button" && text(element).includes("Create from Scratch")
+    );
+    expect(scratchBtn).toBeDefined();
+    scratchBtn!.props.onClick!();
+
+    // Step 1: fill required fields
+    const step1El = elements(render()).find(
+      (element) => typeof element.type === "function" && element.type.name === "Step1"
+    );
+    expect(step1El).toBeDefined();
+    const step1Props = step1El!.props as {
+      setTitle: (t: string) => void;
+      setValidTill: (d: string) => void;
+      onProcurementTypeChange: (type: string) => void;
+      onProcurementCategoryChange: (cat: string) => void;
+    };
+
+    step1Props.setTitle("Manual Direct RFQ");
+    step1Props.setValidTill("2026-11-20");
+    step1Props.onProcurementTypeChange("Direct");
+    step1Props.onProcurementCategoryChange("Raw Material");
+
+    // Next to Step 2
+    const nextBtn = elements(render()).find(
+      (element) => element.type === "button" && text(element).trim() === "Next"
+    );
+    expect(nextBtn).toBeDefined();
+    nextBtn!.props.onClick!();
+
+    // Step 2: configure item row
+    const step2El = elements(render()).find(
+      (element) => typeof element.type === "function" && element.type.name === "Step2"
+    );
+    expect(step2El).toBeDefined();
+    const step2Props = step2El!.props as {
+      updateItemRow: (id: string, patch: Record<string, unknown>) => void;
+      items: Array<{ id: string }>;
+    };
+    step2Props.updateItemRow(step2Props.items[0].id, {
+      item_code: "DIR-ALU-001",
+      item_name: "Aluminum Sheet 6061-T6",
+      item_group: "Aluminium",
+      uom: "Sheet",
+      qty: 15,
+    });
+
+    // Next to Step 3
+    const nextBtn2 = elements(render()).find(
+      (element) => element.type === "button" && text(element).trim() === "Next"
+    );
+    expect(nextBtn2).toBeDefined();
+    nextBtn2!.props.onClick!();
+
+    // Step 3: select suppliers
+    const step3El = elements(render()).find(
+      (element) => typeof element.type === "function" && element.type.name === "Step3"
+    );
+    expect(step3El).toBeDefined();
+    const step3Props = step3El!.props as {
+      toggleSupplier: (s: { name: string; supplier_name: string }) => void;
+    };
+    step3Props.toggleSupplier({ name: "Atlantic Precision Manufacturing.", supplier_name: "Atlantic Precision Manufacturing." });
+    step3Props.toggleSupplier({ name: "Blue Ridge Manufacturing Inc", supplier_name: "Blue Ridge Manufacturing Inc" });
+
+    // Next to Step 4
+    const nextBtn3 = elements(render()).find(
+      (element) => element.type === "button" && text(element).trim() === "Next"
+    );
+    expect(nextBtn3).toBeDefined();
+    nextBtn3!.props.onClick!();
+
+    // Select Contract Required: No
+    const contractField = elements(render()).find(
+      (element) => typeof element.type === "function" && element.type.name === "RfqContractRequirementField"
+    );
+    expect(contractField).toBeDefined();
+    (contractField!.props as any).onChange("No");
+
+    // Submit on Step 4
+    const createBtn = elements(render()).find(
+      (element) => element.type === "button" && text(element).includes("Create RFQ")
+    );
+    expect(createBtn).toBeDefined();
+    await createBtn!.props.onClick!();
+
+    expect(harness.create).toHaveBeenCalledTimes(1);
+    const payload = harness.create.mock.calls[0][0];
+    expect(payload.custom_procurement_type).toBe("Direct");
+    expect(payload.custom_procurement_category).toBe("Raw Material");
+  });
+
+  it("shows validation error when template category is missing or invalid", async () => {
+    // Template with missing category
+    harness.mockTemplate = {
+      ...harness.defaultTemplate,
+      category: "" as any,
+    };
+
+    const templateButton = elements(render()).find(
+      (element) => element.type === "button" && text(element).includes("Use Template")
+    );
+    expect(templateButton).toBeDefined();
+    templateButton!.props.onClick!();
+
+    const useTplButton = elements(render()).find(
+      (element) => element.type === "button" && text(element).includes("Raw Materials Procurement")
+    );
+    expect(useTplButton).toBeDefined();
+    await useTplButton!.props.onClick!();
+
+    expect(harness.error).toHaveBeenCalledWith(
+      expect.stringContaining("missing a Procurement Category"),
+      expect.anything()
+    );
+  });
+
+  it("preserves category across step navigation unless explicitly modified", async () => {
+    const templateButton = elements(render()).find(
+      (element) => element.type === "button" && text(element).includes("Use Template")
+    );
+    templateButton!.props.onClick!();
+
+    const useTplButton = elements(render()).find(
+      (element) => element.type === "button" && text(element).includes("Raw Materials Procurement")
+    );
+    await useTplButton!.props.onClick!();
+
+    let step1El = elements(render()).find(
+      (element) => typeof element.type === "function" && element.type.name === "Step1"
+    );
+    expect((step1El!.props as any).procurementCategory).toBe("Raw Materials Procurement");
+
+    (step1El!.props as any).setValidTill("2026-11-15");
+
+    // Navigate to Step 2
+    elements(render()).find(
+      (element) => element.type === "button" && text(element).trim() === "Next"
+    )!.props.onClick!();
+
+    // Navigate back to Step 1 using Previous button
+    elements(render()).find(
+      (element) => element.type === "button" && text(element).trim() === "Previous"
+    )!.props.onClick!();
+
+    // Verify category remains preserved
+    step1El = elements(render()).find(
+      (element) => typeof element.type === "function" && element.type.name === "Step1"
+    );
+    expect((step1El!.props as any).procurementCategory).toBe("Raw Materials Procurement");
+
+    // Explicitly update category
+    (step1El!.props as any).onProcurementCategoryChange("Production");
+    step1El = elements(render()).find(
+      (element) => typeof element.type === "function" && element.type.name === "Step1"
+    );
+    expect((step1El!.props as any).procurementCategory).toBe("Production");
   });
 });
