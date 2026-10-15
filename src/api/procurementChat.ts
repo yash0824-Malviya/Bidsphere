@@ -1,9 +1,6 @@
 import { COMPANY, erpnextClient } from "./erpnext";
 import { AI_ASSISTANT_NAME, APP_NAME } from "../config/branding";
 import { ANTHROPIC_MODEL } from "../config/aiConfig";
-
-const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_VERSION = "2023-06-01";
 const REQUEST_TIMEOUT_MS = 45_000;
 const AUTO_RETRY_DELAY_MS = 2_000;
 const MAX_ATTEMPTS = 2;

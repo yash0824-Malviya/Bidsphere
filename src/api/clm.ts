@@ -1,6 +1,6 @@
 import { apiGet, apiPost, withoutNetworkRetry } from "./erpnext";
 import { readErpProxyAccessToken, readSupplierAccessToken } from "../utils/accessToken";
-import type { ClmSignature, ClmSignatureWorkflow, ClmSupplierWorkflow, ClmSla, RfqClmSummary, RfqClmCreateResult, RfqClmDecisionResult } from "../types/clm";
+import type { ClmSignature, ClmSignatureWorkflow, ClmSupplierWorkflow, ClmSla, RfqClmSummary, RfqClmCreateResult, RfqClmDecisionResult, LegalSignatoryResolution } from "../types/clm";
 import { rfqClmRequestWorkflowView } from "../utils/rfqClmWorkflow";
 import type { PurchaseOrder } from "../types/erpnext";
 export type { RfqClmSummary, RfqClmCreateResult, RfqClmDecisionResult, LegalManagerSignatoryUser, LegalSignatoryResolution } from "../types/clm";
@@ -235,8 +235,8 @@ export async function decideRfqContractRequirement(input: { rfq: string; expecte
   return result;
 }
 export async function getDesignatedLegalSignatory(): Promise<LegalSignatoryResolution> {
-  const result = unwrap(await clmGet<{ data: LegalSignatoryResolution } | LegalSignatoryResolution>({ view: "legal_signatory" }));
-  return (result as { data: LegalSignatoryResolution }).data || (result as LegalSignatoryResolution);
+  const result = unwrap(await clmGet<LegalSignatoryResolution | { data: LegalSignatoryResolution }>({ view: "legal_signatory" }));
+  return result;
 }
 export async function lookupClm(doctype: string, query: string): Promise<ClmRecord[]> {
   const result = unwrap(await clmGet<ClmList | { data: ClmList }>({ view: "lookup", doctype, query }));

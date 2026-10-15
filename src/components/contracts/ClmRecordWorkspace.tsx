@@ -19,7 +19,6 @@ import { rfqClmRequestWorkflowView } from "../../utils/rfqClmWorkflow";
 import ProcurementRequestWorkspace from "./ProcurementRequestWorkspace";
 import RfqContractSigning, { RfqSignatureApprovals } from "./RfqContractSigning";
 import SupplierContractActions from "./SupplierContractActions";
-import ContractWorkflowStepper from "./ContractWorkflowStepper";
 
 const relatedTypes = ["Contract Risk", "Contract Obligation", "Contract Milestone", "Contract Renewal", "Contract Amendment"];
 function text(value: unknown) { return value === undefined || value === null || value === "" ? "—" : typeof value === "object" ? "" : String(value).replace(/<[^>]*>/g, ""); }
@@ -443,19 +442,19 @@ export default function ClmRecordWorkspace({ doctype, name, supplier = false, em
               </dl>
             </div>
 
-            {(record.contract_purpose || record.description) && (
+            {Boolean(record.contract_purpose || record.description) && (
               <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-xs">
                 <div className="border-b border-slate-100 pb-3 mb-4">
                   <h2 className="text-base font-semibold text-slate-900">Contract Scope & Terms</h2>
                 </div>
                 <div className="space-y-4">
-                  {record.contract_purpose && (
+                  {Boolean(record.contract_purpose) && (
                     <div>
                       <dt className="text-xs font-medium text-slate-500">Contract Purpose</dt>
                       <dd className="mt-1 text-sm text-slate-800">{String(record.contract_purpose)}</dd>
                     </div>
                   )}
-                  {record.description && (
+                  {Boolean(record.description) && (
                     <div>
                       <dt className="text-xs font-medium text-slate-500">Description</dt>
                       <dd className="mt-1 text-sm text-slate-800 whitespace-pre-wrap">{String(record.description)}</dd>

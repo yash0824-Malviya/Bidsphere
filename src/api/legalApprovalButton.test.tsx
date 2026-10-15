@@ -110,7 +110,7 @@ function makeReview(verifiedCount: number, signedCount: number): LegalDocumentSe
         env.signatureRequest = {
           id: `SIG-${key}`,
           sourceHash: env.documentHash,
-          sourceFileId: env.sourceFileId,
+          sourceFileId: env.sourceFileId ?? `FILE-${key}`,
           signerId: "legal@netlink.com",
           startedAt: "2026-10-14T12:00:00Z",
           completedAt: "2026-10-14T12:01:00Z",

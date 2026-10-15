@@ -107,10 +107,10 @@ export default function PendingClmRequestsCard({
                     {workflow.rfq}
                   </p>
                   <span className="inline-flex items-center rounded-full border border-primary-200 bg-primary-50 px-2 py-0.5 text-[11px] font-medium text-primary-700">
-                    Role: {workflow.assigned_role === "procurement_team" ? "Procurement Team" : workflow.assigned_role || "Procurement"}
+                    Role: {workflow.assignedRole === "procurement_team" ? "Procurement Team" : workflow.assignedRole || "Procurement"}
                   </span>
                   <span className="text-[11px] text-slate-400">
-                    Age: {formatAge(record.creation || record.modified)}
+                    Age: {formatAge(typeof record.creation === "string" ? record.creation : typeof record.modified === "string" ? record.modified : undefined)}
                   </span>
                 </div>
                 <p className="mt-1 break-words text-xs text-slate-500">

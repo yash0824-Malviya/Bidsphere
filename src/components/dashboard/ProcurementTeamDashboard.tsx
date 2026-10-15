@@ -542,12 +542,10 @@ export default function ProcurementTeamDashboard() {
     // Stage 2: Sourcing RFQs (active bidding packages before award)
     const sourcingRfqCount = rfqs.filter(
       (r) =>
-        (r.status === "Draft" ||
-          r.status === "Active" ||
-          r.status === "Published" ||
-          r.status === "In Evaluation") &&
-        r.status !== "Supplier Selection" &&
-        r.status !== "Awarded",
+        r.status === "Draft" ||
+        r.status === "Active" ||
+        r.status === "Published" ||
+        r.status === "In Evaluation",
     ).length;
 
     // Stage 3: Supplier Selection & Award (quotes received, evaluating, or awarded prior to PO)

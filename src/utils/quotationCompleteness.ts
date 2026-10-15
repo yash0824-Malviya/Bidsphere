@@ -1,4 +1,4 @@
-import type { QuotePriceStatus, SupplierVerdict } from "../types/erpnext";
+import type { SupplierVerdict } from "../types/erpnext";
 import { parseQuoteAmount, resolveQuotePrice, type QuoteLike } from "./quotePrice";
 
 export interface QuotationCompletenessResult {
@@ -98,10 +98,6 @@ export function evaluateQuotationCompleteness(
     : null;
 
   const byItem = quote.byItem instanceof Map ? quote.byItem : null;
-
-  const hasItems =
-    (items !== null && items.length > 0) ||
-    (byItem !== null && byItem.size > 0);
 
   if (items !== null && items.length === 0 && (!byItem || byItem.size === 0)) {
     missingFields.push("Quotation Items");

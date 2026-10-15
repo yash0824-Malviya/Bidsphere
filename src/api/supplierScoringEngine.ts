@@ -53,6 +53,7 @@ export interface ScoredSupplier {
   has_sufficient_data: boolean;
   /** Confidence level reduced when historical data is missing */
   confidence_level: "high" | "medium" | "low";
+  risk_level?: "Low" | "Medium" | "High" | string;
 }
 
 export interface ScoringEngineResult {

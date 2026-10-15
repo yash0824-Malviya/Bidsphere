@@ -30,7 +30,6 @@ import {
 } from "../../api/rfqTemplates";
 import RFQTemplateFormDialog from "../../components/sourcing/RFQTemplateFormDialog";
 import RFQTemplatePreviewDialog from "../../components/sourcing/RFQTemplatePreviewDialog";
-import { getCategoryAvailability } from "../../api/rfqTemplatePopulation";
 import type {
   RFQTemplate,
   RFQTemplateCategory,

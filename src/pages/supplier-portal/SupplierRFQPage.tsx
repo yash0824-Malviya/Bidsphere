@@ -59,7 +59,7 @@ import { triggerQuotationDeclined } from "../../api/notifications";
 import NoQuoteDialog, {
   type NoQuotePayload,
 } from "../../components/supplier-portal/NoQuoteDialog";
-import { uploadFileToERPNext, uploadFileToERPNextDetailed, getFullFileUrl } from "../../api/legalDocsStorage";
+import { uploadFileToERPNextDetailed, getFullFileUrl } from "../../api/legalDocsStorage";
 import { AppLoading } from "../../components/enterprise";
 import SupplierItemAttachmentsPanel from "../../components/supplier-portal/SupplierItemAttachmentsPanel";
 import SupplierRfqDocumentsSection from "../../components/supplier-portal/SupplierRfqDocumentsSection";
@@ -85,15 +85,7 @@ import {
   pickEngineeringDocs,
   type EngineeringDocs,
 } from "../../utils/materialRequestItemFiles";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../../components/ui/select";
 
-const DELIVERY_DAY_OPTIONS = [1, 2, 3, 5, 7, 10, 14, 15, 21, 30, 45, 60, 90] as const;
 
 /** Enterprise procurement UI tokens (supplier quotation). */
 const ENT_CARD =
@@ -892,12 +884,15 @@ export default function SupplierRFQPage() {
             setLegalDraft({
               terms_file_url: ld.terms_conditions_pdf ?? "",
               terms_file_name: ld.terms_conditions_name ?? "",
+              terms_file_id: (ld as { terms_file_id?: string }).terms_file_id ?? "",
               terms_note: ld.terms_conditions_note ?? "",
               warranty_file_url: ld.warranty_certificate_pdf ?? "",
               warranty_file_name: ld.warranty_certificate_name ?? "",
+              warranty_file_id: (ld as { warranty_file_id?: string }).warranty_file_id ?? "",
               warranty_note: ld.warranty_certificate_note ?? "",
               insurance_file_url: ld.insurance_certificate_pdf ?? "",
               insurance_file_name: ld.insurance_certificate_name ?? "",
+              insurance_file_id: (ld as { insurance_file_id?: string }).insurance_file_id ?? "",
               insurance_note: ld.insurance_certificate_note ?? "",
             });
           }

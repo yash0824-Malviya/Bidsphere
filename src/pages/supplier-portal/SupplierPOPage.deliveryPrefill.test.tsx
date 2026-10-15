@@ -168,6 +168,7 @@ const button = (tree: Node[], name: string) =>
 const click = (name: string) => {
   const node = button(render(), name);
   expect(node).toBeDefined();
+  if (!node) throw new Error(`Button not found: ${name}`);
   (node.props.onClick as () => void)();
 };
 

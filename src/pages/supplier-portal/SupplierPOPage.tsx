@@ -247,7 +247,13 @@ export default function SupplierPOPage() {
     if (poHeader?.custom_supplier_quotation?.trim()) return poHeader.custom_supplier_quotation.trim();
     if (poHeader?.supplier_quotation?.trim()) return poHeader.supplier_quotation.trim();
 
-    const contract = contractQuery.data?.contract;
+    const contract = contractQuery.data?.contract as
+      | {
+          custom_supplier_quotation?: string;
+          supplier_quotation?: string;
+          custom_clm_data?: string | unknown;
+        }
+      | undefined;
     if (contract?.custom_supplier_quotation?.trim()) return contract.custom_supplier_quotation.trim();
     if (contract?.supplier_quotation?.trim()) return contract.supplier_quotation.trim();
     if (contract?.custom_clm_data) {

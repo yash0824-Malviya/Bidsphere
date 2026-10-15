@@ -38,7 +38,6 @@ import {
   isLocalTemplateId,
   logTemplateStorage,
   mergeTemplateLists,
-  readLocalTemplates,
   saveLocalTemplate,
 } from "./rfqTemplateStorage";
 import {

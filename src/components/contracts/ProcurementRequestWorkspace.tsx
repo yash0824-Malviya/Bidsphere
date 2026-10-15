@@ -950,7 +950,7 @@ export default function ProcurementRequestWorkspace({
 
           <Information label="Department" value={record.department || workflow?.department || "Production - NSGAI"} />
           <Information label="Company" value={record.company || "Netlink"} />
-          <Information label="Requester" value={record.requester || (workflow && "requester" in workflow ? (workflow as Record<string, unknown>).requester : "") || "—"} />
+          <Information label="Requester" value={record.requester || (workflow && "requester" in workflow ? (workflow as unknown as Record<string, unknown>).requester : "") || "—"} />
         </dl>
 
         {/* Awarded Item Rows & Commercial Breakdown (Shown for Supply / Procurement Contract) */}

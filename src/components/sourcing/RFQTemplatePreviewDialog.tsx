@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   FileCheck2,
   FileText,
-  Layers,
   Package,
   Play,
   Pencil,
@@ -13,7 +12,6 @@ import {
 } from "lucide-react";
 import type { RFQTemplate } from "../../types/erpnext";
 import StatusBadge from "../StatusBadge";
-import { formatCurrency } from "../../utils/format";
 import { getCategoryAvailability } from "../../api/rfqTemplatePopulation";
 
 interface Props {

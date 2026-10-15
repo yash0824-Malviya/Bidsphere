@@ -1,6 +1,5 @@
 import type { AIRecommendation, SupplierAnalysisRow } from "../types/erpnext";
 import { getSupplierAwardEligibility } from "./supplierAwardEligibility";
-import { evaluateQuotationCompleteness } from "./quotationCompleteness";
 
 export type EvaluationRisk = "Low" | "Medium" | "High" | "Unavailable";
 

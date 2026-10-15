@@ -400,13 +400,13 @@ export const DEFAULT_WORKFLOW_RULES: RFQTemplateWorkflowRules = {
 export type RFQTemplateType = RFQTemplateCategory;
 
 /** Child row: supplier in an RFQ Template. */
-export interface RFQTemplateSupplierRow extends ErpDoc {
+export interface RFQTemplateSupplierRow extends Partial<ErpDoc> {
   supplier: string;
   supplier_name?: string;
 }
 
 /** Child row: item in an RFQ Template. */
-export interface RFQTemplateItemRow extends ErpDoc {
+export interface RFQTemplateItemRow extends Partial<ErpDoc> {
   item_code: string;
   item_name?: string;
   description?: string;

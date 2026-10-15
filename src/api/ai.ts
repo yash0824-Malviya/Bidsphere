@@ -458,7 +458,7 @@ function coerceFromRankingFormat(
         : verdictFromRank(rank, ranking.length, hasValidPrice, score, risk);
 
       if (completeness.is_complete && verdict === "QUOTE INCOMPLETE") {
-        verdict = (risk === "High" || risk === "HIGH RISK") ? "HIGH RISK / REVIEW" : (rank === 1 ? "BEST VALUE" : "GOOD OPTION");
+        verdict = (risk === "High" || (risk as string) === "HIGH RISK") ? "HIGH RISK / REVIEW" : (rank === 1 ? "BEST VALUE" : "GOOD OPTION");
       } else if (!completeness.is_complete && verdict !== "AVOID") {
         verdict = "QUOTE INCOMPLETE";
       }
@@ -593,6 +593,7 @@ function coerceSupplierAnalysis(
       const name = String(r.name ?? "");
       const quote = findQuote(name, quotations);
       const grandTotal = findQuoteTotal(name, quotations);
+      const hasValidPrice = isSubmittedQuoteAmount(grandTotal);
       const rowRisk = String(r.risk ?? "");
       const completeness = evaluateQuotationCompleteness(quote || {
         supplier: name,
@@ -1238,11 +1239,11 @@ export function buildLocalProcurementRecommendation(
         supplier_id: s.supplier_id,
         supplier_name: s.supplier_name,
         grand_total: grandTotal,
-        quotation_id: s.quotation_id ?? quote?.quotation_id,
+        quotation_id: s.quotation_id,
       });
       let verdict = verdictFromEngineRank(s.ranking, engineResult.suppliers.length, hasValidPrice, s.risk_level);
       if (completeness.is_complete && verdict === "QUOTE INCOMPLETE") {
-        verdict = (s.risk_level === "High" || s.risk_level === "HIGH RISK") ? "HIGH RISK / REVIEW" : (s.ranking === 1 ? "BEST VALUE" : "GOOD OPTION");
+        verdict = (s.risk_level === "High" || (s.risk_level as string) === "HIGH RISK") ? "HIGH RISK / REVIEW" : (s.ranking === 1 ? "BEST VALUE" : "GOOD OPTION");
       }
       const strengths: string[] = [];
       const weaknesses: string[] = [];

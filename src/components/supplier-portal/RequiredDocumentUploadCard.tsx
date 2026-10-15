@@ -20,6 +20,8 @@ export type DocumentUploadStatus = "empty" | "uploading" | "uploaded";
 
 /** Loose file shape — RFI/RFP uploads and ERPNext attachments. */
 export interface DocumentFileRef {
+  id?: string | null;
+  name?: string | null;
   file_name?: string;
   file_url?: string | null;
   file_id?: string | null;
@@ -60,7 +62,7 @@ export function resolveOpenableFileUrl(
   if (stored.startsWith("data:") || stored.includes("/api/file-proxy")) {
     return stored;
   }
-  const fileId = file && typeof file === "object" ? file.id || file.file_id || file.name : undefined;
+  const fileId = file && typeof file === "object" ? (file.id || file.file_id || file.name) || undefined : undefined;
   if (/^\/?(private\/)?files\//.test(stored)) {
     const proxied = getFullFileUrl(stored, fileId);
     return proxied || null;

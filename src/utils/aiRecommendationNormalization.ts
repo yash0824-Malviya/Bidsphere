@@ -350,7 +350,7 @@ export function normalizeAndDeduplicateRecommendation(
     resolvedRow.missing_fields = completeness.missing_fields;
 
     if (resolvedRow.is_complete && resolvedRow.verdict === "QUOTE INCOMPLETE") {
-      resolvedRow.verdict = (resolvedRow.risk === "High" || resolvedRow.risk === "HIGH RISK") ? "HIGH RISK / REVIEW" : (resolvedRow.rank === 1 ? "BEST VALUE" : "GOOD OPTION");
+      resolvedRow.verdict = (resolvedRow.risk === "High" || (resolvedRow.risk as string) === "HIGH RISK") ? "HIGH RISK / REVIEW" : (resolvedRow.rank === 1 ? "BEST VALUE" : "GOOD OPTION");
     } else if (!resolvedRow.is_complete && resolvedRow.verdict !== "AVOID" && resolvedRow.verdict !== "NOT EVALUATED") {
       resolvedRow.verdict = "QUOTE INCOMPLETE";
     }

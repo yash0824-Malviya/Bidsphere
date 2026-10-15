@@ -252,7 +252,6 @@ export default function ContractWorkflowStepper({
             const state = resolvedStates[item.step];
             const isCompleted = state === "completed";
             const isCurrent = state === "current";
-            const isUpcoming = state === "upcoming";
             const isSelected = expandedStep === item.step;
 
             return (

@@ -20,19 +20,15 @@ Object.defineProperty(globalThis, "localStorage", {
 });
 
 import {
-  STANDARD_RFQ_TEMPLATES,
   ensureStandardTemplatesPopulated,
   getCategoryAvailability,
-  INITIAL_TEMPLATES_STORAGE_KEY,
 } from "./rfqTemplatePopulation";
 import {
   getRFQTemplates,
   getRFQTemplate,
   createRFQTemplate,
-  updateRFQTemplate,
   activateRFQTemplate,
   deactivateRFQTemplate,
-  archiveRFQTemplate,
 } from "./rfqTemplates";
 
 describe("RFQ Template Library — Population from Existing Data", () => {

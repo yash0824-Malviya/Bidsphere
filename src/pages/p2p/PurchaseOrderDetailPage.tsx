@@ -243,7 +243,7 @@ export default function PurchaseOrderDetailPage() {
   const deliveryDetailsText =
     syncedDeliveryState?.tracking_number
       ? `Tracking: ${syncedDeliveryState.tracking_number}`
-      : syncedDeliveryState?.overall_status ||
+      : syncedDeliveryState?.status ||
         (syncedDeliveryState as { delivery_status?: string })?.delivery_status ||
         (po.schedule_date ? `Expected: ${formatDate(po.schedule_date)}` : "Standard Delivery");
   const grandTotal = po.grand_total ?? 0;
