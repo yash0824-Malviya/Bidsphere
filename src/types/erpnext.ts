@@ -414,6 +414,9 @@ export interface RFQTemplateItemRow extends Partial<ErpDoc> {
   uom?: string;
   target_price?: number;
   specification?: string;
+  schedule_date?: string;
+  delivery_date?: string;
+  required_by?: string;
 }
 
 /** Custom "RFQ Template" DocType for reusable RFQ configurations. */

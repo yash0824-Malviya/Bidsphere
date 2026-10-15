@@ -319,9 +319,9 @@ export default function NewRFQPage() {
             "";
           const tplTarget = Number(tplItem.target_price);
           const rawDeliveryDate =
-            (tplItem as Record<string, unknown>).schedule_date ||
-            (tplItem as Record<string, unknown>).delivery_date ||
-            (tplItem as Record<string, unknown>).required_by ||
+            tplItem.schedule_date ||
+            tplItem.delivery_date ||
+            tplItem.required_by ||
             "";
           return {
             id: generateId(),

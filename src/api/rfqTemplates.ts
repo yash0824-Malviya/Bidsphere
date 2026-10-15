@@ -98,6 +98,9 @@ export interface RFQTemplateInput {
     uom?: string;
     target_price?: number;
     specification?: string;
+    schedule_date?: string;
+    delivery_date?: string;
+    required_by?: string;
   }>;
   suppliers?: Array<{ supplier: string; supplier_name?: string }>;
   required_documents?: RFQTemplateRequiredDocuments;

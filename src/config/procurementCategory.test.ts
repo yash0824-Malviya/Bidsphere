@@ -55,6 +55,21 @@ describe("procurementCategory template and type mapping rules", () => {
     }
   });
 
+  it("validates canonical master categories with isProcurementCategory", () => {
+    expect(isProcurementCategory("Raw Material")).toBe(true);
+    expect(isProcurementCategory("Production")).toBe(true);
+    expect(isProcurementCategory("Office Supplies")).toBe(true);
+    expect(isProcurementCategory("Raw Materials Procurement")).toBe(false);
+    expect(isProcurementCategory("Nonexistent Category")).toBe(false);
+  });
+
+  it("normalizes template and legacy categories to canonical master categories", () => {
+    expect(normalizeProcurementCategoryValue("Raw Materials Procurement")).toBe("Raw Material");
+    expect(normalizeProcurementCategoryValue("Spare Parts & Maintenance")).toBe("Production");
+    expect(normalizeProcurementCategoryValue("Office Supplies")).toBe("Office Supplies");
+    expect(normalizeProcurementCategoryValue("Unknown Category")).toBe("");
+  });
+
   it("preserves canonical master lists untouched", () => {
     expect(DIRECT_PROCUREMENT_CATEGORIES).toEqual([
       "Production",
