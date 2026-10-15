@@ -30,8 +30,8 @@ import {
 } from "lucide-react";
 
 import { getRFQ, getSupplierQuotations } from "../../api/sourcing";
-import { getLegalDocsByRfq, type LegalDocumentSet } from "../../api/legalDocs";
-import { invalidateApprovalWorkflow } from "../../api/approvalWorkflow";
+import { getLegalDocsByRfq, verifyLegalDocumentIntegrity, type LegalDocumentSet } from "../../api/legalDocs";
+import { invalidateApprovalWorkflow, isRfqReadyForFinance, isRfqReadyForPurchaseOrder } from "../../api/approvalWorkflow";
 import { updateFinanceReviewStatus } from "../../api/financeReviews";
 import {
   getRfqBudgetCheckByCostCenter,
@@ -123,11 +123,11 @@ function toWorkspaceState(doc: LegalDocumentSet): FinanceWorkspaceState {
         ]
       : [],
     workflow_step:
-      financeStatus === "Budget Approved"
+      isRfqReadyForPurchaseOrder(doc)
         ? "Approved for PO"
         : financeStatus === "Rejected"
           ? "Finance Rejected"
-          : legalStatus === "Approved"
+          : isRfqReadyForFinance(doc)
             ? "Pending Finance Review"
             : legalStatus === "Rejected"
               ? "Legal Rejected"
@@ -168,7 +168,7 @@ const CHECKLIST_ITEMS: ChecklistItem[] = [
   { id: "final_approval", label: "Final Approval", description: "Confirm the final budget approval decision", auto: false },
 ];
 
-const FINANCE_APPROVER_ROLES = ["finance", "finance_executive", "admin"];
+const FINANCE_APPROVER_ROLES = ["finance", "admin"];
 
 /* -------------------------------------------------------------------------- */
 /*  Main component                                                             */
@@ -225,7 +225,19 @@ export default function FinanceReviewDetailPage() {
     () => (legalDoc ? toWorkspaceState(legalDoc) : null),
     [legalDoc]
   );
-  const legalApprovedForFinance = approvalState?.legal_status === "Approved";
+  const signatureReadyForFinance = isRfqReadyForFinance(legalDoc);
+  const integrityQuery = useQuery({
+    queryKey: ["legal-document-integrity", legalDoc?.name, legalDoc?.modified],
+    queryFn: () => verifyLegalDocumentIntegrity(legalDoc!.name!),
+    enabled: signatureReadyForFinance && !!legalDoc?.name,
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+    retry: false,
+  });
+  const integrityVerified = !!integrityQuery.data?.documents.length &&
+    integrityQuery.data.documents.every(document => document.status === "Verified");
+  const legalApprovedForFinance = signatureReadyForFinance && integrityVerified && !integrityQuery.isFetching;
 
   const [aiAnalysis, setAiAnalysis] = useState<AIRecommendation | null>(() =>
     readSavedAnalysis(decodedId)
@@ -349,14 +361,14 @@ export default function FinanceReviewDetailPage() {
 
   const canSubmit = (action: string) => {
     if (submitted) return false;
+    if (!FINANCE_APPROVER_ROLES.includes(user?.role ?? "")) return false;
     if (!legalApprovedForFinance) return false;
+    if (!hasBudget) return false;
     if (!actionReason.trim()) return false;
-    // A rejection is always allowed (e.g. over-budget) as long as a reason is
-    // given; approval requires every checklist item — auto + manual — to pass.
+    // A rejection requires at least 10 characters for audit justification;
+    // approval requires every checklist item — auto + manual — to pass.
     if (action === "reject") return actionReason.trim().length >= 10;
-    // Approval requires an assigned budget plus every checklist item (auto +
-    // manual). Without a budget the auto validations are not applicable.
-    return hasBudget && checklistComplete;
+    return checklistComplete;
   };
 
   const handleAction = useCallback(
@@ -376,6 +388,7 @@ export default function FinanceReviewDetailPage() {
         .join("\n\n");
 
       try {
+        if (!legalApprovedForFinance) throw new Error("Legal e-signatures and current document integrity must be verified before Finance can decide.");
         if (action === "approve" && budgetCheckQuery.data?.found && !budgetCheckQuery.data.withinBudget) {
           toast(BUDGET_EXCEEDED_WARNING, {
             icon: "⚠️",
@@ -401,7 +414,7 @@ export default function FinanceReviewDetailPage() {
         setSubmitting(null);
       }
     },
-    [decodedId, user?.email, reviewNotes, actionReason, budgetCheckQuery.data, legalDocQuery, queryClient]
+    [decodedId, user?.email, reviewNotes, actionReason, budgetCheckQuery.data, legalDocQuery, queryClient, legalApprovedForFinance]
   );
 
   /* ── Loading / error states ── */
@@ -446,29 +459,36 @@ export default function FinanceReviewDetailPage() {
     !budgetCheck.withinBudget &&
     legalApprovedForFinance &&
     currentFinanceStatus === "Pending Finance Review";
+  const canApprove = canSubmit("approve") && !submitting;
+  const canReject = canSubmit("reject") && !submitting;
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="finance-review-detail-page w-full space-y-3">
       {/* ── Header ── */}
-      <div className="mb-6">
+      <div className="space-y-1">
         <button
           type="button"
           onClick={() => navigate("/budget/pending-reviews")}
-          className="mb-3 inline-flex items-center gap-1.5 text-sm font-medium text-neutral-500 transition hover:text-primary cursor-pointer bg-transparent border-none p-0"
+          className="inline-flex items-center gap-1.5 text-xs font-semibold text-neutral-500 transition hover:text-primary cursor-pointer bg-transparent border-none p-0"
         >
-          <ArrowLeft className="h-4 w-4" /> Back to RFQ Financial Review
+          <ArrowLeft className="h-3.5 w-3.5" /> Back to RFQ Financial Review
         </button>
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100">
-                <Wallet className="h-5 w-5 text-emerald-600" />
-              </div>
-              <p className="text-sm font-semibold text-neutral-700">{decodedId}</p>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between pt-0.5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">
+              <Wallet className="h-5 w-5" />
+            </div>
+            <div>
+              <span className="block text-xs font-semibold uppercase tracking-wider text-neutral-400">
+                RFQ Financial Review
+              </span>
+              <h1 className="text-xl font-bold tracking-tight text-neutral-900 sm:text-2xl leading-tight">
+                {decodedId}
+              </h1>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <SlaStageBadge
               workflow="Finance Review"
               referenceDoctype="Request for Quotation"
@@ -480,25 +500,31 @@ export default function FinanceReviewDetailPage() {
         </div>
       </div>
 
-      {!legalApprovedForFinance && (
-        <div className="mb-5 flex items-start gap-3 rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3">
-          <Gavel className="mt-0.5 h-5 w-5 flex-shrink-0 text-neutral-400" />
+      {currentFinanceStatus === "Pending Finance Review" && !legalApprovedForFinance && (
+        <div className="flex items-center gap-3 rounded-lg border border-neutral-200 bg-neutral-50/80 px-3.5 py-2.5">
+          <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-neutral-200/70 text-neutral-600">
+            <Gavel className="h-3.5 w-3.5" />
+          </div>
           <div>
-            <p className="text-sm font-bold text-neutral-800">Awaiting Legal Approval</p>
-            <p className="mt-0.5 text-xs text-neutral-600">
-              This RFQ has not yet been approved by Legal Review. Finance decisions are only
-              available once Legal Review approves the selected supplier's quotation.
+            <p className="text-xs font-bold text-neutral-900">{signatureReadyForFinance ? "Document Integrity Verification" : "Awaiting Legal E-Signature"}</p>
+            <p className="text-[11px] text-neutral-600 leading-normal">
+              {signatureReadyForFinance
+                ? integrityQuery.isFetching ? "Verifying the current signed PDF bytes before Finance approval…"
+                  : "Document integrity could not be verified. Finance approval is blocked until Legal resolves the document version."
+                : "Finance decisions become available after Legal signs all required verified supplier documents."}
             </p>
           </div>
         </div>
       )}
 
       {budgetExceeded && (
-        <div className="mb-5 flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
-          <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
+        <div className="flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50/80 px-3.5 py-2.5">
+          <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-amber-100 text-amber-700">
+            <AlertTriangle className="h-3.5 w-3.5" />
+          </div>
           <div>
-            <p className="text-sm font-bold text-amber-900">{BUDGET_EXCEEDED_WARNING}</p>
-            <p className="mt-0.5 text-xs text-amber-800">
+            <p className="text-xs font-bold text-amber-900">{BUDGET_EXCEEDED_WARNING}</p>
+            <p className="text-[11px] text-amber-800 leading-normal">
               RFQ value {formatCurrency(rfqValue)} exceeds remaining budget{" "}
               {formatCurrency(budgetCheck?.remainingBudget ?? 0)}. Finance must review and
               approve before PO creation.
@@ -509,9 +535,11 @@ export default function FinanceReviewDetailPage() {
 
       {/* ── Reviewer / Timestamp Banner ── */}
       {approvalState?.finance_reviewer && submitted && (
-        <div className="mb-5 flex items-center gap-3 rounded-xl border border-neutral-200 bg-neutral-50 px-4 py-3">
-          <User className="h-4 w-4 text-neutral-400" />
-          <div className="text-sm text-neutral-600">
+        <div className="flex items-center gap-3 rounded-lg border border-neutral-200 bg-neutral-50/80 px-3.5 py-2">
+          <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-neutral-200/70 text-neutral-600">
+            <User className="h-3.5 w-3.5" />
+          </div>
+          <div className="text-xs text-neutral-600">
             Reviewed by{" "}
             <span className="font-semibold text-neutral-900">
               {approvalState.finance_reviewer}
@@ -523,7 +551,7 @@ export default function FinanceReviewDetailPage() {
         </div>
       )}
 
-      <div className="space-y-4">
+      <div className="space-y-3">
         {/* ═══════════════ Section: RFQ Summary ═══════════════ */}
         <CollapsibleSection
           id="summary"
@@ -532,7 +560,7 @@ export default function FinanceReviewDetailPage() {
           expanded={expandedSections.summary}
           onToggle={toggleSection}
         >
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-y-2.5 gap-x-4">
             <InfoField label="RFQ Number" value={rfq.name} />
             <InfoField label="Requested By" value={formatRfqOwnerFromDoc(rfq)} />
             <InfoField label="Transaction Date" value={formatDate(rfq.transaction_date)} />
@@ -542,30 +570,30 @@ export default function FinanceReviewDetailPage() {
           </div>
 
           {rfqItems.length > 0 && (
-            <div className="mt-4">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
+            <div className="mt-3 pt-2.5 border-t border-neutral-100">
+              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
                 Items ({rfqItems.length})
               </p>
-              <div className="overflow-x-auto rounded-lg border border-neutral-200">
-                <table className="w-full text-sm">
+              <div className="overflow-x-auto rounded-lg border border-neutral-200/80">
+                <table className="w-full text-xs">
                   <thead>
-                    <tr className="border-b border-neutral-100 bg-neutral-50/50">
-                      <th className="px-3 py-2 text-left text-xs font-semibold text-neutral-500">Item</th>
-                      <th className="px-3 py-2 text-right text-xs font-semibold text-neutral-500">Qty</th>
-                      <th className="px-3 py-2 text-left text-xs font-semibold text-neutral-500">UOM</th>
+                    <tr className="border-b border-neutral-100 bg-neutral-50/80 text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
+                      <th className="px-3.5 py-1.5 text-left">Item</th>
+                      <th className="px-3.5 py-1.5 text-right w-28 sm:w-32">Qty</th>
+                      <th className="px-3.5 py-1.5 text-left w-28 sm:w-32">UOM</th>
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className="divide-y divide-neutral-100">
                     {rfqItems.map((item, idx) => (
-                      <tr key={idx} className="border-b border-neutral-50 last:border-0">
-                        <td className="px-3 py-2">
-                          <p className="font-medium text-neutral-900">{item.item_code}</p>
+                      <tr key={idx} className="hover:bg-neutral-50/40 transition">
+                        <td className="px-3.5 py-2">
+                          <p className="font-semibold text-neutral-900">{item.item_code}</p>
                           {item.item_name && item.item_name !== item.item_code && (
-                            <p className="text-xs text-neutral-500">{item.item_name}</p>
+                            <p className="text-[11px] text-neutral-500 mt-0.5">{item.item_name}</p>
                           )}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums font-medium">{item.qty}</td>
-                        <td className="px-3 py-2 text-neutral-600">{item.uom ?? "—"}</td>
+                        <td className="px-3.5 py-2 text-right tabular-nums font-semibold text-neutral-900">{item.qty}</td>
+                        <td className="px-3.5 py-2 text-neutral-600">{item.uom ?? "—"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -584,7 +612,7 @@ export default function FinanceReviewDetailPage() {
           onToggle={toggleSection}
         >
           {selectedSupplier ? (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
               <InfoField label="Supplier" value={selectedSupplier} highlight />
               <InfoField
                 label="Quotation Value"
@@ -594,8 +622,8 @@ export default function FinanceReviewDetailPage() {
               <InfoField label="Submitted By" value={approvalState?.submitted_by ?? "—"} />
             </div>
           ) : (
-            <div className="flex items-center gap-3 rounded-lg bg-warning-50 px-4 py-3 text-sm text-warning-700">
-              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+            <div className="flex items-center gap-2.5 rounded-lg bg-amber-50 border border-amber-200/80 px-3.5 py-2 text-xs text-amber-800">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0 text-amber-600" />
               No supplier has been selected for this RFQ yet.
             </div>
           )}
@@ -610,31 +638,48 @@ export default function FinanceReviewDetailPage() {
           onToggle={toggleSection}
           badge={
             approvalState?.legal_status === "Approved" ? (
-              <span className="rounded-full bg-success-100 px-2 py-0.5 text-[10px] font-bold text-success-700">
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-[11px] font-bold text-emerald-700">
+                <CheckCircle2 className="h-3 w-3 text-emerald-600" />
                 Approved
               </span>
             ) : (
-              <span className="rounded-full bg-warning-100 px-2 py-0.5 text-[10px] font-bold text-warning-700">
+              <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[11px] font-bold text-amber-700">
+                <Clock className="h-3 w-3 text-amber-600" />
                 {approvalState?.legal_status ?? "Pending"}
               </span>
             )
           }
         >
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <InfoField label="Legal Status" value={approvalState?.legal_status ?? "—"} />
-            <InfoField label="Reviewed By" value={approvalState?.legal_reviewer ?? "—"} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-neutral-400">Legal Status</p>
+              <div className="mt-0.5 flex items-center gap-1.5">
+                {approvalState?.legal_status === "Approved" ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                    Approved
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 rounded-md bg-amber-50 border border-amber-200 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                    <Clock className="h-3.5 w-3.5 text-amber-600" />
+                    {approvalState?.legal_status ?? "Pending"}
+                  </span>
+                )}
+              </div>
+            </div>
+            <InfoField label="Reviewed By" value={approvalState?.legal_reviewer ?? "legal@netlink.com"} />
             <InfoField label="Review Date" value={approvalState?.legal_review_date ? formatDate(approvalState.legal_review_date) : "—"} />
           </div>
           {(approvalState?.legal_comments ?? []).length > 0 && (
-            <div className="mt-4">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
+            <div className="mt-3.5 pt-3 border-t border-neutral-100">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
                 Legal Review Notes
               </p>
               <div className="space-y-2">
                 {(approvalState?.legal_comments ?? []).map((c, idx) => (
-                  <div key={idx} className="rounded-lg border border-neutral-100 bg-neutral-50 p-3">
-                    <p className="text-sm text-neutral-700">{c.comment}</p>
-                    <p className="mt-1 text-xs text-neutral-400">{c.comment_by} · {c.comment_date ? formatDate(c.comment_date) : ""}</p>
+                  <div key={idx} className="rounded-lg border border-neutral-200/80 bg-neutral-50/70 p-3">
+                    <p className="text-xs text-neutral-800 leading-relaxed">{c.comment}</p>
+                    <p className="mt-1 text-[11px] text-neutral-400">{c.comment_by} · {c.comment_date ? formatDate(c.comment_date) : ""}</p>
                   </div>
                 ))}
               </div>
@@ -651,25 +696,25 @@ export default function FinanceReviewDetailPage() {
           onToggle={toggleSection}
           badge={
             aiAnalysis ? (
-              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
+              <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-[10px] font-bold text-primary">
                 Analysis Available
               </span>
             ) : undefined
           }
         >
           {aiAnalysis ? (
-            <div className="space-y-4">
-              <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
-                <div className="flex items-start gap-3">
-                  <Bot className="mt-0.5 h-5 w-5 flex-shrink-0 text-primary" />
+            <div className="space-y-3">
+              <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 sm:p-3.5">
+                <div className="flex items-start gap-2.5">
+                  <Bot className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
                   <div>
-                    <p className="text-sm font-semibold text-neutral-900">
-                      AI Recommends: {aiAnalysis.recommended_supplier}
+                    <p className="text-xs sm:text-sm font-semibold text-neutral-900">
+                      Top score: {aiAnalysis.recommended_supplier}
                     </p>
-                    <p className="mt-1 text-sm leading-relaxed text-neutral-600">
+                    <p className="mt-0.5 text-xs sm:text-sm leading-relaxed text-neutral-600">
                       {aiAnalysis.recommendation_summary}
                     </p>
-                    <p className="mt-2 text-xs text-neutral-500">
+                    <p className="mt-1.5 text-[11px] text-neutral-500">
                       Confidence: {aiAnalysis.confidence_score}%
                     </p>
                   </div>
@@ -677,18 +722,18 @@ export default function FinanceReviewDetailPage() {
               </div>
               {(aiAnalysis.risk_flags ?? []).length > 0 && (
                 <div>
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
-                    Financial Risk Flags
+                  <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
+                    Supplier Evaluation Risk Flags
                   </p>
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     {(aiAnalysis.risk_flags ?? []).map((flag, idx) => (
                       <div
                         key={idx}
-                        className={`flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-sm ${
+                        className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${
                           flag.severity === "high"
-                            ? "border-danger-200 bg-danger-50 text-danger-800"
+                            ? "border-rose-200 bg-rose-50 text-rose-800"
                             : flag.severity === "medium"
-                            ? "border-warning-200 bg-warning-50 text-warning-800"
+                            ? "border-amber-200 bg-amber-50 text-amber-800"
                             : "border-neutral-200 bg-neutral-50 text-neutral-700"
                         }`}
                       >
@@ -701,14 +746,14 @@ export default function FinanceReviewDetailPage() {
               )}
             </div>
           ) : (
-            <div className="flex items-center gap-3 rounded-lg bg-neutral-50 px-4 py-6 text-sm text-neutral-500">
-              <Info className="h-5 w-5 flex-shrink-0" />
+            <div className="flex items-center gap-2.5 rounded-lg bg-neutral-50/70 border border-neutral-200/80 px-3.5 py-3 text-xs text-neutral-500">
+              <Info className="h-4 w-4 flex-shrink-0 text-neutral-400" />
               No AI analysis has been performed for this RFQ yet.
             </div>
           )}
         </CollapsibleSection>
 
-        {/* ═══════════════ Section: Budget & Spend Analysis ═══════════════ */}
+        {/* ═══════════════ Section: Budget Availability & Spend Forecast ═══════════════ */}
         <CollapsibleSection
           id="budget"
           icon={PieChart}
@@ -718,9 +763,9 @@ export default function FinanceReviewDetailPage() {
         >
           {budgetCheckQuery.isLoading ? (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <Skeleton className="h-24 rounded-lg" />
-              <Skeleton className="h-24 rounded-lg" />
-              <Skeleton className="h-24 rounded-lg" />
+              <Skeleton className="h-24 rounded-xl" />
+              <Skeleton className="h-24 rounded-xl" />
+              <Skeleton className="h-24 rounded-xl" />
             </div>
           ) : budgetCheckQuery.data?.found ? (
             <BudgetAnalysisCards check={budgetCheckQuery.data} />
@@ -734,17 +779,7 @@ export default function FinanceReviewDetailPage() {
           )}
         </CollapsibleSection>
 
-        {/* Budget not yet linked — the Finance Review Checklist is not applicable
-            until a budget is created or assigned. */}
-        {budgetMissing && (
-          <div className="flex items-start gap-2.5 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm font-medium text-primary">
-            <Info className="mt-0.5 h-4 w-4 flex-shrink-0" />
-            Finance review will become available after a budget has been created
-            or assigned.
-          </div>
-        )}
-
-        {/* ═══════════════ Section: Finance Checklist ═══════════════ */}
+        {/* ═══════════════ Section: Finance Review Checklist ═══════════════ */}
         {!budgetMissing && (
         <CollapsibleSection
           id="checklist"
@@ -754,18 +789,18 @@ export default function FinanceReviewDetailPage() {
           onToggle={toggleSection}
           badge={
             <span
-              className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+              className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
                 checklistComplete
-                  ? "bg-success-100 text-success-700"
-                  : "bg-warning-100 text-warning-700"
+                  ? "bg-emerald-100 text-emerald-700"
+                  : "bg-amber-100 text-amber-700"
               }`}
             >
               {checklistDoneCount}/{CHECKLIST_ITEMS.length}
             </span>
           }
         >
-          <div className="mb-3 flex items-center gap-2 rounded-lg bg-neutral-50 px-3 py-2 text-[11px] font-medium text-neutral-500">
-            <Info className="h-3.5 w-3.5 flex-shrink-0" />
+          <div className="mb-2.5 flex items-center gap-2 rounded-lg bg-neutral-50/80 border border-neutral-200/70 px-3 py-2 text-xs font-medium text-neutral-600">
+            <Info className="h-4 w-4 flex-shrink-0 text-neutral-400" />
             Budget Availability, Cost Center, Budget Limit and Approval Authority
             are verified automatically from live data. Only Financial Compliance and
             Final Approval are manual.
@@ -778,28 +813,28 @@ export default function FinanceReviewDetailPage() {
                 return (
                   <div
                     key={item.id}
-                    className={`flex items-start gap-3 rounded-lg border px-4 py-3 ${
+                    className={`flex items-start gap-2.5 rounded-lg border px-3 py-2 transition ${
                       done
-                        ? "border-success-200 bg-success-50/50"
+                        ? "border-emerald-200 bg-emerald-50/40"
                         : pending
-                          ? "border-neutral-200 bg-neutral-50"
-                          : "border-danger-200 bg-danger-50/40"
+                          ? "border-neutral-200 bg-neutral-50/50"
+                          : "border-rose-200 bg-rose-50/40"
                     }`}
                   >
                     <div className="pt-0.5">
                       {pending ? (
-                        <Loader2 className="h-4 w-4 animate-spin text-neutral-400" />
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-neutral-400" />
                       ) : done ? (
-                        <CheckCircle2 className="h-4 w-4 text-success-600" />
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
                       ) : (
-                        <XCircle className="h-4 w-4 text-danger-500" />
+                        <XCircle className="h-3.5 w-3.5 text-rose-500" />
                       )}
                     </div>
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
                         <p
-                          className={`text-sm font-semibold ${
-                            done ? "text-success-800" : "text-neutral-900"
+                          className={`text-xs sm:text-sm font-semibold ${
+                            done ? "text-emerald-900" : "text-neutral-900"
                           }`}
                         >
                           {item.label}
@@ -811,8 +846,8 @@ export default function FinanceReviewDetailPage() {
                       <p className="mt-0.5 text-xs text-neutral-500">{item.description}</p>
                     </div>
                     <span
-                      className={`ml-auto mt-0.5 flex-shrink-0 text-[11px] font-bold ${
-                        done ? "text-success-600" : pending ? "text-neutral-400" : "text-danger-600"
+                      className={`ml-auto mt-0.5 flex-shrink-0 text-xs font-bold ${
+                        done ? "text-emerald-600" : pending ? "text-neutral-400" : "text-rose-600"
                       }`}
                     >
                       {pending ? "Checking…" : done ? "Verified" : "Attention"}
@@ -823,9 +858,9 @@ export default function FinanceReviewDetailPage() {
               return (
                 <label
                   key={item.id}
-                  className={`flex cursor-pointer items-start gap-3 rounded-lg border px-4 py-3 transition ${
+                  className={`flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2 transition ${
                     checklist[item.id]
-                      ? "border-success-200 bg-success-50/50"
+                      ? "border-emerald-200 bg-emerald-50/40"
                       : "border-neutral-200 bg-white hover:border-neutral-300"
                   } ${submitted ? "pointer-events-none opacity-70" : ""}`}
                 >
@@ -837,25 +872,25 @@ export default function FinanceReviewDetailPage() {
                         setChecklist((prev) => ({ ...prev, [item.id]: e.target.checked }))
                       }
                       disabled={submitted}
-                      className="h-4 w-4 rounded border-neutral-300 text-success-600 focus:ring-success-500"
+                      className="h-3.5 w-3.5 rounded border-neutral-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
                     />
                   </div>
                   <div>
-                    <p className={`text-sm font-semibold ${checklist[item.id] ? "text-success-800" : "text-neutral-900"}`}>
+                    <p className={`text-xs sm:text-sm font-semibold ${checklist[item.id] ? "text-emerald-900" : "text-neutral-900"}`}>
                       {item.label}
                     </p>
                     <p className="mt-0.5 text-xs text-neutral-500">{item.description}</p>
                   </div>
                   {checklist[item.id] && (
-                    <Check className="ml-auto mt-0.5 h-4 w-4 flex-shrink-0 text-success-600" />
+                    <Check className="ml-auto mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-emerald-600" />
                   )}
                 </label>
               );
             })}
           </div>
           {!checklistComplete && !submitted && (
-            <div className="mt-3 flex items-center gap-2 rounded-lg bg-warning-50 px-3 py-2 text-xs font-medium text-warning-700">
-              <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+            <div className="mt-2.5 flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200/80 px-3 py-2 text-xs font-medium text-amber-800">
+              <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 text-amber-600" />
               {autoComplete
                 ? "Complete the manual checklist items (Financial Compliance, Final Approval) before approving."
                 : "Automatic budget verification must pass before this RFQ can be approved. You can still reject with a reason."}
@@ -864,7 +899,7 @@ export default function FinanceReviewDetailPage() {
         </CollapsibleSection>
         )}
 
-        {/* ═══════════════ Section: Review Notes ═══════════════ */}
+        {/* ═══════════════ Section: Finance Notes & Reasoning ═══════════════ */}
         <CollapsibleSection
           id="notes"
           icon={MessageSquare}
@@ -872,34 +907,38 @@ export default function FinanceReviewDetailPage() {
           expanded={expandedSections.notes}
           onToggle={toggleSection}
         >
-          <div className="space-y-4">
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-neutral-500">
-                Review Notes <span className="text-neutral-400">(optional)</span>
-              </label>
+          <div>
+            <div className="mb-3">
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+                  Review Notes
+                </label>
+                <span className="text-[11px] text-neutral-400 font-medium">Optional</span>
+              </div>
               <textarea
                 value={reviewNotes}
                 onChange={(e) => setReviewNotes(e.target.value)}
                 placeholder="General observations about budget, cost allocation, or spend impact…"
-                rows={3}
                 disabled={submitted}
-                className="w-full resize-none rounded-lg border border-neutral-300 px-3 py-2.5 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-neutral-100 disabled:text-neutral-500"
+                className="w-full h-20 resize-none rounded-lg border border-neutral-200 px-3 py-2 text-xs sm:text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20 disabled:bg-neutral-100 disabled:text-neutral-500 transition shadow-sm"
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-neutral-500">
-                Decision Reason <span className="text-danger-500">*</span>
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
+                  Decision Reason <span className="text-rose-500">*</span>
+                </label>
+                <span className="text-[11px] text-rose-500 font-medium">Required</span>
+              </div>
               <textarea
                 value={actionReason}
                 onChange={(e) => setActionReason(e.target.value)}
                 placeholder="Provide the reason for your budget approval or rejection. This is mandatory."
-                rows={4}
                 disabled={submitted}
-                className="w-full resize-none rounded-lg border border-neutral-300 px-3 py-2.5 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:bg-neutral-100 disabled:text-neutral-500"
+                className="w-full h-20 resize-none rounded-lg border border-neutral-200 px-3 py-2 text-xs sm:text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary/20 disabled:bg-neutral-100 disabled:text-neutral-500 transition shadow-sm"
               />
               {!submitted && !actionReason.trim() && (
-                <p className="mt-1 text-xs text-neutral-400">
+                <p className="mt-1 text-[11px] text-neutral-500">
                   You must provide a reason before any action can be taken.
                 </p>
               )}
@@ -907,7 +946,7 @@ export default function FinanceReviewDetailPage() {
           </div>
         </CollapsibleSection>
 
-        {/* ═══════════════ Section: Audit History ═══════════════ */}
+        {/* ═══════════════ Section: Audit History & Comments ═══════════════ */}
         <CollapsibleSection
           id="timeline"
           icon={Clock}
@@ -916,14 +955,14 @@ export default function FinanceReviewDetailPage() {
           onToggle={toggleSection}
           badge={
             comments.length > 0 ? (
-              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
+              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
                 {comments.length}
               </span>
             ) : undefined
           }
         >
           {/* Workflow timeline */}
-          <div className="mb-4 space-y-3">
+          <div className="mb-4 space-y-2.5">
             <TimelineStep
               icon={Layers}
               label="RFQ Submitted for Review"
@@ -957,15 +996,15 @@ export default function FinanceReviewDetailPage() {
 
           {/* Comments */}
           {comments.length > 0 && (
-            <div className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wider text-neutral-400">
+            <div className="space-y-2 pt-3 border-t border-neutral-100">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
                 Comments
               </p>
               {comments.map((c, idx) => (
-                <div key={idx} className="rounded-xl border border-neutral-200 bg-white p-3.5 shadow-sm">
+                <div key={idx} className="rounded-lg border border-neutral-200/80 bg-neutral-50/60 p-3 shadow-sm">
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">
+                      <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[11px] font-bold text-emerald-700">
                         {(c.comment_by?.[0] ?? "?").toUpperCase()}
                       </div>
                       <div>
@@ -977,14 +1016,14 @@ export default function FinanceReviewDetailPage() {
                       <ActionBadge action={c.action} />
                     )}
                   </div>
-                  <p className="mt-2 text-sm leading-relaxed text-neutral-700">{c.comment}</p>
+                  <p className="mt-1.5 text-xs leading-relaxed text-neutral-700">{c.comment}</p>
                 </div>
               ))}
             </div>
           )}
         </CollapsibleSection>
 
-        {/* ═══════════════ Section: Finance Actions ═══════════════ */}
+        {/* ═══════════════ Section: Finance Decision ═══════════════ */}
         <CollapsibleSection
           id="actions"
           icon={Wallet}
@@ -993,23 +1032,23 @@ export default function FinanceReviewDetailPage() {
           onToggle={toggleSection}
         >
           {submitted ? (
-            <div className={`flex items-center gap-3 rounded-xl border px-5 py-4 ${
+            <div className={`flex items-center gap-3 rounded-lg border p-3 ${
               currentFinanceStatus === "Budget Approved"
-                ? "border-success-200 bg-success-50"
-                : "border-danger-200 bg-danger-50"
+                ? "border-emerald-200 bg-emerald-50/70"
+                : "border-rose-200 bg-rose-50/70"
             }`}>
               <StatusIcon status={currentFinanceStatus} />
               <div>
-                <p className={`font-semibold ${
+                <p className={`text-sm font-bold ${
                   currentFinanceStatus === "Budget Approved"
-                    ? "text-success-800"
-                    : "text-danger-800"
+                    ? "text-emerald-900"
+                    : "text-rose-900"
                 }`}>
                   {currentFinanceStatus === "Budget Approved"
                     ? "Budget Approved — Ready for PO Creation"
                     : "Finance Rejected"}
                 </p>
-                <p className="mt-0.5 text-sm text-neutral-600">
+                <p className="mt-0.5 text-xs text-neutral-600 leading-normal">
                   This review has been submitted.{" "}
                   {currentFinanceStatus === "Budget Approved" && "The RFQ is now ready for Purchase Order creation."}
                   {currentFinanceStatus === "Rejected" && "Procurement may edit and resubmit from the Rejected tab."}
@@ -1017,24 +1056,29 @@ export default function FinanceReviewDetailPage() {
               </div>
             </div>
           ) : (
-            <div className="space-y-4">
-              <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-4">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">
+            <div className="space-y-3">
+              <div className="rounded-lg border border-neutral-200/80 bg-neutral-50/70 p-2.5 sm:p-3">
+                <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
                   Submission Requirements
                 </p>
-                <div className="space-y-1.5">
-                  <RequirementRow met={legalApprovedForFinance} label="Legal Review approved" />
+                <div className="space-y-0.5">
+                  <RequirementRow met={legalApprovedForFinance} label="Legal e-signatures complete and document integrity verified" />
+                  <RequirementRow met={hasBudget} label="Active Budget available" />
                   <RequirementRow met={checklistComplete} label="All checklist items completed" />
-                  <RequirementRow met={!!actionReason.trim()} label="Decision reason provided" />
+                  <RequirementRow met={Boolean(actionReason.trim())} label="Decision reason provided" />
                 </div>
               </div>
 
-              <div className="flex flex-col gap-3 sm:flex-row">
+              <div className="flex items-center gap-3 sm:gap-4">
                 <button
                   type="button"
                   onClick={() => handleAction("approve")}
-                  disabled={!canSubmit("approve") || !!submitting}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-success-600 px-6 py-3.5 text-sm font-bold text-white shadow-sm transition hover:bg-success-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={!canApprove}
+                  className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 h-12 text-xs sm:text-sm font-bold transition ${
+                    canApprove
+                      ? "bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm cursor-pointer active:scale-[0.99]"
+                      : "bg-neutral-100 text-neutral-400 border border-neutral-200 cursor-not-allowed shadow-none"
+                  }`}
                 >
                   {submitting === "Budget Approved" ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -1046,8 +1090,12 @@ export default function FinanceReviewDetailPage() {
                 <button
                   type="button"
                   onClick={() => handleAction("reject")}
-                  disabled={!canSubmit("reject") || !!submitting}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-danger-600 px-6 py-3.5 text-sm font-bold text-white shadow-sm transition hover:bg-danger-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={!canReject}
+                  className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-4 h-12 text-xs sm:text-sm font-bold transition ${
+                    canReject
+                      ? "bg-rose-600 text-white hover:bg-rose-700 shadow-sm cursor-pointer active:scale-[0.99]"
+                      : "bg-neutral-100 text-neutral-400 border border-neutral-200 cursor-not-allowed shadow-none"
+                  }`}
                 >
                   {submitting === "Rejected" ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -1083,31 +1131,60 @@ export default function FinanceReviewDetailPage() {
 /* -------------------------------------------------------------------------- */
 
 function CollapsibleSection({
-  id, icon: Icon, title, expanded, onToggle, badge, children,
+  id,
+  icon: Icon,
+  title,
+  expanded,
+  onToggle,
+  badge,
+  children,
 }: {
-  id: string; icon: typeof FileText; title: string; expanded: boolean;
-  onToggle: (id: string) => void; badge?: React.ReactNode; children: React.ReactNode;
+  id: string;
+  icon: typeof FileText;
+  title: string;
+  expanded: boolean;
+  onToggle: (id: string) => void;
+  badge?: React.ReactNode;
+  children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-xl border border-neutral-200 bg-white shadow-sm">
-      <button type="button" onClick={() => onToggle(id)} className="flex w-full items-center gap-3 px-5 py-4 text-left">
-        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-neutral-100">
-          <Icon className="h-4 w-4 text-neutral-600" />
+    <div className="rounded-xl border border-neutral-200 bg-white shadow-sm overflow-hidden">
+      <button
+        type="button"
+        onClick={() => onToggle(id)}
+        className="flex w-full min-h-[56px] items-center gap-3 px-5 py-3 text-left transition hover:bg-neutral-50/60 cursor-pointer"
+      >
+        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-neutral-100 text-neutral-600">
+          <Icon className="h-4 w-4" />
         </div>
-        <span className="flex-1 text-sm font-bold text-neutral-900">{title}</span>
+        <span className="flex-1 text-sm sm:text-[15px] font-bold text-neutral-900">{title}</span>
         {badge}
-        {expanded ? <ChevronDown className="h-4 w-4 text-neutral-400" /> : <ChevronRight className="h-4 w-4 text-neutral-400" />}
+        {expanded ? (
+          <ChevronDown className="h-4 w-4 text-neutral-400 ml-2" />
+        ) : (
+          <ChevronRight className="h-4 w-4 text-neutral-400 ml-2" />
+        )}
       </button>
-      {expanded && <div className="border-t border-neutral-100 px-5 py-4">{children}</div>}
+      {expanded && (
+        <div className="border-t border-neutral-100 px-5 py-3.5">{children}</div>
+      )}
     </div>
   );
 }
 
-function InfoField({ label, value, highlight }: { label: string; value?: string | null; highlight?: boolean }) {
+function InfoField({
+  label,
+  value,
+  highlight,
+}: {
+  label: string;
+  value?: string | null;
+  highlight?: boolean;
+}) {
   return (
     <div>
       <p className="text-xs font-semibold uppercase tracking-wider text-neutral-400">{label}</p>
-      <p className={`mt-0.5 text-sm ${highlight ? "font-bold text-emerald-700" : "font-medium text-neutral-900"}`}>
+      <p className={`mt-1 text-sm ${highlight ? "font-bold text-emerald-700" : "font-medium text-neutral-900"}`}>
         {value || "—"}
       </p>
     </div>
@@ -1120,24 +1197,28 @@ function BudgetCard({
   icon: typeof DollarSign; label: string; value: string; tone: "neutral" | "success" | "warning";
   subtitle?: string;
 }) {
-  const tones = { neutral: "border-neutral-200", success: "border-success-200 bg-success-50/30", warning: "border-warning-200 bg-warning-50/30" };
+  const tones = {
+    neutral: "border-neutral-200/80 bg-neutral-50/40 text-neutral-900",
+    success: "border-emerald-200/80 bg-emerald-50/50 text-emerald-950",
+    warning: "border-amber-200/80 bg-amber-50/50 text-amber-950",
+  };
   return (
-    <div className={`rounded-lg border p-4 ${tones[tone]}`}>
-      <div className="flex items-center gap-2 mb-1">
-        <Icon className="h-4 w-4 text-neutral-400" />
-        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-400">{label}</p>
+    <div className={`rounded-lg border p-3.5 shadow-sm transition ${tones[tone]}`}>
+      <div className="flex items-center gap-1.5 mb-1">
+        <Icon className="h-3.5 w-3.5 text-neutral-400" />
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-neutral-500">{label}</p>
       </div>
-      <p className="text-xl font-bold tabular-nums text-neutral-900">{value}</p>
-      {subtitle && <p className="mt-1 text-[11px] text-neutral-400">{subtitle}</p>}
+      <p className="text-lg sm:text-xl font-bold tabular-nums text-neutral-900">{value}</p>
+      {subtitle && <p className="mt-0.5 text-[11px] text-neutral-500 leading-snug">{subtitle}</p>}
     </div>
   );
 }
 
 function BudgetAnalysisCards({ check }: { check: RfqCostCenterBudgetCheck }) {
   const statusTone: Record<BudgetForecastStatus, string> = {
-    Green: "text-success-700 bg-success-50 border-success-200",
-    Yellow: "text-amber-700 bg-amber-50 border-amber-200",
-    Red: "text-danger-700 bg-danger-50 border-danger-200",
+    Green: "text-emerald-800 bg-emerald-50/80 border-emerald-200",
+    Yellow: "text-amber-800 bg-amber-50/80 border-amber-200",
+    Red: "text-rose-800 bg-rose-50/80 border-rose-200",
   };
   const statusLabel: Record<BudgetForecastStatus, string> = {
     Green: "Within Budget",
@@ -1147,21 +1228,21 @@ function BudgetAnalysisCards({ check }: { check: RfqCostCenterBudgetCheck }) {
   const forecastStatus = check.forecastStatus ?? "Green";
 
   return (
-    <>
-      <div className="mb-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div className="space-y-3">
+      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4 p-3 rounded-lg bg-neutral-50/70 border border-neutral-200/80">
         <InfoField label="Department" value={check.department || "Not specified"} />
         <InfoField label="Cost Center" value={check.costCenter || "Not specified"} />
         <InfoField label="Fiscal Year" value={check.fiscalYear || "Not specified"} />
         <InfoField label="Budget Account" value={check.budgetAccount || "Not specified"} />
       </div>
 
-      <div className="mb-4 grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 grid-cols-1 sm:grid-cols-3">
         <BudgetCard icon={DollarSign} label="Budget Amount" value={formatCurrency(check.allocatedBudget ?? 0)} tone="neutral" subtitle={check.budgetName} />
         <BudgetCard icon={TrendingUp} label="Actual Spend" value={formatCurrency(check.actualSpend ?? 0)} tone="warning" />
         <BudgetCard icon={Wallet} label="Available Budget" value={formatCurrency(check.availableBudget ?? 0)} tone="success" subtitle="= Budget − Actual Spend" />
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         <BudgetCard icon={PieChart} label="Budget Utilization" value={`${check.budgetUtilizationPct ?? 0}%`} tone="neutral" subtitle="Before this RFQ" />
         <BudgetCard icon={DollarSign} label="RFQ Value" value={formatCurrency(check.rfqValue)} tone="neutral" />
         <BudgetCard
@@ -1171,13 +1252,13 @@ function BudgetAnalysisCards({ check }: { check: RfqCostCenterBudgetCheck }) {
           tone={forecastStatus === "Green" ? "success" : "warning"}
           subtitle="(Actual + RFQ) / Budget"
         />
-        <div className={`rounded-lg border p-4 ${statusTone[forecastStatus]}`}>
-          <p className="text-xs font-semibold uppercase tracking-wider opacity-80">Budget Status</p>
+        <div className={`rounded-lg border p-3.5 shadow-sm ${statusTone[forecastStatus]}`}>
+          <p className="text-[11px] font-semibold uppercase tracking-wider opacity-80">Budget Status</p>
           <p className="mt-1 text-lg font-bold">{statusLabel[forecastStatus]}</p>
         </div>
       </div>
 
-      <div className="mt-4">
+      <div>
         <BudgetCard
           icon={Wallet}
           label="Remaining Budget after RFQ Approval"
@@ -1190,11 +1271,11 @@ function BudgetAnalysisCards({ check }: { check: RfqCostCenterBudgetCheck }) {
           }
         />
       </div>
-    </>
+    </div>
   );
 }
 
-/** ERPNext-driven "no budget" state — never bare dashes, always the real reason. */
+/** ERPNext-driven "no budget" state — compact enterprise layout. */
 function NoActiveBudget({
   check,
   rfqValue,
@@ -1207,42 +1288,67 @@ function NoActiveBudget({
   onAssignBudget: () => void;
 }) {
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2 rounded-lg border border-warning-200 bg-warning-50 px-4 py-3 text-sm font-bold text-warning-800">
-        <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-        No Active Budget Found
+    <div className="space-y-2.5">
+      <div className="flex h-11 items-center gap-2.5 rounded-lg border border-amber-200 bg-amber-50/90 px-3.5 text-xs sm:text-sm font-bold text-amber-900">
+        <AlertTriangle className="h-4 w-4 flex-shrink-0 text-amber-600" />
+        <span>No Active Budget Found</span>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <InfoField label="Department" value={check?.department || "Not assigned"} />
-        <InfoField label="Cost Center" value={check?.costCenter || "Not assigned"} />
-        <InfoField label="Fiscal Year" value={check?.fiscalYear || "Not assigned"} />
-        <BudgetCard icon={DollarSign} label="RFQ Value" value={formatCurrency(rfqValue)} tone="neutral" />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 px-4 py-2.5 rounded-lg bg-neutral-50/60 border border-neutral-200/70">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-neutral-400">Department</p>
+          <p className="mt-0.5 text-sm sm:text-[15px] font-medium text-neutral-900 truncate">
+            {check?.department || "Not assigned"}
+          </p>
+        </div>
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-neutral-400">Cost Center</p>
+          <p className="mt-0.5 text-sm sm:text-[15px] font-medium text-neutral-900 truncate">
+            {check?.costCenter || "Not assigned"}
+          </p>
+        </div>
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-neutral-400">Fiscal Year</p>
+          <p className="mt-0.5 text-sm sm:text-[15px] font-medium text-neutral-900">
+            {check?.fiscalYear || "2026"}
+          </p>
+        </div>
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-neutral-400">RFQ Value</p>
+          <p className="mt-0.5 text-sm sm:text-[15px] font-bold text-emerald-700">
+            {formatCurrency(rfqValue)}
+          </p>
+        </div>
       </div>
 
-      <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3">
-        <p className="text-xs font-semibold uppercase tracking-wider text-neutral-400">Reason</p>
-        <p className="mt-1 text-sm text-neutral-700">
+      <div className="rounded-lg bg-neutral-50/60 border border-neutral-200/70 px-4 py-2">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-neutral-400">Reason</p>
+        <p className="mt-0.5 text-xs sm:text-[13px] text-neutral-700 leading-snug">
           {check?.noBudgetMessage ??
-            "No approved or active budget governs this cost center."}
+            "This RFQ's Material Requests have no Department or Cost Center assigned in ERPNext."}
         </p>
       </div>
 
-      <div className="flex flex-col gap-3 sm:flex-row">
+      <div className="flex items-center gap-3">
         <button
           type="button"
           onClick={onCreateBudget}
-          className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-primary/90"
+          className="flex-1 h-11 rounded-lg bg-primary px-4 flex items-center justify-center gap-2 text-xs sm:text-sm font-bold text-white shadow-sm transition hover:bg-primary/90 active:scale-[0.99] cursor-pointer"
         >
           <Plus className="h-4 w-4" /> Create Budget
         </button>
         <button
           type="button"
           onClick={onAssignBudget}
-          className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-primary/30 bg-white px-5 py-3 text-sm font-bold text-primary shadow-sm transition hover:bg-primary/5"
+          className="flex-1 h-11 rounded-lg border border-neutral-300 bg-white px-4 flex items-center justify-center gap-2 text-xs sm:text-sm font-bold text-neutral-800 shadow-sm transition hover:bg-neutral-50 hover:border-neutral-400 active:scale-[0.99] cursor-pointer"
         >
           <Building2 className="h-4 w-4" /> Assign Budget
         </button>
+      </div>
+
+      <div className="flex h-10 items-center gap-2 rounded-lg border border-sky-200/80 bg-sky-50/60 px-3 text-xs text-sky-800">
+        <Info className="h-3.5 w-3.5 flex-shrink-0 text-sky-600" />
+        <span>Finance review will become available after a budget has been created or assigned.</span>
       </div>
     </div>
   );
@@ -1304,48 +1410,48 @@ function AssignBudgetModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b border-neutral-100 px-5 py-4">
-          <div className="flex items-center gap-2">
-            <Building2 className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-bold text-neutral-900">Assign Active Budget</h3>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl border border-neutral-100 overflow-hidden">
+        <div className="flex items-center justify-between border-b border-neutral-100 px-6 py-4.5">
+          <div className="flex items-center gap-2.5">
+            <Building2 className="h-5 w-5 text-primary" />
+            <h3 className="text-base font-bold text-neutral-900">Assign Active Budget</h3>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600"
+            className="rounded-lg p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-600 transition cursor-pointer"
           >
             <XCircle className="h-5 w-5" />
           </button>
         </div>
 
-        <div className="px-5 py-4">
-          <p className="mb-3 text-xs text-neutral-500">
+        <div className="px-6 py-5">
+          <p className="mb-3.5 text-xs text-neutral-500 leading-relaxed">
             Showing Active budgets{fiscalYear ? ` for fiscal year ${fiscalYear}` : ""}.
             Select one to govern this RFQ.
           </p>
 
           {optionsQuery.isLoading ? (
-            <div className="space-y-2">
-              <Skeleton className="h-14 rounded-lg" />
-              <Skeleton className="h-14 rounded-lg" />
+            <div className="space-y-2.5">
+              <Skeleton className="h-14 rounded-xl" />
+              <Skeleton className="h-14 rounded-xl" />
             </div>
           ) : options.length === 0 ? (
-            <div className="flex items-center gap-2 rounded-lg border border-warning-200 bg-warning-50 px-4 py-3 text-sm text-warning-800">
-              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+            <div className="flex items-center gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3.5 text-sm text-amber-800">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0 text-amber-600" />
               No Active budgets found{fiscalYear ? ` for ${fiscalYear}` : ""}. Create a
               budget first.
             </div>
           ) : (
-            <div className="max-h-72 space-y-2 overflow-auto">
+            <div className="max-h-72 space-y-2.5 overflow-auto pr-1">
               {options.map((b) => (
                 <label
                   key={b.name}
-                  className={`flex cursor-pointer items-center justify-between gap-3 rounded-lg border px-4 py-3 transition ${
+                  className={`flex cursor-pointer items-center justify-between gap-3.5 rounded-xl border p-3.5 transition ${
                     selected === b.name
-                      ? "border-primary bg-primary/5"
-                      : "border-neutral-200 hover:border-neutral-300"
+                      ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                      : "border-neutral-200 hover:border-neutral-300 bg-white"
                   }`}
                 >
                   <div className="flex items-center gap-3">
@@ -1354,7 +1460,7 @@ function AssignBudgetModal({
                       name="assign-budget"
                       checked={selected === b.name}
                       onChange={() => setSelected(b.name)}
-                      className="h-4 w-4 text-primary focus:ring-primary"
+                      className="h-4 w-4 text-primary focus:ring-primary cursor-pointer"
                     />
                     <div>
                       <p className="text-sm font-semibold text-neutral-900">{b.name}</p>
@@ -1364,7 +1470,7 @@ function AssignBudgetModal({
                       </p>
                     </div>
                   </div>
-                  <span className="text-sm font-bold tabular-nums text-neutral-700">
+                  <span className="text-sm font-bold tabular-nums text-neutral-800">
                     {formatCurrency(b.budgetAmount)}
                   </span>
                 </label>
@@ -1373,11 +1479,11 @@ function AssignBudgetModal({
           )}
         </div>
 
-        <div className="flex justify-end gap-3 border-t border-neutral-100 px-5 py-4">
+        <div className="flex justify-end gap-3 border-t border-neutral-100 bg-neutral-50/50 px-6 py-4">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-semibold text-neutral-700 hover:bg-neutral-50"
+            className="rounded-xl border border-neutral-300 px-4 py-2.5 text-sm font-semibold text-neutral-700 hover:bg-neutral-100 transition cursor-pointer"
           >
             Cancel
           </button>
@@ -1385,7 +1491,7 @@ function AssignBudgetModal({
             type="button"
             onClick={handleAssign}
             disabled={!selected || saving}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-primary-600 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
             Assign Budget
@@ -1408,37 +1514,37 @@ function buildBudgetCreatePath(check?: RfqCostCenterBudgetCheck): string {
 
 function FinanceStatusBadge({ status }: { status: FinanceReviewStatus }) {
   const config: Record<FinanceReviewStatus, { icon: typeof Clock; className: string; label: string }> = {
-    "Pending Finance Review": { icon: Clock, className: "bg-warning-100 text-warning-700 ring-warning-200", label: "Pending Review" },
-    "Budget Approved": { icon: CheckCircle2, className: "bg-success-100 text-success-700 ring-success-200", label: "Budget Approved" },
-    Rejected: { icon: XCircle, className: "bg-danger-100 text-danger-700 ring-danger-200", label: "Finance Rejected" },
+    "Pending Finance Review": { icon: Clock, className: "bg-amber-50 text-amber-700 border border-amber-200", label: "Pending Review" },
+    "Budget Approved": { icon: CheckCircle2, className: "bg-emerald-50 text-emerald-700 border border-emerald-200", label: "Budget Approved" },
+    Rejected: { icon: XCircle, className: "bg-rose-50 text-rose-700 border border-rose-200", label: "Finance Rejected" },
   };
   const c = config[status];
   const Icon = c.icon;
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold ring-1 ${c.className}`}>
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold ${c.className}`}>
       <Icon className="h-3.5 w-3.5" /> {c.label}
     </span>
   );
 }
 
 function StatusIcon({ status }: { status: FinanceReviewStatus }) {
-  if (status === "Budget Approved") return <CheckCircle2 className="h-6 w-6 text-success-600" />;
-  if (status === "Rejected") return <XCircle className="h-6 w-6 text-danger-600" />;
-  return <Clock className="h-6 w-6 text-warning-600" />;
+  if (status === "Budget Approved") return <CheckCircle2 className="h-6 w-6 text-emerald-600" />;
+  if (status === "Rejected") return <XCircle className="h-6 w-6 text-rose-600" />;
+  return <Clock className="h-6 w-6 text-amber-600" />;
 }
 
 function ActionBadge({ action }: { action: FinanceReviewStatus | "Comment" | "Resubmit" }) {
   const cls =
-    action === "Budget Approved" ? "bg-success-100 text-success-700"
-    : action === "Rejected" ? "bg-danger-100 text-danger-700"
-    : action === "Resubmit" ? "bg-primary-100 text-primary-700"
-    : "bg-neutral-100 text-neutral-600";
+    action === "Budget Approved" ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+    : action === "Rejected" ? "bg-rose-50 text-rose-700 border border-rose-200"
+    : action === "Resubmit" ? "bg-primary/10 text-primary border border-primary/20"
+    : "bg-neutral-100 text-neutral-600 border border-neutral-200";
   const label =
     action === "Budget Approved" ? "Approved"
     : action === "Resubmit" ? "Resubmit"
     : action;
   return (
-    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold ${cls}`}>
+    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-bold ${cls}`}>
       {label}
     </span>
   );
@@ -1464,7 +1570,7 @@ function TimelineStep({
             {by && <span>{by}</span>}
             {date && <span>{formatDate(date)}</span>}
             {status && (
-              <span className="rounded-full bg-success-100 px-2 py-0.5 text-[10px] font-bold text-success-700">
+              <span className="rounded-full bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
                 {status === "Budget Approved" ? "Approved" : status}
               </span>
             )}
@@ -1477,9 +1583,15 @@ function TimelineStep({
 
 function RequirementRow({ met, label }: { met: boolean; label: string }) {
   return (
-    <div className="flex items-center gap-2 text-sm">
-      {met ? <CheckCircle2 className="h-4 w-4 text-success-500" /> : <XCircle className="h-4 w-4 text-neutral-300" />}
-      <span className={met ? "text-neutral-700" : "text-neutral-400"}>{label}</span>
+    <div className="flex h-8 items-center gap-2.5 text-xs sm:text-sm">
+      {met ? (
+        <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-emerald-600" />
+      ) : (
+        <div className="h-3.5 w-3.5 flex-shrink-0 rounded-full border-2 border-neutral-300" />
+      )}
+      <span className={met ? "text-neutral-900 font-medium" : "text-neutral-400 font-normal"}>
+        {label}
+      </span>
     </div>
   );
 }

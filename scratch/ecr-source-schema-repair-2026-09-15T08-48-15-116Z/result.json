@@ -1,0 +1,12 @@
+{
+  "field": "ECR Affected Part.source_reference_type",
+  "nativeChanged": false,
+  "customFieldsChanged": 0,
+  "customFieldsPreservedDueToDuplicate": [
+    "ECR Affected Part-source_reference_type"
+  ],
+  "compatibilityNote": "Existing duplicate Custom Field definitions are preserved. The application sends explicit empty source fields for unreferenced items, preventing inherited defaults.",
+  "verifiedRecordsUnchanged": 11,
+  "verifiedWorkflowDocumentsUnchanged": 3,
+  "otherSchemaAndPermissionsUnchanged": true
+}

@@ -17,8 +17,8 @@ import {
   getRFQ,
   getSupplierQuotations,
   lookupDefaultWarehouse,
-  submitRFQ,
 } from "../../api/sourcing";
+import { submitRfqWithContractConfirmation } from "../../api/rfqSubmitClm";
 import {
   getItemTargetPrice,
   isItemTargetPriceVisibleToSupplier,
@@ -36,36 +36,44 @@ import {
 } from "../../api/purchasing";
 import type { LinkedPORow } from "../../api/purchasing";
 import {
-  AI_FALLBACK_NOTICE,
-  buildLocalProcurementRecommendation,
+  buildPricingAvailabilitySummary,
+  getAIProviderAvailability,
   computeConfidenceScore,
   resolveAIRecommendation,
 } from "../../api/ai";
 import type { AIQuotation, AIQuotationLine, AnalysisWeights } from "../../api/ai";
 import type {
   AIRecommendation,
+  QuotePriceStatus,
   RFQApprovalState,
   SupplierAnalysisRow,
 } from "../../types/erpnext";
 import { getScoringConfig } from "../../api/supplierScoring";
 import { getSupplierPerformance } from "../../api/supplierPerformance";
-import { scoreSuppliers } from "../../api/supplierScoringEngine";
+import { scoringResultFromRecommendation } from "../../utils/aiEvaluationResult";
+import { getEvaluationRisk } from "../../utils/aiEvaluationDecision";
+import { getSupplierAwardEligibility } from "../../utils/supplierAwardEligibility";
 import {
   getLatestAnalysisSnapshot,
   saveScoringResult,
 } from "../../api/supplierScoringResults";
 import {
+  normalizeAndDeduplicateRecommendation,
+  findRecommendationWinner,
+  normalizeSupplierKey,
+  type AuthoritativeQuoteInfo,
+} from "../../utils/aiRecommendationNormalization";
+import {
   getApprovalState,
   submitForReview,
-  canCreatePOFromWorkflow,
   markPOCreated,
 } from "../../api/rfqApprovalWorkflow";
 import {
   ensureLegalDocumentReviewForSelection,
   getLegalDocsByRfq,
 } from "../../api/legalDocs";
-import { getApprovalStateFromErp } from "../../api/legalReviews";
 import type { LegalDocumentItemSummary, LegalDocumentSet } from "../../api/legalDocs";
+import { getApprovalStateFromErp } from "../../api/legalReviews";
 import {
   extendRfqDeadline,
   inviteSuppliersToRfq,
@@ -84,8 +92,9 @@ import {
   type RfqAiStaleSource,
 } from "../../utils/rfqAiBaseline";
 import { parseRfqMessage } from "../../utils/rfqMessage";
-import { deriveRfqProcurementWorkflow } from "../../api/rfqProcurementWorkflow";
-import { invalidateApprovalWorkflow } from "../../api/approvalWorkflow";
+import { deriveRfqProcurementWorkflow, type RfqWorkflowStep } from "../../api/rfqProcurementWorkflow";
+import { invalidateApprovalWorkflow, isRfqReadyForPurchaseOrder } from "../../api/approvalWorkflow";
+import { isLegalReviewExecuted } from "../../types/legalEsign";
 import { ANALYSIS_STEPS } from "../../components/aiAnalysisSteps";
 import AIAnalysisModal, {
   type SupplierSelectionPayload,
@@ -105,6 +114,9 @@ import {
   getReverseBiddingForRFQ,
 } from "../../api/reverseBidding";
 import type { RFQ, RFQSupplier, SupplierQuotation } from "../../types/erpnext";
+import type { ReverseBiddingQuotationSelection } from "../../types/reverseBidding";
+import { reverseBiddingSelectionForRow, selectedReverseBiddingQuotations, validateReverseBiddingSelection } from "../../utils/reverseBiddingSelection";
+import { resolveRfqQuotationIdentity, type RfqQuotationIdentity } from "../../utils/rfqQuotationIdentity";
 import { formatDate, isoDateOffset } from "../../utils/format";
 import RejectedReviewActions from "../../components/sourcing/RejectedReviewActions";
 import CheckBudgetModal from "../../components/sourcing/CheckBudgetModal";
@@ -113,6 +125,8 @@ import CompareQuotationsModal, {
   type ComparisonQuote,
 } from "../../components/sourcing/CompareQuotationsModal";
 import RFQDetailEnterpriseLayout from "./rfq-detail/RFQDetailEnterpriseLayout";
+
+import { clmViewerKey, getRfqClmSummary, recordRfqAwardDecision } from "../../api/clm";
 import {
   canCreateRfqQuoteRound,
   createNextRfqQuoteRound,
@@ -152,21 +166,21 @@ import {
   useRfqBackgroundQueryError,
 } from "../../utils/rfqDetailApiErrors";
 import dayjs from "dayjs";
+import {
+  isSubmittedQuoteAmount,
+  parseQuoteAmount,
+  priceFromLines,
+  resolveQuotePrice,
+  resolveSupplierQuotationPrice,
+} from "../../utils/quotePrice";
 
-const HAS_ANTHROPIC_KEY = !!(
-  import.meta.env.VITE_ANTHROPIC_API_KEY as string | undefined
-);
+// The key lives on the server. Its intentional absence in browser code is not an outage.
+const HAS_ANTHROPIC_KEY = getAIProviderAvailability().claude;
 
-type RiskLevel = "Low" | "Medium" | "High";
+type RiskLevel = ReturnType<typeof getEvaluationRisk>;
 
-/** Mirrors the risk heuristic used across the AI analysis UI (modal + summary). */
 function supplierRiskLevel(s: SupplierAnalysisRow): RiskLevel {
-  if (s.verdict === "AVOID") return "High";
-  if (s.verdict === "EXPENSIVE") return "Medium";
-  const rel = s.score?.reliability ?? 50;
-  if (rel < 40 || (s.weaknesses ?? []).length >= 3) return "High";
-  if (rel < 65 || s.verdict === "GOOD OPTION") return "Medium";
-  return "Low";
+  return getEvaluationRisk(s);
 }
 
 /** Savings of the recommended supplier vs the highest bid among all quotes. */
@@ -175,14 +189,16 @@ function getSavingsPotential(analysis: AIRecommendation): {
   pct: number;
 } {
   const rows = analysis.supplier_analysis ?? [];
-  const recommended = rows.find(
-    (s) =>
-      s.name.toLowerCase() === (analysis.recommended_supplier ?? "").trim().toLowerCase()
-  );
-  const totals = rows.map((s) => s.grand_total).filter((t) => t > 0);
+  const recommended = findRecommendationWinner(analysis, rows);
+  const totals = rows
+    .map((s) => s.grand_total)
+    .filter(isSubmittedQuoteAmount);
   const highest = totals.length ? Math.max(...totals) : 0;
-  const recommendedTotal = recommended?.grand_total ?? 0;
-  const amount = highest > recommendedTotal ? highest - recommendedTotal : 0;
+  const recommendedTotal = recommended?.grand_total;
+  const amount =
+    recommendedTotal != null && highest > recommendedTotal
+      ? highest - recommendedTotal
+      : 0;
   const pct =
     highest > 0
       ? Math.round((amount / highest) * 100)
@@ -194,10 +210,11 @@ function getSavingsPotential(analysis: AIRecommendation): {
 interface SavedAnalysisRecord {
   rfq_name: string;
   analysed_at: string;
+  evaluation_run_id?: string;
   recommended_supplier: string;
   confidence_score: number;
   analysis: AIRecommendation;
-  quotations_snapshot: { supplier: string; grand_total: number }[];
+  quotations_snapshot: { supplier: string; supplier_id?: string; quotation_id?: string; grand_total: number }[];
 }
 
 const analysisStorageKey = (rfqName: string) => `rfq_analysis_${rfqName}`;
@@ -224,20 +241,81 @@ function readSavedAnalysis(rfqName: string): SavedAnalysisRecord | null {
       localStorage.removeItem(analysisStorageKey(rfqName));
       return null;
     }
+    if (record && record.analysis?.supplier_analysis) {
+      const snapQuotes = (record.quotations_snapshot ?? []).map((s) => ({
+        quotation_id: s.quotation_id,
+        supplier_id: s.supplier_id,
+        supplier_name: s.supplier,
+        total: s.grand_total,
+      }));
+      record.analysis = normalizeAndDeduplicateRecommendation({
+        recommendation: record.analysis,
+        authoritativeQuotes: snapQuotes,
+        rfqId: rfqName,
+      });
+      record.recommended_supplier = record.analysis.recommended_supplier;
+      record.confidence_score = record.analysis.confidence_score;
+    }
     return record;
   } catch {
     return null;
   }
 }
 
+interface SubmittedQuote {
+  /** Supplier Quotation docname — needed to open the "View Quotation" modal. */
+  sqName: string;
+  supplier: string;
+  supplier_name: string;
+  total: number | null;
+  priceStatus: QuotePriceStatus;
+  notes: string;
+  payment_terms?: string;
+  warrantyCertificate?: boolean;
+  termsCondition?: boolean;
+  insuranceCertificate?: boolean;
+  /**
+   * Unit price, total and delivery_days per item_code. Stored locally so
+   * the comparison table reflects in-flight submissions even before the
+   * `getSupplierQuotations` query refetches.
+   */
+  byItem: Map<
+    string,
+    { unit_price: number | null; total: number | null; delivery_days: number }
+  >;
+}
+
+function getAuthoritativeQuoteInfos(
+  quotes: Map<string, SubmittedQuote>
+): AuthoritativeQuoteInfo[] {
+  const list: AuthoritativeQuoteInfo[] = [];
+  const seen = new Set<string>();
+  for (const q of quotes.values()) {
+    const key = q.sqName || q.supplier || normalizeSupplierKey(q.supplier_name);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    list.push({
+      quotation_id: q.sqName,
+      supplier_id: q.supplier,
+      supplier_name: q.supplier_name,
+      total: q.total,
+      priceStatus: q.priceStatus,
+      docstatus: 1,
+      byItem: q.byItem,
+    });
+  }
+  return list;
+}
+
 /**
- * Validates a cached analysis against the current RFQ's invited suppliers.
- * Returns the record (possibly filtered) if valid, or null if it should be
- * discarded and re-run.
+ * Validates a cached/saved analysis against the current RFQ state.
+ * If the saved analysis contains suppliers that are no longer invited,
+ * or duplicates, it is cleaned or discarded.
  */
 function validateCachedAnalysis(
   record: SavedAnalysisRecord | null,
-  invitedSupplierIds: Set<string>
+  invitedSupplierIds: Set<string>,
+  localQuotes?: Map<string, SubmittedQuote>
 ): SavedAnalysisRecord | null {
   if (!record) return null;
   if (!isUsableAnalysis(record)) {
@@ -248,75 +326,52 @@ function validateCachedAnalysis(
     }
     return null;
   }
-  if (invitedSupplierIds.size === 0) return record;
 
-  const analysis = record.analysis;
-  if (!analysis?.supplier_analysis?.length) return null;
+  const authQuotes =
+    localQuotes && localQuotes.size > 0
+      ? getAuthoritativeQuoteInfos(localQuotes)
+      : (record.quotations_snapshot ?? []).map((s) => ({
+          quotation_id: s.quotation_id,
+          supplier_id: s.supplier_id,
+          supplier_name: s.supplier,
+          total: s.grand_total,
+        }));
 
-  const beforeCount = analysis.supplier_analysis.length;
-  analysis.supplier_analysis = analysis.supplier_analysis.filter((row) =>
-    invitedSupplierIds.has(row.name.trim().toLowerCase())
-  );
+  const norm = normalizeAndDeduplicateRecommendation({
+    recommendation: record.analysis,
+    authoritativeQuotes: authQuotes,
+    rfqId: record.rfq_name,
+  });
 
-  if (analysis.supplier_analysis.length === 0) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      "[AI Cache] Purging cached analysis for",
-      record.rfq_name,
-      "— none of the ranked suppliers are in the invited list"
+  if (invitedSupplierIds.size > 0) {
+    const normInvited = new Set(
+      Array.from(invitedSupplierIds).map(normalizeSupplierKey)
     );
-    localStorage.removeItem(analysisStorageKey(record.rfq_name));
+    norm.supplier_analysis = norm.supplier_analysis.filter(
+      (r) =>
+        invitedSupplierIds.has(r.name.trim().toLowerCase()) ||
+        normInvited.has(normalizeSupplierKey(r.name))
+    );
+    norm.supplier_analysis = norm.supplier_analysis.map((r, i) => ({
+      ...r,
+      rank: i + 1,
+    }));
+    if (!norm.supplier_analysis.some((row) => row.name === norm.recommended_supplier)) return null;
+  }
+
+  if (norm.supplier_analysis.length === 0) {
+    try {
+      localStorage.removeItem(analysisStorageKey(record.rfq_name));
+    } catch {
+      /* ignore */
+    }
     return null;
   }
 
-  if (analysis.supplier_analysis.length < beforeCount) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      "[AI Cache] Removed",
-      beforeCount - analysis.supplier_analysis.length,
-      "non-invited supplier(s) from cached analysis"
-    );
-    // Re-rank sequentially
-    analysis.supplier_analysis
-      .sort((a, b) => a.rank - b.rank)
-      .forEach((row, idx) => { row.rank = idx + 1; });
-  }
-
-  // Fix recommended_supplier if it's not in the invited set
-  if (!invitedSupplierIds.has(record.recommended_supplier.trim().toLowerCase())) {
-    const fallback = analysis.supplier_analysis[0]?.name ?? "";
-    // eslint-disable-next-line no-console
-    console.warn(
-      "[AI Cache] recommended_supplier",
-      record.recommended_supplier,
-      "not in invited set — correcting to",
-      fallback
-    );
-    record.recommended_supplier = fallback;
-    analysis.recommended_supplier = fallback;
-    record.confidence_score = analysis.confidence_score;
-  }
-
+  record.analysis = norm;
+  record.recommended_supplier = norm.recommended_supplier;
+  record.confidence_score = norm.confidence_score;
   return record;
-}
-
-interface SubmittedQuote {
-  /** Supplier Quotation docname — needed to open the "View Quotation" modal. */
-  sqName: string;
-  supplier: string;
-  supplier_name: string;
-  total: number;
-  notes: string;
-  payment_terms?: string;
-  /**
-   * Unit price, total and delivery_days per item_code. Stored locally so
-   * the comparison table reflects in-flight submissions even before the
-   * `getSupplierQuotations` query refetches.
-   */
-  byItem: Map<
-    string,
-    { unit_price: number; total: number; delivery_days: number }
-  >;
 }
 
 /**
@@ -324,22 +379,109 @@ interface SubmittedQuote {
  * Parsed via `parseRfqMessage` from `utils/rfqMessage`.
  */
 
+function quoteForSupplier(
+  localQuotes: Map<string, SubmittedQuote>,
+  supplierId: string
+): SubmittedQuote | undefined {
+  if (!supplierId) return undefined;
+  const rawKey = supplierId.trim().toLowerCase();
+  const normKey = normalizeSupplierKey(supplierId);
+
+  // Exact or normalized key match
+  for (const q of localQuotes.values()) {
+    const qSuppRaw = (q.supplier || "").trim().toLowerCase();
+    const qNameRaw = (q.supplier_name || "").trim().toLowerCase();
+    const qSuppNorm = normalizeSupplierKey(q.supplier || "");
+    const qNameNorm = normalizeSupplierKey(q.supplier_name || "");
+
+    if (
+      qSuppRaw === rawKey ||
+      qNameRaw === rawKey ||
+      qSuppNorm === normKey ||
+      qNameNorm === normKey
+    ) {
+      return q;
+    }
+  }
+
+  // Substring or prefix match
+  for (const q of localQuotes.values()) {
+    const qSuppNorm = normalizeSupplierKey(q.supplier || "");
+    const qNameNorm = normalizeSupplierKey(q.supplier_name || "");
+    if (
+      (qSuppNorm && normKey.includes(qSuppNorm)) ||
+      (normKey && qSuppNorm.includes(normKey)) ||
+      (qNameNorm && normKey.includes(qNameNorm)) ||
+      (normKey && qNameNorm.includes(normKey))
+    ) {
+      return q;
+    }
+  }
+
+  return localQuotes.get(supplierId);
+}
+
+function reconcileAnalysisQuotePrices(
+  analysis: AIRecommendation,
+  localQuotes: Map<string, SubmittedQuote>,
+  rfqId: string = ""
+): boolean {
+  const authQuotes = getAuthoritativeQuoteInfos(localQuotes);
+  if (authQuotes.length === 0) return false;
+
+  const beforeCount = analysis.supplier_analysis?.length ?? 0;
+  const beforeJson = JSON.stringify(analysis.supplier_analysis);
+
+  const norm = normalizeAndDeduplicateRecommendation({
+    recommendation: analysis,
+    authoritativeQuotes: authQuotes,
+    rfqId,
+  });
+
+  Object.assign(analysis, norm);
+
+  const changed =
+    beforeCount !== norm.supplier_analysis.length ||
+    beforeJson !== JSON.stringify(norm.supplier_analysis);
+
+  const availability = buildPricingAvailabilitySummary(
+    norm.supplier_analysis.map((row) => ({
+      total_value: row.grand_total,
+    })),
+  );
+  if (availability) {
+    const genuineZeroCount = norm.supplier_analysis.filter(
+      (row) => row.grand_total === 0 && row.quote_price_status === "submitted",
+    ).length;
+    const availabilitySummary =
+      genuineZeroCount > 0
+        ? `${availability} ${genuineZeroCount} supplier${genuineZeroCount === 1 ? "" : "s"} submitted a genuine zero-value quote.`
+        : availability;
+    const normalize = (value: string) => {
+      const sanitized = value
+        .split(/(?<=[.!?])\s+/)
+        .filter((sentence) => !/\$0(?:\.00)?/i.test(sentence))
+        .join(" ")
+        .trim();
+      return sanitized.toLowerCase().includes(availabilitySummary.toLowerCase())
+        ? sanitized.trim()
+        : `${sanitized} ${availabilitySummary}`.trim();
+    };
+    const summary = normalize(analysis.recommendation_summary ?? "");
+    const verdict = normalize(analysis.final_verdict ?? "");
+    analysis.recommendation_summary = summary;
+    analysis.final_verdict = verdict;
+    analysis.reason = summary;
+  }
+  return changed;
+}
+
 type SupplierQuoteStatus =
   | "Pending"
   | "Pending Invitation"
   | "Quotation Received"
   | "Declined"
   | "Expired";
-
-function quoteForSupplier(
-  localQuotes: Map<string, SubmittedQuote>,
-  supplierId: string
-): SubmittedQuote | undefined {
-  for (const q of localQuotes.values()) {
-    if (q.supplier === supplierId || q.supplier_name === supplierId) return q;
-  }
-  return localQuotes.get(supplierId);
-}
 
 function resolveSupplierStatus(
   row: RFQSupplier,
@@ -391,6 +533,7 @@ export default function RFQDetailPage() {
     () => getApprovalState(rfqName)
   );
   const [submittingForReview, setSubmittingForReview] = useState(false);
+  const [pendingAwardDecision, setPendingAwardDecision] = useState<{ award: string; supplier: string; quotation: string } | null>(null);
   const [submittingRFQ, setSubmittingRFQ] = useState(false);
   const [localQuotes, setLocalQuotes] = useState<Map<string, SubmittedQuote>>(
     new Map()
@@ -451,6 +594,10 @@ export default function RFQDetailPage() {
     queryKey: ["legal-doc-review", rfqName],
     queryFn: () => getLegalDocsByRfq(rfqName),
     enabled: !!rfqName,
+    // Always fetch fresh data on page visit so Legal/Finance status badges
+    // never show stale approval state when reopening the RFQ.
+    staleTime: 0,
+    refetchOnWindowFocus: "always",
   });
   const legalDoc = legalDocQuery.data;
 
@@ -459,6 +606,15 @@ export default function RFQDetailPage() {
     enabled: !!rfqName,
     queryFn: () => getRFQ(rfqName),
   });
+  const rfqClmQuery = useQuery({
+    queryKey: ["clm", "rfq-contract", rfqName, clmViewerKey()],
+    queryFn: () => getRfqClmSummary(rfqName),
+    enabled: !!rfqName,
+    staleTime: 15_000,
+    refetchInterval: 15_000,
+    refetchOnWindowFocus: "always",
+  });
+  const contractContinuationReady = !rfqClmQuery.isError && rfqClmQuery.data?.continuation_ready === true && rfqClmQuery.data.blocks_procurement === false;
 
   const roundsQuery = useQuery<RfqQuoteRound[]>({
     queryKey: ["rfq-quote-rounds", rfqName],
@@ -617,7 +773,7 @@ export default function RFQDetailPage() {
    */
   const isRealPurchaseOrder = !!linkedPO && !!linkedPO.name;
   const poExists = isRealPurchaseOrder;
-  const isCompleted = isRealPurchaseOrder;
+  const isCompleted = isRealPurchaseOrder && contractContinuationReady;
 
   // Procurement is FINALIZED once any backend signal says the decision is done:
   // a real Purchase Order exists, the RFQ status is "Completed", or the approval
@@ -627,8 +783,8 @@ export default function RFQDetailPage() {
   // by backend state — never hardcoded UI values.
   const procurementFinalized =
     poExists ||
-    (rfq?.status ?? "").trim().toLowerCase() === "completed" ||
-    approvalState?.workflow_step === "PO Created";
+    (contractContinuationReady && ((rfq?.status ?? "").trim().toLowerCase() === "completed" ||
+    approvalState?.workflow_step === "PO Created"));
 
   const completionPO = linkedPO ?? null;
   const completionSummary = {
@@ -710,37 +866,245 @@ export default function RFQDetailPage() {
     );
   }, [quotesQuery.data, rfqName]);
 
-  // Hydrate `localQuotes` whenever the server-side query refreshes.
+  // Hydrate `localQuotes` whenever the server-side query refreshes or from sessionStorage
   useEffect(() => {
-    if (!quotesQuery.data) return;
-    setLocalQuotes((prev) => {
-      const next = new Map(prev);
-      for (const sq of quotesQuery.data) {
-        const supplierName = sq.supplier_name ?? sq.supplier;
+    setLocalQuotes(() => {
+      const next = new Map<string, SubmittedQuote>();
+
+      // Group quotes by normalized supplier key to avoid duplicate entries when
+      // multiple quotation revisions exist (e.g. Draft docstatus=0 vs Submitted docstatus=1)
+      type SQItem = NonNullable<typeof quotesQuery.data>[number];
+      const grouped = new Map<string, SQItem[]>();
+      for (const sq of quotesQuery.data ?? []) {
+        const suppKey = normalizeSupplierKey(sq.supplier_name || sq.supplier || "");
+        if (!suppKey) continue;
+        const list = grouped.get(suppKey) ?? [];
+        list.push(sq);
+        grouped.set(suppKey, list);
+      }
+
+      for (const [, sqList] of grouped) {
+        if (!sqList || sqList.length === 0) continue;
+        // Prefer submitted (docstatus=1) over draft (docstatus=0), then valid price over 0, then newest name
+        sqList.sort((a, b) => {
+          const aDoc = a.docstatus ?? 0;
+          const bDoc = b.docstatus ?? 0;
+          if (aDoc !== bDoc) return bDoc - aDoc;
+          const aPrice = resolveSupplierQuotationPrice(a).amount ?? 0;
+          const bPrice = resolveSupplierQuotationPrice(b).amount ?? 0;
+          if ((aPrice > 0) !== (bPrice > 0)) return bPrice > 0 ? 1 : -1;
+          return (b.name || "").localeCompare(a.name || "");
+        });
+
+        const sq = sqList[0];
+        const supplierName = sq.supplier_name ?? sq.supplier ?? "";
+        const price = resolveSupplierQuotationPrice(sq);
         const byItem = new Map<
           string,
-          { unit_price: number; total: number; delivery_days: number }
+          { unit_price: number | null; total: number | null; delivery_days: number }
         >();
         for (const it of sq.items ?? []) {
-          byItem.set(it.item_code, {
-            unit_price: it.rate ?? 0,
-            total: it.amount ?? (it.rate ?? 0) * (it.qty ?? 0),
-            delivery_days: it.delivery_days ?? 0,
-          });
+          const itObj = it as unknown as Record<string, unknown>;
+          const unitPrice = parseQuoteAmount(
+            it.rate ??
+            itObj.unit_price ??
+            itObj.price ??
+            itObj.quoted_rate ??
+            itObj.price_list_rate
+          );
+          const qty = parseQuoteAmount(
+            it.qty ??
+            itObj.quantity ??
+            itObj.requested_qty
+          ) ?? 1;
+          const explicitTotal = parseQuoteAmount(
+            it.amount ??
+            itObj.total ??
+            itObj.line_total ??
+            itObj.net_amount
+          );
+          const lineTotal =
+            explicitTotal ??
+            (unitPrice !== null ? unitPrice * qty : null);
+
+          const rawLead =
+            (it as unknown as Record<string, unknown>).lead_time_days ??
+            it.delivery_days ??
+            itObj.lead_time_days ??
+            itObj.delivery_days;
+          const rawDeliveryDate =
+            (it as unknown as Record<string, unknown>).expected_delivery_date ??
+            (it as unknown as Record<string, unknown>).delivery_date ??
+            (it as unknown as Record<string, unknown>).schedule_date ??
+            itObj.expected_delivery_date ??
+            itObj.delivery_date ??
+            itObj.schedule_date;
+          let parsedDelivery =
+            typeof rawLead === "number" && rawLead > 0 ? rawLead : 0;
+          if (!parsedDelivery && typeof rawDeliveryDate === "string" && rawDeliveryDate.trim()) {
+            const now = new Date();
+            now.setHours(0, 0, 0, 0);
+            const target = new Date(rawDeliveryDate);
+            target.setHours(0, 0, 0, 0);
+            const diff = Math.round((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+            if (diff > 0) parsedDelivery = diff;
+          }
+
+          const itemEntry = {
+            unit_price: unitPrice,
+            total: lineTotal,
+            delivery_days: parsedDelivery,
+            expected_delivery_date: typeof rawDeliveryDate === "string" ? rawDeliveryDate : undefined,
+          };
+          if (it.item_code) {
+            byItem.set(it.item_code, itemEntry);
+            byItem.set(it.item_code.trim().toLowerCase(), itemEntry);
+          }
+          if (it.item_name) {
+            byItem.set(it.item_name, itemEntry);
+            byItem.set(it.item_name.trim().toLowerCase(), itemEntry);
+          }
         }
-        next.set(supplierName, {
+
+        let resolvedAmount = price.amount;
+        let resolvedStatus = price.status;
+
+        // If price is missing or not resolved from server payload, check sessionStorage for matching quotation
+        if (resolvedAmount === null && typeof window !== "undefined") {
+          const keysToTry = [
+            `quotation_${rfqName}_${supplierName}`,
+            `quotation_${rfqName}_${sq.supplier}`,
+            `quotation_${rfqName}_${normalizeSupplierKey(supplierName)}`,
+            `quotation_${rfqName}_${normalizeSupplierKey(sq.supplier)}`,
+            `draft_quotation_${rfqName}_${supplierName}`,
+            `draft_quotation_${rfqName}_${sq.supplier}`,
+          ];
+          for (const k of keysToTry) {
+            try {
+              const raw = sessionStorage.getItem(k);
+              if (raw) {
+                const parsed = JSON.parse(raw);
+                const sPrice = resolveQuotePrice(parsed);
+                if (sPrice.amount !== null) {
+                  resolvedAmount = sPrice.amount;
+                  resolvedStatus = sPrice.status;
+                  if (byItem.size === 0 && Array.isArray(parsed.items)) {
+                    for (const pit of parsed.items) {
+                      const pUnit = parseQuoteAmount(pit.unit_price ?? pit.rate ?? pit.price);
+                      const pQty = parseQuoteAmount(pit.qty ?? pit.quantity) ?? 1;
+                      const pTot = parseQuoteAmount(pit.total ?? pit.amount) ?? (pUnit !== null ? pUnit * pQty : null);
+                      const pLead = (pit as Record<string, unknown>).lead_time_days ?? pit.delivery_days ?? 0;
+                      const pDate = (pit as Record<string, unknown>).expected_delivery_date ?? (pit as Record<string, unknown>).delivery_date ?? "";
+                      let pDays = typeof pLead === "number" && pLead > 0 ? pLead : 0;
+                      if (!pDays && typeof pDate === "string" && pDate.trim()) {
+                        const now = new Date();
+                        now.setHours(0, 0, 0, 0);
+                        const target = new Date(pDate);
+                        target.setHours(0, 0, 0, 0);
+                        const diff = Math.round((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+                        if (diff > 0) pDays = diff;
+                      }
+                      const pEntry = {
+                        unit_price: pUnit,
+                        total: pTot,
+                        delivery_days: pDays,
+                        expected_delivery_date: typeof pDate === "string" ? pDate : undefined,
+                      };
+                      if (pit.item_code) {
+                        byItem.set(pit.item_code, pEntry);
+                        byItem.set(pit.item_code.trim().toLowerCase(), pEntry);
+                      }
+                      if (pit.item_name) {
+                        byItem.set(pit.item_name, pEntry);
+                        byItem.set(pit.item_name.trim().toLowerCase(), pEntry);
+                      }
+                    }
+                  }
+                  break;
+                }
+              }
+            } catch {
+              /* ignore parse errors */
+            }
+          }
+        }
+
+        const quoteObj: SubmittedQuote = {
           sqName: sq.name,
           supplier: sq.supplier,
           supplier_name: supplierName,
-          total: sq.grand_total ?? sq.total ?? sumQuotation(sq),
-          notes: sq.notes ?? "",
+          total: resolvedAmount,
+          priceStatus: resolvedStatus,
+          notes: [sq.notes, sq.custom_terms_note && `Terms: ${sq.custom_terms_note}`,
+            sq.custom_warranty_note && `Warranty: ${sq.custom_warranty_note}`,
+            sq.custom_insurance_note && `Insurance: ${sq.custom_insurance_note}`]
+            .filter(Boolean).join("\n"),
           payment_terms: (sq as unknown as Record<string, unknown>).terms as string | undefined,
+          warrantyCertificate: Boolean(sq.custom_warenty_certificate),
+          termsCondition: Boolean(sq.custom_terms__condition || sq.terms),
+          insuranceCertificate: Boolean(sq.custom_insurance_certificate),
           byItem,
-        });
+        };
+
+        // Exactly one canonical entry per unique supplier
+        next.set(supplierName, quoteObj);
       }
+
+      // Check sessionStorage for quotes for this RFQ that might not have landed on backend
+      if (typeof window !== "undefined") {
+        try {
+          for (let i = 0; i < sessionStorage.length; i++) {
+            const storageKey = sessionStorage.key(i);
+            if (storageKey && storageKey.startsWith(`quotation_${rfqName}_`)) {
+              const raw = sessionStorage.getItem(storageKey);
+              if (raw) {
+                const parsed = JSON.parse(raw);
+                const supp = parsed.supplier || parsed.supplier_name;
+                if (supp && !quoteForSupplier(next, supp)) {
+                  const sPrice = resolveQuotePrice(parsed);
+                  const byItem = new Map<
+                    string,
+                    { unit_price: number | null; total: number | null; delivery_days: number }
+                  >();
+                  if (Array.isArray(parsed.items)) {
+                    for (const pit of parsed.items) {
+                      const pUnit = parseQuoteAmount(pit.unit_price ?? pit.rate ?? pit.price);
+                      const pQty = parseQuoteAmount(pit.qty ?? pit.quantity) ?? 1;
+                      const pTot = parseQuoteAmount(pit.total ?? pit.amount) ?? (pUnit !== null ? pUnit * pQty : null);
+                      const pEntry = { unit_price: pUnit, total: pTot, delivery_days: pit.delivery_days ?? 0 };
+                      if (pit.item_code) {
+                        byItem.set(pit.item_code, pEntry);
+                        byItem.set(pit.item_code.trim().toLowerCase(), pEntry);
+                      }
+                      if (pit.item_name) {
+                        byItem.set(pit.item_name, pEntry);
+                        byItem.set(pit.item_name.trim().toLowerCase(), pEntry);
+                      }
+                    }
+                  }
+                  const quoteObj: SubmittedQuote = {
+                    sqName: parsed.name || "",
+                    supplier: parsed.supplier || supp,
+                    supplier_name: parsed.supplier_name || supp,
+                    total: sPrice.amount,
+                    priceStatus: sPrice.status,
+                    notes: parsed.notes ?? "",
+                    payment_terms: parsed.payment_terms,
+                    byItem,
+                  };
+                  next.set(supp, quoteObj);
+                }
+              }
+            }
+          }
+        } catch {
+          /* ignore storage enumeration errors */
+        }
+      }
+
       return next;
     });
-  }, [quotesQuery.data]);
+  }, [quotesQuery.data, rfqName]);
 
   /* ─────────────── Comparison data ─────────────── */
 
@@ -759,6 +1123,16 @@ export default function RFQDetailPage() {
 
   const submittedQuoteCount = comparison?.submittedCount ?? 0;
 
+  const aiQuoteAmount = useMemo(() => {
+    const recommendedSupplierName =
+      aiResult?.recommended_supplier ??
+      savedAnalysis?.recommended_supplier ??
+      "";
+    if (!recommendedSupplierName) return null;
+    const quote = quoteForSupplier(localQuotes, recommendedSupplierName);
+    return quote?.total ?? null;
+  }, [aiResult, savedAnalysis, localQuotes]);
+
   /* ─────────────── Invited supplier allow-list ─────────────── */
 
   const invitedSupplierIds = useMemo(() => {
@@ -774,7 +1148,6 @@ export default function RFQDetailPage() {
   const quotedSupplierIds = useMemo(
     () =>
       Array.from(localQuotes.values())
-        .filter((q) => q.total > 0)
         .map((q) => (q.supplier ?? q.supplier_name ?? "").trim().toLowerCase())
         .filter(Boolean),
     [localQuotes],
@@ -844,56 +1217,103 @@ export default function RFQDetailPage() {
   useEffect(() => {
     const cached = readSavedAnalysis(rfqName);
     setSavedAnalysis(cached);
-    // Cross-device fallback: this browser may never have run/cached the
-    // analysis for this RFQ (e.g. it was generated on a different device).
-    // ERPNext's `Supplier Scoring Result.analysis_snapshot` is the durable
-    // source of truth — fetch it when the local cache is empty.
-    if (!cached && rfqName) {
-      getLatestAnalysisSnapshot<SavedAnalysisRecord>(rfqName)
-        .then((snapshot) => {
-          if (snapshot && isUsableAnalysis(snapshot)) setSavedAnalysis(snapshot);
-        })
-        .catch(() => {
-          /* best-effort — analysis can always be re-run */
+    let active = true;
+    // Always reconcile with ERPNext; a browser cache must not conceal a newer run.
+    if (rfqName) {
+      getLatestAnalysisSnapshot<SavedAnalysisRecord>(rfqName).then((snapshot) => {
+        if (!active || !snapshot || !isUsableAnalysis(snapshot)) return;
+        setSavedAnalysis((current) => {
+          if (current && Date.parse(current.analysed_at) > Date.parse(snapshot.analysed_at)) return current;
+          try { localStorage.setItem(analysisStorageKey(rfqName), JSON.stringify(snapshot)); } catch { /* optional cache */ }
+          return snapshot;
         });
+      }).catch(() => { /* cached analysis remains available while ERPNext is offline */ });
     }
+    return () => { active = false; };
   }, [rfqName]);
+
+  useEffect(() => {
+    if (import.meta.env.DEV && savedAnalysis?.analysis.evaluation_run_id) {
+      console.debug("[AI EVALUATION DEBUG] frontend", JSON.stringify({
+        rfq: savedAnalysis.rfq_name,
+        evaluation_run_id: savedAnalysis.analysis.evaluation_run_id,
+        recommendations: savedAnalysis.analysis.supplier_analysis,
+      }));
+    }
+  }, [savedAnalysis]);
 
   // Validate cached analysis against the actual invited suppliers once
   // the RFQ data is available — purge or filter stale results that
   // reference suppliers not invited to THIS RFQ.
   useEffect(() => {
-    if (!rfq || invitedSupplierIds.size === 0 || !savedAnalysis) return;
+    if (!rfq || !savedAnalysis) return;
     const validated = validateCachedAnalysis(
       structuredClone(savedAnalysis),
-      invitedSupplierIds
+      invitedSupplierIds,
+      localQuotes
     );
-    if (validated !== savedAnalysis) {
+    if (!validated) {
+      if (localQuotes.size > 0) setSavedAnalysis(null);
+      return;
+    }
+    if (
+      JSON.stringify(validated.analysis.supplier_analysis) !==
+        JSON.stringify(savedAnalysis.analysis.supplier_analysis)
+    ) {
       // eslint-disable-next-line no-console
       console.log(
         "[AI Cache] Validated cached analysis against invited suppliers:",
-        validated ? "filtered" : "purged"
+        "filtered"
       );
       setSavedAnalysis(validated);
     }
-  }, [rfq, invitedSupplierIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rfq, invitedSupplierIds, savedAnalysis, localQuotes]);
 
-  function saveAnalysis(name: string, analysis: AIRecommendation): SavedAnalysisRecord {
+  // Repair older cached analyses after the authoritative quotation records
+  // load. Earlier versions persisted missing quote prices as numeric zero.
+  useEffect(() => {
+    if (!quotesQuery.data || !savedAnalysis) return;
+    const reconciled = structuredClone(savedAnalysis);
+    if (reconcileAnalysisQuotePrices(reconciled.analysis, localQuotes, rfqName)) {
+      reconciled.recommended_supplier = reconciled.analysis.recommended_supplier;
+      reconciled.confidence_score = reconciled.analysis.confidence_score;
+      setSavedAnalysis(reconciled);
+      try {
+        localStorage.setItem(analysisStorageKey(rfqName), JSON.stringify(reconciled));
+      } catch {
+        // Rendering remains correct even if browser storage is unavailable.
+      }
+    }
+  }, [quotesQuery.data, localQuotes, rfqName, savedAnalysis]);
+
+  function saveAnalysis(name: string, analysis: AIRecommendation, publish = true): SavedAnalysisRecord {
     const record: SavedAnalysisRecord = {
       rfq_name: name,
       analysed_at: new Date().toISOString(),
+      evaluation_run_id: analysis.evaluation_run_id,
       recommended_supplier: analysis.recommended_supplier,
       confidence_score: analysis.confidence_score,
       analysis,
-      quotations_snapshot: Array.from(localQuotes.values())
-        .filter((q) => {
-          if (q.total <= 0) return false;
-          if (invitedSupplierIds.size === 0) return true;
-          const key = (q.supplier ?? q.supplier_name ?? "").trim().toLowerCase();
-          return invitedSupplierIds.has(key);
-        })
-        .map((q) => ({ supplier: q.supplier_name, grand_total: q.total })),
+      quotations_snapshot: (() => {
+        const seen = new Set<string>();
+        const snap: SavedAnalysisRecord["quotations_snapshot"] = [];
+        const normInvited = new Set(Array.from(invitedSupplierIds).map(normalizeSupplierKey));
+        for (const q of localQuotes.values()) {
+          if (!isSubmittedQuoteAmount(q.total)) continue;
+          const key = normalizeSupplierKey(q.supplier ?? q.supplier_name ?? "");
+          if (invitedSupplierIds.size > 0) {
+            const rawKey = (q.supplier ?? q.supplier_name ?? "").trim().toLowerCase();
+            if (!invitedSupplierIds.has(rawKey) && !normInvited.has(key)) continue;
+          }
+          if (!seen.has(key)) {
+            seen.add(key);
+            snap.push({ supplier: q.supplier_name, supplier_id: q.supplier, quotation_id: q.sqName, grand_total: q.total! });
+          }
+        }
+        return snap;
+      })(),
     };
+    if (!publish) return record;
     try {
       // When a supplier is already selected, save re-analysis under a
       // separate key to preserve the original selection snapshot.
@@ -916,8 +1336,8 @@ export default function RFQDetailPage() {
         saveRfqAiBaseline(
           name,
           Array.from(invitedSupplierIds),
-          Array.from(localQuotes.values())
-            .filter((q) => q.total > 0)
+            Array.from(localQuotes.values())
+            .filter((q) => isSubmittedQuoteAmount(q.total))
             .map((q) => (q.supplier ?? q.supplier_name ?? "").trim())
             .filter(Boolean),
         );
@@ -933,7 +1353,17 @@ export default function RFQDetailPage() {
     // Never fall through to the full AI modal or re-run analysis.
     if (approvalState?.selected_supplier) {
       if (savedAnalysis) {
-        setAiResult(savedAnalysis.analysis);
+        const validated = validateCachedAnalysis(
+          structuredClone(savedAnalysis),
+          invitedSupplierIds,
+          localQuotes
+        );
+        if (!validated) {
+          setAiResult(null);
+          toast.error("AI evaluation unavailable / incomplete for the current quotations.");
+          return;
+        }
+        setAiResult(validated.analysis);
       }
       setSummaryModalOpen(true);
       return;
@@ -944,7 +1374,8 @@ export default function RFQDetailPage() {
 
     const validated = validateCachedAnalysis(
       structuredClone(savedAnalysis),
-      invitedSupplierIds
+      invitedSupplierIds,
+      localQuotes
     );
     if (!validated) {
       // eslint-disable-next-line no-console
@@ -960,8 +1391,26 @@ export default function RFQDetailPage() {
     setAiModalOpen(true);
   }
 
-  function findQuoteByName(name: string): SubmittedQuote | undefined {
-    return quoteForSupplier(localQuotes, name);
+  function findQuoteByIdentity(identity: RfqQuotationIdentity): SubmittedQuote {
+    const sq = resolveRfqQuotationIdentity(rfqName, identity, quotesQuery.data ?? []);
+    const quote = [...localQuotes.values()].find((row) => row.sqName === sq.name && row.supplier === sq.supplier);
+    if (!quote) throw new Error("Selected Supplier Quotation is no longer available. Refresh the RFQ and try again.");
+    return quote;
+  }
+
+  function assertEvaluatedSupplierEligible(identity: RfqQuotationIdentity, requireEvaluation = true) {
+    const rows = (aiResult ?? savedAnalysis?.analysis)?.supplier_analysis ?? [];
+    const matching = rows.filter((row) => {
+      const evaluated = reverseBiddingSelectionForRow(row);
+      return evaluated?.rfq_id === rfqName && evaluated.quotation_id === identity.quotation_id &&
+        evaluated.supplier_id === identity.supplier_id;
+    });
+    // Existing approved records without an AI snapshot still use the live backend gate.
+    if (!requireEvaluation && matching.length === 0) return;
+    const eligibility = getSupplierAwardEligibility(matching.length === 1 ? matching[0] : undefined);
+    if (!eligibility.awardEligible) {
+      throw new Error(eligibility.awardIneligibilityReason || "Supplier is not eligible for selection. Refresh the evaluation and try again.");
+    }
   }
 
   /**
@@ -969,27 +1418,26 @@ export default function RFQDetailPage() {
    * custom fields) for a supplier — unlike `SubmittedQuote`, which is a
    * locally-derived display object with no ERPNext document name.
    */
-  function findRealSQForSupplier(supplierId: string): SupplierQuotation | undefined {
-    return (quotesQuery.data ?? []).find(
-      (q) => q.supplier === supplierId || q.supplier_name === supplierId
-    );
+  function findRealSQForSupplier(supplierId: string, quotationId?: string): SupplierQuotation | undefined {
+    try {
+      return resolveRfqQuotationIdentity(rfqName, { supplier_id: supplierId, quotation_id: quotationId }, quotesQuery.data ?? []);
+    } catch { return undefined; }
   }
 
   /**
    * Ensures a "Legal Document Review" record exists for the winning
    * supplier the instant they're selected (RFQ workflow -> "Pending Legal
-   * Review"). Never blocks or fails the selection flow itself —
-   * `submitForReview()` has already succeeded by the time this runs, so any
-   * failure here is logged and surfaced as a non-blocking toast only.
+   * Review"). Award confirmation must verify this persisted record before the CLM decision.
    */
   async function ensureLegalReviewForWinningSupplier(
     rfqForReview: RFQ,
-    supplierForApproval: string
-  ): Promise<void> {
+    supplierForApproval: string,
+    quotationId?: string,
+  ): Promise<LegalDocumentSet> {
     // eslint-disable-next-line no-console
     console.log("[LegalAudit] 1. Procurement selected supplier:", supplierForApproval);
 
-    const sq = findRealSQForSupplier(supplierForApproval);
+    const sq = findRealSQForSupplier(supplierForApproval, quotationId);
     // eslint-disable-next-line no-console
     console.log("[LegalAudit] 2. Supplier Quotation lookup result:", {
       searched_supplier_id: supplierForApproval,
@@ -1018,11 +1466,7 @@ export default function RFQDetailPage() {
         "supplier identifier passed in does not exactly match either field",
         "(check for casing/whitespace/quote-character differences)."
       );
-      toast.error(
-        "Supplier selected, but no matching Supplier Quotation was found — the Legal Document Review was NOT created. Please notify Legal.",
-        { duration: 10_000 }
-      );
-      return;
+      throw new Error("Supplier selection was saved, but its matching Supplier Quotation could not be confirmed. The Contract decision was not recorded.");
     }
     // eslint-disable-next-line no-console
     console.log("[LegalAudit] 3. Lookup query matched. supplier == selected supplier is verified against quotations pre-filtered by request_for_quotation == current RFQ.");
@@ -1068,7 +1512,15 @@ export default function RFQDetailPage() {
         quotation_number: sq.name,
         procurement_manager: user?.email ?? "",
         submission_date: sq.transaction_date ?? new Date().toISOString(),
-        grand_total: sq.grand_total ?? sq.total ?? 0,
+        grand_total: (() => {
+          const amount = resolveSupplierQuotationPrice(sq).amount;
+          if (amount === null) {
+            throw new Error(
+              "Cannot create Legal Review: quotation pricing was not provided.",
+            );
+          }
+          return amount;
+        })(),
         valid_till: sq.valid_till,
         item_summary: JSON.stringify(itemSummary),
         terms_file_url: termsFileUrl,
@@ -1079,29 +1531,16 @@ export default function RFQDetailPage() {
         insurance_note: insuranceNote,
       });
       // eslint-disable-next-line no-console
-      console.log(
-        "[LegalAudit] 5. Legal Review Name:",
-        (created as { name?: string })?.name ?? "(created, name not returned)"
-      );
+      console.log("[LegalAudit] 5. Legal Review Name:", created?.name ?? "(missing)");
+      const persisted = await getLegalDocsByRfq(rfqForReview.name);
+      if (!created.name || persisted?.name !== created.name || persisted.rfq_name !== rfqForReview.name || persisted.supplier !== supplierForApproval || persisted.sq_name !== sq.name) throw new Error("The persisted supplier award could not be verified. The Contract decision was not recorded.");
+      return persisted;
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error("[LegalAudit] 5. Creation failed — complete ERP error:", err);
-      toast.error(
-        "Supplier selected, but the Legal Document Review record could not be created automatically. Please notify Legal.",
-        { duration: 10_000 }
-      );
+      throw err;
     }
   }
-
-  const aiQuoteAmount = useMemo(() => {
-    if (!aiResult) return 0;
-    const fromQuotes = findQuoteByName(aiResult.recommended_supplier)?.total;
-    if (fromQuotes && fromQuotes > 0) return fromQuotes;
-    const analysisRow = aiResult.supplier_analysis?.find(
-      (r) => r.name.toLowerCase() === aiResult.recommended_supplier.toLowerCase()
-    );
-    return analysisRow?.grand_total ?? 0;
-  }, [aiResult, localQuotes]);
 
   function closeAIModal() {
     if (creatingPO) return;
@@ -1150,12 +1589,21 @@ export default function RFQDetailPage() {
     // eslint-disable-next-line no-console
     console.log("[AI] Invited suppliers (excluding declines):", [...invitedSuppliers]);
 
-    /* ── Filter quotations: only invited + submitted ────────────────── */
+    /* ── Filter quotations: only invited + submitted (deduplicated) ─── */
 
+    const normInvitedSuppliers = new Set(
+      Array.from(invitedSuppliers).map(normalizeSupplierKey)
+    );
+    const seenEligible = new Set<string>();
     const eligibleQuotes: SubmittedQuote[] = [];
     for (const q of localQuotes.values()) {
-      const key = (q.supplier ?? q.supplier_name ?? "").trim().toLowerCase();
-      if (invitedSuppliers.has(key)) {
+      const rawKey = (q.supplier ?? q.supplier_name ?? "").trim().toLowerCase();
+      const normKey = normalizeSupplierKey(rawKey);
+      if (
+        !seenEligible.has(normKey) &&
+        (invitedSuppliers.has(rawKey) || normInvitedSuppliers.has(normKey))
+      ) {
+        seenEligible.add(normKey);
         eligibleQuotes.push(q);
       }
     }
@@ -1179,11 +1627,9 @@ export default function RFQDetailPage() {
 
     /* ── Build AI request from eligible suppliers ONLY ───────────────── */
 
-    const eligibleNameSet = new Set(
-      eligibleQuotes.map((q) => q.supplier_name.trim().toLowerCase())
-    );
-
+    const evaluationRunId = crypto.randomUUID();
     const aiRequest = {
+      evaluation_run_id: evaluationRunId,
       rfq_name: rfq.name,
       rfq_title: parsedMessage.title || rfq.name,
       items_requested: (rfq.items ?? []).map((it) => ({
@@ -1193,22 +1639,63 @@ export default function RFQDetailPage() {
       })),
       quotations: eligibleQuotes.map<AIQuotation>((q) => {
         const lines: AIQuotationLine[] = (rfq.items ?? []).map((it) => {
-          const cell = q.byItem.get(it.item_code);
+          const itemCodeKey = it.item_code?.trim().toLowerCase();
+          const itemNameKey = it.item_name?.trim().toLowerCase();
+          const cell =
+            (it.item_code ? q.byItem.get(it.item_code) : undefined) ??
+            (itemCodeKey ? q.byItem.get(itemCodeKey) : undefined) ??
+            (it.item_name ? q.byItem.get(it.item_name) : undefined) ??
+            (itemNameKey ? q.byItem.get(itemNameKey) : undefined) ??
+            Array.from(q.byItem.entries()).find(([k]) => {
+              const lk = k.toLowerCase();
+              return (
+                (itemCodeKey && lk.includes(itemCodeKey)) ||
+                (itemNameKey && lk.includes(itemNameKey))
+              );
+            })?.[1];
+
+          const unitPrice = cell?.unit_price ?? null;
+          const qty = it.qty ?? 1;
+          const lineTotal =
+            cell?.total ?? (unitPrice !== null ? unitPrice * qty : null);
+
+          const cellDelivery =
+            cell?.delivery_days && cell.delivery_days > 0
+              ? cell.delivery_days
+              : undefined;
+
           return {
             item: it.item_name ?? it.item_code,
-            requested_qty: it.qty,
-            unit_price: cell?.unit_price ?? 0,
-            total: cell?.total ?? 0,
-            delivery_days: cell?.delivery_days ?? 7,
+            requested_qty: qty,
+            unit_price: unitPrice,
+            total: lineTotal,
+            delivery_days: cellDelivery,
+            delivery_date: (cell as unknown as { expected_delivery_date?: string })?.expected_delivery_date,
+            expected_delivery_date: (cell as unknown as { expected_delivery_date?: string })?.expected_delivery_date,
             notes: "",
           };
         });
+
+        let totalValue = q.total;
+        if (totalValue === null) {
+          const sumLines = priceFromLines(lines);
+          if (sumLines !== null) totalValue = sumLines;
+        }
+
         return {
+          quotation_id: q.sqName,
+          supplier_id: q.supplier,
           supplier_name: q.supplier_name,
           items: lines,
-          total_value: q.total,
+          total_value: totalValue,
+          price_status: isSubmittedQuoteAmount(totalValue) ? "submitted" : q.priceStatus,
           payment_terms: q.payment_terms || undefined,
           notes: q.notes,
+          documents: {
+            warranty_certificate: q.warrantyCertificate,
+            terms_conditions: q.termsCondition,
+            insurance_certificate: q.insuranceCertificate,
+          },
         };
       }),
     };
@@ -1242,109 +1729,74 @@ export default function RFQDetailPage() {
       };
 
       // eslint-disable-next-line no-console
-      console.log("AI Request", aiRequest);
+      if (import.meta.env.DEV) console.log("AI Request", aiRequest);
 
-      const supplierNames = aiRequest.quotations.map((q) => q.supplier_name);
+      const supplierNames = aiRequest.quotations.map((q) => q.supplier_id || q.supplier_name);
       let historicalData;
       try {
         historicalData = await getSupplierPerformance(supplierNames);
         // eslint-disable-next-line no-console
-        console.log("[AI] Historical performance data:", historicalData);
+        if (import.meta.env.DEV) console.log("[AI] Historical performance data:", historicalData);
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn("[AI] Could not fetch historical data, scoring with quotation data only:", err);
       }
 
-      const targetPriceMap = new Map<string, number>();
-      for (const it of rfq.items ?? []) {
-        const t = getItemTargetPrice(it);
-        if (t != null && t > 0) targetPriceMap.set(it.item_code, t);
+      for (const quote of aiRequest.quotations) {
+        quote.historical_data = historicalData?.[quote.supplier_id || quote.supplier_name];
       }
-      const engineResult = scoreSuppliers(
-        aiRequest.quotations,
-        (rfq.items ?? []).length,
-        {
-          price_weight: scoringConfig.price_weight,
-          delivery_weight: scoringConfig.delivery_weight,
-          quality_weight: scoringConfig.quality_weight,
-          reliability_weight: scoringConfig.reliability_weight,
-        },
-        historicalData,
-        targetPriceMap.size > 0 ? targetPriceMap : undefined,
-      );
-      // eslint-disable-next-line no-console
-      console.log("[SCORING ENGINE]", engineResult);
-
-      let recommendation: AIRecommendation | null = null;
-
+      if (import.meta.env.DEV) console.debug("[AI EVALUATION DEBUG] input", JSON.stringify(aiRequest));
       const resolved = await resolveAIRecommendation(aiRequest, analysisWeights);
-      if (resolved) {
-        recommendation = resolved.recommendation;
-      } else {
-        recommendation = buildLocalProcurementRecommendation(aiRequest, engineResult);
-        toast(AI_FALLBACK_NOTICE, { icon: "ℹ️", duration: 6_000 });
+      if (!resolved) throw new Error("AI evaluation unavailable / incomplete. Please retry the analysis.");
+      let recommendation = resolved.recommendation;
+
+      /* ── Post-validation: Normalize, deduplicate & reconcile quote prices ─── */
+      const authoritativeQuotes: AuthoritativeQuoteInfo[] = eligibleQuotes.map((q) => ({
+        quotation_id: q.sqName || undefined,
+        supplier_quotation_id: q.sqName || undefined,
+        supplier_id: q.supplier || undefined,
+        supplier_name: q.supplier_name,
+        grand_total: q.total != null && isSubmittedQuoteAmount(q.total) ? q.total : undefined,
+        rfq_id: rfq.name,
+        docstatus: 1,
+        byItem: q.byItem,
+        priceStatus: q.priceStatus,
+      }));
+
+      recommendation = normalizeAndDeduplicateRecommendation(recommendation, {
+        rfqId: rfq.name,
+        authoritativeQuotes,
+      });
+
+      if (recommendation.supplier_analysis.length !== eligibleQuotes.length) {
+        throw new Error("AI evaluation unavailable / incomplete: one result per current quotation is required.");
       }
-
-      /* ── Post-validation: strip any supplier NOT in eligible set ─── */
-
-      const beforeCount = recommendation.supplier_analysis.length;
-      recommendation.supplier_analysis = recommendation.supplier_analysis.filter(
-        (row) => eligibleNameSet.has(row.name.trim().toLowerCase())
-      );
-      if (recommendation.supplier_analysis.length < beforeCount) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          "[AI] Removed",
-          beforeCount - recommendation.supplier_analysis.length,
-          "non-eligible supplier(s) from ranking"
-        );
+      for (const row of recommendation.supplier_analysis) {
+        const quote = aiRequest.quotations.find((q) => q.quotation_id === row.quotation_id && q.supplier_id === row.supplier_id);
+        if (!quote || row.evaluation_run_id !== evaluationRunId) throw new Error("AI evaluation identity mismatch.");
+        const quotedDelivery = quote.items.some((item) => Number(item.delivery_days) > 0);
+        const history = quote.historical_data;
+        const deliveryAvailable = !!history?.has_delivery_data || quotedDelivery;
+        const historyAvailable = !!history?.has_sufficient_data;
+        row.has_sufficient_data = deliveryAvailable && historyAvailable;
+        row.confidence_level = row.has_sufficient_data ? "high" : "low";
+        row.score_sources = [
+          {dimension:"Price", value:row.score.cost, source:"This supplier's submitted quotation", has_data:isSubmittedQuoteAmount(quote.total_value)},
+          {dimension:"Delivery", value:row.score.delivery, source:history?.has_delivery_data ? "This supplier's receipts matched to their purchase orders; quoted delivery is separately reported" : quotedDelivery ? "This quotation's delivery commitment" : "Delivery unavailable; existing neutral scoring rule", has_data:deliveryAvailable},
+          {dimension:"Quality", value:row.score.quality ?? -1, source:history?.has_quality_data ? "Actual quantities and rejections in this supplier's purchase receipts" : "Quoted item coverage; historical quality unavailable", has_data:!!history?.has_quality_data},
+          {dimension:"Reliability", value:row.score.reliability, source:history?.has_reliability_data ? "This supplier's order and invoice history" : "Terms and attachment presence; contents not verified", has_data:!!history?.has_reliability_data},
+        ];
       }
-
-      recommendation.supplier_analysis
-        .sort((a, b) => a.rank - b.rank)
-        .forEach((row, idx) => { row.rank = idx + 1; });
-
-      if (!eligibleNameSet.has(recommendation.recommended_supplier.trim().toLowerCase())) {
-        recommendation.recommended_supplier =
-          recommendation.supplier_analysis[0]?.name ??
-          eligibleQuotes[0]?.supplier_name ??
-          "";
-      }
-
-      // eslint-disable-next-line no-console
-      console.log(
-        "[AI] Final ranked suppliers:",
-        recommendation.supplier_analysis.map((r) => `#${r.rank} ${r.name}`)
-      );
-
-      // Merge deterministic engine scores into supplier_analysis
-      for (const scored of engineResult.suppliers) {
-        const row = recommendation.supplier_analysis.find(
-          (r) => r.name.toLowerCase() === scored.supplier.toLowerCase()
-        );
-        if (row) {
-          row.score = {
-            cost: scored.dimensions.price_score,
-            delivery: scored.dimensions.delivery_score,
-            reliability: scored.dimensions.reliability_score,
-            overall: scored.final_score,
-          };
-          row.rank = scored.ranking;
-          (row as unknown as Record<string, unknown>).score_sources = scored.score_sources;
-          (row as unknown as Record<string, unknown>).has_sufficient_data = scored.has_sufficient_data;
-          (row as unknown as Record<string, unknown>).confidence_level = scored.confidence_level;
-        }
-      }
+      const engineResult = scoringResultFromRecommendation(recommendation, scoringConfig);
 
       // Confidence Score (AI Procurement Copilot card) — always the fixed
       // Price 35% / Delivery 25% / Reliability 30% / Completeness 10%
       // formula applied to the recommended supplier's dimension scores, so
       // it never depends on whether the cloud AI provider echoed a usable
       // top-level confidence figure.
+      const winner = findRecommendationWinner(recommendation);
       const recommendedScored = engineResult.suppliers.find(
-        (s) =>
-          s.supplier.trim().toLowerCase() ===
-          recommendation.recommended_supplier.trim().toLowerCase()
+        (s) => s.quotation_id === winner?.quotation_id && s.supplier_id === winner?.supplier_id,
       );
       if (recommendedScored) {
         recommendation.confidence_score = computeConfidenceScore({
@@ -1355,67 +1807,22 @@ export default function RFQDetailPage() {
         });
       }
 
-      setAiResult(recommendation);
-      const analysisRecord = saveAnalysis(rfq.name, recommendation);
+      const analysisRecord = saveAnalysis(rfq.name, recommendation, false);
+      const persisted = await saveScoringResult(rfq.name, engineResult, analysisRecord);
+      const verified = JSON.parse(persisted.analysis_snapshot!) as SavedAnalysisRecord;
+      saveAnalysis(rfq.name, verified.analysis);
+      setAiResult(verified.analysis);
       setAiLoadingStep(ANALYSIS_STEPS.length - 1);
       setAiError(null);
-
-      saveScoringResult(rfq.name, engineResult, analysisRecord).catch((err) => {
-        // eslint-disable-next-line no-console
-        console.warn("[SCORING] Failed to persist results:", err);
-      });
+      if (import.meta.env.DEV) console.debug("[AI EVALUATION DEBUG] persisted/frontend", JSON.stringify({
+        rfq:rfq.name, evaluation_run_id:evaluationRunId, document:persisted.name,
+        persisted:persisted.supplier_scores, frontend:verified.analysis.supplier_analysis,
+      }));
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("[AI Analysis] Unexpected error:", err);
-
-      // Never block procurement — always attempt local engine as last resort
-      try {
-        const scoringConfig = await getScoringConfig();
-        const targetPriceMap = new Map<string, number>();
-        for (const it of rfq.items ?? []) {
-          const t = getItemTargetPrice(it);
-          if (t != null && t > 0) targetPriceMap.set(it.item_code, t);
-        }
-        const engineResult = scoreSuppliers(
-          aiRequest.quotations,
-          (rfq.items ?? []).length,
-          {
-            price_weight: scoringConfig.price_weight,
-            delivery_weight: scoringConfig.delivery_weight,
-            quality_weight: scoringConfig.quality_weight,
-            reliability_weight: scoringConfig.reliability_weight,
-          },
-          undefined,
-          targetPriceMap.size > 0 ? targetPriceMap : undefined,
-        );
-        const localRec = buildLocalProcurementRecommendation(aiRequest, engineResult);
-        const recommendedScored = engineResult.suppliers.find(
-          (s) =>
-            s.supplier.trim().toLowerCase() ===
-            localRec.recommended_supplier.trim().toLowerCase()
-        );
-        if (recommendedScored) {
-          localRec.confidence_score = computeConfidenceScore({
-            price_score: recommendedScored.dimensions.price_score,
-            delivery_score: recommendedScored.dimensions.delivery_score,
-            reliability_score: recommendedScored.dimensions.reliability_score,
-            completeness_score: recommendedScored.dimensions.quality_score,
-          });
-        }
-        setAiResult(localRec);
-        setAiError(null);
-        saveAnalysis(rfq.name, localRec);
-        toast(AI_FALLBACK_NOTICE, { icon: "ℹ️", duration: 6_000 });
-      } catch (localErr) {
-        // eslint-disable-next-line no-console
-        console.error("[AI Analysis] Local fallback also failed:", localErr);
-        const fallbackMsg = resolveApiErrorMessage(
-          localErr,
-          AI_FALLBACK_NOTICE,
-        );
-        setAiError(fallbackMsg);
-        toast(AI_FALLBACK_NOTICE, { icon: "ℹ️", duration: 6_000, id: "rfq-ai-fallback" });
-      }
+      const message = resolveApiErrorMessage(err, "AI evaluation unavailable / incomplete. Please retry the analysis.");
+      setAiError(message);
+      setAiResult(null);
+      toast.error(message, {id:"rfq-ai-evaluation"});
     } finally {
       if (aiStepIntervalRef.current) {
         clearInterval(aiStepIntervalRef.current);
@@ -1425,58 +1832,21 @@ export default function RFQDetailPage() {
     }
   }
 
-  async function handleConfirmAndSendForReview() {
-    if (!aiResult || !rfq) return;
-
-    const existing = getApprovalState(rfqName);
-    if (existing && canCreatePOFromWorkflow(existing, poExists)) {
-      void handleCreatePO(aiResult.recommended_supplier);
-      return;
-    }
-
-    setSubmittingForReview(true);
-    try {
-      const supplier = aiResult.recommended_supplier;
-      const quote = findQuoteByName(supplier);
-      // Use the ERPNext supplier document ID from the quotation record.
-      // The AI returns a display name which may not match the ERPNext link ID.
-      const supplierForApproval = quote?.supplier ?? supplier;
-      // eslint-disable-next-line no-console
-      console.log("[RFQ] submitForReview — AI recommended:", supplier, "| ERPNext ID:", supplierForApproval);
-      const state = await submitForReview({
-        rfqName: rfq.name,
-        rfqTitle: parsedMessage.title || rfq.name,
-        company: rfq.company ?? "",
-        selectedSupplier: supplierForApproval,
-        selectedSupplierTotal: quote?.total ?? 0,
-        rfqValue: quote?.total ?? 0,
-        submittedBy: user?.email ?? "procurement@netlink.com",
-      });
-      setApprovalState(state);
-      await ensureLegalReviewForWinningSupplier(rfq, supplierForApproval);
-      invalidateApprovalWorkflow(queryClient);
-      void legalDocQuery.refetch();
-      toast.success("Supplier selection confirmed — sent for Legal & Finance review.");
-      setAiModalOpen(false);
-    } catch (err) {
-      toast.error(
-        resolveApiErrorMessage(err, "Failed to submit for review."),
-        { id: "rfq-submit-for-review" },
-      );
-    } finally {
-      setSubmittingForReview(false);
-    }
+  function handleConfirmAndSendForReview() {
+    setAiModalOpen(false);
+    toast("The saved RFQ contract requirement is applied after supplier award.");
   }
 
   function createPOFromRecommendation() {
     if (!aiResult) return;
-    // Prefer live LDR gate (same as Generate PO) over legacy localStorage check.
-    const ldrReady =
-      legalDoc?.review_status === "Approved" &&
-      legalDoc?.finance_status === "Approved" &&
-      !poExists;
-    if (ldrReady || canCreatePOFromWorkflow(getApprovalState(rfqName), poExists)) {
-      void handleCreatePO(aiResult.recommended_supplier);
+    // Prefer live contract / LDR gate (same as Generate PO) over legacy localStorage check.
+    const ldrReady = (contractContinuationReady || isRfqReadyForPurchaseOrder(legalDoc)) && !poExists;
+    if (ldrReady) {
+      if (!canManagePurchaseOrders(userRole)) {
+        toast.error("Purchase Order creation is restricted to authorized roles.");
+        return;
+      }
+      void handleCreatePO();
     } else {
       void handleConfirmAndSendForReview();
     }
@@ -1484,6 +1854,7 @@ export default function RFQDetailPage() {
 
   async function handleSelectAnySupplier(payload: SupplierSelectionPayload) {
     if (!rfq) return;
+    let awardPersisted = !!pendingAwardDecision;
 
     // eslint-disable-next-line no-console
     console.log("[RFQ] Supplier selection:", {
@@ -1496,19 +1867,21 @@ export default function RFQDetailPage() {
       timestamp: new Date().toISOString(),
     });
 
-    const quote = findQuoteByName(payload.supplierName);
-    const supplierForApproval = quote?.supplier ?? payload.supplierName;
-
     setSubmittingForReview(true);
     try {
-      const state = await submitForReview({
+      const quote = findQuoteByIdentity(payload);
+      assertEvaluatedSupplierEligible(payload);
+      if (!isSubmittedQuoteAmount(quote.total)) throw new Error("Cannot select this supplier until quotation pricing is provided.");
+      const supplierForApproval = quote.supplier;
+      const state = pendingAwardDecision ? approvalState : await submitForReview({
         rfqName: rfq.name,
         rfqTitle: parsedMessage.title || rfq.name,
         company: rfq.company ?? "",
         selectedSupplier: supplierForApproval,
-        selectedSupplierTotal: payload.grandTotal,
-        rfqValue: payload.grandTotal,
+        selectedSupplierTotal: quote.total,
+        rfqValue: quote.total,
         submittedBy: user?.email ?? "procurement@netlink.com",
+        contractRequired: rfq.contract_required === "Yes",
       });
 
       // Persist audit trail for the selection decision
@@ -1516,11 +1889,12 @@ export default function RFQDetailPage() {
       const audit = {
         rfq: rfq.name,
         selected_supplier: supplierForApproval,
+        supplier_quotation: quote.sqName,
         supplier_display_name: payload.supplierName,
         ai_rank: payload.aiRank,
         risk_level: payload.riskLevel,
         selection_reason: payload.reason,
-        grand_total: payload.grandTotal,
+        grand_total: quote.total,
         selected_by: user?.full_name ?? user?.email ?? "Procurement Manager",
         selected_by_email: user?.email ?? "",
         selected_at: new Date().toISOString(),
@@ -1531,19 +1905,30 @@ export default function RFQDetailPage() {
       // eslint-disable-next-line no-console
       console.log("[RFQ] Selection audit saved:", audit);
 
-      setApprovalState(state);
-      await ensureLegalReviewForWinningSupplier(rfq, supplierForApproval);
+      if (pendingAwardDecision && (pendingAwardDecision.supplier !== supplierForApproval || pendingAwardDecision.quotation !== quote.sqName)) throw new Error("Finish the saved supplier award Contract decision before selecting another supplier.");
+      const award = pendingAwardDecision || await ensureLegalReviewForWinningSupplier(rfq, supplierForApproval, quote.sqName).then(record => ({ award: record.name!, supplier: record.supplier, quotation: record.sq_name }));
+      if (!award?.award) throw new Error("The persisted supplier award is unavailable. The Contract decision was not recorded.");
+      awardPersisted = true;
+      const handoff = await recordRfqAwardDecision({
+        rfq: rfq.name,
+        award_id: award.award,
+        quotation_id: award.quotation,
+        supplier_id: award.supplier,
+        decision: (rfq.contract_required === "Yes" || rfq.contract_required === "No") ? rfq.contract_required : undefined,
+      });
+      setPendingAwardDecision(null);
+      if (state) setApprovalState(state);
+      void queryClient.invalidateQueries({ queryKey: ["clm"] });
       invalidateApprovalWorkflow(queryClient);
       void legalDocQuery.refetch();
-      toast.success(
-        `${payload.supplierName} selected — sent for Legal & Finance review.`
-      );
+      toast.success(handoff.summary.decision === "Yes" ? `${payload.supplierName} awarded. Contract Request ${handoff.request!.record.name} is pending with Procurement.` : `${payload.supplierName} awarded. No Contract required; the existing procurement workflow continues.`);
       setAiModalOpen(false);
     } catch (err) {
       toast.error(
-        resolveApiErrorMessage(err, "Failed to submit for review."),
+        `${awardPersisted ? "Supplier award is saved, but its Contract decision could not be confirmed. " : ""}${resolveApiErrorMessage(err, "The award Contract decision could not be recorded. Keep this form open and retry.")}`,
         { id: "rfq-submit-for-review" },
       );
+      throw err;
     } finally {
       setSubmittingForReview(false);
     }
@@ -1555,27 +1940,36 @@ export default function RFQDetailPage() {
    * This does NOT touch the Legal/Finance/PO path — the auction feeds into it
    * later via "Approve Winner".
    */
-  async function handleStartReverseBidding(supplierNames: string[]) {
+  async function handleStartReverseBidding(selectedRows: ReverseBiddingQuotationSelection[]) {
     if (!rfq || startingReverseBidding) return;
     setStartingReverseBidding(true);
     try {
+      const selectedQuotations = validateReverseBiddingSelection(rfq.name, selectedRows, quotesQuery.data ?? []);
+      selectedQuotations.forEach((selection) => assertEvaluatedSupplierEligible(selection));
+      const approvedSuppliers = selectedQuotations.map((row) => row.supplier_id);
+      if (import.meta.env.DEV) console.debug("[ReverseBidding] frontend selection", {
+        rfq_id: rfq.name,
+        selected_quotations: selectedQuotations.map((row) => ({
+          ...row,
+          supplier_name: (quotesQuery.data ?? []).find((quote) => quote.name === row.quotation_id)?.supplier_name,
+        })),
+        selected_supplier_ids: approvedSuppliers,
+        selected_quotation_ids: selectedQuotations.map((row) => row.quotation_id),
+        shortlisted_ids: approvedSuppliers,
+      });
       const existing = await getReverseBiddingForRFQ(rfq.name);
-      if (existing) {
-        toast(`Reverse auction already exists for ${rfq.name}.`, { icon: "ℹ️" });
-        setAiModalOpen(false);
-        navigate(
-          `/sourcing/reverse-bidding/${encodeURIComponent(existing.name)}`
-        );
-        return;
-      }
       const rb = await createReverseBiddingFromRFQ({
         rfqName: rfq.name,
-        approvedSuppliers: supplierNames,
+        approvedSuppliers,
+        selectedQuotations,
+        activeRoundName,
         procurementManager: user?.email,
       });
-      toast.success(
-        `Reverse auction ${rb.name} created with ${supplierNames.length} suppliers.`
-      );
+      if (existing?.name === rb.name) {
+        toast(`Reverse auction already exists for ${rfq.name}.`, { icon: "ℹ️" });
+      } else {
+        toast.success(`Reverse auction ${rb.name} created with ${selectedQuotations.length} suppliers.`);
+      }
       setAiModalOpen(false);
       navigate(`/sourcing/reverse-bidding/${encodeURIComponent(rb.name)}`);
     } catch (err) {
@@ -1597,25 +1991,41 @@ export default function RFQDetailPage() {
 
     setSubmittingRFQ(true);
     try {
-      await submitRFQ(rfq.name);
-      toast.success(`RFQ ${rfq.name} submitted — suppliers can now respond.`);
-      // Refetch so docstatus + status reflect the new Submitted state.
-      void rfqQuery.refetch();
+      const submitted = await submitRfqWithContractConfirmation(rfq.name);
+      toast.success(submitted.message);
     } catch (err) {
       toast.error(resolveApiErrorMessage(err, "Submit failed."), {
         id: "rfq-submit",
         duration: 8_000,
       });
     } finally {
+      // ERPNext may have submitted the RFQ even if its subsequent CLM routing failed.
+      void rfqQuery.refetch();
+      void queryClient.invalidateQueries({ queryKey: ["clm"] });
       setSubmittingRFQ(false);
     }
   }
 
-  async function handleCreatePO(supplierName: string) {
+  async function handleCreatePO() {
     if (!rfq || isCompleted) return;
 
     if (poExists) {
       toast.error("A Purchase Order already exists for this RFQ.");
+      return;
+    }
+    try {
+      const contract = await getRfqClmSummary(rfq.name);
+      queryClient.setQueryData(["clm", "rfq-contract", rfqName, clmViewerKey()], contract);
+      if (!contract.continuation_ready || contract.blocks_procurement) {
+        toast.error(contract.decision === "Pending" ? "Save the Contract / CLM decision before creating a purchase order." : "Complete the required CLM execution before creating a purchase order.");
+        return;
+      }
+      if (contract.contract?.name) {
+        navigate(`/p2p/purchase-orders/new?${new URLSearchParams({ contract: contract.contract.name })}`);
+        return;
+      }
+    } catch (error) {
+      toast.error(resolveApiErrorMessage(error, "Could not verify the RFQ Contract Requirement. Refresh and try again."));
       return;
     }
 
@@ -1638,21 +2048,18 @@ export default function RFQDetailPage() {
       );
       return;
     }
-    const isReadyForPO =
-      legalDoc?.review_status === "Approved" &&
-      legalDoc?.finance_status === "Approved";
-    if (!isReadyForPO) {
+    const isReadyForPO = isRfqReadyForPurchaseOrder(legalDoc);
+    if (!legalDoc || !isReadyForPO) {
       toast.error(
-        `PO creation requires both Legal and Finance approval. Legal: ${
+        `PO creation requires completed Legal e-signatures, verified integrity, and Finance approval. Legal: ${
           legalDoc?.review_status ?? "Not submitted"
         }, Finance: ${legalDoc?.finance_status ?? "Not submitted"}.`
       );
       return;
     }
 
-    const winner = findQuoteByName(supplierName);
-    if (!winner) {
-      toast.error(`No saved quotation for ${supplierName}.`);
+    if (!canManagePurchaseOrders(userRole)) {
+      toast.error("Purchase Order creation is restricted to authorized roles.");
       return;
     }
 
@@ -1660,6 +2067,17 @@ export default function RFQDetailPage() {
 
     try {
       await assertNoPOForRFQ(rfq.name);
+
+      // The approved Legal record identifies the awarded quotation, independently
+      // of which supplier the AI recommended or which row is currently displayed.
+      const sqsForRfq = await getSupplierQuotations(rfq.name, { activeRoundName });
+      const winningSq = resolveRfqQuotationIdentity(rfq.name, {
+        supplier_id: legalDoc.supplier,
+        quotation_id: legalDoc.sq_name,
+        rfq_id: legalDoc.rfq_name,
+      }, sqsForRfq);
+      const winner = findQuoteByIdentity({ supplier_id: winningSq.supplier, quotation_id: winningSq.name, rfq_id: rfq.name });
+      assertEvaluatedSupplierEligible({ supplier_id: winningSq.supplier, quotation_id: winningSq.name, rfq_id: rfq.name }, false);
 
       const poTransactionDate = resolvePoTransactionDate();
       const rfqTransactionDateIso = formatERPNextDate(rfq.transaction_date);
@@ -1670,13 +2088,6 @@ export default function RFQDetailPage() {
       const warehouse = await lookupDefaultWarehouse(COMPANY);
       // eslint-disable-next-line no-console
       console.log("[PO] Using warehouse:", warehouse);
-
-      const sqsForRfq = await getSupplierQuotations(rfq.name);
-      const winningSq = sqsForRfq.find(
-        (sq) =>
-          sq.supplier === winner.supplier ||
-          sq.supplier_name === winner.supplier_name
-      );
 
       const poItems = (rfq.items ?? []).map((it) => {
         const cell = winner.byItem.get(it.item_code);
@@ -1714,7 +2125,7 @@ export default function RFQDetailPage() {
       );
 
       // eslint-disable-next-line no-console
-      console.log("[PO] Selected supplier (display):", supplierName);
+      console.log("[PO] Selected supplier (display):", winner.supplier_name);
       // eslint-disable-next-line no-console
       console.log("[PO] ERPNext supplier ID:", winner.supplier);
       // eslint-disable-next-line no-console
@@ -1844,7 +2255,7 @@ export default function RFQDetailPage() {
             isReadOnly || aiNeedsRerun ? () => {} : createPOFromRecommendation
           }
           onSelectSupplier={
-            isReadOnly || hasSelectedSupplier || aiNeedsRerun
+            isReadOnly || (hasSelectedSupplier && !pendingAwardDecision) || aiNeedsRerun
               ? undefined
               : handleSelectAnySupplier
           }
@@ -2191,12 +2602,8 @@ export default function RFQDetailPage() {
    * These read straight from the saved analysis (persists across refresh —
    * see `saveAnalysis` / `getLatestAnalysisSnapshot`) so the card never has
    * to wait on `hasSelectedSupplier` to show what the analysis produced. */
-  const copilotRecommendedRow = copilotHasAnalysis
-    ? (savedAnalysis?.analysis?.supplier_analysis ?? []).find(
-        (s) =>
-          s.name.toLowerCase() ===
-          (savedAnalysis?.recommended_supplier ?? "").trim().toLowerCase()
-      )
+  const copilotRecommendedRow = copilotHasAnalysis && savedAnalysis
+    ? findRecommendationWinner(savedAnalysis.analysis)
     : undefined;
   const copilotRiskLevel = copilotRecommendedRow
     ? supplierRiskLevel(copilotRecommendedRow)
@@ -2239,6 +2646,8 @@ export default function RFQDetailPage() {
     recommendedSupplier: savedAnalysis?.recommended_supplier ?? null,
     selectedSupplier: resolvedSelectedSupplier || null,
     legalStatus: legalDoc?.review_status ?? "",
+    legalSigned: !!legalDoc && isLegalReviewExecuted(legalDoc),
+    legalWorkflowState: legalDoc?.workflow_state ?? null,
     financeStatus: legalDoc?.finance_status ?? "",
     legalApprovedBy: legalDoc?.approved_by,
     legalApprovedOn: legalDoc?.approved_on,
@@ -2248,19 +2657,33 @@ export default function RFQDetailPage() {
     poName: completionSummary.poName !== "—" ? completionSummary.poName : null,
     currentOwnerOverride: legalDoc?.current_owner,
     nextApproverOverride: legalDoc?.next_approver,
+    contract: rfqClmQuery.isError ? null : rfqClmQuery.data ?? null,
   });
 
-  const timeline = workflow.stages;
+  const timeline: RfqWorkflowStep[] = (() => {
+    const list = workflow.stages;
+    if (!list.some((s) => s.active) && !list.every((s) => s.done)) {
+      const firstPending = list.find((s) => !s.done);
+      if (firstPending) {
+        return list.map((s) =>
+          s.id === firstPending.id ? { ...s, active: true, state: "current" as const } : s,
+        );
+      }
+    }
+    return list;
+  })();
   const legalApproved = workflow.legalApproved;
   const financeApproved = workflow.financeApproved;
   const fullyApproved = legalApproved && financeApproved;
   // PO creation is owned by Procurement Team after Manager approval.
   const canCreatePO =
-    workflow.canCreatePO && canManagePurchaseOrders(userRole);
+    workflow.canCreatePO &&
+    (contractContinuationReady || isRfqReadyForPurchaseOrder(legalDoc)) &&
+    canManagePurchaseOrders(userRole);
 
   const quoteTotals = Array.from(localQuotes.values())
     .map((q) => q.total)
-    .filter((t) => t > 0);
+    .filter(isSubmittedQuoteAmount);
   const allSuppliersResponded = supplierCount > 0 && awaitingCount === 0;
   const avgQuote =
     quoteTotals.length > 0
@@ -2546,7 +2969,7 @@ export default function RFQDetailPage() {
       onPerformAnalysis={handlePerformAnalysis}
       onViewAnalysis={handleViewAnalysis}
       onReAnalyze={handleReAnalyze}
-      onCreatePO={() => void handleCreatePO(resolvedSelectedSupplier)}
+      onCreatePO={() => void handleCreatePO()}
       onPrint={handlePrintPdf}
       onExportPdf={handleExportPdf}
       onInviteMoreSuppliers={() => setInviteDialogOpen(true)}
@@ -2562,6 +2985,7 @@ export default function RFQDetailPage() {
       }
       supplierStatusTone={supplierStatusTone}
       quoteForSupplier={quoteForSupplier}
+
       quoteRoundsSlot={
         <div className="space-y-4">
           <RfqQuoteRoundsPanel
@@ -2587,9 +3011,11 @@ export default function RFQDetailPage() {
       }
       rejectionBanners={
         <>
-          {!isReadOnly && legalDoc?.review_status === "Rejected" && (
+          {!isReadOnly && (legalDoc?.review_status === "Rejected" ||
+            legalDoc?.review_status === "Pending" && legalDoc.current_owner === "Procurement") && (
             <div className="mb-4 rounded-2xl border border-danger-200 bg-danger-50/60 px-4 py-3">
-              <p className="mb-2 text-sm font-semibold text-danger-800">Legal Rejected</p>
+              <p className="mb-2 text-sm font-semibold text-danger-800">{legalDoc?.review_status === "Rejected" ? "Legal Rejected" : "Legal Changes Requested"}</p>
+              {legalDoc?.legal_comments && <p className="mb-2 text-xs text-danger-700">{legalDoc.legal_comments}</p>}
               <p className="mb-3 text-xs text-danger-700">
                 Edit the RFQ if needed, then resubmit for legal review.
               </p>
@@ -2632,9 +3058,9 @@ export default function RFQDetailPage() {
         canManageReverseBidding(userRole) ? (
           <ReverseBiddingCTA
             rfqName={rfq.name}
-            approvedSuppliers={(savedAnalysis.analysis.supplier_analysis ?? [])
-              .filter((r) => r.verdict !== "AVOID")
-              .map((r) => r.name)}
+            approvedRows={(savedAnalysis.analysis.supplier_analysis ?? [])
+              .filter((row) => getSupplierAwardEligibility(row).awardEligible)}
+            activeRoundName={activeRoundName}
             procurementManager={user?.email}
             allowCreate={!hasSelectedSupplier && !aiNeedsRerun}
           />
@@ -2736,6 +3162,7 @@ export default function RFQDetailPage() {
                   supplier: q.supplier,
                   supplierName: q.supplier_name,
                   total: q.total,
+                  priceStatus: q.priceStatus,
                   paymentTerms: q.payment_terms,
                   notes: q.notes,
                   byItem: q.byItem,
@@ -2814,32 +3241,26 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-/* ==========================================================================
- * Utilities
- * ========================================================================== */
-
-function sumQuotation(sq: SupplierQuotation): number {
-  return (sq.items ?? []).reduce(
-    (s, it) => s + (it.amount ?? (it.rate ?? 0) * (it.qty ?? 0)),
-    0
-  );
-}
-
 /* ── Reverse Bidding call-to-action (after AI evaluation) ───────────────── */
 
 function ReverseBiddingCTA({
   rfqName,
-  approvedSuppliers,
+  approvedRows,
+  activeRoundName,
   procurementManager,
   allowCreate,
 }: {
   rfqName: string;
-  approvedSuppliers: string[];
+  approvedRows: SupplierAnalysisRow[];
+  activeRoundName?: string | null;
   procurementManager?: string;
   /** Once a supplier is selected, new auctions can no longer be created. */
   allowCreate: boolean;
 }) {
   const navigate = useNavigate();
+
+  const eligibleRows = approvedRows.filter((row) => getSupplierAwardEligibility(row).awardEligible &&
+    isSubmittedQuoteAmount(row.grand_total) && reverseBiddingSelectionForRow(row));
 
   const existingQuery = useQuery({
     queryKey: ["reverse-bidding-for-rfq", rfqName],
@@ -2850,12 +3271,20 @@ function ReverseBiddingCTA({
 
   // Hooks must run unconditionally — early return only after every hook below.
   const createMutation = useMutation({
-    mutationFn: () =>
-      createReverseBiddingFromRFQ({
+    mutationFn: () => {
+      if (eligibleRows.length < 2 || eligibleRows.length > 5) {
+        throw new Error("Select 2–5 eligible suppliers in the AI report before starting reverse bidding.");
+      }
+      const selectedQuotations = selectedReverseBiddingQuotations(eligibleRows,
+        new Set(eligibleRows.map((row) => row.quotation_id || row.supplier_quotation_id || "")));
+      return createReverseBiddingFromRFQ({
         rfqName,
-        approvedSuppliers,
+        approvedSuppliers: selectedQuotations.map((row) => row.supplier_id),
+        selectedQuotations,
+        activeRoundName,
         procurementManager,
-      }),
+      });
+    },
     onSuccess: (rb) => {
       toast.success(`Reverse auction ${rb.name} created.`);
       navigate(`/sourcing/reverse-bidding/${encodeURIComponent(rb.name)}`);
@@ -2904,7 +3333,8 @@ function ReverseBiddingCTA({
         <button
           type="button"
           onClick={() => createMutation.mutate()}
-          disabled={createMutation.isPending || !allowCreate}
+          disabled={createMutation.isPending || !allowCreate || eligibleRows.length < 2 || eligibleRows.length > 5}
+          title={eligibleRows.length < 2 || eligibleRows.length > 5 ? "Select 2–5 eligible suppliers in the AI report." : undefined}
           className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#1F3A6D] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Sparkles className="h-4 w-4" />

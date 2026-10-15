@@ -1,0 +1,31 @@
+{
+  "verified_at": "2026-09-21T06:50:00Z",
+  "erp_extension_installed": false,
+  "erp_extension_evidence": "ERP GET method/bidsphere_workflows.rfq_clm.decide returned HTTP 417: App bidsphere_workflows is not installed.",
+  "versions": { "frappe": "16.20.0", "erpnext": "16.22.0" },
+  "award_schema": {
+    "field": "Legal Document Review.custom_clm_state",
+    "fieldtype": "Long Text",
+    "optional": true,
+    "default": "",
+    "read_only": true,
+    "applied": true,
+    "second_plan_operations": 0,
+    "existing_awards_preserved": 23,
+    "roles_permissions_workflows_preserved": true,
+    "backup": "scratch/rfq-clm-lifecycle-schema-2026-09-21T06-49-39-865Z/"
+  },
+  "rfq_contract_required_allow_on_submit": { "current": 0, "changed": false, "prerequisite": "Install ERP extension before applying the separate branch patch." },
+  "deployment_access": {
+    "workspace_bench_runtime": false,
+    "workspace_ssh_or_bench_configuration": false,
+    "local_ssh_config": false,
+    "docker_contexts": ["default: local Windows named pipe", "desktop-linux: local Windows named pipe"],
+    "docker_desktop_engine_running": false,
+    "wsl_distributions": ["Ubuntu", "docker-desktop"],
+    "remote_host_connection_known": false,
+    "remote_login_attempted": false,
+    "private_keys_read": false
+  },
+  "live_contracts_or_workflow_decisions_changed": false
+}

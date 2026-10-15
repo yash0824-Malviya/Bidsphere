@@ -182,7 +182,7 @@ export function sanitizeSupplierProcurementDocument(
         (row) => canonicalSupplier(row.supplier) === canonicalSupplier(supplier),
       )
     : [];
-  const sanitized = {
+  const sanitized: Record<string, unknown> = {
     ...document,
     items,
     suppliers,

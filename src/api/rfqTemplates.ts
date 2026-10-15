@@ -45,6 +45,7 @@ import {
   buildMetaFromTemplate,
   stashRFQCreationMeta,
 } from "./rfqCreationMeta";
+import { ensureStandardTemplatesPopulated } from "./rfqTemplatePopulation";
 
 const TEMPLATE_DOCTYPE = "RFQ Template";
 const TEMPLATE_ITEM_DOCTYPE = "RFQ Template Item";
@@ -54,6 +55,11 @@ const RFQ_ITEM_DOCTYPE = "Request for Quotation Item";
 const RFQ_SUPPLIER_DOCTYPE = "Request for Quotation Supplier";
 
 export const RFQ_TEMPLATE_CATEGORIES: RFQTemplateCategory[] = [
+  "Raw Materials Procurement",
+  "Spare Parts & Maintenance",
+  "Office Supplies",
+  "Electrical & Industrial Components",
+  "General Procurement",
   "Raw Materials",
   "Manufacturing Components",
   "Electrical Components",
@@ -77,14 +83,19 @@ export let usingFallbackTemplates = false;
 export interface RFQTemplateInput {
   template_name: string;
   category: RFQTemplateCategory;
+  procurement_type?: "Direct" | "Indirect";
   rfq_type?: RFQTemplateRfqType;
   description?: string;
   status?: RFQTemplateStatus;
   estimated_value?: number;
+  cost_breakdown_required?: boolean;
+  contract_required?: boolean;
+  supplier_terms?: string;
   items?: Array<{
     item_code: string;
     item_name?: string;
-    qty: number | string;
+    description?: string;
+    qty?: number | string;
     uom?: string;
     target_price?: number;
     specification?: string;
@@ -96,8 +107,7 @@ export interface RFQTemplateInput {
 
 function validateTemplateInput(data: RFQTemplateInput): void {
   if (!data.template_name?.trim()) throw new Error("Template name is required.");
-  if (!data.items?.length) throw new Error("At least one item is required.");
-  if (!data.suppliers?.length) throw new Error("At least one supplier is required.");
+  if (!data.category?.trim()) throw new Error("Template category is required.");
 }
 
 function mapInputToTemplate(
@@ -110,19 +120,26 @@ function mapInputToTemplate(
     name: existing?.name,
     template_name: data.template_name.trim(),
     category: data.category,
+    procurement_type: data.procurement_type ?? existing?.procurement_type ?? "Direct",
     rfq_type: data.rfq_type ?? "Standard RFQ",
     description: data.description ?? "",
     status: data.status ?? existing?.status ?? "Active",
     estimated_value: data.estimated_value ?? 0,
     usage_count: existing?.usage_count ?? 0,
     last_used_at: existing?.last_used_at,
+    cost_breakdown_required:
+      data.cost_breakdown_required ?? existing?.cost_breakdown_required ?? false,
+    contract_required:
+      data.contract_required ?? existing?.contract_required ?? false,
+    supplier_terms: data.supplier_terms ?? existing?.supplier_terms ?? "",
     items: (data.items ?? []).map(
       (item, i) =>
         ({
           name: existing?.items?.[i]?.name ?? `item-${i}`,
           item_code: item.item_code,
           item_name: item.item_name || item.item_code,
-          qty: Number(item.qty) || 1,
+          description: item.description ?? item.item_name ?? item.item_code,
+          qty: item.qty != null ? Number(item.qty) || 1 : undefined,
           uom: item.uom || "Nos",
           target_price: item.target_price ?? 0,
           specification: item.specification ?? "",
@@ -149,9 +166,13 @@ function buildErpPayload(data: RFQTemplateInput): Record<string, unknown> {
     template_name: data.template_name,
     category: data.category,
     description: JSON.stringify({
+      procurement_type: data.procurement_type,
       rfq_type: data.rfq_type,
       required_documents: data.required_documents,
       workflow_rules: data.workflow_rules,
+      cost_breakdown_required: data.cost_breakdown_required,
+      contract_required: data.contract_required,
+      supplier_terms: data.supplier_terms,
       note: data.description,
     }),
     status: data.status ?? "Active",
@@ -161,6 +182,7 @@ function buildErpPayload(data: RFQTemplateInput): Record<string, unknown> {
       doctype: TEMPLATE_ITEM_DOCTYPE,
       item_code: item.item_code,
       item_name: item.item_name || item.item_code,
+      description: item.description || item.specification || item.item_name || item.item_code,
       qty: Number(item.qty) || 1,
       uom: item.uom || "Nos",
     })),
@@ -177,7 +199,7 @@ export async function getRFQTemplates(
   params?: ListParams
 ): Promise<RFQTemplate[]> {
   logTemplateStorage("FETCH list — start");
-  const local = readLocalTemplates();
+  const local = ensureStandardTemplatesPopulated();
 
   try {
     const result = await apiGet<RFQTemplate[]>(
@@ -247,6 +269,10 @@ export async function getRFQTemplate(name: string): Promise<RFQTemplate> {
 
 function normalizeErpTemplate(raw: RFQTemplate): RFQTemplate {
   let rfq_type: RFQTemplateRfqType | undefined;
+  let procurement_type: "Direct" | "Indirect" | undefined = raw.procurement_type;
+  let cost_breakdown_required = raw.cost_breakdown_required ?? false;
+  let contract_required = raw.contract_required ?? false;
+  let supplier_terms = raw.supplier_terms ?? "";
   let required_documents = { ...DEFAULT_REQUIRED_DOCUMENTS };
   let workflow_rules = { ...DEFAULT_WORKFLOW_RULES };
   let description = raw.description ?? "";
@@ -255,11 +281,19 @@ function normalizeErpTemplate(raw: RFQTemplate): RFQTemplate {
     if (description.startsWith("{")) {
       const cfg = JSON.parse(description) as {
         rfq_type?: RFQTemplateRfqType;
+        procurement_type?: "Direct" | "Indirect";
+        cost_breakdown_required?: boolean;
+        contract_required?: boolean;
+        supplier_terms?: string;
         required_documents?: RFQTemplateRequiredDocuments;
         workflow_rules?: RFQTemplateWorkflowRules;
         note?: string;
       };
       rfq_type = cfg.rfq_type;
+      if (cfg.procurement_type) procurement_type = cfg.procurement_type;
+      if (cfg.cost_breakdown_required !== undefined) cost_breakdown_required = cfg.cost_breakdown_required;
+      if (cfg.contract_required !== undefined) contract_required = cfg.contract_required;
+      if (cfg.supplier_terms) supplier_terms = cfg.supplier_terms;
       if (cfg.required_documents) required_documents = cfg.required_documents;
       if (cfg.workflow_rules) workflow_rules = cfg.workflow_rules;
       if (cfg.note) description = cfg.note;
@@ -270,7 +304,11 @@ function normalizeErpTemplate(raw: RFQTemplate): RFQTemplate {
 
   return {
     ...raw,
+    procurement_type: procurement_type ?? "Direct",
     rfq_type: rfq_type ?? "Standard RFQ",
+    cost_breakdown_required,
+    contract_required,
+    supplier_terms,
     description,
     required_documents,
     workflow_rules,
@@ -386,6 +424,14 @@ export async function archiveRFQTemplate(name: string): Promise<RFQTemplate> {
   return updateRFQTemplate(name, { status: "Archived" });
 }
 
+export async function activateRFQTemplate(name: string): Promise<RFQTemplate> {
+  return updateRFQTemplate(name, { status: "Active" });
+}
+
+export async function deactivateRFQTemplate(name: string): Promise<RFQTemplate> {
+  return updateRFQTemplate(name, { status: "Inactive" });
+}
+
 /* ─── Create RFQ from template ────────────────────────────────────────────── */
 
 export interface CreateRFQFromTemplateInput {
@@ -417,6 +463,7 @@ export async function createRFQFromTemplate(
 
   const docLines: string[] = [];
   if (template.description) docLines.push(template.description);
+  if (template.supplier_terms?.trim()) docLines.push(`Supplier Terms:\n${template.supplier_terms.trim()}`);
   if (template.rfq_type) docLines.push(`RFQ Type: ${template.rfq_type}`);
   const req = template.required_documents;
   if (req) {
@@ -435,6 +482,9 @@ export async function createRFQFromTemplate(
     transaction_date: assertERPNextDate(today, "transaction_date"),
     status: "Draft",
     company,
+    custom_procurement_type: template.procurement_type ?? "Direct",
+    custom_procurement_category: template.category,
+    custom_require_cost_breakdown: template.cost_breakdown_required ? 1 : 0,
     message_for_supplier: [input.rfq_name || template.template_name, ...docLines].join("\n\n"),
     items: template.items.map((item) => ({
       doctype: RFQ_ITEM_DOCTYPE,

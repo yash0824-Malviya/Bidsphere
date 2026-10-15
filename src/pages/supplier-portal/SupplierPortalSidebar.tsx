@@ -8,20 +8,18 @@ import {
   FileQuestion,
   FileText,
   Gavel,
-  HelpCircle,
   LayoutDashboard,
-  LifeBuoy,
   Lock,
-  Mail,
   Receipt,
   ShoppingCart,
-  UserRound,
+  X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { TFunction } from "i18next";
 
 import BrandLogo from "../../components/BrandLogo";
 import { APP_NAME, APP_SUPPLIER_PORTAL, COMPANY_NAME } from "../../config/branding";
+import { isSupplierNavPathActive as isActive } from "./supplierPortalNavigation";
 
 interface NavChild {
   labelKey: string;
@@ -35,25 +33,18 @@ interface NavGroup {
   to: string;
   lockedUntilApproved?: boolean;
   children?: NavChild[];
+  sectionLabel?: string;
 }
 
 const NAV: NavGroup[] = [
-  { labelKey: "supplierNav.dashboard", icon: LayoutDashboard, to: "/supplier/dashboard" },
-  {
-    labelKey: "supplierNav.profile",
-    icon: UserRound,
-    to: "/supplier/profile",
-    children: [
-      { labelKey: "supplierNav.profileDetails", to: "/supplier/profile" },
-      { labelKey: "supplierNav.documents", to: "/supplier/profile?tab=documents" },
-      { labelKey: "supplierNav.security", to: "/supplier/security" },
-    ],
-  },
+  { labelKey: "supplierNav.dashboard", icon: LayoutDashboard, to: "/supplier/dashboard", sectionLabel: "Workspace" },
+  { labelKey: "Contracts", icon: FileText, to: "/supplier/contracts", lockedUntilApproved: true },
   {
     labelKey: "supplierNav.rfqs",
     icon: Receipt,
     to: "/supplier/rfqs",
     lockedUntilApproved: true,
+    sectionLabel: "Sourcing",
     children: [
       { labelKey: "supplierNav.myRfqs", to: "/supplier/rfqs", lockedUntilApproved: true },
       {
@@ -92,6 +83,7 @@ const NAV: NavGroup[] = [
     icon: ShoppingCart,
     to: "/supplier/purchase-orders",
     lockedUntilApproved: true,
+    sectionLabel: "Operations",
     children: [
       {
         labelKey: "supplierNav.purchaseOrders",
@@ -117,21 +109,7 @@ const NAV: NavGroup[] = [
       { labelKey: "supplierNav.payments", to: "/supplier/payments", lockedUntilApproved: true },
     ],
   },
-  {
-    labelKey: "supplierNav.support",
-    icon: LifeBuoy,
-    to: "/supplier/help-desk",
-    children: [
-      { labelKey: "supplierNav.help", to: "/supplier/help-desk" },
-      { labelKey: "supplierNav.contactSupport", to: "/supplier/contact-support" },
-    ],
-  },
 ];
-
-function isActive(pathname: string, to: string): boolean {
-  const pathOnly = to.split("?")[0];
-  return pathname === pathOnly || pathname.startsWith(`${pathOnly}/`);
-}
 
 function groupActive(pathname: string, group: NavGroup): boolean {
   if (isActive(pathname, group.to)) return true;
@@ -146,6 +124,7 @@ interface Props {
   onNavigate?: () => void;
   /** Pin sidebar to viewport edge (desktop layout shell). */
   fixed?: boolean;
+  onClose?: () => void;
 }
 
 export default function SupplierPortalSidebar({
@@ -154,17 +133,18 @@ export default function SupplierPortalSidebar({
   className = "",
   onNavigate,
   fixed = false,
+  onClose,
 }: Props) {
   const { pathname } = useLocation();
   const { t } = useTranslation();
 
   return (
     <aside
-      className={`app-sidebar w-[280px] min-w-[280px] max-w-[280px] border-r border-neutral-800 ${
+      className={`app-sidebar supplier-portal-sidebar border-r border-neutral-800 ${
         fixed ? "app-sidebar-fixed z-[100]" : "h-[100vh] min-h-[100vh]"
       } ${className}`}
     >
-      <div className="flex h-[52px] shrink-0 items-center border-b border-white/5 px-4">
+      <div className="supplier-sidebar-brand flex h-[52px] shrink-0 items-center border-b border-white/5 px-4">
         <Link
           to="/supplier/dashboard"
           onClick={onNavigate}
@@ -173,14 +153,21 @@ export default function SupplierPortalSidebar({
           <BrandLogo size="xs" markOnly />
           <div className="min-w-0">
             <p className="truncate text-sm font-bold text-white">{APP_SUPPLIER_PORTAL}</p>
-            <p className="truncate text-[10px] uppercase tracking-wider text-slate-500">
-              {supplierName}
-            </p>
           </div>
         </Link>
+        {onClose && (
+          <button type="button" onClick={onClose} className="supplier-sidebar-close" aria-label="Close navigation">
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
-      <nav className="app-sidebar-nav space-y-1 px-3 py-4">
+      <div className="supplier-sidebar-company">
+        <span className="supplier-sidebar-company-label">Supplier account</span>
+        <span className="supplier-sidebar-company-name" title={supplierName}>{supplierName}</span>
+      </div>
+
+      <nav aria-label="Supplier navigation" className="app-sidebar-nav space-y-1 px-3 py-4">
         {NAV.map((group) => (
           <SidebarGroup
             key={group.labelKey}
@@ -189,12 +176,14 @@ export default function SupplierPortalSidebar({
             t={t}
             unlocked={unlocked}
             onNavigate={onNavigate}
+            sectionLabel={group.sectionLabel}
           />
         ))}
       </nav>
 
       <div className="app-sidebar-footer">
-        {COMPANY_NAME} · {APP_NAME}
+        <span>{COMPANY_NAME} · {APP_NAME}</span>
+        <span className="supplier-sidebar-version">v6.0</span>
       </div>
     </aside>
   );
@@ -206,12 +195,14 @@ function SidebarGroup({
   t,
   unlocked,
   onNavigate,
+  sectionLabel,
 }: {
   group: NavGroup;
   pathname: string;
   t: TFunction;
   unlocked: boolean;
   onNavigate?: () => void;
+  sectionLabel?: string;
 }) {
   const hasChildren = (group.children?.length ?? 0) > 0;
   const active = groupActive(pathname, group);
@@ -231,44 +222,53 @@ function SidebarGroup({
     </>
   );
 
+  const itemClass = `supplier-sidebar-nav-item flex w-full items-center${active ? " is-active" : ""}${locked ? " opacity-70" : ""}`;
+  const destination = locked ? "/supplier/locked" : group.to;
+  const lockedState = locked ? { title: t(group.labelKey) } : undefined;
+
   if (!hasChildren) {
     return (
-      <Link
-        to={locked ? "/supplier/locked" : group.to}
-        state={locked ? { title: t(group.labelKey) } : undefined}
-        onClick={onNavigate}
-        className={`relative flex h-10 items-center gap-2.5 rounded-xl px-3 text-[13px] font-medium transition ${
-          active
-            ? "bg-white/[0.10] text-white shadow-sm before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[3px] before:rounded-full before:bg-primary"
-            : "text-sidebar-text hover:bg-white/[0.06] hover:text-white"
-        } ${locked ? "opacity-70" : ""}`}
-      >
-        {label}
-      </Link>
+      <>
+        {sectionLabel && <p className="supplier-sidebar-section-label">{sectionLabel}</p>}
+        <Link
+          to={destination}
+          state={lockedState}
+          onClick={onNavigate}
+          aria-current={active ? "page" : undefined}
+          className={itemClass}
+        >
+          {label}
+        </Link>
+      </>
     );
   }
 
   return (
     <div>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className={`relative flex h-10 w-full items-center gap-2.5 rounded-xl px-3 text-left text-[13px] font-medium transition ${
-          active
-            ? "bg-white/[0.10] text-white shadow-sm before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[3px] before:rounded-full before:bg-primary"
-            : "text-sidebar-text hover:bg-white/[0.06] hover:text-white"
-        }`}
-      >
-        {label}
-        {open ? (
-          <ChevronDown className="h-3.5 w-3.5 opacity-60" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 opacity-60" />
-        )}
-      </button>
+      {sectionLabel && <p className="supplier-sidebar-section-label">{sectionLabel}</p>}
+      <div className={`supplier-sidebar-nav-row${active ? " is-active" : ""}`}>
+        <Link
+          to={destination}
+          state={lockedState}
+          onClick={onNavigate}
+          aria-current={active ? "page" : undefined}
+          className={itemClass}
+        >
+          {label}
+        </Link>
+        <button
+          type="button"
+          className="supplier-sidebar-toggle"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          aria-label={`${open ? "Collapse" : "Expand"} ${t(group.labelKey)} navigation`}
+        >
+          {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        </button>
+      </div>
       {open && (
-        <div className="mt-1.5 mr-2 ml-5 border-l border-white/10 pl-3">
-          <div className="space-y-1">
+        <div className="supplier-sidebar-children border-l border-white/10">
+          <div>
             {group.children!.map((child) => {
               const childActive = isActive(pathname, child.to);
               const childLocked = !!child.lockedUntilApproved && !unlocked;
@@ -278,11 +278,8 @@ function SidebarGroup({
                   to={childLocked ? "/supplier/locked" : child.to}
                   state={childLocked ? { title: t(child.labelKey) } : undefined}
                   onClick={onNavigate}
-                  className={`relative mx-1 flex h-8 items-center justify-between px-2 text-[12px] font-medium transition ${
-                    childActive
-                      ? "rounded-[10px] bg-white/[0.10] text-white"
-                      : "rounded-lg text-sidebar-text hover:bg-white/[0.06] hover:text-white"
-                  } ${childLocked ? "opacity-70" : ""}`}
+                  aria-current={childActive ? "page" : undefined}
+                  className={`flex items-center justify-between px-2 font-medium${childLocked ? " opacity-70" : ""}`}
                 >
                   <span>{t(child.labelKey)}</span>
                   {childLocked && <Lock className="h-3 w-3" />}
@@ -292,71 +289,6 @@ function SidebarGroup({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-export function SupplierPortalMobileNav({ unlocked = true }: { unlocked?: boolean }) {
-  const { pathname } = useLocation();
-  const { t } = useTranslation();
-  const tabs = [
-    { label: t("supplierNav.home"), to: "/supplier/dashboard", icon: LayoutDashboard },
-    { label: t("supplierNav.profile", "Profile"), to: "/supplier/profile", icon: UserRound },
-    {
-      label: t("supplierNav.rfqs"),
-      to: unlocked ? "/supplier/rfqs" : "/supplier/locked",
-      icon: Receipt,
-      locked: !unlocked,
-    },
-    {
-      label: t("supplierNav.auctions"),
-      to: unlocked ? "/supplier/auctions" : "/supplier/locked",
-      icon: Gavel,
-      locked: !unlocked,
-    },
-    {
-      label: t("supplierNav.orders"),
-      to: unlocked ? "/supplier/purchase-orders" : "/supplier/locked",
-      icon: ShoppingCart,
-      locked: !unlocked,
-    },
-    {
-      label: t("supplierNav.finance"),
-      to: unlocked ? "/supplier/vouchers" : "/supplier/locked",
-      icon: CreditCard,
-      locked: !unlocked,
-    },
-    { label: t("supplierNav.help"), to: "/supplier/help-desk", icon: HelpCircle },
-  ];
-
-  return (
-    <div className="flex gap-1 overflow-x-auto border-b border-neutral-200 bg-white px-2 py-2 lg:hidden">
-      {tabs.map((tab) => {
-        const active = isActive(pathname, tab.to);
-        const Icon = tab.icon;
-        return (
-          <Link
-            key={tab.to + tab.label}
-            to={tab.to}
-            className={`inline-flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium ${
-              active
-                ? "bg-primary-50 text-primary-700"
-                : "text-neutral-600 hover:bg-neutral-50"
-            }`}
-          >
-            <Icon className="h-3.5 w-3.5" />
-            {tab.label}
-            {"locked" in tab && tab.locked ? <Lock className="h-3 w-3" /> : null}
-          </Link>
-        );
-      })}
-      <Link
-        to="/supplier/contact-support"
-        className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-neutral-600 hover:bg-neutral-50"
-      >
-        <Mail className="h-3.5 w-3.5" />
-        {t("supplierNav.contact")}
-      </Link>
     </div>
   );
 }

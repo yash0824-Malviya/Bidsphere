@@ -1,6 +1,7 @@
 import {
   getECRCurrentStage,
   isECRActionableForRole,
+  matchesECRQueueFilter,
 } from "../config/ecrQueues";
 import type { EngineeringChangeRequest } from "../types/erpnext";
 
@@ -36,13 +37,13 @@ export function deriveProcurementDashboardEcrMetrics(
 
     if (
       !hasRfq &&
-      (stage === "Procurement Review" || stage === "RFQ Pending")
+      ["Procurement Review", "RFQ Pending", "Procurement BC Review", "ECR Approved", "Procurement Decision"].includes(stage)
     ) {
       metrics.approvedEcrsAwaitingAction += 1;
     }
 
     if (
-      stage === "RFQ Pending" &&
+      matchesECRQueueFilter("rfq-pending", "procurement", ecr) &&
       !hasRfq &&
       isECRActionableForRole("procurement", ecr)
     ) {

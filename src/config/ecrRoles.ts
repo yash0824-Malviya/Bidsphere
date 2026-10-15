@@ -13,6 +13,7 @@ export type ECRRole = Extract<
   | "engineering"
   | "operations"
   | "quality"
+  | "finance"
   | "program_manager"
   | "procurement_team"
   | "procurement"
@@ -30,6 +31,15 @@ export type CanonicalECRStage =
   | "Unknown"
   | "Draft"
   | "Engineering Review"
+  | "Technical Approved"
+  | "Business Case Preparation"
+  | "Business Case Submitted"
+  | "Finance Review"
+  | "Procurement BC Review"
+  | "Business Case Approved"
+  | "Final ECR Approval"
+  | "ECR Approved"
+  | "Procurement Decision"
   | "Procurement Review"
   | "RFQ Pending"
   | "Operations Review"
@@ -87,6 +97,29 @@ export const ECR_WORKFLOW_STAGES: Array<{
   { id: "RFQ Pending", label: "RFQ Pending" },
   { id: "RFQ", label: "RFQ" },
 ];
+
+/** Unversioned records retain the existing workflow and its role ownership. */
+export function isExtendedECRWorkflow(ecr?: Partial<EngineeringChangeRequest> | null): boolean {
+  return ecr?.ecr_workflow_version === "extended_v1";
+}
+
+export const ECR_EXTENDED_WORKFLOW_STAGES: Array<{ id: CanonicalECRStage; label: string; conditional?: boolean }> = [
+  { id: "Draft", label: "Draft" },
+  { id: "Engineering Review", label: "Technical Review" },
+  { id: "Technical Approved", label: "Business Case Preparation" },
+  { id: "Finance Review", label: "Finance Review", conditional: true },
+  { id: "Procurement BC Review", label: "Procurement Review" },
+  { id: "Quality Review", label: "Quality Review", conditional: true },
+  { id: "Business Case Approved", label: "Business Case Approved" },
+  { id: "Final ECR Approval", label: "Final ECR Approval" },
+  { id: "ECR Approved", label: "ECR Approved" },
+  { id: "Procurement Decision", label: "Procurement Decision" },
+  { id: "RFQ", label: "RFQ", conditional: true },
+];
+
+export function isECRBusinessCaseReviewStage(stage: CanonicalECRStage): boolean {
+  return ["Finance Review", "Procurement BC Review", "Quality Review"].includes(stage);
+}
 
 export interface ECRStageConfig {
   stage: CanonicalECRStage;
@@ -171,9 +204,47 @@ export const ECR_STAGE_WORKFLOW_MAP: Partial<Record<CanonicalECRStage, ECRStageC
 export function getApplicableECRWorkflowStages(
   ecr?: Partial<EngineeringChangeRequest> | null,
 ): Array<{ id: CanonicalECRStage; label: string; conditional?: boolean }> {
-  // Keep the parameter for API compatibility; demo stages are unconditional.
-  void ecr;
+  if (isExtendedECRWorkflow(ecr)) {
+    return ECR_EXTENDED_WORKFLOW_STAGES.filter((stage) =>
+      (stage.id !== "Finance Review" || Number(ecr?.cost_impact) === 1) &&
+      (stage.id !== "Quality Review" || Number(ecr?.quality_impact) === 1) &&
+      (stage.id !== "RFQ" || ecr?.rfq_required !== "No"),
+    ).map((stage) => ({ ...stage })).concat(ecr?.rfq_required === "No" ? [{ id: "Closed", label: "Closed" }] : []);
+  }
   return ECR_WORKFLOW_STAGES.map((stage) => ({ ...stage }));
+}
+
+export function getECRStageConfig(
+  status?: ECRStatus | string | null,
+  ecr?: Partial<EngineeringChangeRequest> | null,
+): ECRStageConfig | undefined {
+  const stage = canonicalECRStage(status, ecr);
+  if (!isExtendedECRWorkflow(ecr)) return ECR_STAGE_WORKFLOW_MAP[stage];
+  if (stage === "Engineering Review") return {
+    ...ECR_STAGE_WORKFLOW_MAP[stage]!, nextStage: "Technical Approved",
+    label: "Technical Review", decisionTitle: "Technical Approval",
+  };
+  const definitions: Partial<Record<CanonicalECRStage, [AppRole, string, CanonicalECRStage | null, string, string]>> = {
+    "Technical Approved": ["engineer", "Engineer", "Business Case Submitted", "Prepare Business Case", "Prepare the business justification, financial impact and risk assessment."],
+    "Business Case Preparation": ["engineer", "Engineer", "Business Case Submitted", "Prepare Business Case", "Complete and submit the linked Business Case."],
+    "Business Case Submitted": ["engineer", "Engineer", Number(ecr?.cost_impact) === 1 ? "Finance Review" : "Procurement BC Review", "Business Case Submitted", "The Business Case is entering the required review stages."],
+    "Finance Review": ["finance", "Finance Manager", "Procurement BC Review", "Financial Review", "Review the financial impact in the linked Business Case."],
+    "Procurement BC Review": ["procurement", "Procurement Manager", Number(ecr?.quality_impact) === 1 ? "Quality Review" : "Business Case Approved", "Procurement Business Case Review", "Review supplier impact and sourcing requirements in the linked Business Case."],
+    "Quality Review": ["quality", "Quality Manager", "Business Case Approved", "Quality Review", "Review quality impact and risks in the linked Business Case."],
+    "Business Case Approved": ["program_manager", "Program Manager", "Final ECR Approval", "Start Final Review", "Review the approved Business Case and begin final ECR approval."],
+    "Final ECR Approval": ["program_manager", "Program Manager", "ECR Approved", "Final ECR Approval", "Make the final ECR decision using the approved Business Case and technical assessment."],
+    "ECR Approved": ["procurement", "Procurement Manager", "Procurement Decision", "Record Procurement Decision", "Decide whether an RFQ is required and record the reason."],
+    "Procurement Decision": ["procurement", "Procurement Manager", ecr?.rfq_required === "No" ? "Closed" : "RFQ", "Create RFQ", "Create an RFQ from the approved ECR and recorded procurement decision."],
+  };
+  const definition = definitions[stage];
+  if (!definition) return ECR_STAGE_WORKFLOW_MAP[stage];
+  return {
+    stage, label: stage, responsibleRole: definition[0], responsibleTitle: definition[1],
+    nextStage: definition[2], reviewType: definition[3], decisionTitle: definition[3],
+    decisionSubtitle: definition[4],
+    assessmentFields: stage === "Final ECR Approval" ? ["Final Decision Rationale"] : [],
+    ...(stage === "Final ECR Approval" ? { requiredAssessmentFields: ["Final Decision Rationale"] } : {}),
+  };
 }
 
 /**
@@ -184,9 +255,19 @@ export function getNextApplicableECRStage(
   action: string,
   ecr?: Partial<EngineeringChangeRequest> | null,
 ): CanonicalECRStage {
-  // Keep the parameter for API compatibility; the demo has no conditional gates.
-  void ecr;
-  const currentStage = canonicalECRStage(currentStatus);
+  const currentStage = canonicalECRStage(currentStatus, ecr);
+  if (isExtendedECRWorkflow(ecr)) {
+    if (isECRBusinessCaseReviewStage(currentStage)) return currentStage;
+    if (currentStage === "Engineering Review" && action === "Approve") return "Technical Approved";
+    if (currentStage === "Business Case Approved" && action === "Start Final Review") return "Final ECR Approval";
+    if (currentStage === "Final ECR Approval" && action === "Approve ECR") return "ECR Approved";
+    if (currentStage === "Final ECR Approval" && action === "Send Back") return "Technical Approved";
+    if (currentStage === "Final ECR Approval" && action === "Reject") return "Rejected";
+    if (currentStage === "ECR Approved" && action === "Request Sourcing Revision") return "Draft";
+    if (currentStage === "ECR Approved" && action === "Record Procurement Decision") return ecr?.rfq_required === "No" ? "Closed" : "Procurement Decision";
+    if (currentStage === "Procurement Decision" && action === "Create RFQ" && ecr?.rfq_required === "Yes") return "RFQ";
+    if (currentStage === "Procurement Review" || currentStage === "RFQ Pending") return currentStage;
+  }
   if (currentStage === "Draft" && action === "Submit ECR") return "Engineering Review";
   if (action === "Send Back" && ["Engineering Review", "Procurement Review"].includes(currentStage)) return "Draft";
   if (action === "Reject" && ["Engineering Review", "Procurement Review"].includes(currentStage)) return "Rejected";
@@ -206,6 +287,7 @@ const TERMINAL_STAGES = new Set<CanonicalECRStage>([
 /** Map both the new sequential workflow and pre-migration ERP states. */
 export function canonicalECRStage(
   status?: ECRStatus | string | null,
+  ecr?: Partial<EngineeringChangeRequest> | null,
 ): CanonicalECRStage {
   if (!status) return "Draft";
   const normalized = String(status)
@@ -213,6 +295,16 @@ export function canonicalECRStage(
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, " ")
     .trim();
+  if (isExtendedECRWorkflow(ecr)) {
+    const extended: Record<string, CanonicalECRStage> = {
+      "TECHNICAL APPROVED": "Technical Approved", "BUSINESS CASE PREPARATION": "Business Case Preparation",
+      "BUSINESS CASE SUBMITTED": "Business Case Submitted", "FINANCE REVIEW": "Finance Review",
+      "PROCUREMENT BC REVIEW": "Procurement BC Review", "QUALITY REVIEW": "Quality Review",
+      "BUSINESS CASE APPROVED": "Business Case Approved", "FINAL ECR APPROVAL": "Final ECR Approval",
+      "ECR APPROVED": "ECR Approved", "PROCUREMENT DECISION": "Procurement Decision",
+    };
+    if (extended[normalized]) return extended[normalized];
+  }
   switch (normalized) {
     case "ENGINEERING MANAGER APPROVAL":
     case "ENGINEERING MANAGER REVIEW":
@@ -284,7 +376,7 @@ export interface ResolvedApprovalTask {
  * independent of whether a persisted approval task child row is present.
  */
 export function resolveApprovalTask(
-  ecrOrStatus?: EngineeringChangeRequest | ECRStatus | string | null,
+  ecrOrStatus?: Partial<EngineeringChangeRequest> | ECRStatus | string | null,
   currentUserOrRole?: AppRole | { role?: string | null } | string | null,
 ): ResolvedApprovalTask | null {
   const status =
@@ -297,12 +389,17 @@ export function resolveApprovalTask(
       ? currentUserOrRole.role
       : (currentUserOrRole as AppRole | string | null | undefined);
 
-  const canonical = canonicalECRStage(status);
-  const stageConfig = ECR_STAGE_WORKFLOW_MAP[canonical];
+  const ecr = typeof ecrOrStatus === "object" ? ecrOrStatus : undefined;
+  const canonical = canonicalECRStage(status, ecr);
+  const stageConfig = getECRStageConfig(status, ecr);
   if (!stageConfig) return null;
 
-  const reviewStages: CanonicalECRStage[] = ["Engineering Review", "Procurement Review"];
-  const actionableStages: CanonicalECRStage[] = [...reviewStages, "RFQ Pending"];
+  const reviewStages: CanonicalECRStage[] = isExtendedECRWorkflow(ecr)
+    ? ["Engineering Review", "Finance Review", "Procurement BC Review", "Quality Review", "Final ECR Approval"]
+    : ["Engineering Review", "Procurement Review"];
+  const actionableStages: CanonicalECRStage[] = isExtendedECRWorkflow(ecr)
+    ? [...reviewStages, "Business Case Approved", "ECR Approved", "Procurement Decision"]
+    : [...reviewStages, "RFQ Pending"];
 
   const isReview = reviewStages.includes(canonical);
   if (!actionableStages.includes(canonical)) {
@@ -331,6 +428,7 @@ export function resolveApprovalTask(
       (stageConfig.responsibleRole === "procurement" && (cleanRole === "procurementmanager" || cleanRole === "purchasemanager" || cleanRole === "procurement")) ||
       (stageConfig.responsibleRole === "operations" && (cleanRole === "operationsmanager" || cleanRole === "operations")) ||
       (stageConfig.responsibleRole === "quality" && (cleanRole === "qualitymanager" || cleanRole === "quality")) ||
+      (stageConfig.responsibleRole === "finance" && (cleanRole === "financemanager" || cleanRole === "finance")) ||
       (stageConfig.responsibleRole === "program_manager" && (cleanRole === "programmanager" || cleanRole === "program_manager"))
     )
   );
@@ -340,7 +438,7 @@ export function resolveApprovalTask(
     assignedTo: stageConfig.responsibleTitle,
     requiredRole: stageConfig.responsibleRole,
     stage: canonical,
-    action: canonical === "RFQ Pending" ? "Create RFQ" : "Review and approve",
+    action: canonical === "RFQ Pending" ? "Create RFQ" : isExtendedECRWorkflow(ecr) ? stageConfig.decisionTitle : "Review and approve",
     isReviewStage: isReview,
   };
 }
@@ -348,8 +446,9 @@ export function resolveApprovalTask(
 /** Map canonical ECR stages to high-level lifecycle status */
 export function getECRHighLevelStatus(
   status?: ECRStatus | string | null,
+  ecr?: Partial<EngineeringChangeRequest> | null,
 ): ECRHighLevelStatus {
-  const stage = canonicalECRStage(status);
+  const stage = canonicalECRStage(status, ecr);
   switch (stage) {
     case "Unknown":
       return "Unknown";
@@ -357,7 +456,17 @@ export function getECRHighLevelStatus(
       return "Draft";
     case "Engineering Review":
     case "Procurement Review":
+    case "Technical Approved":
+    case "Business Case Preparation":
+    case "Business Case Submitted":
+    case "Finance Review":
+    case "Procurement BC Review":
+    case "Quality Review":
+    case "Business Case Approved":
+    case "Final ECR Approval":
       return "In Review";
+    case "ECR Approved":
+    case "Procurement Decision":
     case "Approved":
     case "Procurement":
     case "RFQ Pending":
@@ -378,9 +487,10 @@ export function getECRHighLevelStatus(
 /** Return the specific active workflow review stage if the ECR is in review */
 export function getECRReviewStage(
   status?: ECRStatus | string | null,
+  ecr?: Partial<EngineeringChangeRequest> | null,
 ): string | null {
-  const stage = canonicalECRStage(status);
-  return stage === "Engineering Review" || stage === "Procurement Review" ? stage : null;
+  const stage = canonicalECRStage(status, ecr);
+  return ["Engineering Review", "Procurement Review", "Finance Review", "Procurement BC Review", "Quality Review", "Final ECR Approval"].includes(stage) ? stage : null;
 }
 
 export function isTerminalECRStatus(status?: ECRStatus | string | null): boolean {
@@ -388,6 +498,11 @@ export function isTerminalECRStatus(status?: ECRStatus | string | null): boolean
 }
 
 export const ECR_WORKSPACES: Record<ECRRole, ECRWorkspaceConfig> = {
+  finance: {
+    title: "ECR Financial Reviews", description: "Review financial impact and risk in ECR Business Cases.",
+    queueTitle: "Business Cases Awaiting Finance", emptyTitle: "No ECRs awaiting financial review",
+    detailTabs: ["Overview", "Business Case", "Approval History"],
+  },
   engineer: {
     title: "Engineering Change Requests",
     description: "Create, track and manage your engineering change requests.",
@@ -427,18 +542,18 @@ export const ECR_WORKSPACES: Record<ECRRole, ECRWorkspaceConfig> = {
     detailTabs: ["Overview"],
   },
   quality: {
-    title: "Engineering Changes",
-    description: "View engineering change requests and their current status.",
-    queueTitle: "All ECRs",
-    emptyTitle: "No ECRs found",
-    detailTabs: ["Overview"],
+    title: "ECR Quality Reviews",
+    description: "Review quality impact and risk in ECR Business Cases.",
+    queueTitle: "Quality Reviews",
+    emptyTitle: "No ECRs awaiting quality review",
+    detailTabs: ["Overview", "Business Case", "Approval History"],
   },
   program_manager: {
-    title: "Engineering Changes",
-    description: "View engineering change requests and their current status.",
-    queueTitle: "All ECRs",
-    emptyTitle: "No ECRs found",
-    detailTabs: ["Overview"],
+    title: "Final ECR Approvals",
+    description: "Review approved Business Cases and make final ECR decisions.",
+    queueTitle: "Pending ECR Approvals",
+    emptyTitle: "No ECRs awaiting final approval",
+    detailTabs: ["Overview", "Business Case", "Approval History"],
   },
   procurement_team: {
     title: "Procurement Review",
@@ -450,10 +565,10 @@ export const ECR_WORKSPACES: Record<ECRRole, ECRWorkspaceConfig> = {
     assessmentFields: ["Procurement Assessment", "Supplier Requirement", "RFQ Requirement"],
   },
   procurement: {
-    title: "RFQ Creation",
-    description: "Create RFQs for ECRs approved by the Procurement Team.",
-    queueTitle: "RFQ Pending",
-    emptyTitle: "No approved ECRs are awaiting RFQ creation",
+    title: "ECR Reference",
+    description: "View engineering change records referenced by procurement activities.",
+    queueTitle: "All ECRs",
+    emptyTitle: "No ECR records found",
     detailTabs: ["Overview", "Supplier Requirement", "RFQ"],
   },
   admin: {
@@ -510,8 +625,9 @@ function denyECRWorkflowAction(role?: AppRole | string | null): boolean {
 }
 
 export const canReviewOperations = denyECRWorkflowAction;
-export const canReviewQuality = denyECRWorkflowAction;
-export const canReviewProgram = denyECRWorkflowAction;
+export const canReviewQuality = (role?: AppRole | string | null): boolean => role === "quality";
+export const canReviewFinance = (role?: AppRole | string | null): boolean => role === "finance";
+export const canReviewProgram = (role?: AppRole | string | null): boolean => role === "program_manager";
 /** Purchase Requisition is not part of the five-stage ECR demo workflow. */
 export const canCreatePR = denyECRWorkflowAction;
 /** Only the Procurement Manager owns the RFQ Pending -> RFQ handoff. */
@@ -604,8 +720,33 @@ export function isEcrOwnedBy(
 export function getECRWorkflowActions(
   role: AppRole | string | null | undefined,
   status?: ECRStatus | string | null,
+  ecr?: Partial<EngineeringChangeRequest> | null,
 ): ECRWorkflowAction[] {
-  const stage = canonicalECRStage(status);
+  const stage = canonicalECRStage(status, ecr);
+  if (isExtendedECRWorkflow(ecr)) {
+    // Business Case decisions are executed only through the linked Business Case endpoint.
+    if (isECRBusinessCaseReviewStage(stage) || stage === "Procurement Review" || stage === "RFQ Pending") return [];
+    if (role === "engineering" && stage === "Engineering Review") return [
+      { label: "Send Back", action: "Send Back", tone: "secondary" },
+      { label: "Reject", action: "Reject", tone: "danger" },
+      { label: "Technical Approval", action: "Approve", tone: "primary" },
+    ];
+    if (role === "program_manager" && stage === "Business Case Approved") return [
+      { label: "Start Final Review", action: "Start Final Review", tone: "primary" },
+    ];
+    if (role === "program_manager" && stage === "Final ECR Approval") return [
+      { label: "Send Back", action: "Send Back", tone: "secondary" },
+      { label: "Reject", action: "Reject", tone: "danger" },
+      { label: "Approve ECR", action: "Approve ECR", tone: "primary" },
+    ];
+    if (role === "procurement" && stage === "ECR Approved") return [
+      { label: "Request Sourcing Revision", action: "Request Sourcing Revision", tone: "secondary" },
+    ];
+    if (role === "procurement" && stage === "Procurement Decision" && ecr?.rfq_required === "Yes") return [
+      { label: "Create RFQ", action: "Create RFQ", tone: "primary" },
+    ];
+    return [];
+  }
 
   // Draft ECRs are not under review; submission is handled via the draft submission banner
   if (stage === "Draft") {
@@ -646,7 +787,11 @@ export function canReviewECR(
     typeof statusOrEcr === "object" && statusOrEcr !== null
       ? statusOrEcr.select_pxfp
       : statusOrEcr;
-  const stage = canonicalECRStage(status);
+  const ecr = typeof statusOrEcr === "object" ? statusOrEcr : undefined;
+  const stage = canonicalECRStage(status, ecr);
+  if (isExtendedECRWorkflow(ecr)) {
+    return resolveApprovalTask(ecr, role)?.isReviewStage === true && resolveApprovalTask(ecr, role)?.canAct === true;
+  }
 
   switch (stage) {
     case "Engineering Review":
@@ -667,7 +812,7 @@ export function canApproveECR(
     typeof statusOrEcr === "object" && statusOrEcr !== null
       ? statusOrEcr.select_pxfp
       : statusOrEcr;
-  return getECRWorkflowActions(role, status).some((action) =>
+  return getECRWorkflowActions(role, status, typeof statusOrEcr === "object" ? statusOrEcr : undefined).some((action) =>
     /approve|validation passed/i.test(action.label),
   );
 }
@@ -681,7 +826,7 @@ export function canSendBackECR(
     typeof statusOrEcr === "object" && statusOrEcr !== null
       ? statusOrEcr.select_pxfp
       : statusOrEcr;
-  return getECRWorkflowActions(role, status).some((action) =>
+  return getECRWorkflowActions(role, status, typeof statusOrEcr === "object" ? statusOrEcr : undefined).some((action) =>
     /send back|revision/i.test(action.label),
   );
 }
@@ -695,7 +840,7 @@ export function canRejectECR(
     typeof statusOrEcr === "object" && statusOrEcr !== null
       ? statusOrEcr.select_pxfp
       : statusOrEcr;
-  return getECRWorkflowActions(role, status).some((action) =>
+  return getECRWorkflowActions(role, status, typeof statusOrEcr === "object" ? statusOrEcr : undefined).some((action) =>
     /reject|validation failed/i.test(action.label),
   );
 }
@@ -713,7 +858,12 @@ export function isECRQueueItem(
   role: ECRRole,
   ecr: EngineeringChangeRequest,
 ): boolean {
-  const stage = ecr.rfq ? "RFQ" : canonicalECRStage(ecr.select_pxfp);
+  const stage = ecr.rfq ? "RFQ" : canonicalECRStage(ecr.select_pxfp, ecr);
+  if (isExtendedECRWorkflow(ecr)) {
+    if (role === "engineer") return ["Draft", "Technical Approved", "Business Case Preparation"].includes(stage);
+    const task = resolveApprovalTask(ecr, role);
+    return Boolean(task?.canAct);
+  }
   switch (role) {
     case "engineer":
       return stage === "Draft";
@@ -734,7 +884,7 @@ export function ecrStageIndex(
   status?: ECRStatus | string | null,
   ecr?: Partial<EngineeringChangeRequest> | null,
 ): number {
-  const stage = canonicalECRStage(status);
+  const stage = canonicalECRStage(status, ecr);
   const stages = getApplicableECRWorkflowStages(ecr);
   const idx = stages.findIndex((item) => item.id === stage);
   return idx;
@@ -744,9 +894,11 @@ export function getECRNextStatus(
   status?: ECRStatus | string | null,
   ecr?: Partial<EngineeringChangeRequest> | null,
 ): string {
-  // Keep the parameter for API compatibility; demo stages are unconditional.
-  void ecr;
-  const stage = canonicalECRStage(status);
+  const stage = canonicalECRStage(status, ecr);
+  if (isExtendedECRWorkflow(ecr)) {
+    if (stage === "Closed" || stage === "RFQ") return "Completed";
+    return getECRStageConfig(status, ecr)?.nextStage ?? "None";
+  }
 
   switch (stage) {
     case "Draft":
@@ -783,7 +935,7 @@ export function getECRStatusCardInfo(
   status?: ECRStatus | string | null,
   ecr?: Partial<EngineeringChangeRequest> | null,
 ): ECRStatusCardInfo {
-  const canonical = ecr?.rfq ? "RFQ" : canonicalECRStage(status);
+  const canonical = ecr?.rfq ? "RFQ" : canonicalECRStage(status, ecr);
   const nextStatus = getECRNextStatus(canonical, ecr);
   const ownerName = ecr?.ecr_owner || ecr?.owner || "Engineer";
   const verifiedAssignee = (approvalRole: string, fallback: string) => {
@@ -797,6 +949,19 @@ export function getECRStatusCardInfo(
       ? fallback
       : "Unassigned";
   };
+
+  if (isExtendedECRWorkflow(ecr)) {
+    const config = getECRStageConfig(canonical, ecr);
+    if (config && canonical !== "Draft" && canonical !== "RFQ") {
+      const ownerStage = ["Technical Approved", "Business Case Preparation", "Business Case Submitted"].includes(canonical);
+      return {
+        status: canonical, nextStatus,
+        assignedToLabel: ownerStage ? "Owner" : "Assigned To",
+        assignedToValue: ownerStage ? ownerName : verifiedAssignee(config.responsibleTitle, config.responsibleTitle),
+        actionLabel: "Action Required", actionValue: config.decisionTitle,
+      };
+    }
+  }
 
   switch (canonical) {
     case "Unknown":
@@ -877,9 +1042,9 @@ export function getECRStatusCardInfo(
         status: "Closed",
         nextStatus: "Completed",
         assignedToLabel: "Responsible",
-        assignedToValue: "Change Control Board",
+        assignedToValue: "Procurement Manager",
         actionLabel: "Next Action",
-        actionValue: "Change completed and archived",
+        actionValue: isExtendedECRWorkflow(ecr) && ecr?.rfq_required === "No" ? "RFQ not required — procurement decision recorded" : "Change completed and archived",
       };
     case "Rejected":
       return {

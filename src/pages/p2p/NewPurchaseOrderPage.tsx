@@ -8,10 +8,9 @@ import {
   CheckCircle2,
   ClipboardCheck,
   Loader2,
-  Plus,
+  Lock,
   ShieldCheck,
   Sparkles,
-  Trash2,
 } from "lucide-react";
 
 import { ENV_DEFAULTS } from "../../api/erpnext";
@@ -23,12 +22,12 @@ import {
 import { getRFQ, getSupplierQuotations } from "../../api/sourcing";
 import { getSuppliers } from "../../api/supplier";
 import { getLegalDocsByRfq, type LegalDocumentSet } from "../../api/legalDocs";
-import ItemPicker from "../../components/ItemPicker";
+import { clmError, clmViewerKey, getClmPurchaseOrderContext, saveClmPurchaseOrder } from "../../api/clm";
 import PageHeader from "../../components/PageHeader";
 import { ErpNextDateDisplay, ErpNextDatePicker } from "../../components/ui";
 import { Skeleton } from "../../components/Skeleton";
 import type { PurchaseOrder } from "../../types/erpnext";
-import { formatCurrency, isoDateOffset, todayIso } from "../../utils/format";
+import { formatCurrency, formatCurrencyIn, isoDateOffset, todayIso } from "../../utils/format";
 import { assertERPNextDate } from "../../utils/erpNextDate";
 import { generateId } from "../../utils/id";
 
@@ -40,6 +39,7 @@ interface DraftItem {
   uom: string;
   rate: number;
   schedule_date: string;
+  source?: PurchaseOrder["items"][number];
 }
 
 function newDraftItem(): DraftItem {
@@ -59,18 +59,50 @@ export default function NewPurchaseOrderPage() {
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
 
-  const rfqParam = searchParams.get("rfq") ?? "";
+  const contractParam = searchParams.get("contract")?.trim() ?? "";
+  const rfqParam = contractParam ? "" : searchParams.get("rfq") ?? "";
 
   const [supplier, setSupplier] = useState("");
-  const [transactionDate] = useState(todayIso());
+  const [transactionDate, setTransactionDate] = useState(todayIso());
   const [scheduleDate, setScheduleDate] = useState(isoDateOffset(14));
   const [items, setItems] = useState<DraftItem[]>([newDraftItem()]);
   const [prefillInfo, setPrefillInfo] = useState<{
     rfqRef: string;
+    awardRef?: string;
+    quotationRef?: string;
     supplierName: string;
     approvedValue: number;
   } | null>(null);
   const [prefillLoaded, setPrefillLoaded] = useState(false);
+  const contractQuery = useQuery({
+    queryKey: ["clm", "purchase-order", contractParam, clmViewerKey()],
+    queryFn: () => getClmPurchaseOrderContext(contractParam),
+    enabled: !!contractParam, staleTime: 0, retry: false,
+    // Preserve the revision reviewed in the form; a changed Contract must conflict.
+    refetchOnWindowFocus: false,
+  });
+  const contractContext = contractQuery.data;
+  const deliveryContext = contractContext ? [
+    ["Company", contractContext.payload.company],
+    ...[["Delivery address", "shipping_address"], ["Supplier address", "supplier_address"], ["Payment terms", "payment_terms_template"], ["Incoterm", "incoterm"], ["Delivery place", "named_place"]].map(([label, key]) => [label, (contractContext.payload as Record<string, unknown>)[key]]),
+  ].filter(([, value]) => typeof value === "string" && value.trim()) as string[][] : [];
+  const currency = contractContext?.currency;
+  const money = (amount: number) => contractParam ? formatCurrencyIn(amount, currency) : formatCurrency(amount);
+
+  useEffect(() => {
+    if (!contractParam || !contractContext || prefillLoaded) return;
+    const payload = contractContext.payload;
+    setSupplier(contractContext.supplier);
+    if (payload.transaction_date) setTransactionDate(payload.transaction_date);
+    if (payload.schedule_date) setScheduleDate(payload.schedule_date);
+    setItems((payload.items || []).map(item => ({
+      id: generateId(), item_code: item.item_code, item_name: item.item_name || item.item_code,
+      qty: item.qty, uom: item.uom || "", rate: item.rate,
+      schedule_date: item.schedule_date || payload.schedule_date || "", source: item,
+    })));
+    setPrefillInfo({ rfqRef: contractContext.rfq, awardRef: contractContext.award, quotationRef: contractContext.quotation, supplierName: payload.supplier_name || contractContext.supplier, approvedValue: contractContext.award_value });
+    setPrefillLoaded(true);
+  }, [contractParam, contractContext, prefillLoaded]);
 
   /* ── Approval state check — ERPNext's Legal Document Review is the single
    * source of truth for both Legal and Finance approval. ── */
@@ -101,22 +133,19 @@ export default function NewPurchaseOrderPage() {
     enabled: !!rfqParam && approved && !!rfqQuery.data,
     retry: false,
   });
+  const winningQuote = (sqQuery.data ?? []).find((quote) => approvalState?.sq_name
+    ? quote.name === approvalState.sq_name
+    : quote.supplier === approvalState?.supplier || quote.supplier_name === approvalState?.supplier);
 
   useEffect(() => {
     if (prefillLoaded) return;
     if (!rfqParam || !approved || !approvalState) return;
-    if (!rfqQuery.data) return;
-
-    const rfq = rfqQuery.data;
-    const quotations = sqQuery.data ?? [];
+    // Wait for the saved winning quotation. Do not freeze RFQ target rows at a
+    // zero rate while the quotation request is still loading.
+    if (!rfqQuery.data || !winningQuote?.items?.length) return;
     const selectedSupplier = approvalState.supplier;
 
-    const winningQuote = quotations.find(
-      (q) => q.supplier === selectedSupplier || q.supplier_name === selectedSupplier
-    );
-
-    // Use the ERPNext Supplier document ID from the quotation record, falling
-    // back to the stored display name only when no quotation match is found.
+    // Retain the ERPNext Supplier document ID from the saved quotation.
     const resolvedSupplierId = winningQuote?.supplier ?? selectedSupplier;
     // eslint-disable-next-line no-console
     console.log("[NewPO] Selected supplier:", selectedSupplier);
@@ -125,8 +154,7 @@ export default function NewPurchaseOrderPage() {
 
     if (resolvedSupplierId) setSupplier(resolvedSupplierId);
 
-    const quoteItems = winningQuote?.items ?? [];
-    const rfqItems = rfq.items ?? [];
+    const quoteItems = winningQuote.items;
 
     if (quoteItems.length > 0) {
       setItems(
@@ -140,32 +168,22 @@ export default function NewPurchaseOrderPage() {
           schedule_date: isoDateOffset(7),
         }))
       );
-    } else if (rfqItems.length > 0) {
-      setItems(
-        rfqItems.map<DraftItem>((it) => ({
-          id: generateId(),
-          item_code: it.item_code ?? "",
-          item_name: it.item_name ?? it.item_code ?? "",
-          qty: it.qty ?? 1,
-          uom: it.uom ?? "",
-          rate: 0,
-          schedule_date: isoDateOffset(7),
-        }))
-      );
     }
 
     setPrefillInfo({
       rfqRef: rfqParam,
+      awardRef: approvalState.name,
+      quotationRef: winningQuote.name,
       supplierName: winningQuote?.supplier_name ?? selectedSupplier ?? "",
       approvedValue: approvalState.grand_total ?? winningQuote?.grand_total ?? 0,
     });
     setPrefillLoaded(true);
     toast.success(`Auto-populated from approved RFQ ${rfqParam}`);
-  }, [rfqParam, approved, approvalState, rfqQuery.data, sqQuery.data, prefillLoaded]);
+  }, [rfqParam, approved, approvalState, rfqQuery.data, winningQuote, prefillLoaded]);
 
   /* ── Legacy localStorage prefill (from RFQDetailPage) ── */
   useEffect(() => {
-    if (rfqParam) return;
+    if (rfqParam || contractParam) return;
     const raw = localStorage.getItem("po_prefill");
     if (!raw) return;
 
@@ -233,7 +251,7 @@ export default function NewPurchaseOrderPage() {
       }
       localStorage.removeItem("po_prefill");
     })();
-  }, [rfqParam, navigate]);
+  }, [rfqParam, contractParam, navigate]);
 
   const { data: suppliers = [] } = useQuery({
     queryKey: ["supplier-options"],
@@ -244,33 +262,38 @@ export default function NewPurchaseOrderPage() {
         limit_page_length: 200,
         order_by: "supplier_name asc",
       }),
+    enabled: !contractParam,
   });
 
   const total = items.reduce((sum, it) => sum + it.qty * it.rate, 0);
 
-  function updateItem(id: string, patch: Partial<DraftItem>) {
-    setItems((prev) =>
-      prev.map((it) => (it.id === id ? { ...it, ...patch } : it))
-    );
-  }
-
   function buildPayload(): Partial<PurchaseOrder> {
+    // The read response also includes authoritative links and ERP metadata.
+    // Send the reviewed source values and operational dates; the server owns linkage.
+    const contractTerms = contractParam && contractContext ? Object.fromEntries(
+      ["terms", "payment_terms_template", "supplier_address", "shipping_address", "billing_address", "incoterm", "named_place"]
+        .filter(key => Object.hasOwn(contractContext.payload, key))
+        .map(key => [key, (contractContext.payload as Record<string, unknown>)[key]])
+    ) : {};
     const payload: Partial<PurchaseOrder> = {
+      ...contractTerms,
       supplier,
       transaction_date: transactionDate,
       schedule_date: scheduleDate,
-      company: ENV_DEFAULTS.company,
+      company: contractParam ? contractContext?.payload.company : ENV_DEFAULTS.company,
+      ...(contractParam ? { currency: contractContext?.currency } : {}),
       items: items
         .filter((i) => i.item_code && i.qty > 0)
         .map((i) => ({
-          name: i.id,
+          ...i.source,
+          name: i.source?.name || i.id,
           item_code: i.item_code,
           item_name: i.item_name,
           qty: i.qty,
           uom: i.uom,
           rate: i.rate,
           amount: i.qty * i.rate,
-          schedule_date: i.schedule_date,
+          schedule_date: contractParam ? scheduleDate : i.schedule_date,
         })),
     };
 
@@ -324,7 +347,28 @@ export default function NewPurchaseOrderPage() {
     },
   });
 
-  const isSaving = draftMutation.isPending || submitMutation.isPending;
+  const contractMutation = useMutation({
+    mutationFn: (operation: "save_draft" | "submit") => saveClmPurchaseOrder({
+      name: contractParam, expected_modified: contractContext?.expected_modified || "", operation, payload: buildPayload(),
+    }),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
+      await queryClient.invalidateQueries({ queryKey: ["po-queue-ready-rfqs"] });
+      await queryClient.invalidateQueries({ queryKey: ["clm", "detail"] });
+      await queryClient.invalidateQueries({ queryKey: ["clm", "list"] });
+      if (contractContext?.rfq) await queryClient.invalidateQueries({ queryKey: ["rfq", contractContext.rfq] });
+      if (result.completed) {
+        toast.success(`PO Created Successfully: ${result.purchase_order.name}. Contract finalized.`);
+        navigate(`/contracts/${encodeURIComponent(contractParam)}`);
+      } else {
+        toast.success(`Draft saved as ${result.purchase_order.name}. Submit the PO to complete the Contract.`);
+        await contractQuery.refetch();
+      }
+    },
+    onError: error => toast.error(clmError(error)),
+  });
+
+  const isSaving = draftMutation.isPending || submitMutation.isPending || contractMutation.isPending;
 
   function handleSaveDraft() {
     const err = validate();
@@ -332,7 +376,8 @@ export default function NewPurchaseOrderPage() {
       toast.error(err);
       return;
     }
-    draftMutation.mutate(buildPayload() as Partial<PurchaseOrder>);
+    if (contractParam) contractMutation.mutate("save_draft");
+    else draftMutation.mutate(buildPayload() as Partial<PurchaseOrder>);
   }
 
   function handleSubmit() {
@@ -341,11 +386,18 @@ export default function NewPurchaseOrderPage() {
       toast.error(err);
       return;
     }
-    submitMutation.mutate(buildPayload() as Partial<PurchaseOrder>);
+    if (contractParam) contractMutation.mutate("submit");
+    else submitMutation.mutate(buildPayload() as Partial<PurchaseOrder>);
   }
 
   /* ── Guard: no approved RFQ ── */
-  const hasRfqSource = !!rfqParam || !!prefillInfo;
+  const hasRfqSource = !!contractParam || !!rfqParam || !!prefillInfo;
+
+  if (contractParam && contractQuery.isError) return <div role="alert" className="mx-auto max-w-2xl space-y-4 rounded-xl border border-danger-200 bg-danger-50 p-5 text-sm text-danger-800"><h1 className="text-lg font-semibold">Purchase Order unavailable</h1><p>{clmError(contractQuery.error)}</p><Link className="inline-block font-semibold underline" to={`/contracts/${encodeURIComponent(contractParam)}`}>Return to Contract</Link><button type="button" className="ml-4 font-semibold underline" onClick={() => void contractQuery.refetch()}>Retry</button></div>;
+
+  if (contractParam && (contractQuery.isLoading || !contractContext || !prefillLoaded)) return <div className="space-y-4 p-6" role="status" aria-label="Loading Contract Purchase Order"><Skeleton className="h-8 w-64 rounded-lg" /><Skeleton className="h-[400px] rounded-xl" /></div>;
+
+  if (contractContext?.completed && contractContext.purchase_order) return <section className="space-y-4 rounded-xl border border-success-200 bg-success-50 p-5"><h1 className="text-lg font-semibold">PO Created Successfully</h1><p>Purchase Order: <strong>{contractContext.purchase_order.name}</strong></p><p>This Contract is completed. Its saved Purchase Order is reused.</p><div className="flex flex-wrap gap-4"><Link className="font-semibold text-primary" to={`/p2p/purchase-orders/${encodeURIComponent(contractContext.purchase_order.name)}`}>View Purchase Order</Link><Link className="font-semibold text-primary" to={`/contracts/${encodeURIComponent(contractParam)}`}>Return to Contract</Link></div></section>;
 
   if (rfqParam && !approved && !rfqQuery.isLoading) {
     return (
@@ -419,7 +471,12 @@ export default function NewPurchaseOrderPage() {
     );
   }
 
-  if (rfqQuery.isLoading || sqQuery.isLoading) {
+  if (rfqParam && (rfqQuery.isError || sqQuery.isError || (sqQuery.data && !winningQuote?.items?.length))) {
+    const sourceError = rfqQuery.error || sqQuery.error;
+    return <section role="alert" className="mx-auto max-w-2xl space-y-4 rounded-xl border border-danger-200 bg-danger-50 p-5 text-sm text-danger-800"><h1 className="text-lg font-semibold">Awarded quotation unavailable</h1><p>{sourceError instanceof Error ? sourceError.message : "The approved winning quotation and its items could not be loaded. Reload the source before creating the Purchase Order."}</p><Link className="font-semibold underline" to={`/sourcing/rfq/${encodeURIComponent(rfqParam)}`}>View RFQ Details</Link><button type="button" className="ml-4 font-semibold underline" onClick={() => { void rfqQuery.refetch(); void sqQuery.refetch(); }}>Retry</button></section>;
+  }
+
+  if (rfqQuery.isLoading || sqQuery.isLoading || (rfqParam && !prefillLoaded)) {
     return (
       <div className="space-y-4 p-6">
         <Skeleton className="h-8 w-64 rounded-lg" />
@@ -431,15 +488,15 @@ export default function NewPurchaseOrderPage() {
   return (
     <div>
       <Link
-        to="/p2p/purchase-orders"
+        to={contractParam ? `/contracts/${encodeURIComponent(contractParam)}` : "/p2p/purchase-orders"}
         className="mb-3 inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-primary-600"
       >
-        <ArrowLeft className="h-4 w-4" /> Back to purchase orders
+        <ArrowLeft className="h-4 w-4" /> {contractParam ? "Back to Contract" : "Back to purchase orders"}
       </Link>
 
       <PageHeader
         title="New Purchase Order"
-        description="Create a purchase order from an approved RFQ."
+        description={contractParam ? "Review the approved Contract and award details, then submit the PO to complete Procurement Finalization." : "Create a purchase order from an approved RFQ."}
       />
 
       {prefillInfo && (
@@ -450,38 +507,46 @@ export default function NewPurchaseOrderPage() {
           <div className="min-w-0 flex-1 text-sm text-success-900">
             <p className="font-semibold">
               <CheckCircle2 className="mr-1 inline h-3.5 w-3.5" />
-              Approved RFQ: {prefillInfo.rfqRef}
+              Approved RFQ: {prefillInfo.rfqRef} <Lock className="ml-1 inline h-3 w-3" aria-hidden="true" />
             </p>
             <p className="mt-0.5 inline-flex items-center gap-1 text-xs text-success-800/80">
               <Sparkles className="h-3 w-3" />
               Supplier: <span className="font-semibold">{prefillInfo.supplierName}</span>
               {prefillInfo.approvedValue > 0 && (
-                <> &middot; Approved value: <span className="font-semibold">{formatCurrency(prefillInfo.approvedValue)}</span></>
+                <> &middot; Approved value: <span className="font-semibold">{money(prefillInfo.approvedValue)}</span></>
               )}
             </p>
           </div>
         </div>
       )}
 
+      {!contractContext && prefillInfo && <section aria-label="Award Purchase Order context" className="mb-4 min-w-0 rounded-xl border border-neutral-200 bg-white p-4 text-sm"><dl className="grid min-w-0 gap-3 sm:grid-cols-3">{[["RFQ", prefillInfo.rfqRef], ["Award", prefillInfo.awardRef], ["Winning Quotation", prefillInfo.quotationRef]].filter(([, value]) => value).map(([label, value]) => <div className="min-w-0" key={label}><dt className="text-xs text-neutral-500">{label} <Lock className="ml-1 inline h-3 w-3" aria-hidden="true" /></dt><dd className="mt-1 break-words font-medium">{value}</dd></div>)}</dl></section>}
+
+      {contractContext && <section aria-label="Contract Purchase Order context" className="mb-4 min-w-0 rounded-xl border border-neutral-200 bg-white p-4 text-sm"><dl className="grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-4">{[["Contract", contractParam], ["RFQ", contractContext.rfq], ["Award", contractContext.award], ["Winning Quotation", contractContext.quotation], ["Currency", contractContext.currency], ...deliveryContext].map(([label, value]) => <div className="min-w-0" key={label}><dt className="text-xs text-neutral-500">{label}{["Contract", "RFQ", "Award", "Winning Quotation", "Currency"].includes(label) && <Lock className="ml-1 inline h-3 w-3" aria-hidden="true" />}</dt><dd className="mt-1 break-words font-medium">{value}</dd></div>)}</dl>{contractContext.purchase_order && <p className="mt-3 text-sm text-primary">Draft Purchase Order: {contractContext.purchase_order.name}. Saving or submitting reuses this PO.</p>}{contractContext.payload.terms && <div className="mt-3"><h2 className="text-xs font-semibold text-neutral-500">Payment / delivery terms</h2><p className="mt-1 whitespace-pre-wrap break-words">{contractContext.payload.terms.replace(/<[^>]*>/g, " ")}</p></div>}<p className="mt-3 text-xs text-neutral-500">The Contract remains at Procurement Finalization until the Purchase Order is successfully submitted.</p></section>}
+      {contractMutation.isError && <p role="alert" className="mb-4 rounded-lg border border-danger-200 bg-danger-50 p-3 text-sm text-danger-800">{clmError(contractMutation.error)}</p>}
+
       <div className="space-y-6">
         <div className="grid gap-4 card p-5 shadow-sm md:grid-cols-3">
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-neutral-700">
-              Supplier<span className="text-danger-500">*</span>
+            <label htmlFor="po-awarded-supplier" className="mb-1.5 block text-xs font-medium text-neutral-700">
+              Supplier <Lock className="ml-1 inline h-3 w-3 text-neutral-400" aria-hidden="true" />
             </label>
             <select
+              id="po-awarded-supplier"
+              aria-label="Supplier"
               value={supplier}
-              onChange={(e) => setSupplier(e.target.value)}
-              disabled={!!prefillInfo}
+              disabled
               className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 disabled:bg-neutral-100 disabled:text-neutral-500"
             >
               <option value="">Select supplier…</option>
-              {suppliers.map((s) => (
+              {supplier && <option value={supplier}>{prefillInfo?.supplierName || supplier}</option>}
+              {suppliers.filter((s) => s.name !== supplier).map((s) => (
                 <option key={s.name} value={s.name}>
                   {s.supplier_name ?? s.name}
                 </option>
               ))}
             </select>
+            {prefillInfo?.awardRef && <p className="mt-1.5 text-xs text-neutral-500">From Award {prefillInfo.awardRef}</p>}
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-medium text-neutral-700">
@@ -504,105 +569,72 @@ export default function NewPurchaseOrderPage() {
         <div className="card">
           <div className="flex items-center justify-between border-b border-neutral-200 px-5 py-3">
             <h3 className="text-sm font-semibold text-neutral-900">Items</h3>
-            <button
-              type="button"
-              onClick={() => setItems((prev) => [...prev, newDraftItem()])}
-              className="inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
-            >
-              <Plus className="h-3.5 w-3.5" /> Add Row
-            </button>
+            <span className="inline-flex items-center gap-1.5 text-xs text-neutral-500"><Lock className="h-3.5 w-3.5" aria-hidden="true" />Awarded quotation · Read-only</span>
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-neutral-200 text-sm">
               <thead className="bg-neutral-50 text-left text-xs font-medium uppercase tracking-wider text-neutral-500">
                 <tr>
-                  <th className="px-3 py-2 w-[28%]">Item Code</th>
-                  <th className="px-3 py-2 w-[24%]">Item Name</th>
-                  <th className="px-3 py-2 w-[10%] text-right">Qty</th>
-                  <th className="px-3 py-2 w-[10%]">UOM</th>
-                  <th className="px-3 py-2 w-[12%] text-right">Rate</th>
-                  <th className="px-3 py-2 w-[12%] text-right">Amount</th>
-                  <th className="px-3 py-2 w-[2%]" />
+                  <th className="px-3 py-2 w-[26%]">Item Code <Lock className="inline h-3 w-3" aria-hidden="true" /></th>
+                  <th className="px-3 py-2 w-[26%]">Item Name <Lock className="inline h-3 w-3" aria-hidden="true" /></th>
+                  <th className="px-3 py-2 w-[10%] text-right">Qty <Lock className="inline h-3 w-3" aria-hidden="true" /></th>
+                  <th className="px-3 py-2 w-[10%]">UOM <Lock className="inline h-3 w-3" aria-hidden="true" /></th>
+                  <th className="px-3 py-2 w-[14%] text-right">Award Rate <Lock className="inline h-3 w-3" aria-hidden="true" /></th>
+                  <th className="px-3 py-2 w-[14%] text-right">Amount <Lock className="inline h-3 w-3" aria-hidden="true" /></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-200">
                 {items.map((it) => (
                   <tr key={it.id}>
                     <td className="px-3 py-2 align-top">
-                      <ItemPicker
+                      <input
+                        aria-label={`Item code for ${it.item_code}`}
                         value={it.item_code}
-                        onSelect={(opt) =>
-                          updateItem(it.id, {
-                            item_code: opt.name,
-                            item_name: opt.item_name ?? opt.name,
-                            uom: opt.stock_uom ?? "",
-                            rate: it.rate,
-                          })
-                        }
+                        title={it.item_code}
+                        readOnly
+                        aria-readonly={true}
+                        className="w-full cursor-default rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 text-sm text-neutral-600"
                       />
                     </td>
                     <td className="px-3 py-2 align-top">
                       <input
+                        aria-label={`Item name for ${it.item_code || "new item"}`}
                         value={it.item_name}
-                        onChange={(e) =>
-                          updateItem(it.id, { item_name: e.target.value })
-                        }
-                        className="w-full rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                        title={it.item_name}
+                        readOnly
+                        aria-readonly={true}
+                        className="w-full cursor-default rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 text-sm text-neutral-600"
                       />
                     </td>
                     <td className="px-3 py-2 align-top">
                       <input
-                        type="number"
-                        min={0}
-                        step="any"
+                        aria-label={`Quantity for ${it.item_code || "new item"}`}
                         value={it.qty}
-                        onChange={(e) =>
-                          updateItem(it.id, {
-                            qty: Number(e.target.value) || 0,
-                          })
-                        }
-                        className="w-full rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-right text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                        readOnly
+                        aria-readonly={true}
+                        className="w-full cursor-default rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 text-right text-sm tabular-nums text-neutral-600"
                       />
                     </td>
                     <td className="px-3 py-2 align-top">
                       <input
+                        aria-label={`UOM for ${it.item_code || "new item"}`}
                         value={it.uom}
-                        onChange={(e) =>
-                          updateItem(it.id, { uom: e.target.value })
-                        }
-                        className="w-full rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                        readOnly
+                        aria-readonly={true}
+                        className="w-full cursor-default rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 text-sm text-neutral-600"
                       />
                     </td>
                     <td className="px-3 py-2 align-top">
                       <input
-                        type="number"
-                        min={0}
-                        step="any"
+                        aria-label={`Rate for ${it.item_code || "new item"}`}
                         value={it.rate}
-                        onChange={(e) =>
-                          updateItem(it.id, {
-                            rate: Number(e.target.value) || 0,
-                          })
-                        }
-                        className="w-full rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-right text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                        readOnly
+                        aria-readonly={true}
+                        className="w-full cursor-default rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 text-right text-sm tabular-nums text-neutral-600"
                       />
                     </td>
                     <td className="px-3 py-2 align-top text-right text-sm font-medium tabular-nums">
-                      {formatCurrency(it.qty * it.rate)}
-                    </td>
-                    <td className="px-3 py-2 align-top text-right">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setItems((prev) =>
-                            prev.filter((p) => p.id !== it.id)
-                          )
-                        }
-                        disabled={items.length === 1}
-                        className="text-neutral-400 hover:text-danger-600 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      <span className="block rounded-md border border-neutral-200 bg-neutral-50 px-2 py-1.5 text-neutral-600">{money(it.qty * it.rate)}</span>
                     </td>
                   </tr>
                 ))}
@@ -610,12 +642,11 @@ export default function NewPurchaseOrderPage() {
               <tfoot>
                 <tr className="bg-neutral-50">
                   <td colSpan={5} className="px-3 py-3 text-right text-sm font-medium">
-                    Total
+                    Total <Lock className="ml-1 inline h-3 w-3 text-neutral-400" aria-hidden="true" />
                   </td>
                   <td className="px-3 py-3 text-right text-sm font-semibold tabular-nums">
-                    {formatCurrency(total)}
+                    {money(total)}
                   </td>
-                  <td />
                 </tr>
               </tfoot>
             </table>
@@ -625,7 +656,7 @@ export default function NewPurchaseOrderPage() {
         <div className="flex justify-end gap-2">
           <button
             type="button"
-            onClick={() => navigate("/p2p/purchase-orders")}
+            onClick={() => navigate(contractParam ? `/contracts/${encodeURIComponent(contractParam)}` : "/p2p/purchase-orders")}
             disabled={isSaving}
             className="rounded-lg border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
           >
@@ -651,7 +682,7 @@ export default function NewPurchaseOrderPage() {
             {submitMutation.isPending && (
               <Loader2 className="h-4 w-4 animate-spin" />
             )}
-            Submit PO
+            {contractParam ? "Create & Submit Purchase Order" : "Submit PO"}
           </button>
         </div>
       </div>

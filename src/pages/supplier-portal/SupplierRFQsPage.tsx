@@ -18,52 +18,49 @@ import { getDeclinedSuppliersByRfq } from "../../api/supplierRfqResponse";
 import type { SupplierQuotation } from "../../types/erpnext";
 import EmptyState from "../../components/EmptyState";
 import PaginationBar from "../../components/PaginationBar";
-import StatusBadge from "../../components/StatusBadge";
+import StatusBadge, { type StatusTone } from "../../components/StatusBadge";
 import { TableSkeleton } from "../../components/Skeleton";
 import { usePagination } from "../../hooks/usePagination";
 import { formatDate } from "../../utils/format";
 import { useSupplierSession } from "../../hooks/useSupplierSession";
+import {
+  getSupplierRFQStatus,
+  type SupplierQuotationState,
+  type SupplierQuotationAction,
+} from "../../utils/supplierRfqStatus";
 
-type WorklistStatus =
-  | "Awaiting"
-  | "Submitted"
-  | "Awarded"
-  | "Closed";
-
-type StatusFilter = "all" | WorklistStatus;
+type StatusFilter = "all" | SupplierQuotationState;
 type DateFilter = "all" | "7d" | "30d" | "90d";
-
-type ActionKind = "continue" | "details";
 
 type EnrichedRfq = {
   rfq: RFQRow;
-  status: WorklistStatus;
-  action: ActionKind;
+  status: SupplierQuotationState;
+  action: SupplierQuotationAction;
+  actionLabel: string;
+  tone: StatusTone;
   title: string;
   buyer: string;
   dueDate: string | undefined;
   lastUpdated: string | undefined;
 };
 
-const STATUS_LABEL: Record<WorklistStatus, string> = {
-  Awaiting: "Awaiting Quotation",
-  Submitted: "Quotation Submitted",
-  Awarded: "Awarded",
-  Closed: "Closed",
-};
-
 const SUMMARY_CARDS: Array<{
-  key: WorklistStatus;
+  key: SupplierQuotationState;
   label: string;
   accent: string;
 }> = [
   {
-    key: "Awaiting",
+    key: "Awaiting Quotation",
     label: "Awaiting Quotation",
     accent: "border-l-amber-400",
   },
   {
-    key: "Submitted",
+    key: "Draft Quotation",
+    label: "Draft Quotation",
+    accent: "border-l-slate-400",
+  },
+  {
+    key: "Quotation Submitted",
     label: "Quotation Submitted",
     accent: "border-l-primary-500",
   },
@@ -91,32 +88,6 @@ function isInternalOrUnpublishedRfq(rfq: RFQRow): boolean {
   return false;
 }
 
-function deriveWorklistStatus(
-  rfq: RFQRow,
-  hasSubmittedQuote: boolean,
-  declined: boolean,
-): WorklistStatus {
-  const status = (rfq.status ?? "").toLowerCase();
-  if (status.includes("award")) return "Awarded";
-  if (
-    status === "cancelled" ||
-    status === "closed" ||
-    status === "expired" ||
-    status.includes("expired")
-  ) {
-    return "Closed";
-  }
-  if (declined) return "Closed";
-  if (hasSubmittedQuote) return "Submitted";
-  // Supplier draft quotation still means the RFQ is open for quoting.
-  return "Awaiting";
-}
-
-function deriveAction(status: WorklistStatus): ActionKind {
-  if (status === "Awaiting") return "continue";
-  return "details";
-}
-
 function withinDateFilter(iso: string | undefined, filter: DateFilter): boolean {
   if (filter === "all" || !iso) return filter === "all" ? true : false;
   const d = new Date(iso);
@@ -128,38 +99,27 @@ function withinDateFilter(iso: string | undefined, filter: DateFilter): boolean 
   return d >= start;
 }
 
-function StatusPill({ status }: { status: WorklistStatus }) {
-  const tone =
-    status === "Awaiting"
-      ? ("warning" as const)
-      : status === "Submitted"
-        ? ("info" as const)
-        : status === "Awarded"
-          ? ("success" as const)
-          : ("closed" as const);
-  return <StatusBadge status={STATUS_LABEL[status]} tone={tone} />;
+function StatusPill({
+  status,
+  tone,
+}: {
+  status: SupplierQuotationState;
+  tone: StatusTone;
+}) {
+  return <StatusBadge status={status} tone={tone} />;
 }
 
 function ActionCell({
   rfqName,
-  action,
+  actionLabel,
 }: {
   rfqName: string;
-  action: ActionKind;
+  actionLabel: string;
 }) {
   const to = `/supplier/rfq/${encodeURIComponent(rfqName)}`;
-  const className = "btn-secondary no-underline";
-
-  if (action === "continue") {
-    return (
-      <Link to={to} className={`${className} no-underline`}>
-        Continue Quotation
-      </Link>
-    );
-  }
   return (
-    <Link to={to} className={`${className} no-underline`}>
-      View Details
+    <Link to={to} className="btn-secondary no-underline">
+      {actionLabel}
     </Link>
   );
 }
@@ -231,23 +191,18 @@ export default function SupplierRFQsPage() {
     return set;
   }, [declinesQuery.data, erpSupplierName]);
 
-  const quoteStateByRfq = useMemo(() => {
-    const map = new Map<
-      string,
-      { submitted: boolean; draft: boolean }
-    >();
+  const quotationsByRfq = useMemo(() => {
+    const map = new Map<string, SupplierQuotation[]>();
     for (const sq of sqDetailsQuery.data ?? []) {
-      const isDraft =
-        sq.docstatus === 0 ||
-        (sq.status ?? "").toLowerCase() === "draft";
       for (const item of sq.items ?? []) {
         const link = (item as { request_for_quotation?: string })
           .request_for_quotation;
         if (!link) continue;
-        const prev = map.get(link) ?? { submitted: false, draft: false };
-        if (isDraft) prev.draft = true;
-        else prev.submitted = true;
-        map.set(link, prev);
+        const list = map.get(link) ?? [];
+        if (!list.some((existing) => existing.name === sq.name)) {
+          list.push(sq);
+        }
+        map.set(link, list);
       }
     }
     return map;
@@ -258,42 +213,89 @@ export default function SupplierRFQsPage() {
       // Defense in depth: never surface Draft / unpublished / internal RFQs.
       .filter((rfq) => !isInternalOrUnpublishedRfq(rfq))
       .map((rfq) => {
-        const quotes = quoteStateByRfq.get(rfq.name);
-        const status = deriveWorklistStatus(
-          rfq,
-          Boolean(quotes?.submitted),
-          declinedRfqNames.has(rfq.name),
-        );
+        const quotes = quotationsByRfq.get(rfq.name) ?? [];
+        const statusRes = getSupplierRFQStatus({
+          rfq: rfq as unknown as {
+            name: string;
+            status?: string | null;
+            docstatus?: number | null;
+            valid_till?: string | null;
+            award_supplier?: string | null;
+            suppliers?: Array<{
+              supplier?: string;
+              supplier_name?: string;
+              quote_status?: string;
+            }> | null;
+          },
+          quotations: quotes as unknown as Array<{
+            name?: string;
+            status?: string | null;
+            docstatus?: number | null;
+            modified?: string | null;
+            creation?: string | null;
+            valid_till?: string | null;
+            grand_total?: number | null;
+            custom_revision_requested?: number | boolean | null;
+            amended_from?: string | null;
+            supplier?: string | null;
+            supplier_name?: string | null;
+            items?: Array<{
+              request_for_quotation?: string | null;
+            }> | null;
+          }>,
+          supplierId: erpSupplierName,
+          declined: declinedRfqNames.has(rfq.name),
+        });
+
         const title =
           (rfq.message_for_supplier ?? "").trim() ||
           (rfq.company ? `RFQ for ${rfq.company}` : "Request for Quotation");
+
         return {
           rfq,
-          status,
-          action: deriveAction(status),
+          status: statusRes.status,
+          action: statusRes.action,
+          actionLabel: statusRes.actionLabel,
+          tone: statusRes.tone,
           title,
           buyer: rfq.company?.trim() || "—",
           dueDate: rfq.valid_till || undefined,
           lastUpdated: rfq.modified,
         };
       });
-  }, [rfqsQuery.data, quoteStateByRfq, declinedRfqNames]);
+  }, [rfqsQuery.data, quotationsByRfq, declinedRfqNames, erpSupplierName]);
 
   const summaryCounts = useMemo(() => {
-    const counts: Record<WorklistStatus, number> = {
-      Awaiting: 0,
-      Submitted: 0,
+    const counts: Record<SupplierQuotationState, number> = {
+      "Awaiting Quotation": 0,
+      "Draft Quotation": 0,
+      "Quotation Submitted": 0,
+      "Under Review": 0,
+      "Revision Requested": 0,
       Awarded: 0,
       Closed: 0,
     };
-    for (const row of enrichedRows) counts[row.status] += 1;
+    for (const row of enrichedRows) {
+      if (counts[row.status] !== undefined) {
+        counts[row.status] += 1;
+      }
+    }
     return counts;
   }, [enrichedRows]);
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return enrichedRows.filter((row) => {
-      if (statusFilter !== "all" && row.status !== statusFilter) return false;
+      if (statusFilter !== "all") {
+        if (
+          statusFilter === "Quotation Submitted" &&
+          (row.status === "Quotation Submitted" || row.status === "Under Review")
+        ) {
+          // match both submitted and under review under submitted filter
+        } else if (row.status !== statusFilter) {
+          return false;
+        }
+      }
       if (!withinDateFilter(row.lastUpdated ?? row.rfq.transaction_date, dateFilter)) {
         return false;
       }
@@ -319,34 +321,28 @@ export default function SupplierRFQsPage() {
     safePage * pageSize,
   );
 
+  const isError =
+    rfqsQuery.isError || sqsQuery.isError || sqDetailsQuery.isError;
+  const error =
+    rfqsQuery.error || sqsQuery.error || sqDetailsQuery.error;
   const isLoading =
-    rfqsQuery.isLoading || sqsQuery.isLoading || sqDetailsQuery.isLoading;
+    !isReady ||
+    rfqsQuery.isLoading ||
+    sqsQuery.isLoading ||
+    (sqsQuery.data && sqsQuery.data.length > 0 && sqDetailsQuery.isLoading);
+  const isFetching =
+    rfqsQuery.isFetching || sqsQuery.isFetching || sqDetailsQuery.isFetching;
 
-  const refreshing =
-    rfqsQuery.isFetching ||
-    sqsQuery.isFetching ||
-    sqDetailsQuery.isFetching ||
-    declinesQuery.isFetching;
-
-  function handleRefresh() {
+  const handleRefetch = () => {
     void rfqsQuery.refetch();
     void sqsQuery.refetch();
+    void sqDetailsQuery.refetch();
     void declinesQuery.refetch();
-  }
-
-  if (!isReady) {
-    return (
-      <>
-        <div className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-500">
-          Loading…
-        </div>
-      </>
-    );
-  }
+  };
 
   return (
     <>
-      <div className="flex w-full flex-col gap-6">
+      <div className="mx-auto flex max-w-7xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
         <header>
           <h1 className="text-[22px] font-semibold tracking-tight text-[#111827]">
             My RFQs
@@ -356,9 +352,15 @@ export default function SupplierRFQsPage() {
           </p>
         </header>
 
-        <section className="grid grid-cols-2 gap-5 lg:grid-cols-4">
+        <section className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
           {SUMMARY_CARDS.map((card) => {
             const active = statusFilter === card.key;
+            const count =
+              card.key === "Quotation Submitted"
+                ? summaryCounts["Quotation Submitted"] +
+                  summaryCounts["Under Review"]
+                : summaryCounts[card.key] ?? 0;
+
             return (
               <button
                 key={card.key}
@@ -376,7 +378,7 @@ export default function SupplierRFQsPage() {
                   {card.label}
                 </p>
                 <p className="mt-1 text-[24px] font-bold tabular-nums leading-none text-[#0F172A]">
-                  {isLoading ? "—" : summaryCounts[card.key]}
+                  {isLoading ? "—" : count}
                 </p>
               </button>
             );
@@ -399,53 +401,59 @@ export default function SupplierRFQsPage() {
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-              className="select-field w-full sm:w-[160px]"
+              className="select-field w-full sm:w-[180px]"
               aria-label="Status filter"
             >
               <option value="all">All statuses</option>
-              <option value="Awaiting">Awaiting Quotation</option>
-              <option value="Submitted">Quotation Submitted</option>
+              <option value="Awaiting Quotation">Awaiting Quotation</option>
+              <option value="Draft Quotation">Draft Quotation</option>
+              <option value="Quotation Submitted">Quotation Submitted</option>
+              <option value="Under Review">Under Review</option>
+              <option value="Revision Requested">Revision Requested</option>
               <option value="Awarded">Awarded</option>
-              <option value="Closed">Closed / Expired</option>
+              <option value="Closed">Closed</option>
             </select>
             <select
               value={dateFilter}
               onChange={(e) => setDateFilter(e.target.value as DateFilter)}
-              className="select-field w-full sm:w-[160px]"
+              className="select-field w-full sm:w-[140px]"
               aria-label="Date filter"
             >
-              <option value="all">All dates</option>
+              <option value="all">All time</option>
               <option value="7d">Last 7 days</option>
               <option value="30d">Last 30 days</option>
               <option value="90d">Last 90 days</option>
             </select>
             <button
               type="button"
-              onClick={handleRefresh}
-              disabled={refreshing}
+              onClick={handleRefetch}
+              disabled={isFetching}
               className="btn-secondary"
+              aria-label="Refresh list"
             >
               <RefreshCw
-                className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
+                className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`}
               />
               Refresh
             </button>
           </div>
 
           {isLoading ? (
-            <div className="p-4">
-              <TableSkeleton rows={6} columns={6} />
-            </div>
-          ) : rfqsQuery.isError ? (
+            <TableSkeleton rows={5} columns={6} />
+          ) : isError ? (
             <EmptyState
               icon={AlertTriangle}
-              title="Couldn't load your RFQs"
-              description="We hit an error loading RFQs. This is NOT the same as having no RFQs — please retry."
+              title="Unable to load RFQs"
+              description={
+                error instanceof Error
+                  ? error.message
+                  : "We could not fetch your RFQs from the server."
+              }
               action={
                 <button
                   type="button"
-                  onClick={() => void rfqsQuery.refetch()}
-                  className="rounded-xl border border-[#E8EDF5] px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                  onClick={handleRefetch}
+                  className="btn-primary"
                 >
                   Retry
                 </button>
@@ -504,40 +512,40 @@ export default function SupplierRFQsPage() {
                   </thead>
                   <tbody>
                     {pageRows.map((row) => (
-                        <tr
-                          key={row.rfq.name}
-                          className="border-b border-[#E8EDF5] transition-colors last:border-b-0 hover:bg-[#F8FAFC]"
-                        >
-                          <td className="px-4 py-2.5 align-middle">
-                            <p className="text-[15px] font-semibold text-[#111827]">
-                              {row.rfq.name}
-                            </p>
-                            <p className="mt-0.5 max-w-[280px] truncate text-[12px] text-[#64748B]">
-                              {row.title}
-                            </p>
-                          </td>
-                          <td className="px-4 py-2.5 align-middle text-[15px] text-[#111827]">
-                            {row.buyer}
-                          </td>
-                          <td className="whitespace-nowrap px-4 py-2.5 align-middle text-[15px] text-[#334155]">
-                            {row.lastUpdated
-                              ? formatDate(row.lastUpdated)
-                              : "—"}
-                          </td>
-                          <td className="whitespace-nowrap px-4 py-2.5 align-middle text-[15px] text-[#334155]">
-                            {row.dueDate ? formatDate(row.dueDate) : "—"}
-                          </td>
-                          <td className="px-4 py-2.5 align-middle">
-                            <StatusPill status={row.status} />
-                          </td>
-                          <td className="px-4 py-2.5 align-middle">
-                            <ActionCell
-                              rfqName={row.rfq.name}
-                              action={row.action}
-                            />
-                          </td>
-                        </tr>
-                      ))}
+                      <tr
+                        key={row.rfq.name}
+                        className="border-b border-[#E8EDF5] transition-colors last:border-b-0 hover:bg-[#F8FAFC]"
+                      >
+                        <td className="px-4 py-2.5 align-middle">
+                          <p className="text-[15px] font-semibold text-[#111827]">
+                            {row.rfq.name}
+                          </p>
+                          <p className="mt-0.5 max-w-[280px] truncate text-[12px] text-[#64748B]">
+                            {row.title}
+                          </p>
+                        </td>
+                        <td className="px-4 py-2.5 align-middle text-[15px] text-[#111827]">
+                          {row.buyer}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-2.5 align-middle text-[15px] text-[#334155]">
+                          {row.lastUpdated
+                            ? formatDate(row.lastUpdated)
+                            : "—"}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-2.5 align-middle text-[15px] text-[#334155]">
+                          {row.dueDate ? formatDate(row.dueDate) : "—"}
+                        </td>
+                        <td className="px-4 py-2.5 align-middle">
+                          <StatusPill status={row.status} tone={row.tone} />
+                        </td>
+                        <td className="px-4 py-2.5 align-middle">
+                          <ActionCell
+                            rfqName={row.rfq.name}
+                            actionLabel={row.actionLabel}
+                          />
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>

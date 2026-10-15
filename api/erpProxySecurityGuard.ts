@@ -92,12 +92,32 @@ export class ErpProxySecurityError extends Error {
   }
 }
 
+/** Shipment acceptance must always pass the supplier/CLM gateway, including GET RPCs. */
+export function assertNoGenericPoShipmentMutation(apiPath: string, method: string, requestDoctypes: string[] = []): void {
+  const path = cleanPath(apiPath);
+  const doctypes = [resourceDoctype(path), ...requestDoctypes].map(value => String(value).trim());
+  if (!doctypes.includes("PO Shipment")) return;
+  const readMethods = new Set(["method/frappe.client.get", "method/frappe.client.get_list", "method/frappe.client.get_value", "method/frappe.client.get_count"]);
+  const read = path.startsWith("resource/") ? ["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase()) : readMethods.has(path);
+  if (!read) throw new ErpProxySecurityError("Use the authenticated PO Shipment endpoint to update supplier acceptance or shipment status.");
+}
+
+export function assertNoGenericSupplierShipmentRead(apiPath: string, requestDoctypes: string[], principalType?: string): void {
+  if (principalType === "internal") return;
+  if ([resourceDoctype(apiPath), ...requestDoctypes].some(doctype => String(doctype).trim() === "PO Shipment")) {
+    throw new ErpProxySecurityError("Use the authenticated supplier-scoped PO Shipment endpoint to read shipments.");
+  }
+}
+
 export function assertErpProxySecurityBoundary(input: {
   apiPath: string;
   method: string;
   principalRole?: string;
   requestDoctypes?: string[];
 }): void {
+  if (cleanPath(input.apiPath) === "method/bidsphere_workflows.rfq_clm.decide") {
+    throw new ErpProxySecurityError("Use the authenticated RFQ contract decision endpoint.");
+  }
   const method = input.method.toUpperCase();
   if (["GET", "HEAD", "OPTIONS"].includes(method)) return;
   if (input.principalRole === "admin") return;

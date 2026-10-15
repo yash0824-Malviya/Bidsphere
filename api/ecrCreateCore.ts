@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { sanitizeErpPayloadDates } from "./erpDateSanitize.js";
+import { normalizeECRProcurementSourcePart } from "../src/utils/ecrProcurementValidation.js";
 import {
   assertEcrProcurementRelationships,
   type EcrProcurementDocumentLoader,
@@ -135,6 +136,10 @@ const UI_CREATE_FIELDS = new Set([
 ]);
 
 const SERVER_OWNED_FIELDS = new Set([
+  "ecr_workflow_version",
+  "ecr_business_case",
+  "rfq_required",
+  "rfq_decision_reason",
   "name",
   "doctype",
   "ecr_number",
@@ -457,6 +462,12 @@ export function sanitizeEcrCreatePayload(payload: unknown): Record<string, unkno
       ? sanitizeChildRows(value, field)
       : value;
   }
+  const referenceType = clean(sanitized.procurement_reference_type);
+  if ((!referenceType || referenceType === "None") && Array.isArray(sanitized.affected_parts)) {
+    sanitized.affected_parts = sanitized.affected_parts.map((part) =>
+      normalizeECRProcurementSourcePart(part, "None"),
+    );
+  }
   return sanitized;
 }
 
@@ -677,6 +688,18 @@ function createDefaultDependencies(): EcrCreateDependencies {
     },
     insertEcr: async (payload) => {
       try {
+        // Frappe silently ignores unknown fields. Verify the additive schema
+        // before insert so a missing migration cannot create a legacy ECR.
+        const schema = await erpRequest<{ fields?: Array<{ fieldname?: string; fieldtype?: string }> }>(
+          config, "GET", resource("DocType", ECR_DOCTYPE),
+        );
+        const requiredFields: Record<string, string> = {
+          ecr_workflow_version: "Data", ecr_business_case: "Long Text",
+          rfq_required: "Select", rfq_decision_reason: "Small Text",
+        };
+        const missing = Object.entries(requiredFields).filter(([fieldname, fieldtype]) =>
+          !schema.fields?.some((field) => field.fieldname === fieldname && field.fieldtype === fieldtype));
+        if (missing.length) throw new EcrCreateError("The extended ECR schema is not installed. Apply the ECR schema migration before creating requests.", 409, "config");
         return await erpRequest<CreatedEcrDocument>(
           config,
           "POST",
@@ -720,6 +743,7 @@ export async function createEcrDraftCore(
     company: deps.company,
     status: "Draft",
     select_pxfp: "Draft",
+    ecr_workflow_version: "extended_v1",
     docstatus: 0,
     approval_requirements: [],
     [IDEMPOTENCY_FIELD]: idempotencyKey,
@@ -735,6 +759,9 @@ export async function createEcrDraftCore(
   for (let attempt = 1; attempt <= MAX_AUTONAME_ATTEMPTS; attempt += 1) {
     try {
       const created = await deps.insertEcr(document);
+      if (created.ecr_workflow_version !== "extended_v1") {
+        throw new EcrCreateError("ERPNext did not persist the ECR workflow version. Apply the extended ECR schema before creating requests.", 409, "conflict");
+      }
       return normalizeCreatedEcr(created, canonicalOwner, false);
     } catch (error) {
       if (!(error instanceof EcrAutonameCollisionError)) throw error;

@@ -37,8 +37,8 @@ const LayoutContext = createContext<LayoutContextValue | null>(null);
 
 export const SIDEBAR_WIDTH = {
   collapsed: 64,
-  compact: 280,
-  full: 280,
+  compact: 240,
+  full: 240,
 } as const;
 
 function resolveSidebarMode(width: number): SidebarMode {

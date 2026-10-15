@@ -25,9 +25,11 @@ import toast from "react-hot-toast";
 
 import { getRFQNamesWithPO } from "../../api/purchasing";
 import { fetchRfqListKpis } from "../../api/rfqListKpiData";
+import { getAllLegalDocs, type LegalDocumentSet } from "../../api/legalDocs";
 import {
   deleteRFQ,
   getQuoteCountsForRFQs,
+  getSupplierCountsForRFQs,
   getRFQsPaged,
   uniqueByDocName,
   type RFQListRow,
@@ -75,6 +77,7 @@ import {
 
 interface RFQRow extends RFQListRow {
   quote_count: number;
+  supplier_count: number;
   has_po: boolean;
   display_status: string;
 }
@@ -97,8 +100,13 @@ export default function RFQListPage() {
 
   const LIST_STALE_TIME = 5 * 60_000;
 
-  const [filtersState, setFiltersState] =
-    useState<RfqListFilterState>(EMPTY_RFQ_FILTERS);
+  const [filtersState, setFiltersState] = useState<RfqListFilterState>(() => {
+    const statusParam = searchParams.get("status");
+    if (statusParam && (RFQ_STATUS_OPTIONS as readonly string[]).includes(statusParam)) {
+      return { ...EMPTY_RFQ_FILTERS, status: statusParam as RfqStatusFilter };
+    }
+    return EMPTY_RFQ_FILTERS;
+  });
   const debouncedSearch = useDebounce(filtersState.search, 300);
 
   const effectiveFilters = useMemo(
@@ -138,6 +146,8 @@ export default function RFQListPage() {
     queryKey: ["rfq-list-kpis"],
     queryFn: fetchRfqListKpis,
     staleTime: LIST_STALE_TIME,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
     retry: 1,
     retryDelay: 1_200,
   });
@@ -148,7 +158,6 @@ export default function RFQListPage() {
 
   useEffect(() => {
     if (!kpisQuery.isError || !kpisQuery.error) return;
-    // TEMP debug — remove once RFQ list KPI load is stable.
     // eslint-disable-next-line no-console
     console.error("[DashboardLoad] RFQ list KPIs failed", kpisQuery.error);
   }, [kpisQuery.isError, kpisQuery.error]);
@@ -156,30 +165,18 @@ export default function RFQListPage() {
   const rfqsQuery = useQuery({
     queryKey: ["rfqs", filterKey, page, pageSize],
     queryFn: async () => {
-      // TEMP debug
-      // eslint-disable-next-line no-console
-      console.info("[DashboardLoad] getRFQsPaged START", { page, pageSize });
-      try {
-        const result = await getRFQsPaged({
-          page,
-          pageSize,
-          order_by,
-          filters: built.filters.length ? built.filters : undefined,
-          or_filters: built.or_filters.length ? built.or_filters : undefined,
-        });
-        // eslint-disable-next-line no-console
-        console.info("[DashboardLoad] getRFQsPaged DONE", {
-          rows: result.data?.length ?? 0,
-          total: result.total_records,
-        });
-        return result;
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error("[DashboardLoad] getRFQsPaged FAILED", err);
-        throw err;
-      }
+      const result = await getRFQsPaged({
+        page,
+        pageSize,
+        order_by,
+        filters: built.filters.length ? built.filters : undefined,
+        or_filters: built.or_filters.length ? built.or_filters : undefined,
+      });
+      return result;
     },
     staleTime: LIST_STALE_TIME,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
     retry: 1,
     retryDelay: 1_200,
     placeholderData: (prev) => prev,
@@ -196,38 +193,76 @@ export default function RFQListPage() {
     queryKey: ["rfq-list-quote-counts", rfqNames],
     enabled: rfqNames.length > 0,
     staleTime: LIST_STALE_TIME,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
     retry: 0,
     queryFn: () => getQuoteCountsForRFQs(rfqNames),
+  });
+
+  const suppliersQuery = useQuery({
+    queryKey: ["rfq-list-supplier-counts", rfqNames],
+    enabled: rfqNames.length > 0,
+    staleTime: LIST_STALE_TIME,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: 0,
+    queryFn: () => getSupplierCountsForRFQs(rfqNames),
   });
 
   const linkedPOsQuery = useQuery({
     queryKey: ["rfq-list-po-set", rfqNames],
     enabled: rfqNames.length > 0,
     staleTime: LIST_STALE_TIME,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
     retry: 0,
     queryFn: () => getRFQNamesWithPO(rfqNames),
   });
 
+  const legalDocsQuery = useQuery({
+    queryKey: ["legal-docs-all"],
+    staleTime: LIST_STALE_TIME,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
+    retry: 0,
+    queryFn: getAllLegalDocs,
+  });
+
+  const legalDocsMap = useMemo(() => {
+    const map = new Map<string, LegalDocumentSet>();
+    for (const doc of legalDocsQuery.data ?? []) {
+      const rfq = (doc.rfq_name ?? "").trim();
+      if (rfq) map.set(rfq, doc);
+    }
+    return map;
+  }, [legalDocsQuery.data]);
+
   const rows: RFQRow[] = useMemo(() => {
     const quoteCounts = quotesQuery.data;
+    const supplierCounts = suppliersQuery.data;
     const poSet = linkedPOsQuery.data;
     // Group by RFQ document name — never render duplicate IDs.
     return listRows.map<RFQRow>((rfq) => {
       const quote_count = quoteCounts?.get(rfq.name) ?? 0;
+      const supplier_count = supplierCounts?.get(rfq.name) ?? 0;
       const has_po = poSet?.has(rfq.name) ?? false;
+      const legalDoc = legalDocsMap.get(rfq.name) ?? null;
       const display_status = resolveRfqEnterpriseListStatus({
         erpStatus: rfq.status,
+        supplierCount: supplier_count,
         quoteCount: quote_count,
         hasPO: has_po,
+        legalDoc,
       });
       return {
         ...rfq,
         quote_count,
+        supplier_count,
         has_po,
         display_status,
       };
     });
-  }, [listRows, quotesQuery.data, linkedPOsQuery.data]);
+  }, [listRows, quotesQuery.data, suppliersQuery.data, linkedPOsQuery.data, legalDocsMap]);
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -252,13 +287,35 @@ export default function RFQListPage() {
     return sortRows(normalized, sort, RFQ_COMPARATORS);
   }, [rows, sort]);
 
+  const displayRows = useMemo(() => {
+    if (!filtersState.status) return sortedRows;
+    const target = filtersState.status;
+    return sortedRows.filter((row) => {
+      if (target === "Completed") {
+        return (
+          row.display_status === "Completed" ||
+          row.status === "Completed" ||
+          row.status === "Closed"
+        );
+      }
+      if (target === "Purchase Order") {
+        return (
+          row.display_status === "Purchase Order" ||
+          row.display_status === "PO Created" ||
+          row.has_po
+        );
+      }
+      return row.display_status === target || row.status === target;
+    });
+  }, [sortedRows, filtersState.status]);
+
   const lastUpdatedLabel = useMemo(() => {
     let latest = "";
-    for (const row of sortedRows) {
+    for (const row of displayRows) {
       if (row.modified && row.modified > latest) latest = row.modified;
     }
     return latest ? formatDate(latest, "d MMM yyyy") : null;
-  }, [sortedRows]);
+  }, [displayRows]);
 
   const serialBase = (Math.max(1, page) - 1) * pageSize;
 
@@ -273,13 +330,13 @@ export default function RFQListPage() {
   }, [listRows]);
 
   const showOwnerColumn = useMemo(() => {
-    if (sortedRows.length === 0) return true;
+    if (displayRows.length === 0) return true;
     const labels = new Set(
-      sortedRows.map((r) => formatRfqOwnerLabel(r.owner)),
+      displayRows.map((r) => formatRfqOwnerLabel(r.owner)),
     );
     if (labels.size === 1 && labels.has("Procurement Team")) return false;
     return true;
-  }, [sortedRows]);
+  }, [displayRows]);
 
   const chips = useMemo(
     () => getActiveRfqFilterChips(filtersState),
@@ -303,14 +360,14 @@ export default function RFQListPage() {
   }, []);
 
   const allPageSelected =
-    sortedRows.length > 0 && sortedRows.every((r) => selected.has(r.name));
+    displayRows.length > 0 && displayRows.every((r) => selected.has(r.name));
 
   function toggleSelectAll() {
     if (allPageSelected) {
       setSelected(new Set());
       return;
     }
-    setSelected(new Set(sortedRows.map((r) => r.name)));
+    setSelected(new Set(displayRows.map((r) => r.name)));
   }
 
   function toggleSelect(name: string) {
@@ -366,7 +423,7 @@ export default function RFQListPage() {
     },
   ];
 
-  const selectedRows = sortedRows.filter((r) => selected.has(r.name));
+  const selectedRows = displayRows.filter((r) => selected.has(r.name));
 
   function bulkToast(action: string) {
     if (selected.size === 0) {
@@ -377,23 +434,50 @@ export default function RFQListPage() {
   }
 
   return (
-    <div className="rfq-list-ds flex w-full flex-col gap-3">
-      {/* Action toolbar — page title/subtitle omitted; breadcrumb identifies the page */}
-      <div className="rfq-list-toolbar flex flex-wrap items-center justify-end gap-3">
-        <ExportButton
-          module="RFQ"
-          filenamePrefix="RFQ_List_Filtered"
-          columns={exportColumns}
-          rows={selectedRows.length > 0 ? selectedRows : sortedRows}
-          onPrint={() => window.print()}
-        />
-        {canManage ? (
-          <Link to="/sourcing/rfq/new" className="btn-primary">
-            <Plus className="h-[18px] w-[18px]" />
-            Create RFQ
-          </Link>
-        ) : null}
+    <div className="rfq-list-ds flex w-full flex-col gap-4">
+      {/* Header */}
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-[26px] font-bold tracking-tight text-[#12213F]">
+            All RFQs
+          </h1>
+          <p className="text-[13px] text-[#64748B]">
+            View and manage all RFQs across the organization.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <ExportButton
+            module="RFQ"
+            filenamePrefix="RFQ_List_Filtered"
+            columns={exportColumns}
+            rows={selectedRows.length > 0 ? selectedRows : displayRows}
+            onPrint={() => window.print()}
+          />
+          {canManage && userRole !== "legal" ? (
+            <Link to="/sourcing/rfq/new" className="btn-primary">
+              <Plus className="h-[18px] w-[18px]" />
+              Create RFQ
+            </Link>
+          ) : null}
+        </div>
       </div>
+
+      {userRole === "legal" && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50/80 px-4 py-3 text-xs text-blue-900 shadow-2xs">
+          <div className="flex items-center gap-2">
+            <Scale className="h-4 w-4 text-blue-700 shrink-0" />
+            <span>
+              <strong>Read-Only View:</strong> You are viewing organization-wide RFQs in audit mode. Actionable RFQs awaiting your review are managed in your primary work queue.
+            </span>
+          </div>
+          <Link
+            to="/legal/reviews"
+            className="shrink-0 rounded-lg bg-blue-600 px-3 py-1.5 font-semibold text-white transition hover:bg-blue-700"
+          >
+            Go to Legal Reviews →
+          </Link>
+        </div>
+      )}
 
       {/* Mutually exclusive KPI buckets (same status rules as the table) */}
       <div className="sourcing-list-kpis">
@@ -453,10 +537,10 @@ export default function RFQListPage() {
         )}
       </div>
 
-      {/* Sticky filter panel */}
-      <div className="rfq-filter-panel sticky top-[52px] z-10 px-3 py-2.5 backdrop-blur">
+      {/* Search & Filter Container */}
+      <div className="rfq-filter-panel rounded-[10px] border border-[#E2E8F0] bg-white p-4 shadow-sm">
         {preset === "open" && !filtersState.status ? (
-          <div className="mb-1.5 flex items-center gap-2 text-[12px]">
+          <div className="mb-2.5 flex items-center gap-2 text-[12px]">
             <span className="font-medium text-[var(--ds-text-faint)]">Preset</span>
             <span className="font-medium text-[var(--ds-text)]">Open RFQs</span>
             <span className="inline-flex items-center gap-1 font-medium text-[var(--ds-success)]">
@@ -474,7 +558,7 @@ export default function RFQListPage() {
           </div>
         ) : null}
 
-        <FilterBar className="rfq-filter-grid !static !mb-0 !border-0 !bg-transparent !p-0 !shadow-none !flex-row !flex-wrap !items-end gap-2">
+        <FilterBar className="rfq-filter-grid !static !mb-0 !border-0 !bg-transparent !p-0 !shadow-none !flex-row !flex-wrap !items-end gap-3">
           <FilterField
             label="Search RFQ"
             className="min-w-[200px] flex-1 basis-[200px] sm:min-w-[240px]"
@@ -680,7 +764,7 @@ export default function RFQListPage() {
           <div className="p-2">
             <TableSkeleton rows={8} columns={showOwnerColumn ? 8 : 7} />
           </div>
-        ) : sortedRows.length === 0 ? (
+        ) : displayRows.length === 0 ? (
           <EmptyState
             icon={FileSearch}
             title={emptyTitle}
@@ -707,7 +791,7 @@ export default function RFQListPage() {
           <>
             {/* Mobile cards */}
             <div className="space-y-2 p-3 md:hidden">
-              {sortedRows.map((rfq, idx) => (
+              {displayRows.map((rfq, idx) => (
                 <div
                   key={rfq.name}
                   className="rounded-lg border border-neutral-200 bg-white px-3 py-3"
@@ -811,7 +895,7 @@ export default function RFQListPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedRows.map((rfq, idx) => {
+                  {displayRows.map((rfq, idx) => {
                     const detailPath = `/sourcing/rfq/${encodeURIComponent(rfq.name)}`;
                     return (
                       <tr
@@ -867,7 +951,7 @@ export default function RFQListPage() {
                             label={rfq.name}
                             viewTo={detailPath}
                             items={[
-                              ...(canManage
+                              ...(canManage && userRole !== "legal"
                                 ? [
                                     {
                                       id: "edit",
@@ -877,21 +961,25 @@ export default function RFQListPage() {
                                     },
                                   ]
                                 : []),
-                              {
-                                id: "duplicate",
-                                label: "Duplicate",
-                                icon: Copy,
-                                onClick: () =>
-                                  navigate(
-                                    `/sourcing/rfq/new?duplicate=${encodeURIComponent(rfq.name)}`,
-                                  ),
-                              },
-                              {
-                                id: "invite",
-                                label: "Invite Suppliers",
-                                icon: UserPlus,
-                                onClick: () => navigate(detailPath),
-                              },
+                              ...(userRole !== "legal"
+                                ? [
+                                    {
+                                      id: "duplicate",
+                                      label: "Duplicate",
+                                      icon: Copy,
+                                      onClick: () =>
+                                        navigate(
+                                          `/sourcing/rfq/new?duplicate=${encodeURIComponent(rfq.name)}`,
+                                        ),
+                                    },
+                                    {
+                                      id: "invite",
+                                      label: "Invite Suppliers",
+                                      icon: UserPlus,
+                                      onClick: () => navigate(detailPath),
+                                    },
+                                  ]
+                                : []),
                               ...(rfq.quote_count > 1
                                 ? [
                                     {

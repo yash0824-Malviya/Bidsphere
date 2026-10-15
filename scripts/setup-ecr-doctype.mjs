@@ -11,6 +11,8 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { appendSelectOptions, EXTENDED_ECR_FIELDS, EXTENDED_ECR_STATES } from "./ecr-extended-schema.mjs";
+import { ECR_SOURCE_OPTIONAL_SETTINGS, ensureOptionalEcrSourceReferenceSchema } from "./ecr-source-reference-schema.mjs";
 import {
   ECR_AUTONAME_PATTERN,
   ensureEcrNamingSeriesCounter,
@@ -84,6 +86,12 @@ async function createDocType(spec) {
   if (await doctypeExists(spec.name)) {
     if (spec.name === "Engineering Change Request") {
       await reconcileExistingDocTypeFields(spec, {
+        ...Object.fromEntries(
+          EXTENDED_ECR_FIELDS.map((field) => [
+            field.fieldname,
+            [...Object.keys(field).filter((property) => property !== "fieldname"), "reqd"],
+          ]),
+        ),
         ...Object.fromEntries(
           ECR_SUBMITTED_MUTABLE_FIELDS.map((fieldname) => [
             fieldname,
@@ -319,7 +327,7 @@ const ECR_AFFECTED_PART = {
     { fieldname: "current_supplier", label: "Current Supplier", fieldtype: "Link", options: "Supplier" },
     { fieldname: "proposed_supplier", label: "Proposed Supplier", fieldtype: "Link", options: "Supplier" },
     { fieldname: "plant", label: "Plant", fieldtype: "Link", options: "Plant Floor" },
-    { fieldname: "source_reference_type", label: "Source Reference Type", fieldtype: "Select", options: "RFQ\nPurchase Order", hidden: 1 },
+    { fieldname: "source_reference_type", label: "Source Reference Type", fieldtype: "Select", ...ECR_SOURCE_OPTIONAL_SETTINGS, hidden: 1 },
     { fieldname: "source_document_reference", label: "Source Document Reference", fieldtype: "Data", hidden: 1 },
     { fieldname: "source_item_reference", label: "Source Item Row Reference", fieldtype: "Data", hidden: 1 },
   ],
@@ -478,6 +486,10 @@ const ECR_DOCTYPE = {
       options: "\nNot Started\nPending\nIn Progress\nPassed\nFailed", default: "Not Started" },
     { fieldname: "validation_notes", label: "Validation Notes", fieldtype: "Long Text" },
     { fieldname: "validation_documents", label: "Validation Documents", fieldtype: "Attach Multiple" },
+
+    // Optional native fields shared with the schema-only repair and create preflight.
+    // No workflow-version default: existing and manually created ECRs stay legacy.
+    ...EXTENDED_ECR_FIELDS.map((field) => ({ ...field, reqd: 0 })),
   ],
   permissions: ECR_HUMAN_ROLES.map((role) => ({
     role,
@@ -491,6 +503,7 @@ const ECR_DOCTYPE = {
 for (const field of ECR_AFFECTED_PART.fields) field.allow_on_submit = 1;
 for (const field of ECR_SUPPLIER_RESPONSE_REQ.fields) field.allow_on_submit = 1;
 for (const field of ECR_DOCTYPE.fields) {
+  if (["select_pxfp", "status"].includes(field.fieldname)) field.options = appendSelectOptions(field.options, EXTENDED_ECR_STATES);
   if (ECR_SUBMITTED_MUTABLE_FIELDS.includes(field.fieldname)) {
     field.allow_on_submit = 1;
   }
@@ -501,6 +514,8 @@ async function main() {
 
   console.log("\n1. Creating ECR Affected Part (child)...");
   await createDocType(ECR_AFFECTED_PART);
+  // Keep source metadata optional while preserving existing duplicate definitions and records.
+  await ensureOptionalEcrSourceReferenceSchema((method, path, body) => api(method, `/api/${path}`, body));
 
   console.log("\n2. Creating ECR Supplier Response Requirement (child)...");
   await createDocType(ECR_SUPPLIER_RESPONSE_REQ);

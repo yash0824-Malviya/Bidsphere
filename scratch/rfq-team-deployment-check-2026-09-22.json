@@ -1,0 +1,41 @@
+{
+  "checked_at": "2026-09-22T08:04:18.638Z",
+  "read_only": true,
+  "mutation_performed": false,
+  "versions": {
+    "ok": true,
+    "data": {
+      "frappe": {
+        "title": "Frappe Framework",
+        "description": "Full stack web framework with Python, Javascript, MariaDB, Redis, Node",
+        "branch": "",
+        "version": "16.20.0"
+      },
+      "erpnext": {
+        "title": "ERPNext",
+        "description": "ERP made simple",
+        "branch": "",
+        "version": "16.22.0"
+      }
+    }
+  },
+  "endpoint": {
+    "ok": false,
+    "status": 417,
+    "error": "ERP GET method/bidsphere_workflows.rfq_clm.decide returned 417: frappe.exceptions.ValidationError: Failed to get method for command bidsphere_workflows.rfq_clm.decide with App bidsphere_workflows is not installed."
+  },
+  "rfq": {
+    "name": "PUR-RFQ-2026-00093",
+    "status": "Submitted",
+    "docstatus": 1,
+    "contract_required": "Yes",
+    "saved_decision_present": false
+  },
+  "award": {
+    "name": "LDC2026-00024",
+    "rfq": "PUR-RFQ-2026-00093",
+    "quotation": "PUR-SQTN-2026-00263"
+  },
+  "requests": [],
+  "contracts": []
+}

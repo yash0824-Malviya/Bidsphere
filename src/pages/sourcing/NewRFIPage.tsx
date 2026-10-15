@@ -225,7 +225,7 @@ export default function NewRFIPage() {
   const publishedByPreview = user?.email || user?.name || "Current user";
 
   return (
-    <div className="space-y-5 pb-8">
+    <div className="space-y-5">
       <PageHeader
         title="Create RFI"
         description="Enterprise Request for Information — collect supplier capabilities before RFQ."
@@ -454,7 +454,7 @@ export default function NewRFIPage() {
           </div>
 
           {selectedList.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-neutral-200 bg-neutral-50 px-4 py-8 text-center text-sm text-neutral-500">
+            <div className="rounded-lg border border-dashed border-neutral-200 bg-neutral-50 px-4 py-5 text-center text-sm text-neutral-500">
               Use Add Suppliers to search, filter, and invite suppliers.
             </div>
           ) : (
@@ -495,7 +495,7 @@ export default function NewRFIPage() {
         </div>
       </RfiCollapsibleSection>
 
-      <div className="sticky bottom-0 z-20 -mx-1 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#E2E8F0] bg-white/95 px-4 py-3 shadow-[0_-4px_16px_rgba(15,23,42,0.06)] backdrop-blur">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#E2E8F0] bg-white px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
         <p className="text-[12px] text-neutral-500">
           Publish sets status to <strong>Published</strong>, records Published
           On, and notifies invited suppliers.

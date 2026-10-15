@@ -165,7 +165,9 @@ export function purgeStaleAuthStorage(): void {
         state?.isAuthenticated === true && !state?.sessionProof;
       const missingUser = !state?.user?.name;
       const persistedWithoutRemember =
-        Boolean(state?.user?.name) && state?.rememberMe !== true;
+        store === localStorage &&
+        Boolean(state?.user?.name) &&
+        state?.rememberMe !== true;
       const staleProof =
         state?.sessionProof &&
         state?.user?.name &&
@@ -219,6 +221,7 @@ export function clearAllAuthStorage(): void {
   // dedicated key so Finance logout does not break an active supplier session.
   try {
     sessionStorage.removeItem("bidsphere-access-token");
+    localStorage.removeItem("bidsphere-access-token");
     localStorage.removeItem("bidsphere-access-token-remember");
   } catch {
     /* ignore */

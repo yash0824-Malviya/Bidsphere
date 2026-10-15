@@ -57,6 +57,12 @@ export interface SupplierPerformanceData {
   has_sufficient_data: boolean;
   data_sources: string[];
   data_points_count: number;
+  has_delivery_data?: boolean;
+  has_quality_data?: boolean;
+  has_reliability_data?: boolean;
+  unavailable_metrics?: string[];
+  /** Billing dates describe invoice submission, not actual payment history. */
+  invoice_timeliness_basis?: string;
 }
 
 export interface HistoricalPerformanceMap {
@@ -77,6 +83,7 @@ interface PORow {
   schedule_date?: string;
   transaction_date?: string;
   modified?: string;
+  items?: Array<{ name?: string; qty?: number; schedule_date?: string }>;
 }
 
 interface GRNRow {
@@ -86,8 +93,10 @@ interface GRNRow {
   posting_date?: string;
   status?: string;
   per_returned?: number;
+  is_return?: number;
   items?: Array<{
     purchase_order?: string;
+    purchase_order_item?: string;
     qty?: number;
     received_qty?: number;
     rejected_qty?: number;
@@ -107,7 +116,6 @@ interface InvoiceRow {
 
 async function fetchSupplierPOs(supplierNames: string[]): Promise<PORow[]> {
   if (supplierNames.length === 0) return [];
-  try {
     return await apiGet<PORow[]>(
       buildResourceUrl("Purchase Order"),
       withSilent(buildListConfig({
@@ -124,14 +132,10 @@ async function fetchSupplierPOs(supplierNames: string[]): Promise<PORow[]> {
         limit_page_length: 200,
       }))
     );
-  } catch {
-    return [];
-  }
 }
 
 async function fetchSupplierGRNs(supplierNames: string[]): Promise<GRNRow[]> {
   if (supplierNames.length === 0) return [];
-  try {
     return await apiGet<GRNRow[]>(
       buildResourceUrl("Purchase Receipt"),
       withSilent(buildListConfig({
@@ -147,14 +151,10 @@ async function fetchSupplierGRNs(supplierNames: string[]): Promise<GRNRow[]> {
         limit_page_length: 200,
       }))
     );
-  } catch {
-    return [];
-  }
 }
 
 async function fetchSupplierInvoices(supplierNames: string[]): Promise<InvoiceRow[]> {
   if (supplierNames.length === 0) return [];
-  try {
     return await apiGet<InvoiceRow[]>(
       buildResourceUrl("Purchase Invoice"),
       withSilent(buildListConfig({
@@ -170,9 +170,34 @@ async function fetchSupplierInvoices(supplierNames: string[]): Promise<InvoiceRo
         limit_page_length: 200,
       }))
     );
-  } catch {
-    return [];
-  }
+}
+
+async function hydrateDocuments<T extends { name: string; supplier: string }>(
+  doctype: string,
+  rows: T[],
+): Promise<T[]> {
+  return Promise.all(rows.map(async (row) => {
+    try {
+      const document = await apiGet<T>(buildResourceUrl(doctype, row.name), withSilent());
+      // A document fetched by its ID must still belong to that exact supplier.
+      return document.name === row.name && document.supplier === row.supplier
+        ? document : row;
+    } catch {
+      // The header remains evidence of the order, but missing line details
+      // make dependent delivery/quality metrics unavailable below.
+      return row;
+    }
+  }));
+}
+
+function nonnegativeNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function dateMillis(value: string | undefined): number | null {
+  if (!value) return null;
+  const millis = Date.parse(value);
+  return Number.isFinite(millis) ? millis : null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -244,16 +269,21 @@ export async function getSupplierPerformance(
   if (unique.length === 0) return {};
 
   // eslint-disable-next-line no-console
-  console.log("[SupplierPerformance] Fetching historical data for:", unique);
+  if (import.meta.env.DEV) console.log("[SupplierPerformance] Fetching historical data for:", unique);
 
-  const [allPOs, allGRNs, allInvoices] = await Promise.all([
+  const [poResult, grnResult, invoiceResult] = await Promise.allSettled([
     fetchSupplierPOs(unique),
     fetchSupplierGRNs(unique),
     fetchSupplierInvoices(unique),
   ]);
+  const [allPOs, allGRNs] = await Promise.all([
+    hydrateDocuments("Purchase Order", poResult.status === "fulfilled" ? poResult.value : []),
+    hydrateDocuments("Purchase Receipt", grnResult.status === "fulfilled" ? grnResult.value : []),
+  ]);
+  const allInvoices = invoiceResult.status === "fulfilled" ? invoiceResult.value : [];
 
   // eslint-disable-next-line no-console
-  console.log("[SupplierPerformance] Raw data:", {
+  if (import.meta.env.DEV) console.log("[SupplierPerformance] Raw data:", {
     pos: allPOs.length,
     grns: allGRNs.length,
     invoices: allInvoices.length,
@@ -262,13 +292,11 @@ export async function getSupplierPerformance(
   const result: HistoricalPerformanceMap = {};
 
   for (const name of unique) {
-    const nameLower = name.toLowerCase();
     const matchesSupplier = (row: { supplier: string; supplier_name?: string }) =>
-      row.supplier?.toLowerCase() === nameLower ||
-      row.supplier_name?.toLowerCase() === nameLower;
+      row.supplier === name;
 
     const pos = allPOs.filter(matchesSupplier);
-    const grns = allGRNs.filter(matchesSupplier);
+    const grns = allGRNs.filter((row) => matchesSupplier(row) && !row.is_return);
     const invoices = allInvoices.filter(matchesSupplier);
 
     const totalPOs = pos.length;
@@ -278,47 +306,63 @@ export async function getSupplierPerformance(
     const cancelledPOs = pos.filter((p) => p.status === "Cancelled").length;
     const totalPOValue = pos.reduce((s, p) => s + (p.grand_total ?? 0), 0);
 
-    // Delivery: compare GRN posting_date to PO schedule_date
+    // Delivery: match each receipt line to its actual PO and, when supplied,
+    // PO child row. Never compare an unrelated first order from this supplier.
+    const ordersById = new Map(pos.map((po) => [po.name, po]));
     let onTime = 0;
     let late = 0;
     let totalDelayDays = 0;
+    let deliveryComplete = grnResult.status === "fulfilled" && poResult.status === "fulfilled";
+    let qualityComplete = deliveryComplete && pos.length > 0 && grns.length > 0;
+    let totalReceivedQty = 0;
+    let totalRejectedQty = 0;
     for (const grn of grns) {
-      const grnDate = grn.posting_date ? new Date(grn.posting_date) : null;
-      // Find the PO(s) for this supplier to compare schedule_date
-      const relatedPO = pos.find((p) =>
-        p.schedule_date && grnDate
-      );
-      if (relatedPO?.schedule_date && grnDate) {
-        const expected = new Date(relatedPO.schedule_date);
-        const diff = Math.round(
-          (grnDate.getTime() - expected.getTime()) / (1000 * 60 * 60 * 24)
-        );
-        if (diff <= 0) {
-          onTime++;
+      const posted = dateMillis(grn.posting_date);
+      const delays: number[] = [];
+      let receiptComplete = posted !== null && !!grn.items?.length;
+      if (!grn.items?.length) qualityComplete = false;
+      for (const item of grn.items ?? []) {
+        const order = item.purchase_order ? ordersById.get(item.purchase_order) : undefined;
+        const orderLine = item.purchase_order_item
+          ? order?.items?.find((line) => line.name === item.purchase_order_item)
+          : undefined;
+        const linked = !!order && (!item.purchase_order_item || !!orderLine);
+        const expected = linked ? dateMillis(orderLine?.schedule_date || order?.schedule_date) : null;
+        if (posted === null || expected === null) receiptComplete = false;
+        else delays.push(Math.round((posted - expected) / 86_400_000));
+
+        if (!linked || !nonnegativeNumber(item.received_qty) || !nonnegativeNumber(item.rejected_qty) ||
+            item.rejected_qty > item.received_qty) {
+          qualityComplete = false;
         } else {
-          late++;
-          totalDelayDays += diff;
+          totalReceivedQty += item.received_qty;
+          totalRejectedQty += item.rejected_qty;
         }
-      } else {
-        onTime++; // no schedule comparison → assume on-time
       }
+      if (!receiptComplete || !delays.length) { deliveryComplete = false; continue; }
+      // A multi-order receipt is late if any included commitment was missed.
+      const delay = Math.max(...delays);
+      if (delay <= 0) onTime++;
+      else { late++; totalDelayDays += delay; }
     }
     const avgDelayDays = late > 0 ? totalDelayDays / late : 0;
 
-    // Quality: ordered vs received qty
-    const totalOrderedQty = pos.reduce(
-      (s, p) => s + (p.per_received !== undefined ? 100 : 0),
-      0
-    );
-    const totalReceivedQty = pos.reduce(
-      (s, p) => s + (p.per_received ?? 0),
-      0
-    );
+    // Keep the established accepted/ordered formula, using actual line
+    // quantities. PO percentages are never treated as physical quantities.
+    let totalOrderedQty = 0;
+    for (const order of pos) {
+      if (!order.items?.length) qualityComplete = false;
+      for (const item of order.items ?? []) {
+        if (!nonnegativeNumber(item.qty)) qualityComplete = false;
+        else totalOrderedQty += item.qty;
+      }
+    }
 
     // Invoice timeliness
     const invoicesOnTime = invoices.filter((inv) => {
-      if (!inv.due_date || !inv.posting_date) return true;
-      return new Date(inv.posting_date) <= new Date(inv.due_date);
+      const due = dateMillis(inv.due_date);
+      const posted = dateMillis(inv.posting_date);
+      return due !== null && posted !== null && posted <= due;
     }).length;
 
     const dataSources: string[] = [];
@@ -327,19 +371,21 @@ export async function getSupplierPerformance(
     if (invoices.length > 0) dataSources.push(`${invoices.length} Invoices`);
     const dataPointsCount = totalPOs + grns.length + invoices.length;
 
-    const deliveryScore = computeDeliveryScore(totalPOs, onTime, late, avgDelayDays);
-    const qualityScore = computeQualityScore(
+    const deliveryScore = deliveryComplete ? computeDeliveryScore(totalPOs, onTime, late, avgDelayDays) : -1;
+    const qualityScore = qualityComplete ? computeQualityScore(
       totalOrderedQty,
       totalReceivedQty,
-      0 // rejected qty not easily available at PO level
-    );
-    const reliabilityScore = computeReliabilityScore(
+      totalRejectedQty,
+    ) : -1;
+    const reliabilityComplete = poResult.status === "fulfilled" && invoiceResult.status === "fulfilled" &&
+      invoices.every((invoice) => dateMillis(invoice.due_date) !== null && dateMillis(invoice.posting_date) !== null);
+    const reliabilityScore = reliabilityComplete ? computeReliabilityScore(
       totalPOs,
       completedPOs,
       cancelledPOs,
       invoicesOnTime,
       invoices.length
-    );
+    ) : -1;
 
     result[name] = {
       supplier_name: name,
@@ -353,23 +399,29 @@ export async function getSupplierPerformance(
       avg_delay_days: Math.round(avgDelayDays * 10) / 10,
       total_ordered_qty: totalOrderedQty,
       total_received_qty: totalReceivedQty,
-      total_rejected_qty: 0,
-      qty_accuracy_pct: totalOrderedQty > 0
-        ? Math.round((totalReceivedQty / totalOrderedQty) * 100 * 10) / 10
-        : 0,
+      total_rejected_qty: totalRejectedQty,
+      qty_accuracy_pct: qualityComplete && totalOrderedQty > 0
+        ? Math.round(((totalReceivedQty - totalRejectedQty) / totalOrderedQty) * 100 * 10) / 10
+        : -1,
       total_invoices: invoices.length,
       invoices_on_time: invoicesOnTime,
       delivery_score: deliveryScore,
       quality_score: qualityScore,
       reliability_score: reliabilityScore,
-      has_sufficient_data: dataPointsCount >= 1,
+      has_sufficient_data: [deliveryScore, qualityScore, reliabilityScore].every((score) => score >= 0),
+      has_delivery_data: deliveryScore >= 0,
+      has_quality_data: qualityScore >= 0,
+      has_reliability_data: reliabilityScore >= 0,
+      unavailable_metrics: [deliveryScore < 0 ? "delivery" : "", qualityScore < 0 ? "quality" : "",
+        reliabilityScore < 0 ? "reliability" : ""].filter(Boolean),
+      invoice_timeliness_basis: "Invoice posting date compared with its due date; actual payment history is unavailable.",
       data_sources: dataSources,
       data_points_count: dataPointsCount,
     };
   }
 
   // eslint-disable-next-line no-console
-  console.log("[SupplierPerformance] Computed performance:", result);
+  if (import.meta.env.DEV) console.log("[SupplierPerformance] Computed performance:", result);
 
   return result;
 }

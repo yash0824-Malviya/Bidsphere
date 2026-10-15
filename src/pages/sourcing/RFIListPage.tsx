@@ -62,6 +62,8 @@ export default function RFIListPage() {
         status: status || undefined,
       }),
     staleTime: LIST_STALE,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
     placeholderData: (prev) => prev,
   });
 
@@ -69,6 +71,8 @@ export default function RFIListPage() {
     queryKey: ["rfi-stats"],
     queryFn: () => getRfiStats(),
     staleTime: LIST_STALE,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const rows = listQuery.data?.data ?? [];
@@ -78,8 +82,8 @@ export default function RFIListPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="RFI"
-        description="Request for Information — collect supplier information before RFQ."
+        title="All RFI"
+        description="View and manage Requests for Information."
         actions={
           <Link to="/sourcing/rfi/new" className="btn-primary">
             <Plus />
@@ -150,8 +154,8 @@ export default function RFIListPage() {
         ) : rows.length === 0 ? (
           <EmptyState
             icon={FileQuestion}
-            title="No RFIs yet"
-            description="Create a Request for Information to collect supplier details before issuing an RFQ."
+            title="No RFI found"
+            description="There are currently no Requests for Information available."
             action={
               <Link to="/sourcing/rfi/new" className="btn-primary">
                 <Plus className="h-4 w-4" />

@@ -70,6 +70,21 @@ describe("POST /api/ecr-create", () => {
     process.env = { ...ORIGINAL_ENV };
   });
 
+  it("rejects a missing extended schema before inserting any ECR", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const path = String(url);
+      const data = path.includes("/DocType/") ? { fields: [] } :
+        path.includes("/User?") ? [{ name: "engineer@netlink.com", email: "engineer@netlink.com", enabled: 1 }] :
+        path.includes("/Department?") ? [{ name: "Engineering" }] :
+        path.includes("/Plant%20Floor?") ? [{ name: "Plant 1" }] : [];
+      return new Response(JSON.stringify({ data }), { status: 200 });
+    });
+    const { res, status } = response();
+    await handler(request("engineer", validPayload()), res);
+    expect(status).toHaveBeenCalledWith(409);
+    expect(fetchMock.mock.calls.every(([, options]) => options?.method === "GET")).toBe(true);
+  });
+
   it("authenticates the Engineer and inserts through ERP service credentials", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response(
@@ -110,8 +125,18 @@ describe("POST /api/ecr-create", () => {
         { status: 200, headers: { "Content-Type": "application/json" } },
       ))
       .mockResolvedValueOnce(new Response(
+        JSON.stringify({ data: { fields: [
+          { fieldname: "ecr_workflow_version", fieldtype: "Data" },
+          { fieldname: "ecr_business_case", fieldtype: "Long Text" },
+          { fieldname: "rfq_required", fieldtype: "Select" },
+          { fieldname: "rfq_decision_reason", fieldtype: "Small Text" },
+        ] } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ))
+      .mockResolvedValueOnce(new Response(
         JSON.stringify({ data: {
           name: "ECR-2026-00046",
+          ecr_workflow_version: "extended_v1",
           ecr_owner: "engineer@netlink.com",
           select_pxfp: "Draft",
           docstatus: 0,
@@ -138,7 +163,7 @@ describe("POST /api/ecr-create", () => {
         create_replayed: false,
       }),
     });
-    expect(fetchMock).toHaveBeenCalledTimes(7);
+    expect(fetchMock).toHaveBeenCalledTimes(8);
     const [lookupUrl, lookupInit] = fetchMock.mock.calls[0] ?? [];
     expect(String(lookupUrl)).toContain("bidsphere_create_idempotency_key");
     expect(lookupInit?.headers).toMatchObject({
@@ -149,7 +174,8 @@ describe("POST /api/ecr-create", () => {
     expect(String(fetchMock.mock.calls[3]?.[0])).toContain("/api/resource/Plant%20Floor?");
     expect(String(fetchMock.mock.calls[4]?.[0])).toContain("/api/resource/Supplier?");
     expect(String(fetchMock.mock.calls[5]?.[0])).toContain("/api/resource/Item?");
-    const [url, init] = fetchMock.mock.calls[6] ?? [];
+    expect(String(fetchMock.mock.calls[6]?.[0])).toContain("/api/resource/DocType/Engineering%20Change%20Request");
+    const [url, init] = fetchMock.mock.calls[7] ?? [];
     expect(url).toBe("https://erp.test/api/resource/Engineering%20Change%20Request");
     expect(init?.headers).toMatchObject({
       Authorization: "token service-key:service-secret",

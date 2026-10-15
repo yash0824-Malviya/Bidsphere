@@ -1,3 +1,12 @@
+import { createHash, randomUUID } from "node:crypto";
+import { PDFDocument } from "pdf-lib";
+import { assertLegalReviewFileAccess, resolveLegalReviewFile } from "./legalAttachmentAccess.js";
+import { canonicalErpFilePath, fetchErpFile } from "./fileProxyCore.js";
+import { requireRoles, type AccessPrincipal, type AppRole } from "./rbacAuth.js";
+import { assertSupplierAwardEligible } from "./supplierAwardEligibilityGuard.js";
+import { rfqInitialClmHold, withoutInitialClmHeldReviews } from "./rfqInitialClmHold.js";
+import { canStartLegalSignature, createEmptyEnvelope, LEGAL_CHECKPOINT_IDS, LEGAL_DOC_KEYS, parseEsignBundle, areRequiredDocumentsVerified, isLegalDocumentVerified, isLegalReviewExecuted, type LegalDocKey, type LegalEsignAuditAction, type LegalEsignBundle, type LegalEsignSignature } from "../src/types/legalEsign.js";
+import { burnTypedSignatureIntoPdf } from "../src/utils/legalPdfSignature.js";
 /**
  * Legal Document Review — server-owned business logic.
  *
@@ -58,6 +67,7 @@ export const LDR_OWNERS = {
   LEGAL: "Legal Reviewer",
   FINANCE: "Finance Manager",
   PROCUREMENT: "Procurement",
+  PROCUREMENT_TEAM: "Procurement Team",
   NONE: "—",
 } as const;
 
@@ -153,6 +163,13 @@ const WORKFLOW_LIST_FIELDS = [
   "finance_comments",
   "finance_rejection_reason",
   "esign_status",
+  "esign_envelope",
+  "esign_signed_by",
+  "esign_signed_on",
+  "esign_signed_file_url",
+  "terms_file_url",
+  "warranty_file_url",
+  "insurance_file_url",
 ] as const;
 
 let schemaEnsurePromise: Promise<void> | null = null;
@@ -313,6 +330,8 @@ export interface LegalDocumentRecord {
   esign_signed_file_url?: string;
   esign_signed_by?: string;
   esign_signed_on?: string;
+  /** Response-only: derived from the current server-owned attachment slots. */
+  required_document_keys?: LegalDocKey[];
 }
 
 export interface CreateLegalReviewInput {
@@ -364,10 +383,18 @@ async function getByName(
   cfg: ErpAdminConfig,
   name: string
 ): Promise<LegalDocumentRecord> {
-  return erpFetch<LegalDocumentRecord>(
+  const record = await erpFetch<LegalDocumentRecord>(
     cfg,
     `resource/${encodeURIComponent(DOCTYPE)}/${encodeURIComponent(name)}`
   );
+  return withRequiredDocuments(record);
+}
+
+function withRequiredDocuments(record: LegalDocumentRecord): LegalDocumentRecord {
+  // This ERP schema has no mandatory-document child table or reqd flags.
+  // Its persisted review attachment slots define the existing instrument set;
+  // two populated slots require two documents, not a hardcoded three.
+  return { ...record, required_document_keys: LEGAL_DOC_KEYS.filter(key => Boolean(record[`${key}_file_url`]?.trim())) };
 }
 
 /**
@@ -378,6 +405,7 @@ async function getByName(
  */
 export async function listWorkflowRecords(options?: {
   limit?: number;
+  excludeInitialClmHeld?: boolean;
 }): Promise<LegalDocumentRecord[]> {
   const cfg = readErpAdminConfig();
   await ensureLegalDocumentReviewSchema(cfg);
@@ -417,7 +445,8 @@ export async function listWorkflowRecords(options?: {
     }
   }
 
-  return Array.isArray(rows) ? rows : [];
+  const records = Array.isArray(rows) ? rows.map(withRequiredDocuments) : [];
+  return options?.excludeInitialClmHeld ? withoutInitialClmHeldReviews(records, (doctype, name) => erpFetch<Record<string, unknown>>(cfg, resource(doctype, name))) : records;
 }
 
 /**
@@ -602,8 +631,13 @@ export async function createLegalDocumentReview(
   // DB-level unique constraint on rfq_name is the hard backstop against races.
   const existing = await findByRfqName(cfg, rfqName);
   if (existing) {
+    if (existing.sq_name !== sqName || existing.supplier !== supplier) throw new LegalReviewError("This RFQ already has a different selected supplier or quotation.", 409);
     return { created: false, record: existing };
   }
+
+  // The browser's score/rank or eligibility flags cannot authorize an award.
+  // Preserve the Legal workflow, but refuse to initialize it for an AVOID quote.
+  await assertSupplierAwardEligible({ rfqId: rfqName, supplierId: supplier, quotationId: sqName });
 
   const payload: Record<string, unknown> = {
     doctype: DOCTYPE,
@@ -662,456 +696,666 @@ export async function createLegalDocumentReview(
  *  Approve / Reject — the ONLY way review_status may change
  * ──────────────────────────────────────────────────────────────────────── */
 
+
 export interface ReviewDecisionInput {
   name: string;
   status: "Approved" | "Rejected";
-  reviewedBy: string;
-  /** Reviewer's comments — recorded for both Approve and Reject. */
+  reviewedBy?: string; // Compatibility only: never used as identity.
   comments?: string;
-  /** Required for Reject; ignored (cleared) for Approve. */
   rejectionReason?: string;
 }
+export type FinanceDecisionInput = ReviewDecisionInput;
 
-export async function decideLegalDocumentReview(
-  input: ReviewDecisionInput
-): Promise<LegalDocumentRecord> {
+const reviewPath = (name: string) => `resource/${encodeURIComponent(DOCTYPE)}/${encodeURIComponent(name)}`;
+const actorId = (principal: AccessPrincipal) => {
+  if (principal.typ !== "internal") throw new LegalReviewError("Internal authentication required.", 403);
+  return principal.email || principal.sub;
+};
+function requireActorRoles(principal: AccessPrincipal, roles: AppRole[]): asserts principal is Extract<AccessPrincipal, { typ: "internal" }> {
+  if (principal.typ !== "internal") throw new LegalReviewError("Internal signing/workflow authentication is required.", 403);
+  requireRoles(principal, roles);
+}
+const now = () => new Date().toISOString();
+const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+const resource = (doctype: string, name: string) => `resource/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`;
+
+async function loadReview(name: string, principal: AccessPrincipal, readOnly = false) {
+  if (typeof name !== "string" || !name.trim()) throw new LegalReviewError("Review name is required.", 400);
   const cfg = readErpAdminConfig();
-
-  const name = (input.name ?? "").trim();
-  if (!name) throw new LegalReviewError("name is required.", 400);
-  if (input.status !== "Approved" && input.status !== "Rejected") {
-    throw new LegalReviewError('status must be "Approved" or "Rejected".', 400);
+  const record = await getByName(cfg, name);
+  const quotation = await erpFetch<Record<string, unknown>>(cfg, resource("Supplier Quotation", record.sq_name));
+  assertLegalReviewFileAccess(principal, { ...record }, quotation);
+  if (!readOnly) {
+    const hold = await rfqInitialClmHold({ ...record }, (doctype, docname) => erpFetch<Record<string, unknown>>(cfg, resource(doctype, docname)));
+    if (hold) throw new LegalReviewError(hold, 409);
   }
-  if (!input.reviewedBy) throw new LegalReviewError("reviewedBy is required.", 400);
-
-  const rejectionReason = (input.rejectionReason ?? input.comments ?? "").trim();
-  if (input.status === "Rejected" && !rejectionReason) {
-    throw new LegalReviewError("rejectionReason is required to reject a review.", 400);
-  }
-
-  // Self-heal DocType schema before writing Finance handoff fields.
-  await ensureLegalDocumentReviewSchema(cfg);
-
-  // Fetching first both validates the record exists and gives a clean 404.
-  const existing = await getByName(cfg, name);
-
-  // Approve requires a placed electronic signature (type signature).
-  if (input.status === "Approved") {
-    const status = String(existing.esign_status ?? "").toLowerCase();
-    const hasEnvelopeSig =
-      status === "signed" ||
-      status === "locked" ||
-      (typeof existing.esign_envelope === "string" &&
-        /"role"\s*:\s*"legal"/.test(existing.esign_envelope) &&
-        /"status"\s*:\s*"(signed|locked)"/.test(existing.esign_envelope));
-    // Also accept per-doc approved flags set by a successful client burn-in
-    // when esign_* DocType fields are not yet provisioned on ERPNext.
-    const checklistSigned = Boolean(
-      existing.terms_approved ||
-        existing.warranty_approved ||
-        existing.insurance_approved,
-    );
-    if (!hasEnvelopeSig && !existing.esign_signed_by && !checklistSigned) {
-      throw new LegalReviewError(
-        "Please sign the document before approval.",
-        400,
-      );
-    }
-  }
-
-  const approvedOn = formatERPNextDatetime(new Date());
-  const body: Record<string, unknown> = {
-    review_status: input.status,
-    approved_by: input.reviewedBy,
-    approved_on: approvedOn,
-    legal_comments: input.comments ?? "",
-    rejection_reason: input.status === "Rejected" ? rejectionReason : "",
-  };
-
-  // The moment Legal approves, Finance Review becomes actionable on this
-  // SAME record — no separate DocType. Rejection never enters Finance.
-  if (input.status === "Approved") {
-    body.finance_status = FINANCE_REVIEW_STATUS.PENDING;
-    body.workflow_state = LDR_WORKFLOW_STATE.FINANCE_REVIEW;
-    body.current_owner = LDR_OWNERS.FINANCE;
-    body.next_approver = LDR_OWNERS.FINANCE;
-    body.esign_status = "locked";
-    // Lock envelope JSON when present (best-effort; ignore parse errors).
-    if (existing.esign_envelope) {
-      try {
-        const env = JSON.parse(existing.esign_envelope) as {
-          locked?: boolean;
-          status?: string;
-          approvalStatus?: string;
-          approvalTimestamp?: string;
-          signatures?: Array<{ status?: string }>;
-          auditTrail?: unknown[];
-        };
-        env.locked = true;
-        env.status = "locked";
-        env.approvalStatus = "Approved";
-        env.approvalTimestamp = new Date().toISOString();
-        if (Array.isArray(env.signatures)) {
-          env.signatures = env.signatures.map((s) => ({
-            ...s,
-            status: "locked",
-          }));
-        }
-        if (Array.isArray(env.auditTrail)) {
-          env.auditTrail.push(
-            {
-              id: `aud_${Date.now()}`,
-              action: "approval_completed",
-              user: input.reviewedBy,
-              at: new Date().toISOString(),
-              detail: "Legal Approved",
-            },
-            {
-              id: `aud_${Date.now() + 1}`,
-              action: "moved_to_finance_review",
-              user: input.reviewedBy,
-              at: new Date().toISOString(),
-              detail: "Moved to Finance Review — Finance queue activated",
-            },
-          );
-        }
-        body.esign_envelope = JSON.stringify(env);
-      } catch {
-        /* keep prior envelope */
-      }
-    }
-  } else {
-    body.workflow_state = LDR_WORKFLOW_STATE.REJECTED;
-    body.current_owner = LDR_OWNERS.NONE;
-    body.next_approver = LDR_OWNERS.NONE;
-    if (existing.esign_envelope) {
-      try {
-        const env = JSON.parse(existing.esign_envelope) as {
-          auditTrail?: unknown[];
-          approvalStatus?: string;
-        };
-        if (Array.isArray(env.auditTrail)) {
-          env.auditTrail.push({
-            id: `aud_${Date.now()}`,
-            action: "document_rejected",
-            user: input.reviewedBy,
-            at: new Date().toISOString(),
-          });
-        }
-        env.approvalStatus = "Rejected";
-        body.esign_envelope = JSON.stringify(env);
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-
-  await erpFetch<LegalDocumentRecord>(
-    cfg,
-    `resource/${encodeURIComponent(DOCTYPE)}/${encodeURIComponent(name)}`,
-    { method: "PUT", body },
-  );
-
-  // Re-read from ERPNext — never trust a silent field drop.
-  let verified = await getByName(cfg, name);
-
-  if (input.status === "Approved") {
-    if (verified.review_status !== LEGAL_REVIEW_STATUS.APPROVED) {
-      throw new LegalReviewError(
-        "Legal approval did not persist review_status=Approved on Legal Document Review.",
-        500,
-      );
-    }
-
-    const handoffOk =
-      verified.finance_status === FINANCE_REVIEW_STATUS.PENDING &&
-      verified.workflow_state === LDR_WORKFLOW_STATE.FINANCE_REVIEW;
-
-    if (!handoffOk) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[legal-review] Finance handoff incomplete after approve on ${name}; retrying`,
-        {
-          finance_status: verified.finance_status,
-          workflow_state: verified.workflow_state,
-          current_owner: verified.current_owner,
-          next_approver: verified.next_approver,
-        },
-      );
-      // Force schema again (cache may have been stale) and rewrite handoff fields.
-      schemaEnsurePromise = null;
-      await ensureLegalDocumentReviewSchema(cfg);
-      await erpFetch(
-        cfg,
-        `resource/${encodeURIComponent(DOCTYPE)}/${encodeURIComponent(name)}`,
-        {
-          method: "PUT",
-          body: {
-            finance_status: FINANCE_REVIEW_STATUS.PENDING,
-            workflow_state: LDR_WORKFLOW_STATE.FINANCE_REVIEW,
-            current_owner: LDR_OWNERS.FINANCE,
-            next_approver: LDR_OWNERS.FINANCE,
-          },
-        },
-      );
-      verified = await getByName(cfg, name);
-    }
-
-    if (verified.finance_status !== FINANCE_REVIEW_STATUS.PENDING) {
-      throw new LegalReviewError(
-        "Legal approval saved, but Finance handoff failed: finance_status was not set to Pending. " +
-          "Ensure the Legal Document Review DocType has a finance_status Select field " +
-          `(options: ${FINANCE_REVIEW_STATUS.PENDING}/${FINANCE_REVIEW_STATUS.APPROVED}/${FINANCE_REVIEW_STATUS.REJECTED}). ` +
-          "Run: node scripts/setup-legal-review-doctype.mjs",
-        500,
-      );
-    }
-
-    if (verified.workflow_state !== LDR_WORKFLOW_STATE.FINANCE_REVIEW) {
-      throw new LegalReviewError(
-        "Legal approval saved, but workflow_state was not set to Finance Review. " +
-          `Got: ${verified.workflow_state ?? "(empty)"}.`,
-        500,
-      );
-    }
-
-    await syncRfqAfterLegalApprove(
-      cfg,
-      verified.rfq_name,
-      input.reviewedBy,
-      approvedOn,
-    );
-
-    // eslint-disable-next-line no-console
-    console.log(
-      `[legal-review] Approved ${name} by ${input.reviewedBy} → Finance Pending ` +
-        `(workflow=${verified.workflow_state}, owner=${verified.current_owner}, next=${verified.next_approver})`,
-    );
-  } else {
-    // eslint-disable-next-line no-console
-    console.log(`[legal-review] Rejected ${name} by ${input.reviewedBy}`);
-  }
-
-  return verified;
+  return { cfg, record, quotation };
 }
 
-/* ────────────────────────────────────────────────────────────────────────
- *  Finance Review decision — updates the SAME record's finance_* fields.
- *  Gated on review_status === "Approved": Finance can never act on an RFQ
- *  that Legal hasn't (yet) approved.
- * ──────────────────────────────────────────────────────────────────────── */
-
-/**
- * Resets a legal-rejected record back to "Pending" for resubmission after
- * Procurement edits the RFQ. Mirrors `resubmitFinanceReview` below — this is
- * the counterpart that was missing, which previously left Procurement's
- * "Resubmit RFQ" button writing only to legacy RFQ custom fields
- * (`rfqApprovalWorkflow.ts`) while the actual Legal Document Review record
- * that Legal's queue reads from stayed stuck on "Rejected" forever.
- */
-export async function resubmitLegalReview(
-  name: string,
-  resubmittedBy: string,
-  note?: string
-): Promise<LegalDocumentRecord> {
-  const cfg = readErpAdminConfig();
-  if (!name) throw new LegalReviewError("name is required.", 400);
-
-  const existing = await getByName(cfg, name);
-  if (existing.review_status !== "Rejected") {
-    throw new LegalReviewError("Only legally-rejected reviews can be resubmitted.", 400);
-  }
-
-  const remark = (note ?? "").trim() || "RFQ resubmitted for legal review after rejection.";
-  const updated = await erpFetch<LegalDocumentRecord>(
-    cfg,
-    `resource/${encodeURIComponent(DOCTYPE)}/${encodeURIComponent(name)}`,
-    {
-      method: "PUT",
-      body: {
-        review_status: "Pending",
-        workflow_state: LDR_WORKFLOW_STATE.PENDING_REVIEW,
-        finance_status: "",
-        current_owner: LDR_OWNERS.LEGAL,
-        next_approver: LDR_OWNERS.LEGAL,
-        approved_by: "",
-        approved_on: "",
-        legal_comments: `Resubmitted by ${resubmittedBy}: ${remark}`,
-        rejection_reason: "",
-      },
-    }
-  );
-
-  // eslint-disable-next-line no-console
-  console.log(`[legal-review] Legal resubmit ${name} by ${resubmittedBy}`);
-  return updated;
+export async function getLegalReview(name: string, principal: AccessPrincipal) {
+  return (await loadReview(name, principal, true)).record;
 }
 
-export interface FinanceDecisionInput {
-  name: string;
-  status: "Approved" | "Rejected";
-  reviewedBy: string;
-  /** Finance reviewer's comments — captured for both Approve and Reject. */
-  comments?: string;
-  /** Required for Reject; ignored (cleared) for Approve. */
-  rejectionReason?: string;
+async function requireActiveRfq(cfg: ErpAdminConfig, record: LegalDocumentRecord) {
+  if (!record.rfq_name?.trim()) throw new LegalReviewError("This Legal Review is not linked to an RFQ; verify its parent before signing.", 409);
+  const quotation = await erpFetch<Record<string, unknown>>(cfg, resource("Supplier Quotation", record.sq_name));
+  const rfq = await erpFetch<Record<string, unknown>>(cfg, resource(RFQ_DOCTYPE, record.rfq_name));
+  for (const source of [quotation, rfq]) {
+    if (!source) continue;
+    if (Number(source.docstatus) === 2 || [source.status, source.workflow_state, source.custom_status]
+      .some(value => /^(rejected|cancelled|canceled|closed|stopped)$/i.test(String(value || "").trim()))) {
+      throw new LegalReviewError("This RFQ or quotation is rejected, cancelled, or closed.", 409);
+    }
+  }
+  const quotationRfqNames = new Set([
+    quotation.request_for_quotation,
+    ...(Array.isArray(quotation.items)
+      ? quotation.items.map(item => item && typeof item === "object" ? item.request_for_quotation : undefined)
+      : []),
+  ].filter((value): value is string => typeof value === "string" && !!value.trim()));
+  if (!quotationRfqNames.has(record.rfq_name) || quotation.supplier !== record.supplier ||
+      (quotation.company && record.company && quotation.company !== record.company) ||
+      (rfq.company && record.company && rfq.company !== record.company) ||
+      (typeof rfq.custom_selected_supplier === "string" && rfq.custom_selected_supplier.trim() &&
+        rfq.custom_selected_supplier !== record.supplier)) {
+    throw new LegalReviewError("The Legal Review no longer matches its selected supplier quotation.", 409);
+  }
 }
 
-export async function decideFinanceReview(
-  input: FinanceDecisionInput
-): Promise<LegalDocumentRecord> {
-  const cfg = readErpAdminConfig();
-
-  const name = (input.name ?? "").trim();
-  if (!name) throw new LegalReviewError("name is required.", 400);
-  if (input.status !== "Approved" && input.status !== "Rejected") {
-    throw new LegalReviewError('status must be "Approved" or "Rejected".', 400);
-  }
-  if (!input.reviewedBy) throw new LegalReviewError("reviewedBy is required.", 400);
-
-  const comments = (input.comments ?? "").trim();
-  const rejectionReason = (input.rejectionReason ?? input.comments ?? "").trim();
-  if (input.status === "Rejected" && !rejectionReason) {
-    throw new LegalReviewError("rejectionReason is required to reject a finance review.", 400);
-  }
-
-  const existing = await getByName(cfg, name);
-  if (existing.review_status !== "Approved") {
-    throw new LegalReviewError(
-      "Finance review requires Legal approval first. Current legal review_status: " +
-        `${existing.review_status}.`,
-      400
-    );
-  }
-
-  await ensureLegalDocumentReviewSchema(cfg);
-
-  const updated = await erpFetch<LegalDocumentRecord>(
-    cfg,
-    `resource/${encodeURIComponent(DOCTYPE)}/${encodeURIComponent(name)}`,
-    {
-      method: "PUT",
-      body: {
-        finance_status: input.status,
-        finance_approved_by: input.reviewedBy,
-        finance_approved_on: formatERPNextDatetime(new Date()),
-        finance_comments: comments,
-        finance_rejection_reason:
-          input.status === "Rejected" ? rejectionReason : "",
-        workflow_state:
-          input.status === "Approved"
-            ? LDR_WORKFLOW_STATE.COMPLETED
-            : LDR_WORKFLOW_STATE.REJECTED,
-        current_owner:
-          input.status === "Approved" ? LDR_OWNERS.PROCUREMENT : LDR_OWNERS.NONE,
-        next_approver:
-          input.status === "Approved" ? LDR_OWNERS.PROCUREMENT : LDR_OWNERS.NONE,
-      },
-    }
-  );
-
-  // eslint-disable-next-line no-console
-  console.log(`[legal-review] Finance ${input.status} ${name} by ${input.reviewedBy}`, {
-    workflow_state: updated.workflow_state,
-    finance_status: updated.finance_status,
-    current_owner: updated.current_owner,
-    next_approver: updated.next_approver,
+/** Every successful mutation returns a fresh read, verifying ALL written fields. */
+async function saveVerified(cfg: ErpAdminConfig, record: LegalDocumentRecord, updates: Record<string, unknown>) {
+  await erpFetch(cfg, reviewPath(record.name), {
+    method: "PUT",
+    // Frappe's save timestamp check rejects stale concurrent updates.
+    body: { ...updates, modified: record.modified },
   });
-  return updated;
+  const saved = await getByName(cfg, record.name);
+  for (const [key, expected] of Object.entries(updates)) {
+    const actual = (saved as unknown as Record<string, unknown>)[key];
+    const equal = key === "esign_envelope"
+      ? JSON.stringify(parseEsignBundle(actual)) === JSON.stringify(parseEsignBundle(expected))
+      : (actual ?? "") === (expected ?? "") || typeof expected === "number" && Number(actual) === expected;
+    if (!equal) throw new LegalReviewError(`Backend did not persist ${key}. Refresh before retrying.`, 502);
+  }
+  return saved;
 }
 
-/**
- * Resets a finance-rejected record back to "Pending" so Procurement/Finance
- * can resubmit it for another finance decision — the SAME record, never a
- * new one. Only valid when the record is currently Finance-Rejected.
- */
-export async function resubmitFinanceReview(
-  name: string,
-  resubmittedBy: string,
-  note?: string
-): Promise<LegalDocumentRecord> {
-  const cfg = readErpAdminConfig();
-  if (!name) throw new LegalReviewError("name is required.", 400);
-
-  const existing = await getByName(cfg, name);
-  if (existing.review_status !== "Approved") {
-    throw new LegalReviewError("Legal approval is required before finance resubmission.", 400);
+function requireLegalStage(record: LegalDocumentRecord) {
+  if (record.review_status !== "Pending" || !["", "Pending Review", "Legal Review", "Ready for Signature", "Pending Signature"].includes(record.workflow_state || "") ||
+      record.current_owner === LDR_OWNERS.PROCUREMENT) {
+    throw new LegalReviewError("This record is not awaiting Legal Review.", 409);
   }
-  if (existing.finance_status !== "Rejected") {
-    throw new LegalReviewError("Only finance-rejected reviews can be resubmitted.", 400);
+}
+function audit(bundle: LegalEsignBundle, principal: AccessPrincipal, action: LegalEsignAuditAction, detail: string) {
+  bundle.auditTrail ||= [];
+  bundle.auditTrail.push({ id: randomUUID(), action, user: actorId(principal), userId: actorId(principal), at: now(), detail });
+  for (const env of Object.values(bundle.documents)) {
+    if (env) env.auditTrail.push({ id: randomUUID(), action, user: actorId(principal), userId: actorId(principal), at: now(), detail });
   }
+}
+function attachedKeys(record: LegalDocumentRecord) {
+  const keys = LEGAL_DOC_KEYS.filter(key => !!record[`${key}_file_url`]);
+  if (!keys.length) throw new LegalReviewError("No contract PDF is attached for review.", 422);
+  return keys;
+}
+function resetEvidence(record: LegalDocumentRecord, principal: AccessPrincipal, detail: string) {
+  const bundle = parseEsignBundle(record.esign_envelope);
+  audit(bundle, principal, "version_changed", detail);
+  for (const env of Object.values(bundle.documents)) {
+    if (!env) continue;
+    if (env.signedFileUrl) env.auditTrail.push({
+      id: randomUUID(), action: "version_changed", user: actorId(principal), at: now(),
+      detail: `Archived signed version: ${env.documentHash}; ${env.signedFileHash}; ${env.signedFileUrl}`,
+    });
+    delete env.viewedBy; delete env.viewedAt; delete env.approvedHash; delete env.approvedFileId;
+    delete env.approvedBy; delete env.approvalTimestamp; delete env.signatureRequest;
+    delete env.signedFileUrl; delete env.signedFileHash;
+    env.signatures = []; env.locked = false; env.status = "unsigned"; env.approvalStatus = "Pending";
+  }
+  bundle.reviewChecklist = [];
+  return {
+    review_status: "Pending", workflow_state: LDR_WORKFLOW_STATE.PENDING_REVIEW,
+    current_owner: LDR_OWNERS.LEGAL, next_approver: LDR_OWNERS.LEGAL,
+    approved_by: "", approved_on: "", finance_status: "", finance_approved_by: "", finance_approved_on: "",
+    esign_status: "unsigned", esign_signed_by: "", esign_signed_on: "", esign_signed_file_url: "", esign_document_hash: "",
+    terms_viewed: 0, warranty_viewed: 0, insurance_viewed: 0,
+    terms_approved: 0, warranty_approved: 0, insurance_approved: 0,
+    esign_envelope: JSON.stringify(bundle),
+  };
+}
 
-  const remark = (note ?? "").trim() || "RFQ resubmitted for finance review after rejection.";
-  const updated = await erpFetch<LegalDocumentRecord>(
-    cfg,
-    `resource/${encodeURIComponent(DOCTYPE)}/${encodeURIComponent(name)}`,
-    {
-      method: "PUT",
-      body: {
-        finance_status: "Pending",
-        finance_approved_by: "",
-        finance_approved_on: "",
-        finance_comments: `Resubmitted by ${resubmittedBy}: ${remark}`,
-        finance_rejection_reason: "",
-        workflow_state: LDR_WORKFLOW_STATE.FINANCE_REVIEW,
-        current_owner: LDR_OWNERS.FINANCE,
-        next_approver: LDR_OWNERS.FINANCE,
-      },
+const quotationFileFields: Record<LegalDocKey, string[]> = {
+  terms: ["custom_terms__condition", "custom_terms_condition"],
+  warranty: ["custom_warenty_certificate", "custom_warranty_certificate"],
+  insurance: ["custom_insurance_certificate"],
+};
+
+/** Resolves the existing parent-bound File record and checks real, parseable PDF bytes. */
+async function currentPdf(cfg: ErpAdminConfig, record: LegalDocumentRecord, principal: AccessPrincipal, key: LegalDocKey, readOnly = false) {
+  if (!LEGAL_DOC_KEYS.includes(key)) throw new LegalReviewError("Invalid document key.", 400);
+  const fileUrl = record[`${key}_file_url`] || "";
+  const loadDocument = (doctype: string, name: string) => erpFetch<Record<string, unknown>>(cfg, resource(doctype, name));
+  const file = await resolveLegalReviewFile({
+    principal, reviewName: record.name, documentKey: key, requestedPath: fileUrl, loadDocument,
+  });
+  if (file.attached_to_doctype === "Supplier Quotation") {
+    const quotation = await loadDocument("Supplier Quotation", record.sq_name);
+    const latest = quotationFileFields[key].map(field => quotation[field]).find(value => typeof value === "string" && value);
+    if (!latest || canonicalErpFilePath(String(latest)) !== canonicalErpFilePath(fileUrl)) {
+      if (!readOnly && !Object.values(parseEsignBundle(record.esign_envelope).documents).some(env => env?.signatureRequest?.completedAt)) {
+        await saveVerified(cfg, record, resetEvidence(record, principal, "Quotation attachment changed; resubmit the current version."));
+      }
+      throw new LegalReviewError("The quotation PDF changed. Procurement must resubmit the current version for Legal Review.", 409);
     }
-  );
-
-  // eslint-disable-next-line no-console
-  console.log(`[legal-review] Finance resubmit ${name} by ${resubmittedBy}`);
-  return updated;
+  }
+  const result = await fetchErpFile({
+    baseUrl: cfg.baseUrl, apiKey: cfg.key, apiSecret: cfg.secret, filePath: fileUrl, fileId: file.name,
+    authorizeFile: async resolved => {
+      if (resolved.name !== file.name || resolved.attached_to_doctype !== file.attached_to_doctype ||
+          resolved.attached_to_name !== file.attached_to_name) throw new LegalReviewError("Attachment changed.", 409);
+    },
+  });
+  if (!result.ok) throw new LegalReviewError(result.body.message, result.status);
+  if (!result.contentType.toLowerCase().startsWith("application/pdf") || result.buffer.subarray(0, 5).toString() !== "%PDF-") {
+    throw new LegalReviewError("Attachment is not a PDF document.", 422);
+  }
+  let pages: number;
+  try { pages = (await PDFDocument.load(result.buffer)).getPageCount(); }
+  catch { throw new LegalReviewError("The PDF is corrupt or encrypted and cannot be reviewed.", 422); }
+  if (!pages) throw new LegalReviewError("The PDF has no pages.", 422);
+  const hash = digest(result.buffer);
+  const prior = parseEsignBundle(record.esign_envelope).documents[key];
+  if (prior?.viewedAt && (prior.documentHash !== hash || prior.sourceFileId !== file.name || prior.sourceFileUrl !== fileUrl)) {
+    if (!readOnly && !Object.values(parseEsignBundle(record.esign_envelope).documents).some(env => env?.signatureRequest?.completedAt)) {
+      await saveVerified(cfg, record, resetEvidence(record, principal, `Changed ${key}: ${prior.documentHash} → ${hash}`));
+    }
+    throw new LegalReviewError("Document Integrity: Failed. The PDF differs from the verified version; review the replacement before proceeding.", 409);
+  }
+  return { file, fileUrl, hash, bytes: result.buffer, pages };
 }
 
-/* ────────────────────────────────────────────────────────────────────────
- *  Flag / note updates — everything EXCEPT the review decision itself
- * ──────────────────────────────────────────────────────────────────────── */
-
-const ALLOWED_FLAG_FIELDS = new Set([
-  "terms_file_url",
-  "terms_note",
-  "terms_viewed",
-  "terms_approved",
-  "warranty_file_url",
-  "warranty_note",
-  "warranty_viewed",
-  "warranty_approved",
-  "insurance_file_url",
-  "insurance_note",
-  "insurance_viewed",
-  "insurance_approved",
-  "esign_envelope",
-  "esign_status",
-  "esign_document_hash",
-  "esign_signed_file_url",
-  "esign_signed_by",
-  "esign_signed_on",
-]);
-
-export async function updateLegalDocumentFlags(
-  name: string,
-  updates: Record<string, unknown>
-): Promise<LegalDocumentRecord> {
-  const cfg = readErpAdminConfig();
-  if (!name) throw new LegalReviewError("name is required.", 400);
-
-  const safeUpdates: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(updates ?? {})) {
-    if (ALLOWED_FLAG_FIELDS.has(key)) safeUpdates[key] = value;
+async function verifiedPdfsForSignature(cfg: ErpAdminConfig, record: LegalDocumentRecord, principal: AccessPrincipal, readOnly = false) {
+  requireActorRoles(principal, ["legal"]);
+  requireLegalStage(record);
+  await requireActiveRfq(cfg, record);
+  if (!canStartLegalSignature(record)) {
+    if (!areRequiredDocumentsVerified(record)) {
+      throw new LegalReviewError("Verify all required legal documents before e-signature.", 409);
+    }
+    throw new LegalReviewError("Prerequisites for e-signature are not met.", 409);
   }
-
-  if (Object.keys(safeUpdates).length === 0) {
-    throw new LegalReviewError("No updatable fields provided.", 400);
+  const bundle = parseEsignBundle(record.esign_envelope);
+  for (const key of attachedKeys(record)) {
+    const pdf = await currentPdf(cfg, record, principal, key, readOnly);
+    const env = bundle.documents[key];
+    if (!record[`${key}_approved`] || !env?.viewedAt || !env.viewedBy || env.documentHash !== pdf.hash || env.sourceFileId !== pdf.file.name ||
+        (env.approvedHash && env.approvedHash !== pdf.hash) || (env.approvedFileId && env.approvedFileId !== pdf.file.name)) {
+      throw new LegalReviewError(`The current ${key} PDF must be viewed and verified before e-signature.`, 409);
+    }
+    // Bind legacy reviewed flags to freshly fetched bytes, never client hashes.
+    env.approvedHash = pdf.hash; env.approvedFileId = pdf.file.name;
   }
+  return bundle;
+}
 
-  // Datetime columns (e.g. esign_signed_on) must never receive ISO-8601.
-  const sanitized = sanitizeErpPayloadDates(safeUpdates);
+export interface LegalSignatureEligibilityResult {
+  record: LegalDocumentRecord;
+  requiredDocumentKeys: LegalDocKey[];
+  verifiedDocumentKeys: LegalDocKey[];
+  pendingDocumentKeys: LegalDocKey[];
+  canSignDocumentKeys: LegalDocKey[];
+  eligible: boolean;
+  reason?: string;
+  checkedAt: string;
+}
 
-  return erpFetch<LegalDocumentRecord>(
-    cfg,
-    `resource/${encodeURIComponent(DOCTYPE)}/${encodeURIComponent(name)}`,
-    { method: "PUT", body: sanitized }
-  );
+const SIGNATURE_SAVE_PENDING_REASON = "This signature has an in-progress or unconfirmed save. Refresh; if it remains pending, an administrator must reconcile the existing request before retrying.";
+
+/** Read-only preflight: the UI uses the same current-file rules as begin/complete. */
+export async function getLegalSignatureEligibility(name: string, principal: AccessPrincipal): Promise<LegalSignatureEligibilityResult> {
+  requireActorRoles(principal, ["legal"]);
+  const { cfg, record } = await loadReview(name, principal);
+  const requiredDocumentKeys = record.required_document_keys || [];
+  const verifiedDocumentKeys = requiredDocumentKeys.filter(key => isLegalDocumentVerified(record, key));
+  const pendingDocumentKeys = requiredDocumentKeys.filter(key => !verifiedDocumentKeys.includes(key));
+  const result: LegalSignatureEligibilityResult = {
+    record, requiredDocumentKeys, verifiedDocumentKeys, pendingDocumentKeys,
+    canSignDocumentKeys: [], eligible: false, checkedAt: now(),
+  };
+  if (!requiredDocumentKeys.length || pendingDocumentKeys.length) {
+    return { ...result, reason: "Verify all required supplier documents before signing." };
+  }
+  if (isLegalReviewExecuted(record)) return { ...result, reason: "Document has already been signed." };
+  try {
+    // Read-only prevents a readiness refresh from altering verification or signatures.
+    const bundle = await verifiedPdfsForSignature(cfg, record, principal, true);
+    const latest = await getByName(cfg, record.name);
+    if (latest.modified !== record.modified) {
+      const latestKeys = latest.required_document_keys || [];
+      const latestVerified = latestKeys.filter(key => isLegalDocumentVerified(latest, key));
+      return { ...result, record: latest, requiredDocumentKeys: latestKeys, verifiedDocumentKeys: latestVerified,
+        pendingDocumentKeys: latestKeys.filter(key => !latestVerified.includes(key)),
+        reason: "The Legal Review changed during validation. Refresh status before signing." };
+    }
+    const canSignDocumentKeys = requiredDocumentKeys.filter(key => {
+      const request = bundle.documents[key]?.signatureRequest;
+      return canStartLegalSignature(record, key) && (!request || request.signerId === actorId(principal)) &&
+        (!request?.saveAttempt || Boolean(request.saveAttempt.failedAt));
+    });
+    const unconfirmedSave = requiredDocumentKeys.some(key => {
+      const request = bundle.documents[key]?.signatureRequest;
+      return !request?.completedAt && request?.saveAttempt && !request.saveAttempt.failedAt;
+    });
+    return { ...result, canSignDocumentKeys, eligible: canSignDocumentKeys.length > 0,
+      reason: canSignDocumentKeys.length ? undefined : unconfirmedSave ? SIGNATURE_SAVE_PENDING_REASON : "A different signer owns the pending signature request.", checkedAt: now() };
+  } catch (error) {
+    const status = Number((error as { status?: number })?.status);
+    return { ...result, reason: Number.isFinite(status) && status < 500 && error instanceof Error
+      ? error.message : "Unable to verify current RFQ documents. Refresh status before signing." };
+  }
+}
+
+export interface LegalDocumentIntegrityResult {
+  record: LegalDocumentRecord;
+  documents: Array<{ documentKey: LegalDocKey; status: "Verified" | "Failed" | "Unavailable"; documentHash?: string; signedFileHash?: string; message?: string }>;
+}
+
+async function inspectIntegrity(cfg: ErpAdminConfig, record: LegalDocumentRecord, principal: AccessPrincipal): Promise<LegalDocumentIntegrityResult> {
+  const bundle = parseEsignBundle(record.esign_envelope);
+  const documents: LegalDocumentIntegrityResult["documents"] = [];
+  for (const key of record.required_document_keys || []) {
+    const env = bundle.documents[key];
+    if (!env?.signatureRequest?.completedAt || !env.signedFileUrl || !env.signedFileHash ||
+        !env.signatures.some(signature => signature.role === "legal" && ["signed", "locked"].includes(signature.status))) {
+      documents.push({ documentKey: key, status: "Unavailable", message: "Document has not been signed." });
+      continue;
+    }
+    try {
+      const source = await currentPdf(cfg, record, principal, key, true);
+      if (env.signatureRequest.sourceHash !== source.hash || env.signatureRequest.sourceFileId !== source.file.name ||
+          env.approvedHash !== source.hash || env.approvedFileId !== source.file.name) {
+        throw new LegalReviewError("The signed source is not the verified PDF version.", 409);
+      }
+      const query = new URLSearchParams({ filters: JSON.stringify([
+        ["attached_to_doctype", "=", DOCTYPE], ["attached_to_name", "=", record.name], ["file_url", "=", env.signedFileUrl],
+      ]), fields: JSON.stringify(["name", "file_url", "is_private"]), limit_page_length: "2" });
+      const rows = await erpFetch<Array<{ name: string; file_url: string; is_private: number }>>(cfg, `resource/File?${query}`);
+      if (rows.length !== 1 || !rows[0].name || (env.signedFileId && env.signedFileId !== rows[0].name)) {
+        throw new LegalReviewError("The private signed artifact is missing or ambiguous.", 409);
+      }
+      const artifact = await fetchErpFile({
+        baseUrl: cfg.baseUrl, apiKey: cfg.key, apiSecret: cfg.secret, filePath: env.signedFileUrl, fileId: rows[0].name,
+        authorizeFile: async file => {
+          if (file.attached_to_doctype !== DOCTYPE || file.attached_to_name !== record.name || Number(file.is_private) !== 1) {
+            throw new LegalReviewError("The signed artifact is not private or not attached to this review.", 403);
+          }
+        },
+      });
+      if (!artifact.ok || !artifact.contentType.toLowerCase().startsWith("application/pdf") ||
+          artifact.buffer.subarray(0, 5).toString() !== "%PDF-" || digest(artifact.buffer) !== env.signedFileHash) {
+        throw new LegalReviewError("The signed PDF failed SHA-256 integrity verification.", 409);
+      }
+      documents.push({ documentKey: key, status: "Verified", documentHash: source.hash, signedFileHash: digest(artifact.buffer) });
+    } catch (error) {
+      const status = Number((error as { status?: number })?.status);
+      const unavailable = !Number.isFinite(status) || status >= 500;
+      documents.push({ documentKey: key, status: unavailable ? "Unavailable" : "Failed",
+        message: unavailable ? "Unable to verify current PDF bytes." : "Document Integrity: Failed. The source or signed PDF no longer matches its stored evidence." });
+    }
+  }
+  return { record, documents };
+}
+
+/** Read-only check on reopen: always hashes source AND persisted signed bytes. */
+export async function verifyLegalDocumentIntegrity(name: string, principal: AccessPrincipal): Promise<LegalDocumentIntegrityResult> {
+  const { cfg, record } = await loadReview(name, principal, true);
+  return inspectIntegrity(cfg, record, principal);
+}
+
+async function assertExecutedIntegrity(cfg: ErpAdminConfig, record: LegalDocumentRecord, principal: AccessPrincipal) {
+  if (!isLegalReviewExecuted(record)) throw new LegalReviewError("Complete electronic signature on all required documents before Finance approval or Procurement.", 409);
+  const result = await inspectIntegrity(cfg, record, principal);
+  if (!result.documents.length || result.documents.some(document => document.status !== "Verified")) {
+    throw new LegalReviewError("Document Integrity: Failed or unavailable. Approval and Procurement are blocked until the exact signed version is verified.", 409);
+  }
+}
+
+export async function assertLegalReviewReadyForPurchaseOrder(name: string, principal: AccessPrincipal) {
+  requireActorRoles(principal, ["procurement_team"]);
+  const { cfg, record } = await loadReview(name, principal);
+  if (record.review_status !== "Approved" || record.finance_status !== "Approved" || record.workflow_state !== "Completed") {
+    throw new LegalReviewError("RFQ purchase orders require completed electronic signature and Finance approval.", 409);
+  }
+  await requireActiveRfq(cfg, record);
+  await assertExecutedIntegrity(cfg, record, principal);
+  return record;
+}
+
+export async function recordLegalDocumentViewed(name: string, key: LegalDocKey, hash: string, principal: AccessPrincipal) {
+  requireActorRoles(principal, ["legal"]);
+  const { cfg, record } = await loadReview(name, principal);
+  const pdf = await currentPdf(cfg, record, principal, key);
+  if (hash !== pdf.hash) throw new LegalReviewError("The rendered PDF is not the current version. Reload it.", 409);
+  const bundle = parseEsignBundle(record.esign_envelope);
+  const prior = bundle.documents[key];
+  // Viewing is not approval, and repeated renders must not rewrite signature evidence.
+  if (prior?.viewedAt && prior.documentHash === hash && prior.viewedBy === actorId(principal)) return record;
+  const env = prior || createEmptyEnvelope({
+    documentKey: key, documentName: pdf.file.file_name || key, documentNumber: name, documentHash: hash,
+  });
+  env.documentHash = hash; env.sourceFileId = pdf.file.name; env.sourceFileUrl = pdf.fileUrl;
+  env.documentVersion = hash.slice(0, 12);
+  env.viewedBy = actorId(principal); env.viewedAt = now(); env.reviewStartedAt ||= now();
+  env.auditTrail.push({ id: randomUUID(), action: "document_opened", user: actorId(principal), at: now(), detail: `Rendered ${key}; File ${pdf.file.name}; SHA-256 ${hash}` });
+  bundle.documents[key] = env;
+  return saveVerified(cfg, record, { esign_envelope: JSON.stringify(bundle), [`${key}_viewed`]: 1 });
+}
+
+export async function saveLegalChecklist(name: string, items: unknown, principal: AccessPrincipal) {
+  const { cfg, record } = await loadReview(name, principal);
+  requireLegalStage(record);
+  if (!Array.isArray(items) || items.length !== LEGAL_CHECKPOINT_IDS.length ||
+      new Set(items.map(item => item?.id)).size !== LEGAL_CHECKPOINT_IDS.length ||
+      !items.every(item => LEGAL_CHECKPOINT_IDS.includes(item?.id) &&
+        ["Pending", "Compliant", "Non-Compliant", "Not Applicable", "Exception", "Requires Clarification"].includes(item?.status))) {
+    throw new LegalReviewError("Invalid legal checklist.", 422);
+  }
+  const bundle = parseEsignBundle(record.esign_envelope);
+  bundle.reviewChecklist = items.map(item => ({ ...item, reviewedBy: actorId(principal), reviewedAt: now() }));
+  return saveVerified(cfg, record, { esign_envelope: JSON.stringify(bundle) });
+}
+
+export async function decideLegalDocumentReview(input: ReviewDecisionInput, principal: AccessPrincipal): Promise<LegalDocumentRecord> {
+  requireActorRoles(principal, ["legal"]);
+  const { cfg, record } = await loadReview(input.name, principal);
+  if (input.status === "Approved" && record.review_status === "Approved" && record.workflow_state === "Finance Review") {
+    await assertExecutedIntegrity(cfg, record, principal);
+    return record; // Signature completion already performed the Legal handoff.
+  }
+  requireLegalStage(record);
+  const reason = String(input.rejectionReason || input.comments || "").trim();
+  if (!reason) throw new LegalReviewError("A decision reason is required.", 422);
+  const bundle = parseEsignBundle(record.esign_envelope);
+  if (input.status === "Approved") {
+    await requireActiveRfq(cfg, record);
+    await assertExecutedIntegrity(cfg, record, principal);
+  } else if (input.status !== "Rejected") throw new LegalReviewError("Invalid decision.", 400);
+  audit(bundle, principal, input.status === "Approved" ? "approval_completed" : "document_rejected", reason);
+  const approvedOn = formatERPNextDatetime(new Date())!;
+  const approved = input.status === "Approved";
+  const saved = await saveVerified(cfg, record, {
+    review_status: input.status, approved_by: actorId(principal), approved_on: approvedOn,
+    legal_comments: input.comments || reason, rejection_reason: approved ? "" : reason,
+    finance_status: approved ? "Pending" : "", finance_approved_by: "", finance_approved_on: "",
+    workflow_state: approved ? "Finance Review" : "Rejected",
+    current_owner: approved ? LDR_OWNERS.FINANCE : LDR_OWNERS.NONE,
+    next_approver: approved ? LDR_OWNERS.FINANCE : LDR_OWNERS.NONE,
+    esign_envelope: JSON.stringify(bundle),
+  });
+  if (approved) await syncRfqAfterLegalApprove(cfg, saved.rfq_name, actorId(principal), approvedOn);
+  return saved;
+}
+
+export async function requestLegalChanges(name: string, comments: string, principal: AccessPrincipal) {
+  const { cfg, record } = await loadReview(name, principal);
+  requireLegalStage(record);
+  if (typeof comments !== "string" || !comments.trim()) throw new LegalReviewError("Required changes must be specified.", 422);
+  const updates = resetEvidence(record, principal, "Legal requested a revision.");
+  const bundle = parseEsignBundle(updates.esign_envelope);
+  audit(bundle, principal, "changes_requested", comments.trim());
+  return saveVerified(cfg, record, {
+    ...updates, current_owner: LDR_OWNERS.PROCUREMENT, next_approver: LDR_OWNERS.PROCUREMENT,
+    legal_comments: comments.trim(), esign_envelope: JSON.stringify(bundle),
+  });
+}
+
+export async function resubmitLegalReview(name: string, _resubmittedBy: string, note: string | undefined, principal: AccessPrincipal) {
+  const { cfg, record, quotation } = await loadReview(name, principal);
+  if (record.review_status !== "Rejected" && record.review_status !== "Pending") throw new LegalReviewError("Only rejected or returned reviews can be resubmitted.", 409);
+  const updates: Record<string, unknown> = {
+    ...resetEvidence(record, principal, "Resubmitted for Legal Review."),
+    legal_comments: `Resubmitted by ${actorId(principal)}: ${note || ""}`, rejection_reason: "",
+  };
+  for (const key of LEGAL_DOC_KEYS) {
+    const value = quotationFileFields[key].map(field => quotation[field]).find(value => typeof value === "string" && value.trim());
+    // An explicit resubmission starts a new review set from the latest ERP quotation.
+    updates[`${key}_file_url`] = value || "";
+  }
+  return saveVerified(cfg, record, updates);
+}
+
+export async function decideFinanceReview(input: FinanceDecisionInput, principal: AccessPrincipal) {
+  requireActorRoles(principal, ["finance"]);
+  const { cfg, record } = await loadReview(input.name, principal);
+  if (record.review_status !== "Approved" || record.workflow_state !== "Finance Review" || record.finance_status !== "Pending") {
+    throw new LegalReviewError("Finance approval is available only after all required electronic signatures are complete.", 409);
+  }
+  await requireActiveRfq(cfg, record);
+  await assertExecutedIntegrity(cfg, record, principal);
+  if (!["Approved", "Rejected"].includes(input.status)) throw new LegalReviewError("Invalid Finance decision.", 400);
+  const reason = String(input.rejectionReason || input.comments || "").trim();
+  if (input.status === "Rejected" && !reason) throw new LegalReviewError("A rejection reason is required.", 422);
+  const bundle = parseEsignBundle(record.esign_envelope);
+  audit(bundle, principal, "finance_decision", `${input.status}: ${reason}`);
+  return saveVerified(cfg, record, {
+    finance_status: input.status, finance_approved_by: actorId(principal), finance_approved_on: formatERPNextDatetime(new Date()),
+    finance_comments: input.comments || "", finance_rejection_reason: input.status === "Rejected" ? reason : "",
+    workflow_state: input.status === "Approved" ? "Completed" : "Rejected",
+    current_owner: input.status === "Approved" ? LDR_OWNERS.PROCUREMENT_TEAM : LDR_OWNERS.NONE,
+    next_approver: input.status === "Approved" ? LDR_OWNERS.PROCUREMENT_TEAM : LDR_OWNERS.NONE,
+    esign_envelope: JSON.stringify(bundle),
+  });
+}
+
+export async function resubmitFinanceReview(name: string, _by: string, note: string | undefined, principal: AccessPrincipal) {
+  const { cfg, record } = await loadReview(name, principal);
+  if (record.review_status !== "Approved" || record.finance_status !== "Rejected") throw new LegalReviewError("Only finance-rejected reviews can be resubmitted.", 409);
+  return saveVerified(cfg, record, {
+    finance_status: "Pending", finance_approved_by: "", finance_approved_on: "",
+    finance_comments: `Resubmitted by ${actorId(principal)}: ${note || ""}`, finance_rejection_reason: "",
+    workflow_state: "Finance Review", current_owner: LDR_OWNERS.FINANCE, next_approver: LDR_OWNERS.FINANCE,
+  });
+}
+
+export async function updateLegalDocumentFlags(name: string, updates: Record<string, unknown>, principal: AccessPrincipal) {
+  requireActorRoles(principal, ["legal"]);
+  const { cfg, record } = await loadReview(name, principal);
+  requireLegalStage(record);
+  const safe: Record<string, unknown> = {};
+  const bundle = parseEsignBundle(record.esign_envelope);
+  for (const [field, value] of Object.entries(updates || {})) {
+    const key = LEGAL_DOC_KEYS.find(key => field === `${key}_approved` || field === `${key}_note`);
+    if (!key) throw new LegalReviewError("Only review notes and reviewed-document approvals can be updated here.", 400);
+    if (field.endsWith("_approved")) {
+      if (value !== 0 && value !== 1) throw new LegalReviewError("Invalid review flag.", 400);
+      if (bundle.documents[key]?.signatureRequest) {
+        throw new LegalReviewError("A signature has started for this version; request a revision to change verification.", 409);
+      }
+      if (value === 1) {
+        const pdf = await currentPdf(cfg, record, principal, key);
+        const env = bundle.documents[key];
+        if (!env?.viewedAt || env.viewedBy !== actorId(principal) || env.documentHash !== pdf.hash) {
+          throw new LegalReviewError("Render and inspect the current PDF before marking it reviewed.", 422);
+        }
+        env.approvedHash = pdf.hash; env.approvedFileId = pdf.file.name;
+        env.approvedBy = actorId(principal); env.approvalTimestamp = now();
+        env.approvalStatus = "Approved";
+      } else {
+        const env = bundle.documents[key];
+        if (env) {
+          delete env.approvedHash; delete env.approvedFileId; delete env.approvedBy;
+          delete env.approvalTimestamp; env.approvalStatus = "Pending";
+        }
+      }
+    } else if (typeof value !== "string") throw new LegalReviewError("Invalid note.", 400);
+    safe[field] = value;
+  }
+  if (!Object.keys(safe).length) throw new LegalReviewError("No review updates provided.", 400);
+  return saveVerified(cfg, record, { ...safe, esign_envelope: JSON.stringify(bundle) });
+}
+
+export async function beginLegalSignature(name: string, key: LegalDocKey, principal: AccessPrincipal) {
+  requireActorRoles(principal, ["legal"]);
+  const { cfg, record } = await loadReview(name, principal);
+  if (!canStartLegalSignature(record, key)) {
+    if (!areRequiredDocumentsVerified(record)) {
+      throw new LegalReviewError("Verify all required legal documents before e-signature.", 409);
+    }
+    throw new LegalReviewError("Prerequisites for e-signature are not met.", 409);
+  }
+  const bundle = await verifiedPdfsForSignature(cfg, record, principal);
+  const env = bundle.documents[key]!;
+  if (env.signatureRequest && env.signatureRequest.sourceHash === env.documentHash) {
+    if (env.signatureRequest.signerId !== actorId(principal)) throw new LegalReviewError("A different signer owns this signature request.", 409);
+    if (env.signatureRequest.saveAttempt && !env.signatureRequest.saveAttempt.failedAt) throw new LegalReviewError(SIGNATURE_SAVE_PENDING_REASON, 409);
+    return record;
+  }
+  if (env.signatures.length) throw new LegalReviewError("Executed signatures cannot be replaced.", 409);
+  env.signatureRequest = { id: randomUUID(), sourceHash: env.documentHash, sourceFileId: env.sourceFileId || "", signerId: actorId(principal), startedAt: now() };
+  env.auditTrail.push({ id: randomUUID(), action: "signature_initiated", user: actorId(principal), at: now(), detail: `Request ${env.signatureRequest.id}; ${env.documentHash}` });
+  return saveVerified(cfg, record, { esign_envelope: JSON.stringify(bundle) });
+}
+
+// Serializes retries in one process; ERP's modified check also rejects stale writers.
+const signatureWrites = new Map<string, Promise<LegalDocumentRecord>>();
+export async function completeLegalSignature(name: string, key: LegalDocKey, requestId: string, signature: LegalEsignSignature, principal: AccessPrincipal) {
+  const lockKey = `${name}:${key}:${requestId}`;
+  if (signatureWrites.has(lockKey)) throw new LegalReviewError("Signature save is in progress. Refresh before retrying.", 409);
+  const work = completeSignature(name, key, requestId, signature, principal);
+  signatureWrites.set(lockKey, work);
+  try { return await work; } finally { signatureWrites.delete(lockKey); }
+}
+
+async function completeSignature(name: string, key: LegalDocKey, requestId: string, signature: LegalEsignSignature, principal: AccessPrincipal) {
+  requireActorRoles(principal, ["legal"]);
+  const { cfg, record } = await loadReview(name, principal);
+  const bundleCheck = parseEsignBundle(record.esign_envelope);
+  const existingEnv = bundleCheck.documents[key];
+  if (existingEnv?.signatureRequest?.id === requestId &&
+      existingEnv.signatureRequest.completedAt &&
+      existingEnv.signedFileUrl &&
+      existingEnv.signatures.length) {
+    if (existingEnv.signatureRequest.signerId !== actorId(principal)) {
+      throw new LegalReviewError("A different signer owns this signature request.", 409);
+    }
+    const integrity = await inspectIntegrity(cfg, record, principal);
+    if (integrity.documents.find(document => document.documentKey === key)?.status !== "Verified") {
+      throw new LegalReviewError("Document Integrity: Failed. The completed signature cannot be confirmed.", 409);
+    }
+    return record;
+  }
+  if (!canStartLegalSignature(record, key)) {
+    if (!areRequiredDocumentsVerified(record)) {
+      throw new LegalReviewError("Verify all required legal documents before e-signature.", 409);
+    }
+    throw new LegalReviewError("Prerequisites for e-signature are not met.", 409);
+  }
+  const bundle = await verifiedPdfsForSignature(cfg, record, principal);
+  const env = bundle.documents[key]!;
+  const request = env.signatureRequest;
+  const expectedHash = env.documentHash;
+  if (!request || request.id !== requestId || request.signerId !== actorId(principal) ||
+      request.sourceHash !== expectedHash) {
+    throw new LegalReviewError("Signature request does not match the verified version and signer.", 409);
+  }
+  if (request.completedAt && env.signedFileUrl && env.signatures.length) return record;
+  if (request.saveAttempt && !request.saveAttempt.failedAt) {
+    throw new LegalReviewError(SIGNATURE_SAVE_PENDING_REASON, 409);
+  }
+  const pdf = await currentPdf(cfg, record, principal, key);
+  const p = signature?.placement;
+  if (typeof signature?.typedName !== "string" || !signature.typedName.trim() || signature.typedName.length > 120 ||
+      !p || !Number.isInteger(p.page) || p.page < 1 || p.page > pdf.pages ||
+      ![p.xNorm, p.yNorm, p.widthNorm, p.heightNorm].every(n => Number.isFinite(n) && n > 0 && n <= 1)) {
+    throw new LegalReviewError("Invalid typed signature or placement.", 422);
+  }
+  // Persist canonical signer/time/placement before creating an artifact. Retries
+  // reuse this intent and deterministic filename; clients cannot supply signed bytes.
+  const canonical: LegalEsignSignature = env.signatures[0] || {
+    ...signature, id: request.id, sequence: 1, reviewerId: actorId(principal), reviewerName: actorId(principal),
+    role: "legal", signedAt: request.startedAt, typedName: signature.typedName.trim(), status: "pending",
+  };
+  canonical.signedAt = request.startedAt;
+  env.signatures = [canonical];
+  const attemptId = randomUUID();
+  request.saveAttempt = { id: attemptId, startedAt: now() };
+  const reserved = await saveVerified(cfg, record, { esign_envelope: JSON.stringify(bundle), esign_status: "unsigned" });
+  let uploadOutcomeUnknown = false;
+  try {
+  const signed = await burnTypedSignatureIntoPdf(new Uint8Array(pdf.bytes).buffer, canonical.typedName, "Legal Reviewer", new Date(canonical.signedAt), canonical.placement);
+  const signedHash = digest(signed);
+  const fileName = `legal-${request.id}.pdf`;
+  const params = new URLSearchParams({
+    filters: JSON.stringify([["attached_to_doctype", "=", DOCTYPE], ["attached_to_name", "=", name], ["file_name", "=", fileName]]),
+    fields: JSON.stringify(["name", "file_url", "is_private"]), limit_page_length: "2",
+  });
+  const existing = await erpFetch<Array<{ name: string; file_url: string; is_private: number }>>(cfg, `resource/File?${params}`);
+  if (existing.length > 1) throw new LegalReviewError("Multiple artifacts exist for this signature request; manual verification required.", 409);
+  let signedFile = existing[0];
+  if (!signedFile) {
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(signed)], { type: "application/pdf" }), fileName);
+    form.append("is_private", "1"); form.append("doctype", DOCTYPE); form.append("docname", name);
+    uploadOutcomeUnknown = true;
+    const response = await fetch(`${cfg.baseUrl}/api/method/upload_file`, {
+      method: "POST", headers: { Authorization: `token ${cfg.key}:${cfg.secret}` }, body: form,
+    });
+    if (!response.ok) {
+      // A gateway/server timeout may have committed an upload upstream.
+      uploadOutcomeUnknown = response.status >= 500;
+      throw new LegalReviewError("Unable to confirm the signed PDF upload. Refresh before retrying.", 502);
+    }
+    const payload = await response.json() as { message?: { name: string; file_url: string; is_private: number } };
+    if (!payload.message?.name) throw new LegalReviewError("Signed PDF upload was not confirmed.", 502);
+    signedFile = payload.message;
+    uploadOutcomeUnknown = false;
+  }
+  const savedFile = await erpFetch<Record<string, unknown>>(cfg, resource("File", signedFile.name));
+  if (Number(savedFile.is_private) !== 1 || savedFile.attached_to_doctype !== DOCTYPE || savedFile.attached_to_name !== name) {
+    throw new LegalReviewError("The signed artifact is not a private attachment of this review.", 409);
+  }
+  const verifiedBytes = await fetchErpFile({
+    baseUrl: cfg.baseUrl, apiKey: cfg.key, apiSecret: cfg.secret, filePath: String(savedFile.file_url), fileId: signedFile.name,
+    authorizeFile: async file => {
+      if (file.attached_to_doctype !== DOCTYPE || file.attached_to_name !== name || !file.is_private) throw new LegalReviewError("Invalid signature artifact.", 403);
+    },
+  });
+  if (!verifiedBytes.ok || digest(verifiedBytes.buffer) !== signedHash) throw new LegalReviewError("The signed artifact failed integrity verification.", 409);
+  // Re-check source and workflow after upload, before recording execution.
+  const fresh = await getByName(cfg, name);
+  if (fresh.modified !== reserved.modified) throw new LegalReviewError("The review changed while signing. Refresh before retrying.", 409);
+  await verifiedPdfsForSignature(cfg, fresh, principal);
+  canonical.status = "locked"; env.status = "locked"; env.locked = true;
+  env.signedFileUrl = String(savedFile.file_url); env.signedFileHash = signedHash; env.signedFileId = signedFile.name;
+  env.signatureMethod = "typed_pdf"; request.completedAt = now();
+  env.auditTrail.push({ id: randomUUID(), action: "signature_created", user: actorId(principal), at: now(), detail: `Completed request ${request.id}; source ${request.sourceHash}; signed ${signedHash}` });
+  const complete = attachedKeys(record).every(docKey => bundle.documents[docKey]?.signatureRequest?.completedAt);
+  if (complete) await assertExecutedIntegrity(cfg, { ...fresh, esign_envelope: JSON.stringify(bundle) }, principal);
+  const saved = await saveVerified(cfg, fresh, {
+    esign_envelope: JSON.stringify(bundle), esign_status: complete ? "signed" : "unsigned",
+    esign_document_hash: pdf.hash, esign_signed_file_url: env.signedFileUrl,
+    esign_signed_by: actorId(principal), esign_signed_on: formatERPNextDatetime(canonical.signedAt),
+    ...(complete ? {
+      review_status: "Approved", approved_by: actorId(principal), approved_on: formatERPNextDatetime(new Date()),
+      finance_status: "Pending", finance_approved_by: "", finance_approved_on: "",
+      finance_comments: "", finance_rejection_reason: "", workflow_state: "Finance Review",
+      current_owner: LDR_OWNERS.FINANCE, next_approver: LDR_OWNERS.FINANCE,
+    } : {}),
+  });
+  if (complete) await syncRfqAfterLegalApprove(cfg, saved.rfq_name, actorId(principal), saved.approved_on!);
+  return saved;
+  } catch (error) {
+    // Known failures can be retried with the same request/artifact. An unknown
+    // upload outcome stays reserved: never risk producing a second signed file.
+    if (!uploadOutcomeUnknown) {
+      const latest = await getByName(cfg, name);
+      const latestBundle = parseEsignBundle(latest.esign_envelope);
+      const latestRequest = latestBundle.documents[key]?.signatureRequest;
+      if (latestRequest?.saveAttempt?.id === attemptId && !latestRequest.completedAt) {
+        latestRequest.saveAttempt.failedAt = now();
+        await saveVerified(cfg, latest, { esign_envelope: JSON.stringify(latestBundle), esign_status: "unsigned" });
+      }
+    }
+    throw error;
+  }
 }

@@ -462,10 +462,10 @@ export default function TotalSpendDetailsPage() {
         })}
       </section>
 
-      {/* Sticky filter bar */}
-      <div className="sticky top-[52px] z-10 rounded-card border border-neutral-200 bg-white/95 p-3 shadow-card backdrop-blur">
-        <div className="flex flex-wrap items-end gap-2">
-          <label className="min-w-[180px] flex-1 text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+      {/* Filter container */}
+      <div className="rounded-card border border-neutral-200 bg-white p-4 shadow-card">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <label className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
             Search Invoice Number
             <div className="relative mt-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
@@ -479,7 +479,7 @@ export default function TotalSpendDetailsPage() {
             </div>
           </label>
 
-          <label className="min-w-[150px] text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+          <label className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
             Supplier
             <select
               value={supplierFilter}
@@ -495,31 +495,31 @@ export default function TotalSpendDetailsPage() {
             </select>
           </label>
 
-          {showStatusColumn || statusOptions.length > 1 ? (
-            <label className="min-w-[130px] text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
-              Status
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="mt-1 h-10 w-full rounded-control border border-neutral-200 bg-white px-2.5 text-sm"
-              >
-                <option value="">All statuses</option>
-                {statusOptions.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : null}
+          <label className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+            Status
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="mt-1 h-10 w-full rounded-control border border-neutral-200 bg-white px-2.5 text-sm"
+            >
+              <option value="">All statuses</option>
+              {statusOptions.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
 
+        <div className="mt-3 grid grid-cols-1 items-end gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <label className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
             From
             <input
               type="date"
               value={dateFrom}
               onChange={(e) => setDateFrom(e.target.value)}
-              className="mt-1 block h-10 rounded-control border border-neutral-200 px-2.5 text-sm"
+              className="mt-1 block h-10 w-full rounded-control border border-neutral-200 px-2.5 text-sm"
             />
           </label>
           <label className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
@@ -528,11 +528,11 @@ export default function TotalSpendDetailsPage() {
               type="date"
               value={dateTo}
               onChange={(e) => setDateTo(e.target.value)}
-              className="mt-1 block h-10 rounded-control border border-neutral-200 px-2.5 text-sm"
+              className="mt-1 block h-10 w-full rounded-control border border-neutral-200 px-2.5 text-sm"
             />
           </label>
 
-          <label className="w-[110px] text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+          <label className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
             Min Amount
             <input
               type="number"
@@ -543,7 +543,7 @@ export default function TotalSpendDetailsPage() {
               className="mt-1 h-10 w-full rounded-control border border-neutral-200 px-2.5 text-sm"
             />
           </label>
-          <label className="w-[110px] text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
+          <label className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
             Max Amount
             <input
               type="number"
@@ -559,7 +559,7 @@ export default function TotalSpendDetailsPage() {
             type="button"
             onClick={resetFilters}
             disabled={!hasActiveFilters}
-            className="inline-flex h-10 items-center gap-1.5 rounded-control border border-neutral-200 bg-white px-3 text-sm font-semibold text-neutral-700 hover:bg-neutral-50 disabled:opacity-40"
+            className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-control border border-neutral-200 bg-white px-3 text-sm font-semibold text-neutral-700 hover:bg-neutral-50 disabled:opacity-40"
           >
             <RotateCcw className="h-3.5 w-3.5" />
             Reset Filters

@@ -150,7 +150,7 @@ async function fetchUomsInCategoryByFilter(
           filters: JSON.stringify([
             [
               UOM_DOCTYPE,
-              "uom_category",
+              "category",
               "=",
               categoryName,
             ],

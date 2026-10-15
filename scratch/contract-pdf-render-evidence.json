@@ -1,0 +1,31 @@
+{
+  "checked_at": "2026-09-28T10:58:12.094Z",
+  "contract": "CON-2026-00001",
+  "modified": "2026-09-25 13:22:23.139023",
+  "context": {
+    "items": [
+      {
+        "item": "Cold Rolled Steel 6",
+        "qty": 100,
+        "uom": "Kg"
+      },
+      {
+        "item": "Galvanized Steel 10",
+        "qty": 80,
+        "uom": "Kg"
+      }
+    ],
+    "documents": [],
+    "supplierName": "Atlantic Precision Manufacturing.",
+    "rfqTitle": "Procurement RFQ – Production",
+    "rfqValidTill": "2026-10-02",
+    "company": "Netlink",
+    "department": "Production - NSGAI",
+    "awardId": "LDC2026-00027",
+    "awardValue": 4500,
+    "awardCurrency": "USD"
+  },
+  "signature_page": 3,
+  "source_unchanged": true,
+  "mode": "local presentation export; existing locked ERPNext file unchanged"
+}

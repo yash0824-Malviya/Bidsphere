@@ -1,5 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Circle, QrCode, XCircle } from "lucide-react";
+import { Link } from "react-router-dom";
+import {
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  ChevronRight,
+  Circle,
+  Home,
+  Package,
+  QrCode,
+  Warehouse,
+} from "lucide-react";
 import QRCode from "qrcode";
 
 import { receiptVerificationUrl } from "../../../api/materialIssueReceipt";
@@ -11,23 +22,28 @@ import {
   buildReceiptTimeline,
   receiptStatusDisplayLabel,
 } from "../../../types/materialIssueReceipt";
-import { splitMaterialIssueRemarksForDisplay } from "../../../utils/materialIssueRemarksDisplay";
+import {
+  parseStructuredWarehouseProcessing,
+} from "../../../utils/materialIssueRemarksDisplay";
 import {
   getPublicAppOrigin,
   isPublicAppOriginLoopback,
   probeVerificationServiceAvailable,
 } from "../../../utils/publicAppUrl";
 import MaterialIssueAuditPanel from "../MaterialIssueAuditPanel";
+import { AttachmentsCell, PartNameCell } from "../EngineeringDocCells";
 
 type Audience = "warehouse" | "department";
 
 export default function MaterialIssueReceiptView({
   receipt,
-  audience = "warehouse",
+  audience = "department",
+  actions,
   children,
 }: {
   receipt: MaterialIssueReceipt;
   audience?: Audience;
+  actions?: React.ReactNode;
   /** Signature / accept actions slot */
   children?: React.ReactNode;
 }) {
@@ -35,61 +51,18 @@ export default function MaterialIssueReceiptView({
   const [verifyReachable, setVerifyReachable] = useState<
     "checking" | "ok" | "unavailable"
   >("checking");
+
   const timeline = buildReceiptTimeline(receipt);
   const statusLabel = receiptStatusDisplayLabel(receipt.status, audience);
 
-  const remarksDisplay = useMemo(
-    () =>
-      splitMaterialIssueRemarksForDisplay(receipt.remarks, {
-        items: receipt.items.map((i) => ({
-          item_code: i.item_code,
-          item_name: i.item_name,
-          requested_qty: i.requested_qty,
-          issued_qty: i.issued_qty,
-          remaining_qty: i.remaining_qty,
-          uom: i.uom,
-        })),
-      }),
-    [receipt.remarks, receipt.items],
-  );
-
-  const auditForPanel = useMemo(
-    () => ({
-      ...remarksDisplay.audit,
-      created_by:
-        remarksDisplay.audit.created_by ||
-        receipt.warehouse_signature?.signer_name ||
-        receipt.issued_by,
-      created_at:
-        remarksDisplay.audit.created_at ||
-        receipt.warehouse_signed_at ||
-        receipt.created_at,
-      warehouse: remarksDisplay.audit.warehouse || receipt.warehouse,
-      issue_type: remarksDisplay.audit.issue_type || receipt.issue_type,
-      receiver: remarksDisplay.audit.receiver || receipt.received_by,
-      browser:
-        remarksDisplay.audit.browser ||
-        receipt.warehouse_signature?.browser ||
-        receipt.audit_trail.find((a) => a.browser)?.browser,
-      device:
-        remarksDisplay.audit.device ||
-        receipt.warehouse_signature?.device ||
-        receipt.audit_trail.find((a) => a.device)?.device,
-    }),
-    [remarksDisplay.audit, receipt],
-  );
+  const structuredProcessing = useMemo(() => {
+    return parseStructuredWarehouseProcessing(receipt.remarks, receipt);
+  }, [receipt]);
 
   const verifyUrl = receiptVerificationUrl(receipt);
   const publicOrigin = getPublicAppOrigin();
 
   useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log("[QR] Material Issue verification URL:", verifyUrl);
-    // eslint-disable-next-line no-console
-    console.log("[QR] Public origin source:", {
-      origin: publicOrigin,
-      loopback: isPublicAppOriginLoopback(),
-    });
     void QRCode.toDataURL(verifyUrl, {
       width: 180,
       margin: 1,
@@ -115,288 +88,487 @@ export default function MaterialIssueReceiptView({
     !receipt.department_signature &&
     receipt.status !== "Acceptance Rejected" &&
     receipt.status !== "Confirmed";
-  const businessLocked = Boolean(
-    receipt.warehouse_signature ||
-      receipt.status === "Pending Department Acceptance" ||
-      receipt.status === "Confirmed",
-  );
+
+  // Items Totals & Progress Calculation
+  const totals = useMemo(() => {
+    let requested = 0;
+    let issued = 0;
+    let remaining = 0;
+
+    for (const it of receipt.items) {
+      requested += Number(it.requested_qty) || 0;
+      issued += Number(it.issued_qty) || 0;
+      remaining += Number(it.remaining_qty) || 0;
+    }
+
+    const pct = requested > 0 ? Math.min(100, Math.round((issued / requested) * 100)) : 100;
+    return { requested, issued, remaining, pct };
+  }, [receipt.items]);
+
+  const isConfirmed =
+    receipt.status === "Confirmed" || Boolean(receipt.department_signature);
 
   return (
-    <div className="space-y-5">
-      {/* Header summary */}
-      <div className="rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="font-mono text-xs font-semibold uppercase tracking-wide text-neutral-400">
-              {receipt.issue_number}
-            </p>
-            <h1 className="mt-1 text-xl font-semibold text-neutral-900">
+    <div className="w-full space-y-6">
+      {/* ──────────────────────────────────────────────────────────── */}
+      {/* 1. Breadcrumbs & Top Header                                 */}
+      {/* ──────────────────────────────────────────────────────────── */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <nav className="flex items-center gap-1.5 text-xs text-slate-500 mb-1.5" aria-label="Breadcrumb">
+            <Link
+              to="/dashboard"
+              className="inline-flex items-center gap-1 hover:text-slate-900 transition"
+            >
+              <Home className="h-3.5 w-3.5" />
+              <span>Home</span>
+            </Link>
+            <ChevronRight className="h-3 w-3 text-slate-400" />
+            <Link
+              to={
+                audience === "department"
+                  ? "/department/issued-items/issue-receipts"
+                  : "/warehouse/issue-items/receipts"
+              }
+              className="hover:text-slate-900 transition"
+            >
+              Issued Items
+            </Link>
+            <ChevronRight className="h-3 w-3 text-slate-400" />
+            <span className="font-semibold text-slate-800">
+              Material Issue Receipt
+            </span>
+          </nav>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-[26px]">
               Material Issue Receipt
             </h1>
-            <p className="mt-1 text-sm text-slate-500">{statusLabel}</p>
+            <span className="font-mono text-sm font-semibold text-slate-500 bg-slate-100 px-2.5 py-0.5 rounded-md border border-slate-200">
+              {receipt.issue_number}
+            </span>
           </div>
-          <StatusBadge status={receipt.status} size="lg" />
+          <p className="mt-0.5 text-sm text-slate-500">
+            {statusLabel}
+          </p>
         </div>
-        {businessLocked ? (
-          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-            Business fields are locked after Warehouse Signature. Only Department
-            Acceptance (checklist, remarks, signature) can change.
-          </div>
-        ) : null}
-        <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+
+        <div className="flex flex-wrap items-center gap-3">
+          <StatusBadge status={receipt.status} size="lg" />
+          {actions}
+        </div>
+      </div>
+
+      {/* ──────────────────────────────────────────────────────────── */}
+      {/* 2. Business Information Grid (Compact Two-Column Layout)    */}
+      {/* ──────────────────────────────────────────────────────────── */}
+      <div className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-xs">
+        <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3 border-b border-slate-100 pb-2">
+          Business Information
+        </h2>
+        <dl className="grid grid-cols-1 gap-y-3.5 gap-x-6 sm:grid-cols-2 lg:grid-cols-4 text-sm">
           <div>
-            <dt className="text-xs text-neutral-500">Material Request</dt>
-            <dd className="font-mono font-medium">{receipt.mr_name}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-neutral-500">Stock Entry</dt>
-            <dd className="font-mono font-medium">
-              {receipt.stock_entry || "—"}
+            <dt className="text-xs text-slate-500">MR Number</dt>
+            <dd className="mt-0.5 font-mono font-semibold text-primary-700">
+              <Link
+                to={`/material-requests/${encodeURIComponent(receipt.mr_name)}`}
+                className="hover:underline"
+              >
+                {receipt.mr_name}
+              </Link>
             </dd>
           </div>
-          {audience !== "department" ? (
-            <div>
-              <dt className="text-xs text-neutral-500">Department</dt>
-              <dd className="font-medium">{receipt.department || "—"}</dd>
-            </div>
-          ) : null}
+
           <div>
-            <dt className="text-xs text-neutral-500">Company</dt>
-            <dd className="font-medium">{receipt.company || "—"}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-neutral-500">Warehouse</dt>
-            <dd className="font-medium">{receipt.warehouse || "—"}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-neutral-500">Warehouse Manager</dt>
-            <dd className="font-medium">
-              {receipt.warehouse_signature?.signer_name ||
-                receipt.issued_by ||
-                "—"}
+            <dt className="text-xs text-slate-500">Company</dt>
+            <dd className="mt-0.5 font-medium text-slate-900">
+              {receipt.company || "Netlink"}
             </dd>
           </div>
+
           <div>
-            <dt className="text-xs text-neutral-500">Receiver</dt>
-            <dd className="font-medium">{receipt.received_by || "—"}</dd>
+            <dt className="text-xs text-slate-500">Warehouse</dt>
+            <dd className="mt-0.5 font-medium text-slate-900">
+              {receipt.warehouse || "—"}
+            </dd>
           </div>
+
           <div>
-            <dt className="text-xs text-neutral-500">Issue Date</dt>
-            <dd className="font-medium">{formatDate(receipt.issue_date)}</dd>
+            <dt className="text-xs text-slate-500">Received By</dt>
+            <dd className="mt-0.5 font-medium text-slate-900">
+              {receipt.received_by || "Department User"}
+            </dd>
           </div>
+
           <div>
-            <dt className="text-xs text-neutral-500">Issue Type</dt>
-            <dd className="font-medium">{receipt.issue_type || "—"}</dd>
+            <dt className="text-xs text-slate-500">Issue Type</dt>
+            <dd className="mt-0.5 font-medium text-slate-900">
+              {receipt.issue_type || "Full Issue"}
+            </dd>
+          </div>
+
+          <div>
+            <dt className="text-xs text-slate-500">Issue Date</dt>
+            <dd className="mt-0.5 font-medium text-slate-900">
+              {formatDate(receipt.issue_date)}
+            </dd>
+          </div>
+
+          <div>
+            <dt className="text-xs text-slate-500">Priority</dt>
+            <dd className="mt-0.5 font-medium text-slate-900">
+              Medium
+            </dd>
+          </div>
+
+          <div>
+            <dt className="text-xs text-slate-500">Status</dt>
+            <dd className="mt-0.5 font-semibold text-slate-900">
+              {receipt.status}
+            </dd>
           </div>
         </dl>
       </div>
 
-      {/* Timeline */}
-      <div className="rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-sm">
-        <h2 className="mb-4 text-sm font-semibold text-slate-900">Timeline</h2>
-        <ol className="space-y-3">
-          {timeline.map((step) => (
-            <li key={step.key} className="flex items-start gap-3 text-sm">
-              {step.done ? (
-                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-              ) : step.current ? (
-                <Circle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-              ) : (
-                <Circle className="mt-0.5 h-4 w-4 shrink-0 text-slate-300" />
-              )}
-              <div>
-                <p
-                  className={`font-medium ${
-                    step.current
-                      ? "text-amber-800"
-                      : step.done
-                        ? "text-slate-900"
-                        : "text-slate-400"
-                  }`}
-                >
-                  {step.label}
-                </p>
-                {step.at ? (
-                  <p className="text-xs text-slate-500">{step.at}</p>
-                ) : null}
-              </div>
-            </li>
-          ))}
-        </ol>
-      </div>
+      {/* ──────────────────────────────────────────────────────────── */}
+      {/* 3. Requested Items Table & Progress Visualization           */}
+      {/* ──────────────────────────────────────────────────────────── */}
+      <div className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-xs overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3.5">
+          <div className="flex items-center gap-3">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-50 text-primary-700">
+              <Package className="h-4 w-4" />
+            </span>
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">
+                REQUESTED ITEMS
+              </h2>
+              <p className="text-xs text-slate-500">
+                Line items issued from warehouse inventory
+              </p>
+            </div>
+          </div>
 
-      {/* Items */}
-      <div className="rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-sm">
-        <h2 className="mb-3 text-base font-semibold text-neutral-900">Items</h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+          {/* Top Right Summary Badges */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
+              <span>Requested</span>
+              <span className="tabular-nums font-bold text-slate-900">{totals.requested}</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800">
+              <span>Issued</span>
+              <span className="tabular-nums font-bold text-emerald-900">{totals.issued}</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
+              <span>Remaining</span>
+              <span className="tabular-nums font-bold text-slate-800">{totals.remaining}</span>
+            </span>
+          </div>
+        </div>
+
+        {/* Progress / Quantity Visualization */}
+        <div className="mt-3 rounded-lg border border-slate-100 bg-slate-50/70 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-slate-800">
+              {totals.issued} / {totals.requested} Issued
+            </span>
+            <span className="text-xs font-semibold text-emerald-700">
+              ({totals.pct}% Complete)
+            </span>
+          </div>
+          <div className="w-full sm:w-64 h-2 rounded-full bg-slate-200 overflow-hidden">
+            <div
+              className="h-full bg-emerald-500 rounded-full transition-all duration-300"
+              style={{ width: `${totals.pct}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Items Table */}
+        <div className="overflow-x-auto mt-4">
+          <table className="w-full text-left text-xs min-w-[700px]">
+            <thead className="border-b border-slate-100 bg-slate-50/80 text-[11px] font-bold uppercase tracking-wider text-slate-500">
               <tr>
-                <th className="px-3 py-2">Item</th>
-                <th className="px-3 py-2 text-right">Requested Qty</th>
-                <th className="px-3 py-2 text-right">Issued Qty</th>
-                <th className="px-3 py-2 text-right">Remaining Qty</th>
+                <th className="py-2.5 px-3">Item Code</th>
+                <th className="py-2.5 px-3">Item Name</th>
+                <th className="py-2.5 px-3 text-right">Requested</th>
+                <th className="py-2.5 px-3">Part Name</th>
+                <th className="py-2.5 px-3">Attachments</th>
+                <th className="py-2.5 px-3 text-right">Issued</th>
+                <th className="py-2.5 px-3 text-right">Remaining</th>
+                <th className="py-2.5 px-3 text-center">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {receipt.items.map((item) => (
-                <tr key={item.item_code}>
-                  <td className="px-3 py-2">
-                    <p className="font-medium text-slate-900">
+              {receipt.items.map((item) => {
+                const req = Number(item.requested_qty) || 0;
+                const iss = Number(item.issued_qty) || 0;
+                const rem = Number(item.remaining_qty) || 0;
+                const itemStatus = rem === 0 ? "Issued" : iss > 0 ? "Partially Issued" : "Pending";
+
+                return (
+                  <tr key={item.item_code} className="hover:bg-slate-50/70 transition">
+                    <td className="py-3 px-3 font-mono font-bold text-slate-900">
                       {item.item_code}
-                    </p>
-                    <p className="text-xs text-slate-500">{item.item_name}</p>
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {item.requested_qty} {item.uom}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums font-medium">
-                    {item.issued_qty} {item.uom}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums">
-                    {item.remaining_qty} {item.uom}
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="py-3 px-3 font-medium text-slate-800">
+                      {item.item_name}
+                    </td>
+                    <td className="py-3 px-3 text-right tabular-nums text-slate-700">
+                      {req} {item.uom || "Nos"}
+                    </td>
+                    <td className="py-3 px-3">
+                      <PartNameCell value={item.remarks} />
+                    </td>
+                    <td className="py-3 px-3">
+                      <AttachmentsCell />
+                    </td>
+                    <td className="py-3 px-3 text-right tabular-nums font-bold text-emerald-700">
+                      {iss} {item.uom || "Nos"}
+                    </td>
+                    <td className="py-3 px-3 text-right tabular-nums text-slate-600">
+                      {rem} {item.uom || "Nos"}
+                    </td>
+                    <td className="py-3 px-3 text-center">
+                      <StatusBadge status={itemStatus} size="sm" />
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
+      </div>
 
-        <div className="mt-4 rounded-lg border border-slate-100 bg-slate-50/70 px-4 py-3">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+      {/* ──────────────────────────────────────────────────────────── */}
+      {/* 4. REDESIGNED WAREHOUSE PROCESSING & REMARKS SECTION         */}
+      {/* ──────────────────────────────────────────────────────────── */}
+      <div className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-xs">
+        <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-50 text-sky-700">
+            <Warehouse className="h-4 w-4" />
+          </span>
+          <div>
+            <h2 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
+              WAREHOUSE PROCESSING
+            </h2>
+            <p className="text-xs text-slate-500">
+              Fulfillment summary, stock entry reference, and acceptance verification
+            </p>
+          </div>
+        </div>
+
+        {/* Structured Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+          <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+            <span className="text-[11px] font-semibold text-slate-400 uppercase">Status</span>
+            <div className="mt-1 flex items-center gap-1.5 font-bold text-emerald-800 text-sm">
+              <Check className="h-4 w-4 text-emerald-600 stroke-[3]" />
+              {structuredProcessing.status}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+            <span className="text-[11px] font-semibold text-slate-400 uppercase">Material Issue Receipt</span>
+            <div className="mt-1 font-mono font-bold text-slate-900 text-sm">
+              {structuredProcessing.issueNumber}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+            <span className="text-[11px] font-semibold text-slate-400 uppercase">Stock Entry</span>
+            <div className="mt-1 font-mono font-bold text-slate-900 text-sm">
+              {structuredProcessing.stockEntry}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+            <span className="text-[11px] font-semibold text-slate-400 uppercase">Warehouse</span>
+            <div className="mt-1 font-semibold text-slate-800 text-sm">
+              {structuredProcessing.warehouse}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+            <span className="text-[11px] font-semibold text-slate-400 uppercase">Received By</span>
+            <div className="mt-1 font-semibold text-slate-800 text-sm">
+              {structuredProcessing.receivedBy}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+            <span className="text-[11px] font-semibold text-slate-400 uppercase">Issue Type</span>
+            <div className="mt-1 font-semibold text-slate-800 text-sm">
+              {structuredProcessing.issueType}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+            <span className="text-[11px] font-semibold text-slate-400 uppercase">Issue Date</span>
+            <div className="mt-1 font-semibold text-slate-800 text-sm">
+              {structuredProcessing.issueDate}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+            <span className="text-[11px] font-semibold text-slate-400 uppercase">Department Acceptance</span>
+            <div className="mt-1 flex items-center gap-1.5 font-bold text-emerald-800 text-sm">
+              {isConfirmed ? (
+                <>
+                  <Check className="h-4 w-4 text-emerald-600 stroke-[3]" />
+                  Confirmed ({structuredProcessing.acceptanceDate})
+                </>
+              ) : (
+                <span className="text-amber-700">Pending</span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Acceptance Checklist */}
+        {structuredProcessing.acceptanceChecklist && (
+          <div className="mt-4 rounded-lg border border-slate-200/80 bg-slate-50/40 p-4">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 mb-2.5">
+              Acceptance Checklist
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+              {(
+                Object.keys(ACCEPTANCE_CHECKLIST_LABELS) as Array<
+                  keyof typeof ACCEPTANCE_CHECKLIST_LABELS
+                >
+              ).map((key) => {
+                const checked = Boolean(structuredProcessing.acceptanceChecklist?.[key]);
+                return (
+                  <div
+                    key={key}
+                    className="flex items-center gap-2 rounded-md bg-white border border-slate-200/80 px-3 py-2 text-xs font-medium text-slate-800 shadow-2xs"
+                  >
+                    {checked ? (
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                    ) : (
+                      <Circle className="h-4 w-4 text-slate-300 shrink-0" />
+                    )}
+                    <span>{ACCEPTANCE_CHECKLIST_LABELS[key]}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Clean Human Remarks */}
+        <div className="mt-4 rounded-lg border border-slate-100 bg-slate-50/60 p-4">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
             Warehouse Remarks
           </h3>
-          {remarksDisplay.bullets.length > 0 ? (
-            <ul className="mt-2 space-y-1.5 text-sm text-slate-700">
-              {remarksDisplay.bullets.map((b) => (
-                <li key={b} className="flex gap-2">
-                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-400" />
-                  <span>{b}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="mt-2 text-sm text-slate-500">No remarks recorded.</p>
-          )}
+          <p className="text-sm text-slate-700">
+            {structuredProcessing.humanRemarks || "No warehouse remarks added."}
+          </p>
         </div>
       </div>
 
-      {/* Acceptance checklist (read-only once filled) */}
-      {receipt.acceptance_checklist ? (
-        <div className="rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-sm">
-          <h2 className="mb-3 text-sm font-semibold text-slate-900">
-            Acceptance Checklist
-          </h2>
-          <ul className="space-y-2 text-sm">
-            {(
-              Object.keys(ACCEPTANCE_CHECKLIST_LABELS) as Array<
-                keyof typeof ACCEPTANCE_CHECKLIST_LABELS
-              >
-            ).map((key) => (
-              <li key={key} className="flex items-center gap-2">
-                {receipt.acceptance_checklist?.[key] ? (
-                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                ) : (
-                  <XCircle className="h-4 w-4 text-slate-300" />
-                )}
-                {ACCEPTANCE_CHECKLIST_LABELS[key]}
-              </li>
-            ))}
-          </ul>
-          {receipt.department_remarks ? (
-            <p className="mt-3 text-sm text-slate-600">
-              <span className="font-medium">Department Remarks:</span>{" "}
-              {receipt.department_remarks}
-            </p>
-          ) : null}
+      {/* ──────────────────────────────────────────────────────────── */}
+      {/* 5. Timeline & Signatures                                     */}
+      {/* ──────────────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        {/* Timeline (5 Cols) */}
+        <div className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-xs lg:col-span-5 flex flex-col justify-between">
+          <div>
+            <h2 className="text-sm font-bold text-slate-900 mb-3 border-b border-slate-100 pb-2">
+              Timeline
+            </h2>
+            <ol className="space-y-3.5">
+              {timeline.map((step) => (
+                <li key={step.key} className="flex items-start gap-3 text-xs">
+                  {step.done ? (
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                  ) : step.current ? (
+                    <Circle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                  ) : (
+                    <Circle className="mt-0.5 h-4 w-4 shrink-0 text-slate-300" />
+                  )}
+                  <div>
+                    <p
+                      className={`font-semibold ${
+                        step.current
+                          ? "text-amber-800"
+                          : step.done
+                            ? "text-slate-900"
+                            : "text-slate-400"
+                      }`}
+                    >
+                      {step.label}
+                    </p>
+                    {step.at ? (
+                      <p className="text-[11px] text-slate-500 mt-0.5">{step.at}</p>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </div>
         </div>
-      ) : null}
 
-      {receipt.status === "Acceptance Rejected" ? (
-        <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">
-          <p className="font-semibold">Acceptance Rejected</p>
-          <p className="mt-1">
-            By {receipt.rejected_by || "—"} at {receipt.rejected_at || "—"}
-          </p>
-          <p className="mt-1">{receipt.rejection_reason}</p>
-        </div>
-      ) : null}
-
-      <div className="grid gap-5 lg:grid-cols-3">
-        <div className="space-y-4 lg:col-span-2">
-          {/* Digital signatures */}
-          <div className="rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-sm">
-            <h2 className="mb-4 text-sm font-semibold text-slate-900">
+        {/* Digital Signatures (7 Cols) */}
+        <div className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-xs lg:col-span-7 flex flex-col justify-between">
+          <div>
+            <h2 className="text-sm font-bold text-slate-900 mb-3 border-b border-slate-100 pb-2">
               Digital Signatures
             </h2>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="rounded-lg border border-slate-200 p-4 text-sm">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+              <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3.5 text-xs">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
                   Warehouse Signature
-                </p>
+                </span>
                 {receipt.warehouse_signature ? (
-                  <div className="mt-2 space-y-1.5">
-                    <p className="inline-flex items-center gap-1.5 font-semibold text-emerald-800">
-                      <CheckCircle2 className="h-4 w-4" />
-                      Valid
+                  <div className="mt-2 space-y-1">
+                    <p className="inline-flex items-center gap-1 font-bold text-emerald-800">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                      Valid Digital Signature
                     </p>
-                    <p className="font-medium text-slate-900">
+                    <p className="font-semibold text-slate-900">
                       {receipt.warehouse_signature.signer_name}
                     </p>
-                    <p className="text-xs text-slate-500">Warehouse Manager</p>
-                    <p className="text-xs text-slate-600">
-                      <span className="text-slate-400">Signed On · </span>
+                    <p className="text-[11px] text-slate-500">Warehouse Manager</p>
+                    <p className="text-[11px] text-slate-500">
                       {formatDateTime(receipt.warehouse_signature.signed_at)}
-                    </p>
-                    <p className="break-all font-mono text-[10px] text-slate-400">
-                      SHA256 · {receipt.warehouse_signature.sha256_hash}
                     </p>
                   </div>
                 ) : (
-                  <p className="mt-2 text-amber-700">Pending</p>
+                  <p className="mt-2 text-amber-700 font-semibold">Pending Signature</p>
                 )}
               </div>
 
-              <div className="rounded-lg border border-slate-200 p-4 text-sm">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3.5 text-xs">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
                   Department Signature
-                </p>
+                </span>
                 {receipt.department_signature ? (
-                  <div className="mt-2 space-y-1.5">
-                    <p className="inline-flex items-center gap-1.5 font-semibold text-emerald-800">
-                      <CheckCircle2 className="h-4 w-4" />
-                      Valid
+                  <div className="mt-2 space-y-1">
+                    <p className="inline-flex items-center gap-1 font-bold text-emerald-800">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                      Valid Digital Signature
                     </p>
-                    <p className="font-medium text-slate-900">
+                    <p className="font-semibold text-slate-900">
                       {receipt.department_signature.signer_name}
                     </p>
-                    <p className="text-xs text-slate-600">
-                      <span className="text-slate-400">Accepted By · </span>
-                      {receipt.department_signature.signer_name}
-                    </p>
-                    <p className="text-xs text-slate-600">
-                      <span className="text-slate-400">Accepted Time · </span>
+                    <p className="text-[11px] text-slate-500">Department User</p>
+                    <p className="text-[11px] text-slate-500">
                       {formatDateTime(
                         receipt.department_signature.signed_at ||
                           receipt.confirmed_at ||
                           "",
                       )}
                     </p>
-                    <p className="break-all font-mono text-[10px] text-slate-400">
-                      SHA256 · {receipt.department_signature.sha256_hash}
-                    </p>
                   </div>
                 ) : (
                   <div className="mt-2 space-y-1">
                     <p className="font-semibold text-amber-800">
-                      {receipt.status === "Acceptance Rejected"
-                        ? "Rejected"
-                        : "Pending"}
+                      {receipt.status === "Acceptance Rejected" ? "Rejected" : "Pending Acceptance"}
                     </p>
                     {deptAwaiting ? (
-                      <p className="text-xs text-slate-500">
-                        Department acceptance does not change the warehouse
-                        business hash.
+                      <p className="text-[11px] text-slate-500">
+                        Awaiting department acceptance confirmation.
                       </p>
                     ) : null}
                   </div>
@@ -404,71 +576,62 @@ export default function MaterialIssueReceiptView({
               </div>
             </div>
           </div>
-
-          {children}
         </div>
+      </div>
 
-        <div className="space-y-4">
-          <div className="flex min-h-[22rem] flex-col items-center justify-center rounded-xl border border-[#E2E8F0] bg-white p-5 shadow-sm">
-            <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-800">
-              <QrCode className="h-4 w-4" />
-              QR Verification
+      {/* Acceptance actions slot (if pending acceptance) */}
+      {children}
+
+      {/* ──────────────────────────────────────────────────────────── */}
+      {/* 6. QR Verification                                           */}
+      {/* ──────────────────────────────────────────────────────────── */}
+      <div className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-xs">
+        <div className="flex flex-col sm:flex-row items-center gap-6">
+          {verifyReachable === "unavailable" ? (
+            <div className="flex flex-col items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-4 text-center max-w-sm">
+              <AlertTriangle className="h-5 w-5 text-amber-600" />
+              <p className="text-xs font-semibold text-amber-900">
+                Verification QR Service
+              </p>
+              <p className="text-[11px] text-amber-800">
+                QR code is available on reachable network hosts.
+              </p>
             </div>
-            {verifyReachable === "unavailable" ? (
-              <div className="flex max-w-[18rem] flex-col items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-4 text-center">
-                <AlertTriangle className="h-5 w-5 text-amber-600" />
-                <p className="text-sm font-semibold text-amber-900">
-                  Verification service unavailable.
-                </p>
-                <p className="text-[11px] leading-relaxed text-amber-800">
-                  Open BidSphere via a network-reachable host (not localhost),
-                  set{" "}
-                  <code className="rounded bg-amber-100 px-1">VITE_PUBLIC_URL</code>{" "}
-                  or{" "}
-                  <code className="rounded bg-amber-100 px-1">
-                    VITE_APP_BASE_URL
-                  </code>{" "}
-                  to that origin, then confirm another device can open{" "}
-                  <span className="break-all font-mono text-[10px]">
-                    {publicOrigin || "http://<host>:5175"}
-                  </span>{" "}
-                  before sharing QR codes.
-                </p>
-              </div>
-            ) : verifyReachable === "ok" && qrUrl ? (
-              <img
-                src={qrUrl}
-                alt="Receipt verification QR"
-                className="h-40 w-40"
-              />
-            ) : (
-              <div className="h-40 w-40 animate-pulse rounded bg-slate-100" />
-            )}
-            <p className="mt-4 max-w-[16rem] text-center text-[12px] leading-relaxed text-slate-500">
-              Scan this QR using any mobile device to verify the authenticity of
-              this Material Issue Receipt.
+          ) : qrUrl ? (
+            <img
+              src={qrUrl}
+              alt="Receipt verification QR"
+              className="h-32 w-32 shrink-0 border border-slate-200 rounded-lg p-1 bg-white"
+            />
+          ) : (
+            <div className="h-32 w-32 animate-pulse rounded-lg bg-slate-100 shrink-0" />
+          )}
+
+          <div>
+            <div className="flex items-center gap-2 text-sm font-bold text-slate-800">
+              <QrCode className="h-4 w-4 text-primary-600" />
+              Receipt Authenticity Verification
+            </div>
+            <p className="mt-1 text-xs text-slate-500 leading-relaxed max-w-md">
+              Scan this QR code using any smartphone or scanner to verify the digital authenticity and tamper-evident status of this Material Issue Receipt.
             </p>
-            {verifyReachable === "ok" ? (
-              <>
-                <p className="mt-2 max-w-[18rem] break-all text-center font-mono text-[10px] text-slate-400">
-                  {verifyUrl}
-                </p>
-                <a
-                  href={verifyUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-4 text-center text-xs font-medium text-primary-700 hover:underline"
-                >
-                  Open Verification Page
-                </a>
-              </>
-            ) : null}
+            <a
+              href={verifyUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-2.5 inline-flex items-center text-xs font-semibold text-primary-700 hover:text-primary-800 hover:underline"
+            >
+              Open Public Verification Link →
+            </a>
           </div>
         </div>
       </div>
 
+      {/* ──────────────────────────────────────────────────────────── */}
+      {/* 7. Collapsible "View Audit Details" Panel                    */}
+      {/* ──────────────────────────────────────────────────────────── */}
       <MaterialIssueAuditPanel
-        audit={auditForPanel}
+        audit={structuredProcessing.audit}
         auditTrail={receipt.audit_trail}
         documentHash={receipt.document_hash}
         verificationToken={receipt.verification_token}

@@ -2,6 +2,11 @@ import { useState } from "react";
 import { Calculator, Eye, Scale, X } from "lucide-react";
 
 import { formatCurrency } from "../../utils/format";
+import type { QuotePriceStatus } from "../../types/erpnext";
+import {
+  formatQuoteTotal,
+  isSubmittedQuoteAmount,
+} from "../../utils/quotePrice";
 import CostBreakdownComparisonModal from "./CostBreakdownComparisonModal";
 
 export interface ComparisonItem {
@@ -17,10 +22,14 @@ export interface ComparisonQuote {
   sqName: string;
   supplier: string;
   supplierName: string;
-  total: number;
+  total: number | null;
+  priceStatus: QuotePriceStatus;
   paymentTerms?: string;
   notes?: string;
-  byItem: Map<string, { unit_price: number; total: number; delivery_days: number }>;
+  byItem: Map<
+    string,
+    { unit_price: number | null; total: number | null; delivery_days: number }
+  >;
 }
 
 /**
@@ -57,13 +66,15 @@ export default function CompareQuotationsModal({
   const lowestUnitPriceByItem = new Map<string, number>();
   for (const it of safeItems) {
     const prices = safeQuotes
-      .map((q) => q.byItem.get(it.item_code)?.unit_price ?? 0)
-      .filter((p) => p > 0);
+      .map((q) => q.byItem.get(it.item_code)?.unit_price)
+      .filter(isSubmittedQuoteAmount);
     if (prices.length > 0) lowestUnitPriceByItem.set(it.item_code, Math.min(...prices));
   }
-  const positiveTotals = safeQuotes.map((q) => q.total).filter((t) => t > 0);
+  const submittedTotals = safeQuotes
+    .map((q) => q.total)
+    .filter(isSubmittedQuoteAmount);
   const lowestTotal =
-    positiveTotals.length > 0 ? Math.min(...positiveTotals) : 0;
+    submittedTotals.length > 0 ? Math.min(...submittedTotals) : 0;
   const hasAnyTarget = safeItems.some(
     (it) => it.target_price != null && Number(it.target_price) > 0,
   );
@@ -175,9 +186,13 @@ export default function CompareQuotationsModal({
                       {safeQuotes.map((q) => {
                         const cell = q.byItem.get(it.item_code);
                         const isLowest =
-                          !!cell && cell.unit_price > 0 && cell.unit_price === lowest;
+                          !!cell &&
+                          isSubmittedQuoteAmount(cell.unit_price) &&
+                          cell.unit_price === lowest;
                         const variance =
-                          cell && cell.unit_price > 0 && target != null
+                          cell &&
+                          isSubmittedQuoteAmount(cell.unit_price) &&
+                          target != null
                             ? cell.unit_price - target
                             : null;
                         const savings =
@@ -193,7 +208,7 @@ export default function CompareQuotationsModal({
                                 : "text-neutral-700"
                             }`}
                           >
-                            {cell && cell.unit_price > 0 ? (
+                            {cell && isSubmittedQuoteAmount(cell.unit_price) ? (
                               <>
                                 {formatCurrency(cell.unit_price)}
                                 <span className="ml-1 text-xs text-neutral-400">
@@ -234,12 +249,12 @@ export default function CompareQuotationsModal({
                     <td
                       key={q.sqName || q.supplier}
                       className={`px-4 py-3 font-bold tabular-nums ${
-                        q.total > 0 && q.total === lowestTotal
+                        isSubmittedQuoteAmount(q.total) && q.total === lowestTotal
                           ? "text-success-700"
                           : "text-neutral-900"
                       }`}
                     >
-                      {formatCurrency(q.total)}
+                      {formatQuoteTotal(q.total, q.priceStatus)}
                     </td>
                   ))}
                 </tr>

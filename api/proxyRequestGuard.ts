@@ -98,6 +98,22 @@ export function assertSafeProxyBody(input: {
   const method = input.method.toUpperCase();
   if (["GET", "HEAD", "OPTIONS"].includes(method)) return;
   const body = parsedBody(input.body);
+  const path = normalizedPath(input.apiPath);
+  // The generic service-credential gateway must not bypass the CLM engine.
+  // Inspect nested Frappe doc/data payloads and direct resource routes alike.
+  const targetsReview = (value: unknown): boolean => {
+    if (typeof value === "string") {
+      if (value === "Legal Document Review") return true;
+      const parsed = parsedBody(value);
+      return parsed ? targetsReview(parsed) : false;
+    }
+    if (Array.isArray(value)) return value.some(targetsReview);
+    return !!value && typeof value === "object" && Object.values(value).some(targetsReview);
+  };
+  if (/^resource\/Legal Document Review(?:\/|$)/.test(path) || targetsReview(body) ||
+      /^method\/(?:approve_legal_review|reject_legal_review|create_legal_document_review)/.test(path)) {
+    throw new ProxyRequestError("Legal review writes must use the authenticated legal-review workflow endpoint.");
+  }
   if (!body) return;
   if (Object.keys(body).some((key) => key.toLowerCase() === "cmd")) {
     throw new ProxyRequestError(

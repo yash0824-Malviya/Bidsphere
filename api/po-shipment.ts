@@ -1,44 +1,8 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import {
-  getPoShipment,
-  listPoShipments,
-  listReadyForGrnShipments,
-  upsertPoShipment,
-  PoShipmentError,
-} from "./poShipmentCore.js";
-import {
-  RbacError,
-  requireAnyAuth,
-  requireRoles,
-  type AccessPrincipal,
-  type AppRole,
-} from "./rbacAuth.js";
-
-const INTERNAL_READ_ROLES: AppRole[] = [
-  "admin",
-  "procurement",
-  "procurement_team",
-  "warehouse",
-  "finance",
-  "finance_executive",
-];
-
-const INTERNAL_WRITE_ROLES: AppRole[] = [
-  "admin",
-  "procurement",
-  "procurement_team",
-  "warehouse",
-];
-
-function assertCanRead(principal: AccessPrincipal): void {
-  if (principal.typ === "supplier") return;
-  requireRoles(principal, INTERNAL_READ_ROLES);
-}
-
-function assertCanWrite(principal: AccessPrincipal): void {
-  if (principal.typ === "supplier") return;
-  requireRoles(principal, INTERNAL_WRITE_ROLES);
-}
+import { PoShipmentError } from "./poShipmentCore.js";
+import { RbacError, requireAnyAuth } from "./rbacAuth.js";
+import { ClmError } from "./clmCore.js";
+import { handlePoShipmentAction } from "./poShipmentAccess.js";
 
 /**
  * POST /api/po-shipment/:action
@@ -65,48 +29,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       body as Record<string, unknown>,
     );
 
-    switch (action) {
-      case "get": {
-        assertCanRead(principal);
-        const record = await getPoShipment(String(body.po_name ?? ""));
-        res.status(200).json({ success: true, record });
-        return;
-      }
-      case "list": {
-        assertCanRead(principal);
-        const records = await listPoShipments({
-          poNames: Array.isArray(body.po_names) ? body.po_names : undefined,
-          statuses: Array.isArray(body.statuses) ? body.statuses : undefined,
-          readyForGrn: body.ready_for_grn === true,
-          warehouseVisible: body.warehouse_visible === true,
-          limit: typeof body.limit === "number" ? body.limit : undefined,
-        });
-        res.status(200).json({ success: true, records });
-        return;
-      }
-      case "list-ready": {
-        assertCanRead(principal);
-        const records = await listReadyForGrnShipments(
-          typeof body.limit === "number" ? body.limit : 200,
-        );
-        res.status(200).json({ success: true, records });
-        return;
-      }
-      case "upsert": {
-        assertCanWrite(principal);
-        const record = await upsertPoShipment(body);
-        res.status(200).json({ success: true, record });
-        return;
-      }
-      default:
-        res.status(404).json({ error: `Unknown po-shipment action: ${action}` });
-    }
+    const result = await handlePoShipmentAction(principal, String(action ?? ""), body);
+    res.status(200).json(result);
   } catch (err) {
     if (err instanceof RbacError) {
       res.status(err.status).json({ success: false, error: err.message });
       return;
     }
-    if (err instanceof PoShipmentError) {
+    if (err instanceof PoShipmentError || err instanceof ClmError) {
       res.status(err.status).json({ success: false, error: err.message });
       return;
     }

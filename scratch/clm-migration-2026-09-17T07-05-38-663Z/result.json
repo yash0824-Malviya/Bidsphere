@@ -1,0 +1,14 @@
+{
+  "verified": true,
+  "operations": 49,
+  "newDoctypes": 0,
+  "newRoles": 0,
+  "existingRecordsUnchanged": 0,
+  "existingWorkflowsUnchanged": 3,
+  "permissionsUnchanged": true,
+  "permissionChildTimestampsRefreshed": [
+    "Contract Request",
+    "Contract Approval Matrix"
+  ],
+  "remainingOperations": 0
+}

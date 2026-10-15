@@ -15,12 +15,19 @@ import {
 
 import type {
   AIRecommendation,
-  AIRiskFlag,
   SupplierAnalysisRow,
   SupplierVerdict,
 } from "../types/erpnext";
 import { APP_NAME } from "../config/branding";
 import { formatCurrency } from "../utils/format";
+import { formatQuoteTotal } from "../utils/quotePrice";
+import { buildEvaluationSummary, getEvaluationRisk, projectSupplierDecision } from "../utils/aiEvaluationDecision";
+import { findRecommendationWinner } from "../utils/aiRecommendationNormalization";
+import { getSupplierAwardEligibility } from "../utils/supplierAwardEligibility";
+
+function hasScore(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100;
+}
 
 const LOADING_STEPS = [
   "Reading all supplier quotations...",
@@ -38,6 +45,9 @@ const VERDICT_STYLES: Record<
   "GOOD OPTION": { bg: "bg-warning-100", text: "text-warning-500" },
   EXPENSIVE: { bg: "bg-warning-100", text: "text-warning-500" },
   AVOID: { bg: "bg-danger-100", text: "text-danger-500" },
+  "QUOTE INCOMPLETE": { bg: "bg-amber-100", text: "text-amber-700" },
+  "HIGH RISK / REVIEW": { bg: "bg-rose-100", text: "text-rose-700" },
+  "NOT EVALUATED": { bg: "bg-neutral-100", text: "text-neutral-600" },
 };
 
 /** Subtle, enterprise-style rank chip (replaces loud medal emoji). */
@@ -84,6 +94,8 @@ export default function AISupplierAnalysisPanel({
   onRefresh,
   onCreatePO,
 }: Props) {
+  const topRanked = result ? findRecommendationWinner(result) : undefined;
+  const topRankedEligibility = getSupplierAwardEligibility(topRanked);
   return (
     <div id="ai-section" className="mt-8 overflow-hidden rounded-card border border-neutral-200 shadow-card">
       {/* Header */}
@@ -127,7 +139,7 @@ export default function AISupplierAnalysisPanel({
         {!hasApiKey && (
           <div className="p-8 text-center">
             <p className="text-sm text-danger-500">
-              Add VITE_ANTHROPIC_API_KEY to .env file
+              AI analysis is unavailable. Check the server AI configuration.
             </p>
           </div>
         )}
@@ -208,7 +220,7 @@ export default function AISupplierAnalysisPanel({
                   {[...result.supplier_analysis]
                     .sort((a, b) => a.rank - b.rank)
                     .map((s) => (
-                      <SupplierCard key={s.name} supplier={s} />
+                      <SupplierCard key={s.quotation_id || s.supplier_id || s.name} supplier={s} isTopRanked={s === topRanked} />
                     ))}
                 </div>
               </section>
@@ -265,15 +277,15 @@ export default function AISupplierAnalysisPanel({
               </section>
             )}
 
-            {result.risk_flags?.length > 0 && (
+            {result.supplier_analysis?.length > 0 && (
               <section>
                 <h3 className="mb-3 flex items-center gap-2 text-sm font-bold text-neutral-900">
                   <AlertTriangle className="h-4 w-4 text-neutral-400" />
                   Risk Assessment
                 </h3>
                 <div className="flex flex-col gap-2">
-                  {result.risk_flags.map((risk, idx) => (
-                    <RiskRow key={`${risk.type}-${idx}`} risk={risk} />
+                  {result.supplier_analysis.map((supplier) => (
+                    <RiskRow key={`${supplier.evaluation_run_id ?? ""}:${supplier.quotation_id || supplier.supplier_quotation_id || ""}:${supplier.supplier_id || supplier.name}`} supplier={supplier} />
                   ))}
                 </div>
               </section>
@@ -326,7 +338,7 @@ export default function AISupplierAnalysisPanel({
                 Executive Summary
               </p>
               <p className="text-sm leading-relaxed text-white">
-                {result.final_verdict}
+                {buildEvaluationSummary(result.supplier_analysis)}
               </p>
             </div>
 
@@ -337,8 +349,10 @@ export default function AISupplierAnalysisPanel({
               </p>
               <button
                 type="button"
-                onClick={onCreatePO}
-                className="inline-flex items-center gap-2 rounded-lg bg-primary px-8 py-3 text-sm font-bold text-white shadow-md transition hover:bg-primary-600 hover:shadow-lg"
+                onClick={() => { if (topRankedEligibility.awardEligible) onCreatePO(); }}
+                disabled={!topRankedEligibility.awardEligible}
+                title={topRankedEligibility.awardIneligibilityReason}
+                className="inline-flex items-center gap-2 rounded-lg bg-primary px-8 py-3 text-sm font-bold text-white shadow-md transition hover:bg-primary-600 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <ShoppingCart className="h-4 w-4" />
                 Create PO — {result.recommended_supplier}
@@ -360,30 +374,34 @@ export default function AISupplierAnalysisPanel({
 }
 
 function WinnerBanner({ result }: { result: AIRecommendation }) {
-  const score = Math.max(0, Math.min(100, result.confidence_score));
+  const winner = findRecommendationWinner(result);
+  const score = hasScore(winner?.score.overall) ? winner.score.overall : null;
+  const decision = winner ? projectSupplierDecision(winner, true) : undefined;
+  const eligible = getSupplierAwardEligibility(winner).awardEligible;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border-2 border-success-100 bg-success-50 p-5">
+    <div className={`flex flex-wrap items-center justify-between gap-4 rounded-xl border-2 p-5 ${eligible ? "border-success-100 bg-success-50" : "border-neutral-200 bg-neutral-50"}`}>
       <div className="min-w-0 flex-1">
-        <p className="flex items-center gap-1.5 text-xs font-semibold text-success-500">
-          <Award className="h-4 w-4" />
-          AI RECOMMENDED SUPPLIER
+        <p className={`flex items-center gap-1.5 text-xs font-semibold ${eligible ? "text-success-500" : "text-neutral-600"}`}>
+          {eligible ? <Award className="h-4 w-4" /> : <BarChart3 className="h-4 w-4" />}
+          {eligible ? "AI TOP-RANKED SUPPLIER" : score !== null ? "TOP SCORE" : "EVALUATION UNAVAILABLE"}
         </p>
         <p className="mt-1 text-2xl font-bold text-neutral-900">
-          {result.recommended_supplier}
+          {winner?.name ?? "Evaluation unavailable"}
         </p>
         <p className="mt-2 max-w-xl text-sm text-neutral-600">
-          {result.recommendation_summary}
+          {decision?.recommendation_reason ?? "The evaluated quotation could not be resolved."}
         </p>
+        {winner && <p className="mt-2 text-sm text-neutral-700">Risk: {getEvaluationRisk(winner)} · Verdict: {winner.verdict}</p>}
       </div>
       <div className="text-center">
-        <p className="text-4xl font-bold text-success-500">{score}%</p>
-        <p className="text-xs text-neutral-500">confidence</p>
+        <p className="text-4xl font-bold text-success-500">{score === null ? "Unavailable" : `${score}%`}</p>
+        <p className="text-xs text-neutral-500">weighted score</p>
         <div className="mt-2 h-2 w-20 overflow-hidden rounded-full bg-neutral-200">
           <div
             className={`h-full rounded-full transition-all ${
-              score > 80 ? "bg-success-500" : "bg-warning-500"
+              score !== null && score > 80 ? "bg-success-500" : "bg-warning-500"
             }`}
-            style={{ width: `${score}%` }}
+            style={{ width: `${score ?? 0}%` }}
           />
         </div>
       </div>
@@ -391,13 +409,14 @@ function WinnerBanner({ result }: { result: AIRecommendation }) {
   );
 }
 
-function SupplierCard({ supplier }: { supplier: SupplierAnalysisRow }) {
+function SupplierCard({ supplier, isTopRanked }: { supplier: SupplierAnalysisRow; isTopRanked: boolean }) {
   const styles = VERDICT_STYLES[supplier.verdict] ?? VERDICT_STYLES["GOOD OPTION"];
+  const decision = projectSupplierDecision(supplier, isTopRanked);
   const border =
-    supplier.rank === 1
-      ? "border-success-100 bg-success-50"
-      : supplier.verdict === "AVOID"
+    decision.recommendation_status === "REQUIRES_REVIEW"
       ? "border-danger-100 bg-danger-50"
+      : isTopRanked
+      ? "border-primary-200 bg-primary-50"
       : "border-neutral-200 bg-white";
 
   return (
@@ -416,18 +435,22 @@ function SupplierCard({ supplier }: { supplier: SupplierAnalysisRow }) {
           <p className="mt-2 text-sm text-neutral-600">
             {supplier.why_best_or_worst}
           </p>
+          <p className="mt-2 text-xs text-neutral-600">Risk: {getEvaluationRisk(supplier)}. {decision.recommendation_reason}</p>
         </div>
         <div className="text-right">
           <p className="text-lg font-bold">
-            {formatCurrency(supplier.grand_total)}
+            {formatQuoteTotal(
+              supplier.grand_total,
+              supplier.quote_price_status,
+            )}
           </p>
           <p className="text-xs text-neutral-500">
-            Overall score: {supplier.score?.overall ?? 0}%
+            Overall score: {hasScore(supplier.score?.overall) ? `${supplier.score.overall}%` : "AI evaluation unavailable"}
           </p>
         </div>
       </div>
 
-      <div className="mb-3 grid grid-cols-3 gap-2">
+      <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         {(
           [
             { label: "Cost", value: supplier.score?.cost, color: "bg-primary" },
@@ -437,25 +460,33 @@ function SupplierCard({ supplier }: { supplier: SupplierAnalysisRow }) {
               color: "bg-primary",
             },
             {
+              label: "Quality",
+              value: supplier.score?.quality,
+              color: "bg-primary",
+            },
+            {
               label: "Reliability",
               value: supplier.score?.reliability,
               color: "bg-primary",
             },
           ] as const
-        ).map(({ label, value, color }) => (
-          <div key={label}>
-            <div className="mb-0.5 flex justify-between text-[11px] text-neutral-500">
-              <span>{label}</span>
-              <span>{value ?? 0}%</span>
+        ).map(({ label, value, color }) => {
+          const isMissing = !hasScore(value);
+          return (
+            <div key={label}>
+              <div className="mb-0.5 flex justify-between text-[11px] text-neutral-500">
+                <span>{label}</span>
+                <span>{isMissing ? "N/A" : `${value}%`}</span>
+              </div>
+              <div className="h-1 rounded-full bg-neutral-200">
+                <div
+                  className={`h-1 rounded-full ${color}`}
+                  style={{ width: `${isMissing ? 0 : value}%` }}
+                />
+              </div>
             </div>
-            <div className="h-1 rounded-full bg-neutral-200">
-              <div
-                className={`h-1 rounded-full ${color}`}
-                style={{ width: `${value ?? 0}%` }}
-              />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
@@ -464,7 +495,7 @@ function SupplierCard({ supplier }: { supplier: SupplierAnalysisRow }) {
             <CheckCircle2 className="h-3.5 w-3.5" />
             Strengths
           </p>
-          {supplier.strengths?.map((s, i) => (
+          {decision.strengths?.map((s, i) => (
             <p key={i} className="text-xs text-neutral-600">
               • {s}
             </p>
@@ -486,28 +517,33 @@ function SupplierCard({ supplier }: { supplier: SupplierAnalysisRow }) {
   );
 }
 
-function RiskRow({ risk }: { risk: AIRiskFlag }) {
+function RiskRow({ supplier }: { supplier: SupplierAnalysisRow }) {
+  const risk = getEvaluationRisk(supplier);
   const bg =
-    risk.severity === "high"
+    risk === "High"
       ? "border-danger-100 bg-danger-50"
-      : risk.severity === "medium"
+      : risk === "Medium"
       ? "border-warning-100 bg-warning-50"
-      : "border-success-100 bg-success-50";
+      : risk === "Low" ? "border-success-100 bg-success-50" : "border-neutral-200 bg-neutral-50";
   const dot =
-    risk.severity === "high"
+    risk === "High"
       ? "bg-danger-500"
-      : risk.severity === "medium"
+      : risk === "Medium"
       ? "bg-warning-500"
-      : "bg-success-500";
+      : risk === "Low" ? "bg-success-500" : "bg-neutral-400";
 
   return (
-    <div className={`flex items-start gap-3 rounded-lg border p-3 ${bg}`}>
+    <div className={`flex items-start gap-3 rounded-lg border p-3 ${bg}`}
+      data-quotation-id={supplier.quotation_id || supplier.supplier_quotation_id}
+      data-supplier-id={supplier.supplier_id}
+      data-evaluation-run-id={supplier.evaluation_run_id}>
       <span className={`mt-1.5 h-2.5 w-2.5 flex-shrink-0 rounded-full ${dot}`} />
       <div>
         <p className="text-[11px] font-semibold uppercase text-neutral-500">
-          {risk.type} risk
+          Supplier risk · {risk}
         </p>
-        <p className="text-sm text-neutral-700">{risk.message}</p>
+        <p className="text-sm font-semibold text-neutral-900">{supplier.name}</p>
+        <p className="text-sm text-neutral-700">{supplier.why_best_or_worst || "No evaluation reasoning was provided."}</p>
       </div>
     </div>
   );

@@ -1,15 +1,16 @@
 import {
-  ECR_WORKFLOW_STAGES,
+  getApplicableECRWorkflowStages,
   canonicalECRStage,
 } from "../../config/ecrRoles";
-import type { ECRStatus } from "../../types/erpnext";
+import type { ECRStatus, EngineeringChangeRequest } from "../../types/erpnext";
 
 export function getECRWorkflowActiveIndex(
   status?: ECRStatus | string | null,
   rfqReference?: string | null,
+  ecr?: Partial<EngineeringChangeRequest> | null,
 ): number {
   const current = String(rfqReference ?? "").trim()
     ? "RFQ"
-    : canonicalECRStage(status);
-  return ECR_WORKFLOW_STAGES.findIndex((stage) => stage.id === current);
+    : canonicalECRStage(status, ecr);
+  return getApplicableECRWorkflowStages(ecr).findIndex((stage) => stage.id === current);
 }

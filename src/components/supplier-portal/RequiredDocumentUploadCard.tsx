@@ -60,12 +60,13 @@ export function resolveOpenableFileUrl(
   if (stored.startsWith("data:") || stored.includes("/api/file-proxy")) {
     return stored;
   }
+  const fileId = file && typeof file === "object" ? file.id || file.file_id || file.name : undefined;
   if (/^\/?(private\/)?files\//.test(stored)) {
-    const proxied = getFullFileUrl(stored);
+    const proxied = getFullFileUrl(stored, fileId);
     return proxied || null;
   }
   if (/^https?:\/\//i.test(stored)) {
-    return getFullFileUrl(stored) || stored;
+    return getFullFileUrl(stored, fileId) || stored;
   }
   return null;
 }

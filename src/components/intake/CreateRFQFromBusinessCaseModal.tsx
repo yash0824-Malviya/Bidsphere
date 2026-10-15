@@ -70,11 +70,14 @@ export function CreateRFQFromBusinessCaseModal({
       }));
       setItems(mapped);
     } else {
+      const techReqStr = typeof businessCase.technical_requirements === "string"
+        ? businessCase.technical_requirements
+        : "Detailed specifications per business case.";
       setItems([
         {
           item_code: "INT-ROB-001",
           item_name: businessCase.title || "Equipment / Service Request",
-          description: businessCase.technical_requirements || "Detailed specifications per business case.",
+          description: techReqStr,
           qty: 1,
           uom: "Unit",
           target_price: businessCase.budget || 100000,

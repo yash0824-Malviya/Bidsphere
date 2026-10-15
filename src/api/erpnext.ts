@@ -9,7 +9,6 @@ import toast from "react-hot-toast";
 import { handleSessionExpired } from "../store/sessionExpiry";
 import { readErpProxyAccessToken } from "../utils/accessToken";
 import {
-  API_TIMEOUT_MS,
   isRetryableNetworkError,
   logFailedApiRequest,
   MAX_NETWORK_RETRIES,
@@ -30,9 +29,6 @@ export const ENV_DEFAULTS = {
  */
 export const COMPANY = ENV_DEFAULTS.company.trim() || COMPANY_NAME;
 
-const API_KEY = import.meta.env.VITE_API_KEY as string | undefined;
-const API_SECRET = import.meta.env.VITE_API_SECRET as string | undefined;
-
 /**
  * Same-origin `/api/*` requests — proxied to ERPNext in every environment:
  *
@@ -47,18 +43,67 @@ const API_SECRET = import.meta.env.VITE_API_SECRET as string | undefined;
  * host-scoped (not port-scoped); sharing them with ERP Desk on the same host
  * would invalidate Desk after SPA login.
  */
-export const erpnext = axios.create({
+export const erpnextClient = axios.create({
   baseURL: "",
-  timeout: API_TIMEOUT_MS,
-  withCredentials: false,
+  timeout: 15000,
+  withCredentials: true,
   headers: {
     "Content-Type": "application/json",
-    Authorization: `token ${API_KEY}:${API_SECRET}`,
   },
 });
 
-/** Alias for modules that prefer the `erpnextClient` naming convention. */
-export const erpnextClient = erpnext;
+export const erpnext = erpnextClient;
+
+/**
+ * Reusable helper to read CSRF token from browser cookies.
+ */
+export const getCsrfToken = (): string => {
+  if (typeof document === "undefined") return "";
+  const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : "";
+};
+
+/**
+ * Reusable helper to build headers with CSRF token for Frappe mutation requests.
+ */
+export const getAuthHeaders = (): Record<string, string> => {
+  const csrf = getCsrfToken();
+  return {
+    "Content-Type": "application/json",
+    ...(csrf ? { "X-Frappe-CSRF-Token": csrf } : {}),
+  };
+};
+
+/**
+ * Reusable helper to extract detailed API error messages from ERPNext responses.
+ */
+export const getApiErrorMessage = (err: any): string => {
+  let serverMsg = "";
+  if (err?.response?.data?._server_messages) {
+    try {
+      const parsed = JSON.parse(err.response.data._server_messages);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const inner =
+          typeof parsed[0] === "string" && parsed[0].startsWith("{")
+            ? JSON.parse(parsed[0])
+            : null;
+        serverMsg = inner?.message || parsed[0];
+      }
+    } catch {
+      serverMsg = String(err.response.data._server_messages);
+    }
+  }
+
+  return (
+    err?.response?.data?.exception ||
+    serverMsg ||
+    err?.response?.data?.message ||
+    err?.response?.data?.exc ||
+    err?.response?.data?.exc_type ||
+    err?.message ||
+    "Unknown ERPNext error"
+  );
+};
 
 type RetryableAxiosConfig = InternalAxiosRequestConfig & {
   __retryCount?: number;
@@ -1463,4 +1508,4 @@ export function isDocNotFoundError(err: unknown): boolean {
  */
 export { isPermissionDeniedError } from "../utils/permissionError";
 
-export default erpnext;
+export default erpnextClient;

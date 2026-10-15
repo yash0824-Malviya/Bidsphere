@@ -134,20 +134,12 @@ export async function assertEcrProcurementRelationships(
   }
 
   if (referenceType === "None") {
-    const errors: Record<string, string> = {};
-    if (rfqId) errors.existing_rfq_reference = "RFQ must be empty when Reference Type is None.";
-    if (purchaseOrderId) {
-      errors.existing_purchase_order_reference = "Purchase Order must be empty when Reference Type is None.";
-    }
-    parts.forEach((part, index) => {
-      if (
-        clean(part.source_reference_type) ||
-        clean(part.source_document_reference) ||
-        clean(part.source_item_reference)
-      ) {
-        errors[`partitem.${index}`] = "Procurement source metadata must be empty when Reference Type is None.";
-      }
-    });
+    // Use the same source-only contract as the form. Older child Select fields
+    // defaulted to RFQ even without a referenced document or source item.
+    // Supplier involvement and its requirements are independent of a source.
+    const { errors } = validateECRProcurementSourceItems({
+      supplier, referenceType, rfqId, purchaseOrderId, parts,
+    }, []);
     if (Object.keys(errors).length > 0) {
       throw new EcrProcurementValidationError(errors);
     }

@@ -1,0 +1,10 @@
+import {writeFileSync} from 'node:fs';
+import {createEcrSchemaErpClient,ecrSchemaResource as resource} from '../scripts/ecr-schema-erp-client.mjs';
+const api=createEcrSchemaErpClient();
+const po=await api('GET',resource('Purchase Order','PUR-ORD-2026-00028'));
+const contract=await api('GET',resource('Contract','CON-2026-00001'));
+const data=JSON.parse(contract.custom_clm_data);
+const rfq=await api('GET',resource('Request for Quotation',contract.custom_rfq));
+const award=await api('GET',resource('Legal Document Review',data.rfq_context.award_id));
+writeFileSync('scratch/po-contract-visibility-live.json',JSON.stringify({po,contract,rfq,award},null,2));
+console.log(JSON.stringify({po:{name:po.name,docstatus:po.docstatus,supplier:po.supplier,value:po.grand_total,currency:po.currency,contract:po.custom_clm_contract,rfq:po.custom_clm_rfq,award:po.custom_clm_award,key:po.custom_clm_creation_key,quotations:[...new Set(po.items.map(row=>row.supplier_quotation))]},contract:{name:contract.name,status:contract.custom_contract_status,supplier:contract.custom_supplier,currency:contract.custom_currency,value:contract.custom_contract_value,start:contract.start_date,end:contract.end_date,phase:data.rfq_workflow,completion:data.procurement_completion,signatures:data.signatures.map(({party,at,version})=>({party,at,version}))},award:award.name,rfq:rfq.name},null,2));

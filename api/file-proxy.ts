@@ -7,8 +7,11 @@ import {
 import {
   fetchErpFile,
   isValidErpFilePath,
+  resolveExactErpFileRecord,
 } from "./fileProxyCore.js";
 import { authorizePersistedFileRead } from "./fileResourceGuard.js";
+import { resolveLegalReviewFile } from "./legalAttachmentAccess.js";
+import { parseRfpResponseAttachmentContext, resolveRfpResponseFile } from "./rfpResponseAttachmentAccess.js";
 import {
   assertSupplierMayDownloadRfqFile,
   buildSupplierAccessCandidates,
@@ -113,6 +116,21 @@ export default async function handler(
     return;
   }
 
+  let rfpContext: ReturnType<typeof parseRfpResponseAttachmentContext>;
+  try {
+    rfpContext = parseRfpResponseAttachmentContext(req.query as Record<string, unknown>);
+    if (Array.isArray(req.query.file_id) || Array.isArray(req.query.fileId) ||
+        req.query.file_id !== undefined && req.query.fileId !== undefined) {
+      throw new Error("Duplicate File ID parameters are not allowed.");
+    }
+  } catch {
+    res.status(400).json({ success: false, status: 400, message: "Invalid document attachment context." });
+    return;
+  }
+
+  const rawFileId = req.query.file_id || req.query.fileId;
+  let fileId = typeof rawFileId === "string" && rawFileId.trim() ? rawFileId.trim() : undefined;
+
   let supplierRfqAuthorized = false;
   if (principal.typ === "supplier") {
     const rawRfq = req.query.rfq;
@@ -134,13 +152,17 @@ export default async function handler(
         jwtSub: principal.sub,
       });
       try {
-        await assertSupplierMayDownloadRfqFile({
+        const resolvedDoc = await assertSupplierMayDownloadRfqFile({
           rfqName,
           supplierId: supplierCandidates[0] || "",
           supplierCandidates,
           filePath,
+          fileId,
         });
         supplierRfqAuthorized = true;
+        if (!fileId && resolvedDoc?.id && !resolvedDoc.id.startsWith("doc_") && !resolvedDoc.id.startsWith("direct-")) {
+          fileId = resolvedDoc.id;
+        }
       } catch (aclErr) {
         if (aclErr instanceof SupplierRfqDocumentsError) {
           res.status(aclErr.status).json({
@@ -202,14 +224,43 @@ export default async function handler(
         signal: AbortSignal.timeout(10_000),
       },
     );
-    if (!response.ok) throw new RbacError(`${doctype} not found.`, 403);
+    if (!response.ok) throw Object.assign(new Error(`${doctype} not found.`), { status: response.status === 404 ? 404 : response.status >= 500 ? 502 : 403 });
     const payload = await response.json() as { data?: Record<string, unknown> };
     if (!payload.data) throw new RbacError(`${doctype} not found.`, 403);
     return payload.data;
   };
 
-  const rawFileId = req.query.file_id || req.query.fileId;
-  const fileId = typeof rawFileId === "string" ? rawFileId : undefined;
+  if (rfpContext) {
+    try {
+      const file = await resolveRfpResponseFile({
+        principal, ...rfpContext, requestedPath: filePath, requestedFileId: fileId, loadDocument,
+        resolveFileByPath: (path) => resolveExactErpFileRecord(base, path, { Authorization: `token ${creds.key}:${creds.secret}` }),
+      });
+      fileId = file.name;
+    } catch (error) {
+      const reportedStatus = Number((error as { status?: number })?.status) || 500;
+      const status = [401, 403, 404].includes(reportedStatus) ? reportedStatus : 500;
+      res.status(status).json({ success: false, status, message: status === 401 ? "Your session has expired. Please sign in again." : status === 403 ? "You do not have permission to view this document." : status === 404 ? "Document not found." : "Unable to load the document. Please try again." });
+      return;
+    }
+  }
+  const reviewName = req.query.legal_review;
+  const documentKey = req.query.document_key;
+  if (reviewName !== undefined || documentKey !== undefined) {
+    if (typeof reviewName !== "string" || !reviewName.trim() || typeof documentKey !== "string") {
+      res.status(400).json({ success: false, status: 400, message: "A single legal_review and document_key are required." });
+      return;
+    }
+    try {
+      const file = await resolveLegalReviewFile({ principal, reviewName, documentKey, requestedPath: filePath, loadDocument });
+      fileId = file.name;
+    } catch (error) {
+      const status = Number((error as { status?: number })?.status) || 500;
+      console.error("[LEGAL PDF ACCESS ERROR]", { fileName: filePath, parentDoctype: "Legal Document Review", parentName: reviewName, status, response: error instanceof Error ? error.message : "Attachment authorization failed" });
+      res.status(status).json({ success: false, status, message: status === 403 ? "You do not have permission to view this document." : status === 404 ? "Document not found." : "Unable to retrieve the legal attachment." });
+      return;
+    }
+  }
 
   const result = await fetchErpFile({
     baseUrl: base,
@@ -224,6 +275,7 @@ export default async function handler(
       file,
       loadDocument,
       supplierContextAuthorized: supplierRfqAuthorized,
+      rfqContextName: principal.typ === "supplier" && typeof req.query.rfq === "string" ? req.query.rfq.trim() : undefined,
     }),
   });
 
@@ -235,7 +287,9 @@ export default async function handler(
 
   res.setHeader("Content-Type", result.contentType || "application/octet-stream");
   res.setHeader("Content-Disposition", "inline");
-  res.setHeader("Cache-Control", "private, max-age=60");
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Vary", "X-Bidsphere-Access-Token, Authorization");
+  res.setHeader("X-Content-Type-Options", "nosniff");
   if (req.method === "HEAD") {
     res.status(200).end();
     return;

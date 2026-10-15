@@ -1,0 +1,46 @@
+{
+  "checked_at": "2026-09-23T08:50:09.658Z",
+  "read_only": true,
+  "mutation_performed": false,
+  "rfq": "PUR-RFQ-2026-00095",
+  "evaluation": "SCORE-PUR-RFQ-2026-00095-00123",
+  "rows": [
+    {
+      "supplierId": "Apex Fasteners Ltd",
+      "quotationId": "PUR-SQTN-2026-00271",
+      "rank": 1,
+      "score": 88,
+      "risk": "High",
+      "verdict": "QUOTE INCOMPLETE",
+      "allowed": false,
+      "blocked": true,
+      "status": 403,
+      "reason": "Quote incomplete. Complete the supplier quotation before selection."
+    },
+    {
+      "supplierId": "\"Blue Ridge Manufacturing Inc\"",
+      "quotationId": "PUR-SQTN-2026-00270",
+      "rank": 2,
+      "score": 85,
+      "risk": "Low",
+      "verdict": "GOOD OPTION",
+      "allowed": true,
+      "blocked": false
+    },
+    {
+      "supplierId": "\"Redwood Supply Chain Partners\"",
+      "quotationId": "PUR-SQTN-2026-00272",
+      "rank": 3,
+      "score": 81,
+      "risk": "Medium",
+      "verdict": "GOOD OPTION",
+      "allowed": true,
+      "blocked": false
+    }
+  ],
+  "reverse_bidding_guard": {
+    "apex_and_blue_ridge": "blocked",
+    "blue_ridge_and_redwood": "allowed by eligibility; existing workflow gates still apply"
+  },
+  "summary": "Apex Fasteners Ltd: score 88/100; risk High; verdict QUOTE INCOMPLETE; quote total 30. Highest numerical score: 88/100. Stored risk: High. The quotation is incomplete, so this supplier is ineligible for selection and award. Evaluation reasoning: Apex Fasteners Ltd quotes identical $30.00 pricing but presents critical evaluation gaps: zero historical purchase orders, zero GRNs, zero invoices, and no delivery, quality, or reliability data (has_sufficient_data=false, all three dimension flags false). No prior performance history exists to assess on-time delivery capability, quality consistency, or reliability. Quoted delivery days unavailable. Payment terms not specified. Warranty, terms, and insurance certificates attached but verification status unavailable and no historical performance to validate supplier capability. Neutral delivery and reliability scores applied due to complete absence of quotation and historical data. High risk due to inability to verify supplier performance, delivery capability, or quality track record on any prior engagement.\n\nBlue Ridge Manufacturing Inc: score 85/100; risk Low; verdict GOOD OPTION; quote total 30. Ranked alternative by the configured weighted score. Score ranking is not an award recommendation or approval. Award eligibility remains subject to the existing procurement approvals. Evaluation reasoning: Blue Ridge Manufacturing Inc offers identical $30.00 pricing to competitors with the strongest historical performance: 7 completed POs with 100% quantity accuracy, 5 on-time deliveries out of 7 (71% on-time rate), 100% quality score, and 100% reliability score based on 17 data points including 7 GRNs and 3 invoices. All invoices posted on time. Delivery score of 41 reflects historical average delay of 11.5 days; quoted delivery days unavailable from all suppliers. Warranty, terms, and insurance certificates attached. No payment terms specified in quotation, consistent with all three suppliers. Historical data demonstrates consistent execution and quality despite occasional delays.\n\nRedwood Supply Chain Partners: score 81/100; risk Medium; verdict GOOD OPTION; quote total 30. Ranked alternative by the configured weighted score. Score ranking is not an award recommendation or approval. Award eligibility remains subject to the existing procurement approvals. Evaluation reasoning: Redwood Supply Chain Partners matches the $30.00 price point with 100% quantity accuracy across 2 completed POs totaling 780 units received. Quality score is 100% and reliability score is 100% based on 5 data points. However, delivery performance shows 1 on-time delivery and 1 late delivery (50% on-time rate) with average delay of 9 days, resulting in delivery score of 23. Limited historical dataset (only 2 POs, 1 invoice) provides less confidence than Blue Ridge's 7 POs. Warranty, terms, and insurance certificates attached. No payment terms specified. Quoted delivery days unavailable. Medium risk reflects smaller historical sample size and mixed delivery performance."
+}

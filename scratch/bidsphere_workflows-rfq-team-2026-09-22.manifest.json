@@ -1,0 +1,23 @@
+{
+  "created_at": "2026-09-22T07:21:08.451599+00:00",
+  "purpose": "RFQ-linked CLM: Procurement Team, Legal, signatures, Finance, Team handoff",
+  "validation": {
+    "production_build": "passed",
+    "application_tests": {
+      "passed": 2458,
+      "failed_preexisting": 4,
+      "skipped": 3
+    },
+    "failure_file": "src/api/approvalWorkflow.test.ts",
+    "python_transaction_tests_passed": 74,
+    "sequential_workflow_schema_tests_passed": 22,
+    "dedicated_schema_hash_tests_passed": 11,
+    "separate_erp_schema_tests_passed": 4,
+    "live_deployed": false,
+    "live_acceptance": "Blocked: bidsphere_workflows missing and no SSH/hosting access supplied"
+  },
+  "files": 14,
+  "package": "C:\\Users\\VICTUS\\Desktop\\Netlink @7\\Bidsphere\\scratch\\bidsphere_workflows-rfq-team-2026-09-22.zip",
+  "sha256": "cf8824433ff5532c1c12cee85dc48fb6bedf2a57d85366cc780658612b0846f6",
+  "verified": true
+}

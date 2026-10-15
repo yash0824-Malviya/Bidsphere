@@ -116,6 +116,14 @@ const NAV_LABEL_KEYS: Record<string, string> = {
   Assets: "sidebar.assets",
   "Notification Center": "sidebar.notificationCenter",
   Overview: "sidebar.overview",
+  "Intake & Engineering": "sidebar.intakeEngineering",
+  Sourcing: "sidebar.sourcing",
+  "Purchasing & Receiving": "sidebar.purchasingReceiving",
+  "Reports & Administration": "sidebar.reportsAdministration",
+  "Supplier Selection and Award": "sidebar.supplierSelectionAward",
+  "Supplier Quotations": "sidebar.supplierQuotations",
+  "Contract Lifecycle": "sidebar.contractLifecycle",
+  "Contract Requests": "sidebar.contractRequests",
 };
 
 /** Alias — breadcrumb/route titles reuse the same label map. */

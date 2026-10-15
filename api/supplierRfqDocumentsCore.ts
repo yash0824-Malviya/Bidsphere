@@ -733,40 +733,83 @@ export async function assertSupplierMayDownloadRfqFile(input: {
   supplierId: string;
   supplierCandidates?: string[];
   filePath: string;
+  fileId?: string;
   cfg?: ErpAdminConfig;
-}): Promise<void> {
+}): Promise<SupplierRfqDocument> {
   const docs = await listAllSupplierRfqDocumentsForAcl({
     rfqName: input.rfqName,
     supplierId: input.supplierId,
     supplierCandidates: input.supplierCandidates,
     cfg: input.cfg,
   });
-  const allowed = docs.some(
-    (d) =>
-      normalizeErpFilePath(d.fileUrl) === normalizeErpFilePath(input.filePath),
-  );
-  if (!allowed) {
-    /* Double-check: path may be internal-only on this RFQ. */
-    const cfg = input.cfg ?? readErpAdminConfig();
-    const rfqRes = await erpFetch<RfqDoc>(
-      cfg,
-      `resource/Request%20for%20Quotation/${encodeURIComponent(input.rfqName)}`,
-    );
-    const rows: AttachmentVisibilityRow[] = [];
-    for (const item of rfqRes.data?.items ?? []) {
-      rows.push(...(await collectAllForRfqItem(cfg, item)));
+  const normalizedRequestedPath = normalizeErpFilePath(input.filePath);
+  const cleanRequestedId =
+    input.fileId &&
+    typeof input.fileId === "string" &&
+    input.fileId.trim() &&
+    !input.fileId.startsWith("doc_") &&
+    !input.fileId.startsWith("direct-")
+      ? input.fileId.trim()
+      : undefined;
+
+  if (cleanRequestedId) {
+    const matchingById = docs.find((d) => d.id === cleanRequestedId);
+    if (matchingById) {
+      if (
+        normalizeErpFilePath(matchingById.fileUrl) !== normalizedRequestedPath
+      ) {
+        throw new SupplierRfqDocumentsError(
+          "The File ID does not match the requested file path.",
+          403,
+        );
+      }
+      return matchingById;
     }
-    if (!supplierMayAccessAttachmentPath(input.filePath, rows)) {
+  }
+
+  const matchingByPath = docs.filter(
+    (d) => normalizeErpFilePath(d.fileUrl) === normalizedRequestedPath,
+  );
+
+  if (matchingByPath.length === 1) {
+    return matchingByPath[0];
+  }
+
+  if (matchingByPath.length > 1) {
+    const distinctIds = new Set(
+      matchingByPath
+        .map((d) => d.id)
+        .filter((id) => Boolean(id) && !id.startsWith("doc_")),
+    );
+    if (distinctIds.size > 1) {
       throw new SupplierRfqDocumentsError(
-        "You do not have permission to view this document.",
+        "The requested file path is ambiguous.",
         403,
       );
     }
+    return matchingByPath[0];
+  }
+
+  /* Double-check: path may be internal-only on this RFQ. */
+  const cfg = input.cfg ?? readErpAdminConfig();
+  const rfqRes = await erpFetch<RfqDoc>(
+    cfg,
+    `resource/Request%20for%20Quotation/${encodeURIComponent(input.rfqName)}`,
+  );
+  const rows: AttachmentVisibilityRow[] = [];
+  for (const item of rfqRes.data?.items ?? []) {
+    rows.push(...(await collectAllForRfqItem(cfg, item)));
+  }
+  if (!supplierMayAccessAttachmentPath(input.filePath, rows)) {
     throw new SupplierRfqDocumentsError(
       "You do not have permission to view this document.",
       403,
     );
   }
+  throw new SupplierRfqDocumentsError(
+    "You do not have permission to view this document.",
+    403,
+  );
 }
 
 export function attachmentVisibilityFromItemJson(

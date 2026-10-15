@@ -1,0 +1,110 @@
+{
+  "mode": "read-only eligibility dry run; opt-in in memory only",
+  "summary": {
+    "rfq": {
+      "name": "PUR-RFQ-2026-00089",
+      "modified": "2026-09-11 13:59:50.968154"
+    },
+    "contract_required": "Yes",
+    "eligible": true,
+    "reason": "",
+    "can_create": true,
+    "status": "Not Started",
+    "can_open_request": false,
+    "can_open_contract": false,
+    "prefill": {
+      "custom_rfq": "PUR-RFQ-2026-00089",
+      "custom_supplier_quotation": "PUR-SQTN-2026-00249",
+      "supplier": "\"Atlantic Precision Manufacturing.\"",
+      "company": "Netlink",
+      "contract_value": 2500,
+      "estimated_contract_value": 2500,
+      "currency": "USD",
+      "custom_purchase_order": "PUR-ORD-2026-00027",
+      "description": "Title: Procurement RFQ – Production\nValid Till: 2026-09-18\n\nThis Request for Quotation covers the items listed below. Please submit your best pricing and lead times."
+    },
+    "required_fields": [
+      "department",
+      "contract_type",
+      "contract_purpose",
+      "contract_start_date",
+      "contract_end_date"
+    ],
+    "locked_fields": [
+      "custom_rfq",
+      "custom_supplier_quotation",
+      "custom_purchase_order",
+      "supplier",
+      "company",
+      "contract_value",
+      "estimated_contract_value",
+      "currency"
+    ],
+    "source_documents": [
+      {
+        "file_id": "01920254e6",
+        "file_name": "Invoice_ACC-PINV-2026-00012.pdf",
+        "source_doctype": "Supplier Quotation",
+        "source_name": "PUR-SQTN-2026-00249",
+        "source_path": "/sourcing/rfq/PUR-RFQ-2026-00089"
+      },
+      {
+        "file_id": "9f800f8f8b",
+        "file_name": "Invoice_ACC-PINV-2026-00012.pdf",
+        "source_doctype": "Supplier Quotation",
+        "source_name": "PUR-SQTN-2026-00249",
+        "source_path": "/sourcing/rfq/PUR-RFQ-2026-00089"
+      },
+      {
+        "file_id": "116e993760",
+        "file_name": "Invoice_ACC-PINV-2026-00012.pdf",
+        "source_doctype": "Supplier Quotation",
+        "source_name": "PUR-SQTN-2026-00249",
+        "source_path": "/sourcing/rfq/PUR-RFQ-2026-00089"
+      },
+      {
+        "file_id": "4cca6ccf54",
+        "file_name": "Invoice_ACC-PINV-2026-000121cae62.pdf",
+        "source_doctype": "Supplier Quotation",
+        "source_name": "PUR-SQTN-2026-00249",
+        "source_path": "/sourcing/rfq/PUR-RFQ-2026-00089"
+      },
+      {
+        "file_id": "dcf740aa59",
+        "file_name": "Invoice_ACC-PINV-2026-00012.pdf",
+        "source_doctype": "Supplier Quotation",
+        "source_name": "PUR-SQTN-2026-00249",
+        "source_path": "/sourcing/rfq/PUR-RFQ-2026-00089"
+      },
+      {
+        "file_id": "ce8fd6b54d",
+        "file_name": "procurement_workflow_diagram.pdf",
+        "source_doctype": "Supplier Quotation",
+        "source_name": "PUR-SQTN-2026-00249",
+        "source_path": "/sourcing/rfq/PUR-RFQ-2026-00089"
+      },
+      {
+        "file_id": "11d2b3a0ff",
+        "file_name": "procurement_workflow_diagram.pdf",
+        "source_doctype": "Supplier Quotation",
+        "source_name": "PUR-SQTN-2026-00249",
+        "source_path": "/sourcing/rfq/PUR-RFQ-2026-00089"
+      },
+      {
+        "file_id": "eae32ea117",
+        "file_name": "RFQ_PUR-RFQ-2026-00067.pdf",
+        "source_doctype": "Supplier Quotation",
+        "source_name": "PUR-SQTN-2026-00249",
+        "source_path": "/sourcing/rfq/PUR-RFQ-2026-00089"
+      },
+      {
+        "file_id": "fae0d14830",
+        "file_name": "RFQ_PUR-RFQ-2026-00067.pdf",
+        "source_doctype": "Supplier Quotation",
+        "source_name": "PUR-SQTN-2026-00249",
+        "source_path": "/sourcing/rfq/PUR-RFQ-2026-00089"
+      }
+    ],
+    "warnings": []
+  }
+}

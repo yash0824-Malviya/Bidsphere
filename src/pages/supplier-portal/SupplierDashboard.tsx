@@ -10,10 +10,10 @@ import {
   FileText,
   Gavel,
   Inbox,
-  LifeBuoy,
   Loader2,
   Package,
   Receipt,
+  RefreshCw,
   Send,
   Truck,
   Upload,
@@ -37,13 +37,18 @@ import {
 } from "../../api/rfi";
 import { APP_SUPPLIER_PORTAL } from "../../config/branding";
 import { Skeleton } from "../../components/Skeleton";
-import DashboardKpiCard from "../../components/dashboard/DashboardKpiCard";
+import "./SupplierDashboard.css";
 import { formatCurrency, formatDate } from "../../utils/format";
+import { parseRfqMessage } from "../../utils/rfqMessage";
 import {
   useSupplierSession,
   writeSupplierSession,
   readSupplierSession,
 } from "../../hooks/useSupplierSession";
+import {
+  getSupplierRFQStatus,
+  type SupplierQuotationLike,
+} from "../../utils/supplierRfqStatus";
 
 /* ─── Helpers (UI derivation only — no API changes) ──────────────────────── */
 
@@ -257,10 +262,20 @@ export default function SupplierDashboard() {
   return (
     <UnlockedDashboard
       supplierName={supplierName}
+      erpSupplierName={erpSupplierName}
       status={status || "Approved"}
       dashQuery={dashQuery}
       auctionsQuery={auctionsQuery}
       rfiQuery={rfiQuery}
+      isRefreshing={profileQuery.isFetching || dashQuery.isFetching || rfiQuery.isFetching}
+      onRefresh={() => {
+        if (isAuthenticated && sessionToken) void profileQuery.refetch();
+        if (isAuthenticated && unlocked && erpSupplierName) {
+          void dashQuery.refetch();
+          void auctionsQuery.refetch();
+          void rfiQuery.refetch();
+        }
+      }}
     />
   );
 }
@@ -269,16 +284,22 @@ export default function SupplierDashboard() {
 
 function UnlockedDashboard({
   supplierName,
+  erpSupplierName,
   status,
   dashQuery,
   auctionsQuery,
   rfiQuery,
+  isRefreshing,
+  onRefresh,
 }: {
   supplierName: string;
+  erpSupplierName: string;
   status: string;
   dashQuery: ReturnType<typeof useQuery<Awaited<ReturnType<typeof getSupplierDashboardData>>>>;
   auctionsQuery: ReturnType<typeof useQuery<Awaited<ReturnType<typeof getSupplierAuctions>>>>;
   rfiQuery: ReturnType<typeof useQuery<Awaited<ReturnType<typeof getSupplierRFIs>>>>;
+  isRefreshing: boolean;
+  onRefresh: () => void;
 }) {
   const data = dashQuery.data;
   const rfqs = data?.rfqs ?? [];
@@ -286,16 +307,37 @@ function UnlockedDashboard({
   const pos = data?.pos ?? [];
   const pendingPaymentsCount = data?.pendingPayments ?? 0;
 
-  const submittedCount = quotations.filter((sq) =>
-    /submit/i.test(String(sq.status || "")),
-  ).length;
+  const publishedRfqs = useMemo(() => rfqs.filter(isPublishedRfq), [rfqs]);
+
+  const awaitingCount = useMemo(() => {
+    let count = 0;
+    for (const rfq of publishedRfqs) {
+      const statusRes = getSupplierRFQStatus({
+        rfq,
+        quotations: quotations as unknown as SupplierQuotationLike[],
+        supplierId: erpSupplierName || supplierName,
+      });
+      if (
+        statusRes.status === "Awaiting Quotation" ||
+        statusRes.status === "Draft Quotation"
+      ) {
+        count += 1;
+      }
+    }
+    return count;
+  }, [publishedRfqs, quotations, erpSupplierName, supplierName]);
+
+  const submittedCount = useMemo(() => {
+    return quotations.filter((sq) =>
+      Number((sq as { docstatus?: number }).docstatus) === 1 ||
+      /submit|review|accept/i.test(String(sq.status || ""))
+    ).length;
+  }, [quotations]);
+
   const activePOsCount = countActivePOs(pos);
   const liveAuctions = (auctionsQuery.data ?? []).filter(
     (a) => deriveAuctionStatus(a) === "Live",
   ).length;
-
-  const publishedRfqs = useMemo(() => rfqs.filter(isPublishedRfq), [rfqs]);
-  const awaitingCount = Math.max(0, publishedRfqs.length - submittedCount);
 
   const pendingTasks = awaitingCount + pendingPaymentsCount + liveAuctions;
 
@@ -343,7 +385,7 @@ function UnlockedDashboard({
       value: rfiFacing.filter((s) => s === "Submitted" || s === "Under Review")
         .length,
       icon: Send,
-      iconWrap: "bg-emerald-50 text-emerald-700 ring-emerald-100",
+      iconWrap: "bg-blue-50 text-blue-700 ring-blue-100",
       to: "/supplier/rfis",
     },
     {
@@ -364,6 +406,7 @@ function UnlockedDashboard({
 
   const kpis: Array<{
     title: string;
+    description: string;
     value: number;
     icon: LucideIcon;
     iconWrap: string;
@@ -371,34 +414,39 @@ function UnlockedDashboard({
   }> = [
     {
       title: "Total RFQs",
+      description: "RFQs received",
       value: rfqs.length,
       icon: FileText,
       iconWrap: "bg-blue-50 text-blue-700 ring-blue-100",
       to: "/supplier/rfqs",
     },
     {
-      title: "Awaiting",
+      title: "Awaiting Response",
+      description: "RFQs requiring action",
       value: awaitingCount,
       icon: Inbox,
       iconWrap: "bg-amber-50 text-amber-700 ring-amber-100",
       to: "/supplier/rfqs",
     },
     {
-      title: "Submitted",
+      title: "Submitted Quotations",
+      description: "Submitted responses",
       value: submittedCount,
       icon: Send,
       iconWrap: "bg-emerald-50 text-emerald-700 ring-emerald-100",
       to: "/supplier/quotations",
     },
     {
-      title: "Active POs",
+      title: "Active Purchase Orders",
+      description: "Active supplier orders",
       value: activePOsCount,
       icon: Package,
-      iconWrap: "bg-green-50 text-green-700 ring-green-100",
+      iconWrap: "bg-blue-50 text-blue-700 ring-blue-100",
       to: "/supplier/purchase-orders",
     },
     {
-      title: "Pending Pay",
+      title: "Pending Payments",
+      description: "Payments awaiting processing",
       value: pendingPaymentsCount,
       icon: Wallet,
       iconWrap: "bg-violet-50 text-violet-700 ring-violet-100",
@@ -406,9 +454,10 @@ function UnlockedDashboard({
     },
     {
       title: "Live Auctions",
+      description: "Auctions live now",
       value: liveAuctions,
       icon: Gavel,
-      iconWrap: "bg-orange-50 text-orange-700 ring-orange-100",
+      iconWrap: "bg-blue-50 text-blue-700 ring-blue-100",
       to: "/supplier/auctions",
     },
   ];
@@ -417,55 +466,91 @@ function UnlockedDashboard({
     label: string;
     to: string;
     icon: LucideIcon;
-    iconWrap: string;
   }> = [
     {
       label: "Create Quotation",
       to: "/supplier/rfqs",
       icon: FileText,
-      iconWrap: "bg-blue-50 text-blue-700",
     },
     {
       label: "View RFQs",
       to: "/supplier/rfqs",
       icon: Inbox,
-      iconWrap: "bg-sky-50 text-sky-700",
     },
     {
       label: "Upload Documents",
       to: "/supplier/profile?tab=documents",
       icon: Upload,
-      iconWrap: "bg-slate-100 text-slate-700",
+    },
+    {
+      label: "View Contracts",
+      to: "/supplier/contracts",
+      icon: ClipboardList,
     },
     {
       label: "Track Orders",
       to: "/supplier/delivery-schedule",
       icon: Truck,
-      iconWrap: "bg-green-50 text-green-700",
     },
     {
-      label: "Invoices",
+      label: "View Invoices",
       to: "/supplier/invoices",
       icon: Receipt,
-      iconWrap: "bg-violet-50 text-violet-700",
+    },
+  ];
+
+  // These workflows exist, but their task counts are not supplied by the
+  // current dashboard query. Use the requested zero fallback, without
+  // inferring acceptance/required-document state from unrelated record statuses.
+  const unavailableAttentionCount = 0;
+  const attentionItems = [
+    {
+      title: "RFQs Awaiting Response",
+      description: "RFQs received from procurement that require your response.",
+      count: dashQuery.isLoading ? null : awaitingCount,
+      icon: Inbox,
+      to: "/supplier/rfqs",
+      action: "View RFQs",
+      tone: "pending",
     },
     {
-      label: "Support Ticket",
-      to: "/supplier/help-desk",
-      icon: LifeBuoy,
-      iconWrap: "bg-amber-50 text-amber-700",
+      title: "Contracts Awaiting Acceptance",
+      description: "Contracts requiring your review and acceptance.",
+      count: unavailableAttentionCount,
+      icon: ClipboardList,
+      to: "/supplier/contracts",
+      action: "Review Contracts",
+      tone: "neutral",
+    },
+    {
+      title: "Documents Required",
+      description: "Documents that need to be uploaded or completed.",
+      count: unavailableAttentionCount,
+      icon: Upload,
+      to: "/supplier/profile?tab=documents",
+      action: "Upload Documents",
+      tone: "neutral",
+    },
+    {
+      title: "Orders Awaiting Acknowledgement",
+      description: "Purchase orders waiting for supplier acknowledgement.",
+      count: unavailableAttentionCount,
+      icon: Package,
+      to: "/supplier/purchase-orders",
+      action: "View Orders",
+      tone: "neutral",
     },
   ];
 
   return (
-    <div className="supplier-portal-dash">
+    <div className="supplier-dashboard">
       <div className="spd-main">
-        {/* Welcome Banner */}
-        <section className="spd-hero">
+        <header className="spd-hero">
           <div className="min-w-0">
-            <h1 className="spd-hero-title">Welcome back, {supplierName}</h1>
+            <h1 className="spd-hero-title">Supplier Dashboard</h1>
+            <p className="spd-hero-welcome">Welcome back, {supplierName}</p>
             <p className="spd-hero-sub">
-              Manage RFQs, auctions, orders and payments from one dashboard.
+              Manage RFQs, quotations, contracts, purchase orders and payments from one place.
             </p>
           </div>
           <div className="spd-hero-stats">
@@ -479,76 +564,94 @@ function UnlockedDashboard({
             </div>
             <div className="spd-hero-stat">
               <p className="spd-hero-stat-label">Account Status</p>
-              <p className="spd-hero-stat-value is-status">{status}</p>
+              <p className="spd-hero-stat-value is-status" data-status={status}>
+                <span aria-hidden="true" />{status}
+              </p>
+            </div>
+            <button type="button" className="spd-refresh" onClick={onRefresh} disabled={isRefreshing}>
+              <RefreshCw className={isRefreshing ? "animate-spin" : undefined} aria-hidden="true" />
+              {isRefreshing ? "Refreshing" : "Refresh"}
+            </button>
+          </div>
+        </header>
+
+        {/* RFQ Summary KPIs */}
+        <section className="spd-kpis spd-primary-kpis" aria-label="Supplier overview">
+          <div className="spd-section-head">
+            <h2 className="spd-section-title">Supplier Overview</h2>
+          </div>
+          <div className="spd-kpi-grid spd-kpi-grid--primary">
+            {dashQuery.isLoading || auctionsQuery.isLoading
+              ? Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="spd-metric" aria-hidden="true">
+                    <Skeleton className="h-4 w-20" />
+                    <Skeleton className="mt-5 h-9 w-12" />
+                  </div>
+                ))
+              : kpis.map((kpi) => (
+                  <SupplierMetric
+                    key={kpi.title}
+                    {...kpi}
+                  />
+                ))}
+          </div>
+          {/* RFI Overview */}
+          <div className="spd-kpis spd-rfi-kpis">
+            <div className="spd-section-head">
+              <h3 className="spd-secondary-title">RFI Overview</h3>
+              <Link to="/supplier/rfis" className="spd-section-link">
+                View all RFIs <ArrowRight aria-hidden="true" />
+              </Link>
+            </div>
+            <div className="spd-kpi-grid spd-kpi-grid--rfi">
+              {rfiQuery.isLoading
+                ? Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="spd-rfi-metric" aria-hidden="true">
+                      <Skeleton className="h-4 w-20" />
+                      <Skeleton className="h-7 w-8" />
+                    </div>
+                  ))
+                : rfiKpis.map((kpi) => (
+                    <SupplierMetric
+                      key={kpi.title}
+                      {...kpi}
+                      compact
+                    />
+                  ))}
             </div>
           </div>
         </section>
 
-        {/* RFQ Summary KPIs */}
-        <section className="spd-kpis spd-primary-kpis">
-          <div className="spd-kpi-grid spd-kpi-grid--primary">
-            {dashQuery.isLoading || auctionsQuery.isLoading
-              ? Array.from({ length: 6 }).map((_, i) => (
-                  <div key={i} className="kpi-card">
-                    <div className="kpi-card-title-slot">
-                      <Skeleton className="h-4 w-24" />
-                    </div>
-                    <div className="kpi-card-value-slot">
-                      <Skeleton className="h-8 w-16" />
-                    </div>
+        <section aria-labelledby="supplier-attention-title">
+            <div className="spd-section-head">
+              <h2 id="supplier-attention-title" className="spd-section-title">Requires Your Attention</h2>
+            </div>
+            <div className="spd-attention-grid">
+              {attentionItems.map(({ title, description, count, icon: Icon, to, action, tone }) => (
+                <Link key={title} to={to} className="spd-attention-card" data-tone={tone}>
+                  <div className="spd-attention-top">
+                    <span className="spd-attention-icon" aria-hidden="true"><Icon /></span>
+                    {count === null ? (
+                      <span role="status" aria-label="Loading RFQ count"><Skeleton className="h-5 w-6" /></span>
+                    ) : (
+                      <span className="spd-attention-count">{count}</span>
+                    )}
                   </div>
-                ))
-              : kpis.map((kpi) => (
-                  <DashboardKpiCard
-                    key={kpi.title}
-                    label={kpi.title}
-                    value={kpi.value}
-                    icon={kpi.icon}
-                    iconClassName={kpi.iconWrap}
-                    to={kpi.to}
-                  />
-                ))}
-          </div>
-        </section>
-
-        {/* RFI Overview */}
-        <section className="spd-kpis spd-rfi-kpis">
-          <div className="spd-section-head">
-            <h2 className="spd-section-title">RFI Overview</h2>
-            <Link to="/supplier/rfis" className="spd-section-link">
-              View My RFIs
-            </Link>
-          </div>
-          <div className="spd-kpi-grid spd-kpi-grid--rfi">
-            {rfiQuery.isLoading
-              ? Array.from({ length: 4 }).map((_, i) => (
-                  <div key={i} className="kpi-card">
-                    <div className="kpi-card-title-slot">
-                      <Skeleton className="h-4 w-20" />
-                    </div>
-                    <div className="kpi-card-value-slot">
-                      <Skeleton className="h-8 w-12" />
-                    </div>
+                  <div className="spd-attention-copy">
+                    <h3>{title}</h3>
+                    <p>{description}</p>
                   </div>
-                ))
-              : rfiKpis.map((kpi) => (
-                  <DashboardKpiCard
-                    key={kpi.title}
-                    label={kpi.title}
-                    value={kpi.value}
-                    icon={kpi.icon}
-                    iconClassName={kpi.iconWrap}
-                    to={kpi.to}
-                  />
-                ))}
-          </div>
+                  <span className="spd-attention-action">{action} <ArrowRight aria-hidden="true" /></span>
+                </Link>
+              ))}
+            </div>
         </section>
 
         {/* Quick Actions */}
         <section className="spd-actions">
           <div className="spd-section-head">
             <h2 className="spd-section-title">Quick Actions</h2>
-            <span className="text-[11px] text-slate-500">
+            <span className="spd-section-caption">
               Common supplier workflows
             </span>
           </div>
@@ -557,8 +660,8 @@ function UnlockedDashboard({
               const Icon = qa.icon;
               return (
                 <Link key={qa.label} to={qa.to} className="spd-action">
-                  <span className={`spd-action-icon ${qa.iconWrap}`}>
-                    <Icon className="h-[18px] w-[18px]" />
+                  <span className="spd-action-icon" aria-hidden="true">
+                    <Icon />
                   </span>
                   <span className="spd-action-label">{qa.label}</span>
                 </Link>
@@ -582,27 +685,42 @@ function UnlockedDashboard({
               loading={dashQuery.isLoading}
               empty="No RFQs yet"
             >
-              {recentRfqs.map((rfq) => (
+              {recentRfqs.map((rfq) => {
+                const title = parseRfqMessage(rfq.message_for_supplier).title
+                  || (rfq.message_for_supplier ?? "").trim();
+                return (
                 <li key={rfq.name}>
-                  <Link
-                    to={`/supplier/rfq/${encodeURIComponent(rfq.name)}`}
-                    className="spd-list-item"
-                  >
-                    <div className="min-w-0">
-                      <p className="spd-list-primary">{rfq.name}</p>
-                      <p className="spd-list-secondary">
-                        {rfq.status || "Open"}
-                        {rfq.company ? ` · ${rfq.company}` : ""}
-                      </p>
-                    </div>
-                    <span className="spd-list-meta">
-                      {rfq.transaction_date
-                        ? formatDate(rfq.transaction_date)
-                        : "—"}
-                    </span>
-                  </Link>
+                  {(() => {
+                    const statusRes = getSupplierRFQStatus({
+                      rfq,
+                      quotations: quotations as unknown as SupplierQuotationLike[],
+                      supplierId: erpSupplierName || supplierName,
+                    });
+                    return (
+                      <Link
+                        to={`/supplier/rfq/${encodeURIComponent(rfq.name)}`}
+                        className="spd-list-item"
+                      >
+                        <div className="min-w-0">
+                          <p className="spd-list-primary">{rfq.name}</p>
+                          {title && <p className="spd-list-description" title={title}>{title}</p>}
+                          <div className="spd-list-secondary">
+                            <ActivityStatus status={statusRes.status} />
+                            {rfq.company && <span>{rfq.company}</span>}
+                          </div>
+                        </div>
+                        <div className="spd-list-end">
+                          <span className="spd-list-meta">{rfq.transaction_date
+                            ? formatDate(rfq.transaction_date)
+                            : "—"}</span>
+                          <span className="spd-list-open">Open <ArrowRight aria-hidden="true" /></span>
+                        </div>
+                      </Link>
+                    );
+                  })()}
                 </li>
-              ))}
+                );
+              })}
             </RecentPanel>
 
             <RecentPanel
@@ -619,15 +737,17 @@ function UnlockedDashboard({
                   >
                     <div className="min-w-0">
                       <p className="spd-list-primary">{po.name}</p>
-                      <p className="spd-list-secondary">
-                        {formatCurrency(po.grand_total)} · {po.status || "—"}
-                      </p>
+                      <p className="spd-list-description">Supplier order · {formatCurrency(po.grand_total)}</p>
+                      <div className="spd-list-secondary">
+                        <ActivityStatus status={po.status || "—"} />
+                      </div>
                     </div>
-                    <span className="spd-list-meta">
-                      {po.transaction_date
+                    <div className="spd-list-end">
+                      <span className="spd-list-meta">{po.transaction_date
                         ? formatDate(po.transaction_date)
-                        : "—"}
-                    </span>
+                        : "—"}</span>
+                      <span className="spd-list-open">Open <ArrowRight aria-hidden="true" /></span>
+                    </div>
                   </Link>
                 </li>
               ))}
@@ -637,6 +757,41 @@ function UnlockedDashboard({
       </div>
     </div>
   );
+}
+
+function SupplierMetric({
+  title, description, value, icon: Icon, iconWrap, to, compact = false,
+}: {
+  title: string;
+  description?: string;
+  value: number;
+  icon: LucideIcon;
+  iconWrap: string;
+  to: string;
+  compact?: boolean;
+}) {
+  return (
+    <Link to={to} className={compact ? "spd-rfi-metric" : "spd-metric"}>
+      <span className={`spd-metric-icon ${iconWrap}`} aria-hidden="true"><Icon /></span>
+      <span className="spd-metric-label">{title}</span>
+      <span className="spd-metric-value">{value}</span>
+      {description && <span className="spd-metric-description">{description}</span>}
+    </Link>
+  );
+}
+
+function ActivityStatus({ status }: { status: string }) {
+  // Presentation only; the original backend status is always displayed verbatim.
+  const tone = /^(approved|completed|paid|closed)$/i.test(status)
+    ? "success"
+    : /reject|cancel/i.test(status)
+      ? "danger"
+      : /pending|await|to receive|to bill|review/i.test(status)
+        ? "pending"
+        : /^(submitted|open)$/i.test(status)
+          ? "info"
+          : "neutral";
+  return <span className="spd-activity-status" data-tone={tone}>{status}</span>;
 }
 
 function RecentPanel({
@@ -658,8 +813,8 @@ function RecentPanel({
     <div className="spd-panel">
       <div className="spd-panel-head">
         <h3 className="spd-panel-title">{title}</h3>
-        <Link to={viewAll} className="spd-section-link">
-          View all
+        <Link to={viewAll} className="spd-section-link" aria-label={`View all ${title === "Recent RFQs" ? "RFQs" : "orders"}`}>
+          View all <ArrowRight aria-hidden="true" />
         </Link>
       </div>
       {loading ? (

@@ -58,8 +58,8 @@ export default function ForwardedFilterBar({
   const hasActive = Object.values(value).some((v) => v !== "");
 
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-neutral-200 bg-white p-3 shadow-sm">
-      <div className="min-w-[200px] flex-1">
+    <div className="mb-4 flex flex-wrap items-center gap-2.5 rounded-xl border border-neutral-200 bg-white p-3.5 shadow-sm">
+      <div className="min-w-[220px] flex-1">
         <SearchInput
           value={value.search}
           onChange={(search) => set({ search })}
@@ -115,14 +115,14 @@ export default function ForwardedFilterBar({
         value={value.forwardDate}
         onChange={(e) => set({ forwardDate: e.target.value })}
         title="Forwarded on or after"
-        className="input-field w-auto"
+        className="select-field h-9 w-auto text-xs text-neutral-700 rounded-lg border border-neutral-200 bg-white px-2.5 py-1"
       />
 
       {hasActive && (
         <button
           type="button"
           onClick={() => onChange(EMPTY_FORWARDED_FILTERS)}
-          className="btn-secondary"
+          className="inline-flex h-9 items-center gap-1 rounded-lg border border-neutral-200 bg-white px-3 text-xs font-semibold text-neutral-600 hover:bg-neutral-50 shadow-xs"
         >
           <X className="h-3.5 w-3.5" />
           Clear
@@ -147,7 +147,7 @@ function Select({
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="select-field w-auto"
+      className="select-field h-9 w-auto text-xs text-neutral-700 rounded-lg border border-neutral-200 bg-white px-2.5 py-1"
       aria-label={label}
     >
       <option value="">{label}: All</option>

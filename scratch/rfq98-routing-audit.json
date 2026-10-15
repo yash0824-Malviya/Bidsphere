@@ -1,0 +1,208 @@
+{
+  "checked_at": "2026-09-24T07:42:21.867Z",
+  "read_only": true,
+  "rfq": {
+    "name": "PUR-RFQ-2026-00098",
+    "modified": "2026-09-24 12:31:55.604321",
+    "docstatus": 0,
+    "status": "Draft",
+    "company": "Netlink",
+    "owner": "Administrator",
+    "department": null,
+    "custom_department": null,
+    "contract_required": "Yes",
+    "custom_approval_data": null,
+    "custom_target_pricing": null,
+    "custom_target_price_data": null,
+    "custom_rfq_creation_meta": null
+  },
+  "rfqAdditionalFields": [
+    [
+      "custom_show_target_price_to_supplier",
+      0
+    ]
+  ],
+  "items": [
+    {
+      "name": "r5iecqaje0",
+      "idx": 1,
+      "item_code": "AP001",
+      "qty": 12,
+      "uom": "Nos",
+      "material_request": "MAT-MR-2026-00038",
+      "material_request_item": "12uqqp2tf4",
+      "custom_target_price": 0,
+      "custom_show_target_price_to_supplier": 0
+    }
+  ],
+  "materialRequests": [
+    {
+      "name": "MAT-MR-2026-00038",
+      "department": null,
+      "custom_department": "Production",
+      "company": "Bidsphere",
+      "owner": "abhayp@netlink.com",
+      "custom_requester": null,
+      "requested_by": null
+    }
+  ],
+  "requestFields": [
+    {
+      "fieldname": "requester",
+      "fieldtype": "Link",
+      "reqd": 1,
+      "options": "User",
+      "default": null,
+      "mandatory_depends_on": null
+    },
+    {
+      "fieldname": "request_date",
+      "fieldtype": "Date",
+      "reqd": 1,
+      "options": null,
+      "default": "Today",
+      "mandatory_depends_on": null
+    },
+    {
+      "fieldname": "department",
+      "fieldtype": "Link",
+      "reqd": 1,
+      "options": "Department",
+      "default": null,
+      "mandatory_depends_on": null
+    },
+    {
+      "fieldname": "company",
+      "fieldtype": "Link",
+      "reqd": 1,
+      "options": "Company",
+      "default": null,
+      "mandatory_depends_on": null
+    },
+    {
+      "fieldname": "contract_type",
+      "fieldtype": "Select",
+      "reqd": 1,
+      "options": "Supplier Agreement\nPurchase Agreement\nService Agreement\nNDA\nMaster Service Agreement\nTooling Agreement\nQuality Agreement\nConsulting Agreement\nLease Agreement\nOther\nSCA\nLTA\nBAI\nFeasibility\nPackaging\nSupply / Procurement Contract",
+      "default": null,
+      "mandatory_depends_on": null
+    },
+    {
+      "fieldname": "contract_purpose",
+      "fieldtype": "Small Text",
+      "reqd": 1,
+      "options": null,
+      "default": null,
+      "mandatory_depends_on": null
+    },
+    {
+      "fieldname": "description",
+      "fieldtype": "Text Editor",
+      "reqd": 1,
+      "options": null,
+      "default": null,
+      "mandatory_depends_on": null
+    },
+    {
+      "fieldname": "supplier",
+      "fieldtype": "Link",
+      "reqd": 1,
+      "options": "Supplier",
+      "default": null,
+      "mandatory_depends_on": null
+    },
+    {
+      "fieldname": "contract_start_date",
+      "fieldtype": "Date",
+      "reqd": 1,
+      "options": null,
+      "default": null,
+      "mandatory_depends_on": null
+    },
+    {
+      "fieldname": "contract_end_date",
+      "fieldtype": "Date",
+      "reqd": 1,
+      "options": null,
+      "default": null,
+      "mandatory_depends_on": null
+    },
+    {
+      "fieldname": "contract_value",
+      "fieldtype": "Currency",
+      "reqd": 1,
+      "options": null,
+      "default": null,
+      "mandatory_depends_on": null
+    },
+    {
+      "fieldname": "currency",
+      "fieldtype": "Select",
+      "reqd": 1,
+      "options": "USD\nEUR\nGBP\nINR\nAED\nSGD\nAUD\nCAD",
+      "default": null,
+      "mandatory_depends_on": null
+    },
+    {
+      "fieldname": "estimated_contract_value",
+      "fieldtype": "Currency",
+      "reqd": 1,
+      "options": null,
+      "default": null,
+      "mandatory_depends_on": null
+    }
+  ],
+  "rfqFields": [
+    {
+      "dt": null,
+      "fieldname": "material_request",
+      "fieldtype": "Link",
+      "options": "Material Request",
+      "allow_on_submit": 0,
+      "reqd": 0
+    },
+    {
+      "dt": null,
+      "fieldname": "material_request_item",
+      "fieldtype": "Data",
+      "options": null,
+      "allow_on_submit": 0,
+      "reqd": 0
+    },
+    {
+      "dt": "Request for Quotation Item",
+      "fieldname": "custom_show_target_price_to_supplier",
+      "fieldtype": "Check",
+      "options": null,
+      "allow_on_submit": 1,
+      "reqd": 0
+    },
+    {
+      "dt": "Request for Quotation Item",
+      "fieldname": "custom_target_price",
+      "fieldtype": "Currency",
+      "options": null,
+      "allow_on_submit": 1,
+      "reqd": 0
+    },
+    {
+      "dt": "Request for Quotation",
+      "fieldname": "custom_department",
+      "fieldtype": "Data",
+      "options": null,
+      "allow_on_submit": 1,
+      "reqd": 0
+    },
+    {
+      "dt": "Request for Quotation",
+      "fieldname": "custom_show_target_price_to_supplier",
+      "fieldtype": "Check",
+      "options": null,
+      "allow_on_submit": 1,
+      "reqd": 0
+    }
+  ],
+  "requests": [],
+  "contracts": [],
+  "awards": []
+}

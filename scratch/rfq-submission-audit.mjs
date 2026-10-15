@@ -1,0 +1,10 @@
+import { writeFileSync } from 'node:fs';
+import { createEcrSchemaErpClient, ecrSchemaResource, listAllEcrSchemaRows } from '../scripts/ecr-schema-erp-client.mjs';
+const api = createEcrSchemaErpClient();
+const rfq = await api('GET', ecrSchemaResource('Request for Quotation', 'PUR-RFQ-2026-00099'));
+const request = await api('GET', ecrSchemaResource('Contract Request', 'CTRQ-2026-0002'));
+const metadata = await api('GET', ecrSchemaResource('DocType', 'Contract Request'));
+const records = await listAllEcrSchemaRows(api, 'Contract Request', ['name','custom_rfq','request_status']);
+const contracts = await listAllEcrSchemaRows(api, 'Contract', ['name'], [['custom_rfq','=','PUR-RFQ-2026-00099']]);
+writeFileSync('scratch/rfq-submit-live-before.json', JSON.stringify({rfq,request,records,contracts}, null,2));
+console.log(JSON.stringify({rfq:rfq.name,docstatus:rfq.docstatus,status:rfq.status,contract_required:rfq.contract_required,request:request.name,request_status:request.request_status,workflow:JSON.parse(request.custom_clm_data).rfq_request_workflow,status_options:metadata.fields.find(f=>f.fieldname==='request_status')?.options,request_count:records.filter(r=>r.custom_rfq===rfq.name).length,contract_count:contracts.length,send_email:rfq.send_email,supplier_send_email:rfq.suppliers?.map(s=>({supplier:s.supplier,send_email:s.send_email}))}, null,2));

@@ -81,6 +81,7 @@ export function supplierRfqDocumentHref(
   fileUrl: string,
   rfqName: string,
   erpSupplierId?: string,
+  fileId?: string,
 ): string {
   const path = normalizeErpFilePathForProxy(fileUrl);
   const params = new URLSearchParams({
@@ -89,6 +90,15 @@ export function supplierRfqDocumentHref(
   });
   const explicit = String(erpSupplierId || "").trim();
   if (explicit) params.set("erp_supplier_id", explicit);
+  if (
+    fileId &&
+    typeof fileId === "string" &&
+    fileId.trim() &&
+    !fileId.startsWith("doc_") &&
+    !fileId.startsWith("direct-")
+  ) {
+    params.set("file_id", fileId.trim());
+  }
   try {
     const token = readErpProxyAccessToken();
     if (token) params.set("access_token", token);
@@ -117,6 +127,7 @@ export async function fetchSupplierRfqDocumentBlob(input: {
   rfqName: string;
   erpSupplierId?: string;
   fileName?: string;
+  fileId?: string;
 }): Promise<Blob> {
   const path = normalizeErpFilePathForProxy(input.fileUrl);
   if (!path) {
@@ -129,6 +140,15 @@ export async function fetchSupplierRfqDocumentBlob(input: {
   });
   const explicit = String(input.erpSupplierId || "").trim();
   if (explicit) params.set("erp_supplier_id", explicit);
+  if (
+    input.fileId &&
+    typeof input.fileId === "string" &&
+    input.fileId.trim() &&
+    !input.fileId.startsWith("doc_") &&
+    !input.fileId.startsWith("direct-")
+  ) {
+    params.set("file_id", input.fileId.trim());
+  }
   const token = readErpProxyAccessToken();
   /* Keep query token as fallback for environments that only read query auth. */
   if (token) params.set("access_token", token);

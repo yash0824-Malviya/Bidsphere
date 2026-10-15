@@ -1,0 +1,21 @@
+{
+  "mode": "apply",
+  "operations": 2,
+  "inventory": {
+    "contractsScanned": 0,
+    "linkedContracts": 0,
+    "standaloneNullLinks": 0
+  },
+  "recordMigration": false,
+  "workflowChanges": false,
+  "permissionChanges": false,
+  "newFields": [],
+  "newDoctypes": [],
+  "newRoles": [],
+  "verified": true,
+  "recordsPreserved": 102,
+  "workflowsPreserved": true,
+  "permissionsPreserved": true,
+  "standaloneContractsRemainOptional": true,
+  "applied": true
+}

@@ -16,7 +16,8 @@ import {
 import type { SupplierQuotation } from "../../types/erpnext";
 import type { LegalDocumentSet } from "../../api/legalDocs";
 import { updateSupplierQuotationLegalDoc } from "../../api/sourcing";
-import { getFullFileUrl, uploadFileToERPNext } from "../../api/legalDocsStorage";
+import { getFullFileUrl, openErpFileInBrowser, uploadFileToERPNext } from "../../api/legalDocsStorage";
+import { getLegalReviewAttachmentUrl } from "../../api/legalAttachment";
 import {
   resolveSupplierLegalDocs,
   resolveLegalReviewUiStatus,
@@ -167,7 +168,14 @@ export default function SupplierLegalDocuments({
       <div className="divide-y divide-neutral-100">
         {visibleDocs.map((doc) => {
           const busy = busyKey === doc.key;
-          const previewUrl = doc.url ? getFullFileUrl(doc.url) : "";
+          const scopedPreview = Boolean(review?.name && doc.core);
+          const previewUrl = scopedPreview
+            ? getLegalReviewAttachmentUrl(review?.name, doc.key, doc.url)
+            : doc.url ? getFullFileUrl(doc.url) : "";
+          const openReviewedDocument = (mode: "view" | "download") => {
+            void openErpFileInBrowser(previewUrl, { mode, fileName: doc.fileName })
+              .catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Unable to open document."));
+          };
           return (
             <div key={doc.key} className="px-5 py-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -199,6 +207,7 @@ export default function SupplierLegalDocuments({
                     <>
                       <a
                         href={previewUrl}
+                        onClick={scopedPreview ? (event) => { event.preventDefault(); openReviewedDocument("view"); } : undefined}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 rounded-lg border border-neutral-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-700 shadow-sm hover:bg-neutral-50"
@@ -208,6 +217,7 @@ export default function SupplierLegalDocuments({
                       </a>
                       <a
                         href={previewUrl}
+                        onClick={scopedPreview ? (event) => { event.preventDefault(); openReviewedDocument("download"); } : undefined}
                         download={doc.fileName}
                         className="inline-flex items-center gap-1 rounded-lg border border-neutral-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-700 shadow-sm hover:bg-neutral-50"
                       >

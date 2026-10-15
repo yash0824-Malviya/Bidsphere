@@ -1,0 +1,13 @@
+{
+  "installedFields": [
+    "ecr_workflow_version",
+    "ecr_business_case",
+    "rfq_required",
+    "rfq_decision_reason"
+  ],
+  "verifiedRecordsUnchanged": 10,
+  "verifiedWorkflowDocumentsUnchanged": 3,
+  "permissionsUnchanged": true,
+  "versionQuery": "passed",
+  "legacyVersionsPreserved": true
+}

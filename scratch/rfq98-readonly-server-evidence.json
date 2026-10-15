@@ -1,0 +1,29 @@
+{
+  "checked_at": "2026-09-24T07:17:03.801Z",
+  "mode": "local server policy over live ERP reads, no authenticated browser or writes",
+  "department": "Production - NSGAI",
+  "summary": {
+    "rfq": {
+      "name": "PUR-RFQ-2026-00098",
+      "modified": "2026-09-24 12:31:55.604321"
+    },
+    "contract_required": "Yes",
+    "decision": "Pending",
+    "can_decide": false,
+    "blocks_procurement": true,
+    "continuation_ready": false,
+    "eligible": false,
+    "reason": "Contract Required is Yes. Route the Contract Request to Procurement Team; a supplier award is not required at this stage.",
+    "can_create": false,
+    "status": "Not Started",
+    "can_open_request": false,
+    "can_open_contract": false,
+    "prefill": {},
+    "required_fields": [],
+    "locked_fields": [],
+    "source_documents": [],
+    "warnings": [],
+    "initial_request_required": true,
+    "can_request": false
+  }
+}

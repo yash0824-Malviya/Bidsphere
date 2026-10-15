@@ -26,16 +26,16 @@ export default function Header() {
   } = useLayout();
 
   return (
-    <header className="app-topbar z-30 shrink-0 border-b bg-white">
-      <div className="flex h-[64px] min-w-0 items-center gap-2 px-4 sm:gap-3 sm:px-6 lg:px-8">
+    <header className="app-topbar z-30 shrink-0 border-b border-[#E2E8F0] bg-white">
+      <div className="flex h-[52px] min-w-0 items-center gap-2 px-4 sm:gap-3 sm:px-6">
         {sidebarMode === "drawer" && (
           <button
             type="button"
             onClick={toggleMobileNav}
-            className="topbar-control inline-flex h-10 w-10 shrink-0 items-center justify-center border bg-white hover:bg-[var(--ds-paper)]"
+            className="topbar-control inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-[#E2E8F0] bg-white hover:bg-[#F5F7FA]"
             aria-label="Open navigation menu"
           >
-            <Menu className="h-4 w-4" />
+            <Menu className="h-4 w-4 text-[#12213F]" />
           </button>
         )}
 

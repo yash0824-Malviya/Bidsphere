@@ -105,6 +105,28 @@ export function normalizeECRProcurementSourceItem(
   };
 }
 
+/**
+ * Older Select metadata defaulted unsourced affected parts to RFQ. A type by
+ * itself is not a source document: clear that default only when there is no
+ * actual current or legacy source link, and leave supplier/part data intact.
+ */
+export function normalizeECRProcurementSourcePart(
+  part: Partial<ECRAffectedPart>,
+  referenceType: ECRProcurementReferenceType,
+): Partial<ECRAffectedPart> {
+  if (
+    referenceType === "None" &&
+    !clean(part.source_document_reference) &&
+    !clean(part.source_item_reference) &&
+    !clean(part.source_rfq) &&
+    !clean(part.source_purchase_order) &&
+    ["", "RFQ", "Purchase Order"].includes(clean(part.source_reference_type))
+  ) {
+    return { ...part, source_reference_type: "" };
+  }
+  return part;
+}
+
 export function validateECRProcurementSourceItems(
   input: ECRProcurementSelectionInput,
   sourceItems: ECRProcurementSourceItem[],
@@ -118,17 +140,22 @@ export function validateECRProcurementSourceItems(
       errors.existing_purchase_order_reference =
         "Purchase Order must be empty when Reference Type is None.";
     }
-    input.parts.forEach((part, index) => {
+    const canonicalParts = input.parts.map((part) =>
+      normalizeECRProcurementSourcePart(part, input.referenceType),
+    );
+    canonicalParts.forEach((part, index) => {
       if (
         clean(part.source_reference_type) ||
         clean(part.source_document_reference) ||
-        clean(part.source_item_reference)
+        clean(part.source_item_reference) ||
+        clean(part.source_rfq) ||
+        clean(part.source_purchase_order)
       ) {
         errors[`partitem.${index}`] =
           "Procurement source metadata must be empty when Reference Type is None.";
       }
     });
-    return { errors, canonicalParts: input.parts, sourceItems: [] };
+    return { errors, canonicalParts, sourceItems: [] };
   }
 
   const referenceType: Exclude<ECRProcurementReferenceType, "None"> = input.referenceType;

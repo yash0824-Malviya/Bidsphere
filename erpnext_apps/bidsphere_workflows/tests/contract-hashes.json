@@ -1,0 +1,84 @@
+[
+  {
+    "name": "integer values and nullable native defaults",
+    "record": {
+      "party_type": "Supplier",
+      "party_name": "SUP-1",
+      "custom_supplier": "SUP-1",
+      "custom_contract_type": "Supply / Procurement Contract",
+      "custom_contract_value": 2500,
+      "custom_currency": "USD",
+      "custom_risk_level": "",
+      "party_user": null,
+      "requires_fulfilment": 0,
+      "fulfilment_terms": []
+    },
+    "content_hash": "a682de358c64ee117cfd89b57da18e5ec458eb559cc17cd36ba8c46f68d5c63f",
+    "locked_hash": "142662ad97d5ee8b633fd4c42a15230c44c147c6d76300896955b47ea613d6d6"
+  },
+  {
+    "name": "fractional value and Unicode contract terms",
+    "record": {
+      "custom_contract_title": "Café — Ångström 😀",
+      "contract_terms": "First line\n\t\"quoted\" \\ clause",
+      "custom_contract_value": 2500.15,
+      "start_date": "2026-09-21",
+      "end_date": "2027-09-21"
+    },
+    "runtime": {
+      "clause_ids": [
+        "CLAUSE-2",
+        "CLAUSE-1"
+      ],
+      "non_standard_clause": true
+    },
+    "content_hash": "733d18070231b48c22089ac56c1c78214323b61a8e68348d66653791ffc0cb3e",
+    "locked_hash": "c4cedb635f1cf0c3b3ca24829245911f0c9e722f144ad843ce6b5b9c28553051"
+  },
+  {
+    "name": "small decimal uses fixed JSON notation",
+    "record": {
+      "custom_contract_value": 0.000001,
+      "requires_fulfilment": 1,
+      "fulfilment_terms": [
+        {
+          "name": "CT-1",
+          "idx": 1,
+          "requirement": "São Paulo",
+          "modified": "2026-09-21 09:15:30.123456",
+          "deadline": "2026-10-01",
+          "fulfilled": 0,
+          "notes": null,
+          "amount": 0.00001
+        }
+      ]
+    },
+    "content_hash": "afbfef6bfa1ef494bc3cbfd3fba116565b19cebf5adb4fbf19002fc87b250e03",
+    "locked_hash": "c756ada41d8ebaf398dc0caba4208b474fce9dd16090ac429c6ea15c187e07c4"
+  },
+  {
+    "name": "small exponent uses ECMAScript exponent spelling",
+    "record": {
+      "custom_contract_value": 1e-7,
+      "custom_auto_renewal": 0
+    },
+    "content_hash": "794402b5b2a0b1d4eba0f37cbb70f2d3e8d1ac6112a5782bfd23c36375cc80dd",
+    "locked_hash": "26d52468460947437dfe408bb42505b15f9f28387274d163602a855799a21224"
+  },
+  {
+    "name": "large finite value uses fixed notation below 1e21",
+    "record": {
+      "custom_contract_value": 1000000000000000100
+    },
+    "content_hash": "0be73bba19a152a4c13f2288c9719528056764f25b6b5ab15446f3943d838bcd",
+    "locked_hash": "3c2b6dd8f6beba631cf11dc63943695ff5d66e78afb58bbac2c89ab4ca77b625"
+  },
+  {
+    "name": "large exponent uses ECMAScript exponent spelling",
+    "record": {
+      "custom_contract_value": 1e+21
+    },
+    "content_hash": "e2eb5c1f7016c1bc7e04da7d6961d7928f44c1cf608886f41d8f5ec4c130d32a",
+    "locked_hash": "b27d900de1c26b41db99468af756aebdfc3dd9ca504832244a27f917a8aba844"
+  }
+]

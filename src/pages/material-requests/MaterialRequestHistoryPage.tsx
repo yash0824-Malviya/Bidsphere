@@ -155,22 +155,35 @@ export default function MaterialRequestHistoryPage() {
         statuses={stages}
       />
 
-      <div className="card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-neutral-50 text-xs uppercase text-neutral-500">
+      <div className="card max-w-full overflow-hidden p-0 border border-neutral-200 bg-white shadow-sm">
+        <div className="w-full overflow-x-auto">
+          <table className="w-full table-fixed divide-y divide-neutral-200 text-left text-xs sm:text-sm">
+            <colgroup>
+              <col className="w-[16%]" />
+              <col className="w-[9%]" />
+              <col className="w-[9%]" />
+              <col className="w-[9%]" />
+              <col className="w-[9%]" />
+              <col className="w-[10%]" />
+              <col className="w-[8%]" />
+              <col className="w-[10%]" />
+              <col className="w-[9%]" />
+              <col className="w-[6%]" />
+              <col className="w-[5%]" />
+            </colgroup>
+            <thead className="bg-neutral-50 text-[11px] font-bold uppercase tracking-wider text-neutral-500">
               <tr>
-                <th className="whitespace-nowrap px-4 py-3 text-left">MR Number</th>
-                <th className="whitespace-nowrap px-4 py-3 text-left">Department</th>
-                <th className="whitespace-nowrap px-4 py-3 text-left">Warehouse</th>
-                <th className="whitespace-nowrap px-4 py-3 text-left">Forwarded Date</th>
-                <th className="whitespace-nowrap px-4 py-3 text-left">Forwarded By</th>
-                <th className="whitespace-nowrap px-4 py-3 text-left">RFQ Number</th>
-                <th className="whitespace-nowrap px-4 py-3 text-left">RFQ Status</th>
-                <th className="whitespace-nowrap px-4 py-3 text-left">PO Number</th>
-                <th className="whitespace-nowrap px-4 py-3 text-left">Current Stage</th>
-                <th className="whitespace-nowrap px-4 py-3 text-left">Last Updated</th>
-                <th className="whitespace-nowrap px-4 py-3 text-right">View</th>
+                <th className="px-3 py-2.5">MR Number</th>
+                <th className="px-2 py-2.5">Department</th>
+                <th className="px-2 py-2.5">Warehouse</th>
+                <th className="px-2 py-2.5">Forwarded Date</th>
+                <th className="px-2 py-2.5">Forwarded By</th>
+                <th className="px-2 py-2.5">RFQ Number</th>
+                <th className="px-2 py-2.5">RFQ Status</th>
+                <th className="px-2 py-2.5">PO Number</th>
+                <th className="px-2 py-2.5">Stage</th>
+                <th className="px-2 py-2.5">Updated</th>
+                <th className="px-2 py-2.5 text-right">View</th>
               </tr>
             </thead>
 
@@ -198,7 +211,7 @@ export default function MaterialRequestHistoryPage() {
                     />
                     {expanded.has(row.mrNumber) && (
                       <tr className="bg-neutral-50/70">
-                        <td colSpan={COLS} className="px-6 py-4">
+                        <td colSpan={COLS} className="px-4 py-3">
                           <ItemsDrawer row={row} />
                         </td>
                       </tr>
@@ -244,77 +257,102 @@ function HistoryRow({
   onView: () => void;
 }) {
   return (
-    <tr className={expanded ? "bg-blue-50/40" : "hover:bg-neutral-50"}>
-      <td className="whitespace-nowrap px-4 py-3">
-        <div className="flex items-center gap-2">
+    <tr className={expanded ? "bg-blue-50/40" : "hover:bg-neutral-50/80"}>
+      <td className="px-3 py-2.5 align-middle">
+        <div className="flex items-center gap-1.5 min-w-0">
           <button
             type="button"
             onClick={onToggle}
-            className="inline-flex h-6 w-6 items-center justify-center rounded border border-neutral-200 bg-white text-neutral-500 hover:bg-neutral-100"
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border border-neutral-200 bg-white text-neutral-500 hover:bg-neutral-100"
             title={expanded ? "Collapse items" : "Expand items"}
           >
             {expanded ? (
-              <ChevronDown className="h-4 w-4" />
+              <ChevronDown className="h-3.5 w-3.5" />
             ) : (
-              <ChevronRight className="h-4 w-4" />
+              <ChevronRight className="h-3.5 w-3.5" />
             )}
           </button>
           <Link
             to={`/material-requests/${encodeURIComponent(row.mrNumber)}`}
-            className="font-semibold text-primary-600 no-underline hover:underline"
+            className="truncate font-mono text-[12px] font-semibold text-primary-600 hover:underline"
+            title={row.mrNumber}
           >
             {row.mrNumber}
           </Link>
         </div>
       </td>
-      <td className="whitespace-nowrap px-4 py-3 text-neutral-700">{row.department}</td>
-      <td className="whitespace-nowrap px-4 py-3 text-neutral-600">{row.warehouse}</td>
-      <td className="whitespace-nowrap px-4 py-3 text-neutral-600">
-        {row.forwardedOn ? formatDate(row.forwardedOn) : "—"}
+      <td className="px-2 py-2.5 align-middle">
+        <div className="truncate text-xs font-medium text-neutral-700" title={row.department}>
+          {row.department || "—"}
+        </div>
       </td>
-      <td className="whitespace-nowrap px-4 py-3 text-neutral-600">{row.forwardedBy || "—"}</td>
-      <td className="whitespace-nowrap px-4 py-3">
+      <td className="px-2 py-2.5 align-middle">
+        <div className="truncate text-xs text-neutral-600" title={row.warehouse}>
+          {row.warehouse || "—"}
+        </div>
+      </td>
+      <td className="px-2 py-2.5 align-middle">
+        <span className="truncate block text-xs text-neutral-600">
+          {row.forwardedOn ? formatDate(row.forwardedOn) : "—"}
+        </span>
+      </td>
+      <td className="px-2 py-2.5 align-middle">
+        <div className="truncate text-xs text-neutral-600" title={row.forwardedBy}>
+          {row.forwardedBy || "—"}
+        </div>
+      </td>
+      <td className="px-2 py-2.5 align-middle">
         {row.rfqNumber ? (
           <Link
             to={`/sourcing/rfq/${encodeURIComponent(row.rfqNumber)}`}
-            className="font-medium text-primary-600 no-underline hover:underline"
+            className="truncate block font-mono text-xs font-medium text-primary-600 hover:underline"
+            title={row.rfqNumber}
           >
             {row.rfqNumber}
           </Link>
         ) : (
-          <span className="text-neutral-400">—</span>
+          <span className="text-neutral-400 text-xs">—</span>
         )}
       </td>
-      <td className="whitespace-nowrap px-4 py-3 text-neutral-600">{row.rfqStatus}</td>
-      <td className="whitespace-nowrap px-4 py-3">
+      <td className="px-2 py-2.5 align-middle">
+        <div className="truncate text-xs text-neutral-600" title={row.rfqStatus}>
+          {row.rfqStatus || "—"}
+        </div>
+      </td>
+      <td className="px-2 py-2.5 align-middle">
         {row.poNumber ? (
           <Link
             to={`/p2p/purchase-orders/${encodeURIComponent(row.poNumber)}`}
-            className="font-medium text-primary-600 no-underline hover:underline"
+            className="truncate block font-mono text-xs font-medium text-primary-600 hover:underline"
+            title={row.poNumber}
           >
             {row.poNumber}
           </Link>
         ) : (
-          <span className="text-neutral-400">—</span>
+          <span className="text-neutral-400 text-xs">—</span>
         )}
       </td>
-      <td className="whitespace-nowrap px-4 py-3">
+      <td className="px-2 py-2.5 align-middle">
         <span
-          className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${STAGE_STYLES[row.currentStage]}`}
+          className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold truncate max-w-full ${STAGE_STYLES[row.currentStage]}`}
+          title={row.currentStage}
         >
           {row.currentStage}
         </span>
       </td>
-      <td className="whitespace-nowrap px-4 py-3 text-neutral-500">
-        {row.lastUpdated ? formatDateTime(row.lastUpdated) : "—"}
+      <td className="px-2 py-2.5 align-middle">
+        <span className="truncate block text-[11px] text-neutral-500" title={row.lastUpdated ? formatDateTime(row.lastUpdated) : undefined}>
+          {row.lastUpdated ? formatDate(row.lastUpdated) : "—"}
+        </span>
       </td>
-      <td className="whitespace-nowrap px-4 py-3 text-right">
+      <td className="px-2 py-2.5 text-right align-middle">
         <button
           type="button"
           onClick={onView}
-          className="inline-flex items-center gap-1 rounded-lg border border-neutral-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-primary-600 hover:bg-neutral-50"
+          className="inline-flex items-center gap-1 rounded-md border border-neutral-200 bg-white px-2 py-1 text-[11px] font-semibold text-primary-600 hover:bg-neutral-50 shadow-sm"
+          title="View workflow status"
         >
-          <Activity className="h-3.5 w-3.5" />
+          <Activity className="h-3 w-3" />
           View
         </button>
       </td>
@@ -324,46 +362,56 @@ function HistoryRow({
 
 function ItemsDrawer({ row }: { row: ForwardedHistoryRow }) {
   return (
-    <div className="overflow-x-auto overflow-hidden rounded-lg border border-neutral-200 bg-white">
-      <table className="min-w-full text-xs">
-        <thead className="bg-neutral-100 text-neutral-600">
+    <div className="overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-sm">
+      <table className="w-full table-fixed text-xs">
+        <colgroup>
+          <col className="w-[14%]" />
+          <col className="w-[20%]" />
+          <col className="w-[10%]" />
+          <col className="w-[14%]" />
+          <col className="w-[14%]" />
+          <col className="w-[10%]" />
+          <col className="w-[10%]" />
+          <col className="w-[8%]" />
+        </colgroup>
+        <thead className="bg-neutral-100 text-neutral-600 text-[11px] font-semibold">
           <tr>
-            <th className="px-4 py-2 text-left font-semibold">Item Code</th>
-            <th className="px-4 py-2 text-left font-semibold">Item Name</th>
-            <th className="px-4 py-2 text-right font-semibold">Requested Qty</th>
-            <th className="px-4 py-2 text-left font-semibold">Part Name</th>
-            <th className="px-4 py-2 text-left font-semibold">Attachments</th>
-            <th className="px-4 py-2 text-right font-semibold">Available Qty</th>
-            <th className="px-4 py-2 text-right font-semibold">Remaining Qty</th>
-            <th className="px-4 py-2 text-left font-semibold">Warehouse</th>
+            <th className="px-3 py-1.5 text-left">Item Code</th>
+            <th className="px-3 py-1.5 text-left">Item Name</th>
+            <th className="px-2 py-1.5 text-right">Req Qty</th>
+            <th className="px-3 py-1.5 text-left">Part Name</th>
+            <th className="px-3 py-1.5 text-left">Attachments</th>
+            <th className="px-2 py-1.5 text-right">Avail Qty</th>
+            <th className="px-2 py-1.5 text-right">Rem Qty</th>
+            <th className="px-3 py-1.5 text-left">Warehouse</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-neutral-100">
           {(row.items ?? []).map((item, idx) => (
             <tr key={`${row.mrNumber}__${item.item_code}__${idx}`} className="hover:bg-neutral-50/80">
-              <td className="whitespace-nowrap px-4 py-2 font-mono font-medium text-neutral-800">
+              <td className="truncate px-3 py-1.5 font-mono font-medium text-neutral-800" title={item.item_code}>
                 {item.item_code}
               </td>
-              <td className="px-4 py-2 text-neutral-700">{item.item_name}</td>
-              <td className="whitespace-nowrap px-4 py-2 text-right tabular-nums text-neutral-700">
+              <td className="truncate px-3 py-1.5 text-neutral-700" title={item.item_name}>{item.item_name}</td>
+              <td className="px-2 py-1.5 text-right tabular-nums text-neutral-700">
                 {item.requested_qty}
               </td>
-              <td className="px-4 py-2">
+              <td className="truncate px-3 py-1.5">
                 <PartNameCell value={item.part_name} />
               </td>
-              <td className="px-4 py-2">
+              <td className="px-3 py-1.5">
                 <Drawing2dCell
                   url={item.drawing_2d_url}
                   attachments={item.attachments}
                 />
               </td>
-              <td className="whitespace-nowrap px-4 py-2 text-right tabular-nums text-neutral-600">
+              <td className="px-2 py-1.5 text-right tabular-nums text-neutral-600">
                 {item.available_qty}
               </td>
-              <td className="whitespace-nowrap px-4 py-2 text-right font-semibold tabular-nums text-amber-700">
+              <td className="px-2 py-1.5 text-right font-semibold tabular-nums text-amber-700">
                 {item.remaining_qty}
               </td>
-              <td className="whitespace-nowrap px-4 py-2 text-neutral-500">{item.warehouse}</td>
+              <td className="truncate px-3 py-1.5 text-neutral-500" title={item.warehouse}>{item.warehouse}</td>
             </tr>
           ))}
         </tbody>

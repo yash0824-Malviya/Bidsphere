@@ -143,6 +143,8 @@ import {
   listMaterialRequestsWorkflow,
   getMaterialRequestProcurementType,
   getMaterialRequestMode,
+  getMaterialRequestBusinessStatus,
+  type MaterialRequestWorkflowRecord,
   parseForwardedItemsFromMr,
   WAREHOUSE_PENDING_STATUSES,
 } from "../api/materialRequestWorkflow";
@@ -341,9 +343,7 @@ export async function getPendingMaterialRequests(): Promise<WarehouseMaterialReq
 
   const rejected: Array<{ name: string; reason: string }> = [];
   const details = detailDocs.filter((mr: any) => {
-    const status =
-      normalizeWorkflowStatus(mr.custom_bidsphere_status) ||
-      workflowStatusFromStandardFields(mr);
+    const status = getMaterialRequestBusinessStatus(mr as MaterialRequestWorkflowRecord);
     const keep = WAREHOUSE_PENDING_STATUSES.includes(status);
     if (!keep) {
       rejected.push({
@@ -416,9 +416,7 @@ export async function getPendingMaterialRequests(): Promise<WarehouseMaterialReq
       request_date: mr.transaction_date || mr.modified?.split("T")[0] || "",
       required_date: mr.schedule_date || "",
       priority: mr.custom_priority || "Medium",
-      status:
-        normalizeWorkflowStatus(mr.custom_bidsphere_status) ||
-        workflowStatusFromStandardFields(mr),
+      status: getMaterialRequestBusinessStatus(mr as MaterialRequestWorkflowRecord),
       procurement_type: resolveProcurementType(mr.custom_procurement_type),
       request_mode: resolveRequestMode(mr.custom_request_mode),
       items_count: mr.items ? mr.items.length : 0,

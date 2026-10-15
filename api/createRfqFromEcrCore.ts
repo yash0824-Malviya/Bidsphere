@@ -1,8 +1,9 @@
 import { sanitizeErpPayloadDates } from "./erpDateSanitize.js";
-import type { InternalEcrPrincipal } from "./ecrWorkflowCore.js";
+import { assertExtendedEcrReadyForRfq, type EcrWorkflowDocument, type InternalEcrPrincipal } from "./ecrWorkflowCore.js";
 import {
   canonicalApprovalRole,
   canonicalWorkflowStatus,
+  isExtendedEcr,
 } from "./ecrWorkflowPolicy.js";
 
 const ECR_DOCTYPE = "Engineering Change Request";
@@ -31,6 +32,7 @@ export type EcrApprovalRow = Record<string, unknown> & {
 };
 
 export interface DirectRfqSourceEcr extends Record<string, unknown> {
+  ecr_workflow_version?: string;
   name: string;
   modified?: string;
   docstatus?: number;
@@ -501,16 +503,21 @@ function completeProcurementManagerTask(
         required: 1,
         status: "Completed",
         approval_date: timestamp,
-        comments: `RFQ ${rfqName} created.`,
+        comments: `${isExtendedEcr(ecr) ? "[Stage: Procurement Decision]\n" : ""}RFQ ${rfqName} created.`,
       }
     : row);
 }
 
 function validateEcrForDirectRfq(ecr: DirectRfqSourceEcr): void {
   const state = canonicalWorkflowStatus(clean(ecr.select_pxfp));
-  if (!["RFQ Pending", "RFQ"].includes(state)) {
+  if (isExtendedEcr(ecr)) {
+    try { assertExtendedEcrReadyForRfq(ecr as EcrWorkflowDocument); }
+    catch (error) { throw new CreateRfqFromEcrError(error instanceof Error ? error.message : "ECR is not approved for RFQ creation.", 409, "conflict"); }
+  }
+  const readyStage = isExtendedEcr(ecr) ? "Procurement Decision" : "RFQ Pending";
+  if (![readyStage, "RFQ"].includes(state)) {
     throw new CreateRfqFromEcrError(
-      `ECR must be in RFQ Pending before creating an RFQ. Current state: ${state || "Draft"}.`,
+      `ECR must be in ${readyStage} before creating an RFQ. Current state: ${state || "Draft"}.`,
       409,
       "conflict",
     );
@@ -518,7 +525,7 @@ function validateEcrForDirectRfq(ecr: DirectRfqSourceEcr): void {
   const validDocstatuses = state === "RFQ" ? [1] : [0, 1];
   if (!validDocstatuses.includes(Number(ecr.docstatus))) {
     throw new CreateRfqFromEcrError(
-      state === "RFQ Pending"
+      state === readyStage
         ? "ECR must be an active draft or a submitted legacy record until the Procurement Manager creates the RFQ."
         : "An ECR in RFQ stage must be submitted and active.",
       409,
@@ -533,7 +540,7 @@ function validateEcrForDirectRfq(ecr: DirectRfqSourceEcr): void {
     );
   }
   const pendingTasks = pendingApprovalTasks(ecr);
-  if (state === "RFQ Pending") {
+  if (state === readyStage) {
     if (
       pendingTasks.length !== 1 ||
       canonicalApprovalRole(clean(pendingTasks[0]?.approval_role)) !== "Procurement Manager" ||
@@ -720,7 +727,7 @@ async function resolveOrCreateRfq(
       created: false,
     };
   }
-  if (canonicalWorkflowStatus(clean(ecr.select_pxfp)) !== "RFQ Pending") {
+  if (canonicalWorkflowStatus(clean(ecr.select_pxfp)) !== (isExtendedEcr(ecr) ? "Procurement Decision" : "RFQ Pending")) {
     throw new CreateRfqFromEcrError(
       `ECR ${ecr.name} is already in RFQ state but has no persisted RFQ traceability.`,
       409,
@@ -845,7 +852,7 @@ async function ensureEcrRfqState(
     }
     return synchronized;
   }
-  if (canonicalWorkflowStatus(clean(ecr.select_pxfp)) !== "RFQ Pending") {
+  if (canonicalWorkflowStatus(clean(ecr.select_pxfp)) !== (isExtendedEcr(ecr) ? "Procurement Decision" : "RFQ Pending")) {
     throw new CreateRfqFromEcrError(
       `ECR ${ecr.name} cannot move to RFQ from ${clean(ecr.select_pxfp) || "Draft"}.`,
       409,
@@ -885,7 +892,7 @@ async function ensureEcrRfqState(
   } catch (error) {
     const concurrent = await dependencies.loadEcr(ecr.name).catch(() => null);
     if (
-      clean(concurrent?.select_pxfp) === "RFQ" &&
+      concurrent && clean(concurrent.select_pxfp) === "RFQ" &&
       (!hasPersistedStatusField || clean(concurrent?.status) === "RFQ") &&
       clean(concurrent?.rfq) === rfqName &&
       Number(concurrent?.docstatus) === 1 &&

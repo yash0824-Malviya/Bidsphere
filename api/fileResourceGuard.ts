@@ -8,9 +8,13 @@ import {
   assertEcrUploadField,
   supplierOwnsUploadTarget,
 } from "./secureUploadGuard.js";
+import { authorizeLegalFileIfApplicable } from "./legalAttachmentAccess.js";
+import { authorizeRfpResponseFileIfApplicable } from "./rfpResponseAttachmentAccess.js";
+import { authorizeClmFileIfApplicable, authorizeClmScope, isClmDoctype } from "./clmGatewayGuard.js";
 
 const ECR_DOCTYPE = "Engineering Change Request";
 const ECR_READ_ROLES = [
+  "finance",
   "engineer",
   "engineering",
   "operations",
@@ -255,7 +259,10 @@ export async function authorizeFileResourceRequest(input: {
         403,
       );
     }
-    if (scope.doctype === ECR_DOCTYPE) {
+    if (isClmDoctype(scope.doctype)) {
+      await authorizeClmScope(input.principal, scope.doctype, scope.docname, input.loadDocument);
+      if (input.principal.typ === "supplier") throw new RbacError("Supplier Contract files must use the Contract document viewer.", 403);
+    } else if (scope.doctype === ECR_DOCTYPE) {
       const ecr = await input.loadDocument(ECR_DOCTYPE, scope.docname);
       requireInternalEcrRead(input.principal, ecr);
     } else if (input.principal.typ === "supplier") {
@@ -273,9 +280,20 @@ export async function authorizeFileResourceRequest(input: {
     docname: clean(file.attached_to_name),
   };
 
+  if (isClmDoctype(existingScope.doctype)) {
+    if (!READ_METHODS.has(method)) throw new RbacError("Contract attachments cannot be modified or relinked directly.", 403);
+    await authorizeClmFileIfApplicable({ principal: input.principal, file, loadDocument: input.loadDocument });
+    return file;
+  }
+
   if (existingScope.doctype === ECR_DOCTYPE) {
     await authorizeEcrFile(input.principal, method, file, input.loadDocument);
     return file;
+  }
+
+  if (READ_METHODS.has(method)) {
+    await authorizeRfpResponseFileIfApplicable({ principal: input.principal, file, loadDocument: input.loadDocument });
+    await authorizeLegalFileIfApplicable({ principal: input.principal, file, loadDocument: input.loadDocument });
   }
 
   if (input.principal.typ === "supplier") {
@@ -294,6 +312,7 @@ export async function authorizeFileResourceRequest(input: {
       );
     }
     const requestedScope = requestedAttachmentScope(input.body, file);
+    if (isClmDoctype(requestedScope.doctype)) throw new RbacError("Contract attachments must use the scoped Contract upload endpoint.", 403);
     if (requestedScope.doctype === ECR_DOCTYPE) {
       throw new RbacError(
         "ECR files must be created through the scoped multipart upload path and cannot be relinked directly.",
@@ -316,6 +335,7 @@ export async function authorizePersistedFileRead(input: {
   file: FileResourceDocument;
   loadDocument: FileResourceDocumentLoader;
   supplierContextAuthorized?: boolean;
+  rfqContextName?: string;
 }): Promise<void> {
   const scope = {
     doctype: clean(input.file.attached_to_doctype),
@@ -328,8 +348,18 @@ export async function authorizePersistedFileRead(input: {
     await authorizeEcrFile(input.principal, "GET", input.file, input.loadDocument);
     return;
   }
+  if (await authorizeRfpResponseFileIfApplicable(input)) return;
+  if (await authorizeClmFileIfApplicable(input)) return;
+  if (await authorizeLegalFileIfApplicable(input)) return;
   if (input.principal.typ === "supplier") {
-    if (input.supplierContextAuthorized) return;
+    if (input.supplierContextAuthorized) {
+      if (input.rfqContextName) {
+        if (scope.doctype === "Request for Quotation" && scope.docname !== input.rfqContextName) {
+          throw new RbacError("Access denied. This File belongs to a different RFQ.", 403);
+        }
+      }
+      return;
+    }
     await assertSupplierOwnsScope(input.principal, scope, input.loadDocument);
     return;
   }

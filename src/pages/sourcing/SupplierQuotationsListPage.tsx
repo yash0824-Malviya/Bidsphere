@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Download, Eye, FileText, Link2 } from "lucide-react";
 import toast from "react-hot-toast";
@@ -10,8 +10,9 @@ import PageHeader from "../../components/PageHeader";
 import PaginationBar from "../../components/PaginationBar";
 import StatusBadge from "../../components/StatusBadge";
 import ExportButton from "../../components/export/ExportButton";
-import { TableRowActions } from "../../components/ui";
+import { FilterBar, FilterField, SearchInput, TableRowActions } from "../../components/ui";
 import { usePagination } from "../../hooks/usePagination";
+import { useDebounce } from "../../hooks/useDebounce";
 import { formatDate } from "../../utils/format";
 import type { ExportColumn } from "../../utils/export";
 
@@ -25,19 +26,30 @@ interface SupplierQuotationRow {
 
 const SQ_DOCTYPE = "Supplier Quotation";
 const SQ_FIELDS = ["name", "supplier", "supplier_name", "transaction_date", "status"];
+const SQ_STATUS_OPTIONS = ["", "Draft", "Submitted", "Ordered", "Expired", "Lost", "Cancelled"];
 
 export default function SupplierQuotationsListPage() {
   const [searchParams] = useSearchParams();
   const preset = (searchParams.get("preset") ?? "").toLowerCase();
+  const initialStatus = searchParams.get("status") ?? "";
+
+  const [status, setStatus] = useState(initialStatus);
+  const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search, 300);
 
   const filters = useMemo<Filter[] | undefined>(() => {
+    const f: Filter[] = [];
     if (preset === "pending") {
-      return [
-        ["status", "not in", ["Ordered", "Expired", "Lost", "Cancelled"]],
-      ] as Filter[];
+      f.push(["status", "not in", ["Ordered", "Expired", "Lost", "Cancelled"]]);
     }
-    return undefined;
-  }, [preset]);
+    if (status) {
+      f.push(["status", "=", status]);
+    }
+    if (debouncedSearch) {
+      f.push(["name", "like", `%${debouncedSearch}%`]);
+    }
+    return f.length > 0 ? f : undefined;
+  }, [preset, status, debouncedSearch]);
 
   const { page, pageSize, setPage, setPageSize } = usePagination({
     resetKey: JSON.stringify(filters ?? []),
@@ -86,7 +98,7 @@ export default function SupplierQuotationsListPage() {
     <div>
       <PageHeader
         title="Supplier Quotations"
-        description="Review supplier responses to RFQs."
+        description="Review supplier bid submissions, compare commercial terms, and advance selections to award."
         actions={
           <ExportButton
             module="Supplier Quotation"
@@ -96,6 +108,30 @@ export default function SupplierQuotationsListPage() {
           />
         }
       />
+
+      <FilterBar>
+        <FilterField label="Search" className="min-w-[220px] flex-1">
+          <SearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Quotation ID…"
+          />
+        </FilterField>
+        <FilterField label="Status" className="min-w-[160px]">
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+            className="select-field"
+          >
+            {SQ_STATUS_OPTIONS.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt || "All statuses"}
+              </option>
+            ))}
+          </select>
+        </FilterField>
+      </FilterBar>
+
       <div className="card overflow-hidden">
         <table className="data-table min-w-full">
           <thead>

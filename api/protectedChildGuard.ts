@@ -2,6 +2,8 @@ export const PROTECTED_CHILD_DOCTYPES = [
   "Request for Quotation Item",
   "Request for Quotation Supplier",
   "Purchase Order Item",
+  "Reverse Bidding Supplier",
+  "Reverse Bid Item",
   "ECR Affected Part",
   "ECR Supplier Response Requirement",
   "ECR Approval",

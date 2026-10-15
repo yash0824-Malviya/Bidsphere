@@ -3,6 +3,7 @@ import {
   applyEcrWorkflowActionCore,
   buildSequentialApprovalRequirements,
   EcrWorkflowError,
+  firstEcrWorkflowPersistenceMismatch,
   requireCurrentApprovalTask,
   type EcrApprovalRequirement,
   type EcrWorkflowDependencies,
@@ -91,6 +92,31 @@ function memoryDependencies(initial: EcrWorkflowDocument): {
     commitWorkflowDocument,
   };
 }
+
+describe("ECR optional persistence comparison", () => {
+  const fields = ["ecr_business_case", "rfq_required", "rfq_decision_reason", "ecr_workflow_version"];
+  it.each([undefined, null, ""])("accepts omitted, null and blank representations of %s without rewriting data", (empty) => {
+    for (const other of [undefined, null, ""]) {
+      const expected = Object.fromEntries(fields.map((field) => [field, empty]));
+      const actual = Object.fromEntries(fields.map((field) => [field, other]));
+      expect(firstEcrWorkflowPersistenceMismatch(expected, actual)).toBeUndefined();
+      expect(expected.ecr_business_case).toBe(empty);
+      expect(actual.ecr_business_case).toBe(other);
+    }
+  });
+  it.each(fields)("detects lost, modified or unexpected populated %s", (field) => {
+    expect(firstEcrWorkflowPersistenceMismatch({ [field]: "value" }, {})).toBe(field);
+    expect(firstEcrWorkflowPersistenceMismatch({}, { [field]: "value" })).toBe(field);
+    expect(firstEcrWorkflowPersistenceMismatch({ [field]: "value" }, { [field]: " value " })).toBe(field);
+    expect(firstEcrWorkflowPersistenceMismatch({ [field]: "value" }, { [field]: "value" })).toBeUndefined();
+    expect(firstEcrWorkflowPersistenceMismatch({ [field]: "" }, { [field]: false })).toBe(field);
+  });
+  it("accepts cleared RFQ decisions only when the saved values are also empty", () => {
+    const expected = { ecr_workflow_version: "extended_v1", rfq_required: "", rfq_decision_reason: "" };
+    expect(firstEcrWorkflowPersistenceMismatch(expected, { ecr_workflow_version: "extended_v1", rfq_required: null })).toBeUndefined();
+    expect(firstEcrWorkflowPersistenceMismatch(expected, { ecr_workflow_version: "extended_v1", rfq_required: "Yes" })).toBe("rfq_required");
+  });
+});
 
 describe("sequential ECR workflow policy", () => {
   it("contains only the required sequential actions and role handoffs", () => {
@@ -215,6 +241,60 @@ describe("single pending-task invariant", () => {
 });
 
 describe("trusted ECR workflow actions", () => {
+  it.each([undefined, "extended_v1"])("accepts Frappe null save responses for optional fields when submitting version %s", async (version) => {
+    const memory = memoryDependencies(document("Draft", { ecr_workflow_version: version, rfq_required: "" }));
+    const persist = memory.dependencies.commitWorkflowDocument;
+    memory.dependencies.commitWorkflowDocument = async (next) => {
+      const saved = await persist(next);
+      for (const field of ["ecr_business_case", "rfq_required", "rfq_decision_reason"]) saved[field] = null;
+      if (!version) saved.ecr_workflow_version = undefined;
+      return saved;
+    };
+    const result = await applyEcrWorkflowActionCore({
+      name: "1j3b9i4moj", action: "Submit ECR", principal: principal("engineer"), expected_modified: "1",
+    }, memory.dependencies);
+    expect(result.newStatus).toBe("Engineering Review");
+    expect(memory.commitWorkflowDocument).toHaveBeenCalledTimes(1);
+    expect(memory.dependencies.addTimelineComment).toHaveBeenCalledWith("1j3b9i4moj", "Submit ECR");
+    expect(memory.read().approval_requirements).toEqual([expect.objectContaining({ approval_role: "Engineering Manager", status: "Pending" })]);
+  });
+
+  it("still reports the exact field if populated workflow data is lost during save", async () => {
+    const memory = memoryDependencies(document("Draft", { ecr_workflow_version: "extended_v1", ecr_business_case: '{"status":"Draft"}' }));
+    const persist = memory.dependencies.commitWorkflowDocument;
+    memory.dependencies.commitWorkflowDocument = async (next) => {
+      const saved = await persist(next);
+      delete saved.ecr_business_case;
+      return saved;
+    };
+    await expect(applyEcrWorkflowActionCore({
+      name: "1j3b9i4moj", action: "Submit ECR", principal: principal("engineer"), expected_modified: "1",
+    }, memory.dependencies)).rejects.toMatchObject({ status: 409, fieldErrors: { ecr_business_case: expect.any(String) } });
+    expect(memory.dependencies.addTimelineComment).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "extended_v1"])("submits existing %s ECRs with supplier involvement and a default-only source marker", async (version) => {
+    const supplierFields = {
+      supplier_response_required: "Yes",
+      suggested_supplier: "SUP-001",
+      supplier_impact: 1,
+      procurement_reference_type: "None",
+      supplier_response_type: "Quotation",
+      required_quantity: 10,
+      quantity_uom: "Nos",
+      engineering_notes: "Technical Requirements: Drawing\nCommercial Requirements: Quote\nDelivery Requirements: Four weeks\nQuality Requirements: Certificate",
+      affected_parts: [{ partitem: "LAT-4401", quantity: 10, uom: "Nos", source_reference_type: "RFQ" }],
+    };
+    const memory = memoryDependencies(document("Draft", { ...supplierFields, ecr_workflow_version: version }));
+    const result = await applyEcrWorkflowActionCore({
+      name: "1j3b9i4moj", action: "Submit ECR", principal: principal("engineer"), expected_modified: "1",
+    }, memory.dependencies);
+    expect(result.newStatus).toBe("Engineering Review");
+    expect(memory.read()).toMatchObject(supplierFields);
+    expect(memory.dependencies.loadProcurementDocument).not.toHaveBeenCalled();
+    expect(memory.commitWorkflowDocument).toHaveBeenCalledTimes(1);
+  });
+
   it("submits Draft with exactly one Engineering Manager task", async () => {
     const memory = memoryDependencies(document("Draft"));
     const result = await applyEcrWorkflowActionCore({

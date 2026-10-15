@@ -1,0 +1,245 @@
+{
+  "checked_at": "2026-09-23T11:22:27.338Z",
+  "read_only": true,
+  "writes_tested": false,
+  "metadata": [
+    {
+      "doctype": "Request for Quotation",
+      "is_submittable": 1,
+      "fields": [
+        {
+          "fieldname": "contract_required",
+          "fieldtype": "Select",
+          "options": "Yes\nNo",
+          "reqd": 1,
+          "unique": 0,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_approval_data",
+          "fieldtype": "Long Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "read_only": 0,
+          "allow_on_submit": 1,
+          "permlevel": 0
+        }
+      ],
+      "property_setters": [],
+      "effective_permission_probes": [
+        {
+          "ptype": "read",
+          "ok": true,
+          "data": {
+            "has_permission": true
+          }
+        },
+        {
+          "ptype": "write",
+          "ok": true,
+          "data": {
+            "has_permission": true
+          }
+        },
+        {
+          "ptype": "create",
+          "ok": true,
+          "data": {
+            "has_permission": true
+          }
+        },
+        {
+          "ptype": "submit",
+          "ok": true,
+          "data": {
+            "has_permission": true
+          }
+        }
+      ]
+    },
+    {
+      "doctype": "Legal Document Review",
+      "is_submittable": 0,
+      "fields": [
+        {
+          "fieldname": "workflow_state",
+          "fieldtype": "Data",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_clm_state",
+          "fieldtype": "Long Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "read_only": 1,
+          "allow_on_submit": 1,
+          "permlevel": 0
+        }
+      ],
+      "property_setters": [],
+      "effective_permission_probes": [
+        {
+          "ptype": "read",
+          "ok": true,
+          "data": {
+            "has_permission": true
+          }
+        },
+        {
+          "ptype": "write",
+          "ok": true,
+          "data": {
+            "has_permission": true
+          }
+        },
+        {
+          "ptype": "create",
+          "ok": true,
+          "data": {
+            "has_permission": true
+          }
+        },
+        {
+          "ptype": "submit",
+          "ok": true,
+          "data": {
+            "has_permission": true
+          }
+        }
+      ]
+    },
+    {
+      "doctype": "Contract Request",
+      "is_submittable": 1,
+      "fields": [
+        {
+          "fieldname": "custom_clm_data",
+          "fieldtype": "Long Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "read_only": 1,
+          "allow_on_submit": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_rfq",
+          "fieldtype": "Link",
+          "options": "Request for Quotation",
+          "reqd": 0,
+          "unique": 1,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "permlevel": 0
+        }
+      ],
+      "property_setters": [],
+      "effective_permission_probes": [
+        {
+          "ptype": "read",
+          "ok": true,
+          "data": {
+            "has_permission": true
+          }
+        },
+        {
+          "ptype": "write",
+          "ok": true,
+          "data": {
+            "has_permission": true
+          }
+        },
+        {
+          "ptype": "create",
+          "ok": true,
+          "data": {
+            "has_permission": true
+          }
+        },
+        {
+          "ptype": "submit",
+          "ok": true,
+          "data": {
+            "has_permission": true
+          }
+        }
+      ]
+    },
+    {
+      "doctype": "Contract",
+      "is_submittable": 1,
+      "fields": [
+        {
+          "fieldname": "custom_clm_data",
+          "fieldtype": "Long Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "read_only": 1,
+          "allow_on_submit": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_contract_request",
+          "fieldtype": "Link",
+          "options": "Contract Request",
+          "reqd": 0,
+          "unique": 0,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_rfq",
+          "fieldtype": "Link",
+          "options": "Request for Quotation",
+          "reqd": 0,
+          "unique": 0,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "permlevel": 0
+        }
+      ],
+      "property_setters": [],
+      "effective_permission_probes": [
+        {
+          "ptype": "read",
+          "ok": true,
+          "data": {
+            "has_permission": true
+          }
+        },
+        {
+          "ptype": "write",
+          "ok": true,
+          "data": {
+            "has_permission": true
+          }
+        },
+        {
+          "ptype": "create",
+          "ok": true,
+          "data": {
+            "has_permission": true
+          }
+        },
+        {
+          "ptype": "submit",
+          "ok": true,
+          "data": {
+            "has_permission": true
+          }
+        }
+      ]
+    }
+  ]
+}

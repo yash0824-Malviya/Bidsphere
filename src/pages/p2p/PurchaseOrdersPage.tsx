@@ -101,7 +101,10 @@ export default function PurchaseOrdersPage() {
   const preset = (searchParams.get("preset") ?? "").toLowerCase();
   const userRole = useAuthStore((s) => s.user?.role);
   const canManagePo = canManagePurchaseOrders(userRole);
-  const [status, setStatus] = useState<"" | PurchaseOrderStatus>("");
+  const statusParam = (searchParams.get("status") ?? "") as PurchaseOrderStatus | "";
+  const [status, setStatus] = useState<"" | PurchaseOrderStatus>(
+    () => (STATUS_OPTIONS.includes(statusParam) ? statusParam : ""),
+  );
   const [supplier, setSupplier] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -262,6 +265,21 @@ export default function PurchaseOrdersPage() {
           />
         }
       />
+
+      {preset === "pending" && (
+        <div className="mb-4 flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+          <span>
+            Filtering by <strong>Pending Approval</strong> (Draft & unsubmitted Purchase Orders awaiting review).
+          </span>
+          <button
+            type="button"
+            onClick={() => navigate("/p2p/purchase-orders")}
+            className="font-semibold text-amber-900 underline hover:no-underline"
+          >
+            Clear preset
+          </button>
+        </div>
+      )}
 
       <FilterBar>
         <FilterField label="Search" className="min-w-[220px] flex-1">
@@ -578,16 +596,20 @@ export default function PurchaseOrdersPage() {
                                   },
                                 ]
                               : []),
-                            {
-                              id: "duplicate",
-                              label: "Duplicate",
-                              icon: Copy,
-                              separatorBefore: true,
-                              onClick: () =>
-                                toast("Duplicate from Purchase Order details", {
-                                  icon: "ℹ️",
-                                }),
-                            },
+                            ...(canManagePo
+                              ? [
+                                  {
+                                    id: "duplicate",
+                                    label: "Duplicate",
+                                    icon: Copy,
+                                    separatorBefore: true,
+                                    onClick: () =>
+                                      toast("Duplicate from Purchase Order details", {
+                                        icon: "ℹ️",
+                                      }),
+                                  },
+                                ]
+                              : []),
                           ]}
                         />
                       </td>

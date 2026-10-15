@@ -1,2 +1,5 @@
-import RoleECRDashboard from "./RoleECRDashboard";
-export default function ProcurementECRDashboard() { return <RoleECRDashboard role="procurement_team" />; }
+import ProcurementTeamDashboard from "../../dashboard/ProcurementTeamDashboard";
+
+export default function ProcurementECRDashboard() {
+  return <ProcurementTeamDashboard />;
+}

@@ -1,0 +1,378 @@
+{
+  "inspectedAt": "2026-09-30T07:55:53.429Z",
+  "mutations": 0,
+  "identityScope": "Persisted Engineering Manager account; browser is currently Engineer",
+  "user": {
+    "name": "engineeringmanager@netlink.com",
+    "email": "engineeringmanager@netlink.com",
+    "username": "engineering_manager",
+    "full_name": "Engineering Manager",
+    "role": "engineering"
+  },
+  "total": 11,
+  "dashboardBefore": {
+    "mine": 0,
+    "pending": 0,
+    "sentBack": 0,
+    "approved": 10,
+    "closed": 1
+  },
+  "dashboardAfter": {
+    "all": 11,
+    "mine": 0,
+    "pending": 0,
+    "sentBack": 0,
+    "approved": 9,
+    "closed": 1
+  },
+  "listCounts": {
+    "all": 11,
+    "mine": 0,
+    "pending-approval": 0,
+    "sent-back": 0,
+    "approved": 9,
+    "closed": 1
+  },
+  "approvedDiscrepancy": [
+    "ECR-2026-100010"
+  ],
+  "records": [
+    {
+      "id": "ECR-2026-85517",
+      "name": "1j3b9i4moj",
+      "owner": "Administrator",
+      "ecr_owner": "engineer@netlink.com",
+      "created_by": null,
+      "creation_user": null,
+      "amended_from": null,
+      "assigned_to": null,
+      "current_stage": null,
+      "approval_status": null,
+      "workflow_state": null,
+      "workflow_status": "Procurement",
+      "normalized_status": "Procurement Review",
+      "approval_tasks": [
+        {
+          "role": "Engineering Manager",
+          "required": 1,
+          "status": "Approved",
+          "approver": "engineering.manager@netlink.com"
+        }
+      ],
+      "isMine": false,
+      "isApprovedDashboardBefore": true,
+      "isApprovedList": true,
+      "isClosed": false,
+      "isPendingApproval": false,
+      "isSentBack": false
+    },
+    {
+      "id": "ECR-2026-100001",
+      "name": "ECR-2026-100001",
+      "owner": "Administrator",
+      "ecr_owner": "engineer@netlink.com",
+      "created_by": null,
+      "creation_user": null,
+      "amended_from": null,
+      "assigned_to": null,
+      "current_stage": null,
+      "approval_status": null,
+      "workflow_state": null,
+      "workflow_status": "Draft",
+      "normalized_status": "Draft",
+      "approval_tasks": [],
+      "isMine": false,
+      "isApprovedDashboardBefore": false,
+      "isApprovedList": false,
+      "isClosed": false,
+      "isPendingApproval": false,
+      "isSentBack": false
+    },
+    {
+      "id": "ECR-2026-100002",
+      "name": "ECR-2026-100002",
+      "owner": "Administrator",
+      "ecr_owner": "engineer@netlink.com",
+      "created_by": null,
+      "creation_user": null,
+      "amended_from": null,
+      "assigned_to": null,
+      "current_stage": null,
+      "approval_status": null,
+      "workflow_state": null,
+      "workflow_status": "Approved",
+      "normalized_status": "Procurement Review",
+      "approval_tasks": [
+        {
+          "role": "Engineering Manager",
+          "required": 1,
+          "status": "Approved",
+          "approver": "engineering.manager@netlink.com"
+        }
+      ],
+      "isMine": false,
+      "isApprovedDashboardBefore": true,
+      "isApprovedList": true,
+      "isClosed": false,
+      "isPendingApproval": false,
+      "isSentBack": false
+    },
+    {
+      "id": "ECR-2026-100003",
+      "name": "ECR-2026-100003",
+      "owner": "Administrator",
+      "ecr_owner": "engineer@netlink.com",
+      "created_by": null,
+      "creation_user": null,
+      "amended_from": null,
+      "assigned_to": null,
+      "current_stage": null,
+      "approval_status": null,
+      "workflow_state": null,
+      "workflow_status": "Approved",
+      "normalized_status": "Procurement Review",
+      "approval_tasks": [
+        {
+          "role": "Engineering Manager",
+          "required": 1,
+          "status": "Approved",
+          "approver": "engineering.manager@netlink.com"
+        }
+      ],
+      "isMine": false,
+      "isApprovedDashboardBefore": true,
+      "isApprovedList": true,
+      "isClosed": false,
+      "isPendingApproval": false,
+      "isSentBack": false
+    },
+    {
+      "id": "ECR-2026-100004",
+      "name": "ECR-2026-100004",
+      "owner": "Administrator",
+      "ecr_owner": "engineer@netlink.com",
+      "created_by": null,
+      "creation_user": null,
+      "amended_from": null,
+      "assigned_to": null,
+      "current_stage": null,
+      "approval_status": null,
+      "workflow_state": null,
+      "workflow_status": "Implementation",
+      "normalized_status": "Procurement Review",
+      "approval_tasks": [
+        {
+          "role": "Engineering Manager",
+          "required": 1,
+          "status": "Approved",
+          "approver": "engineering.manager@netlink.com"
+        }
+      ],
+      "isMine": false,
+      "isApprovedDashboardBefore": true,
+      "isApprovedList": true,
+      "isClosed": false,
+      "isPendingApproval": false,
+      "isSentBack": false
+    },
+    {
+      "id": "ECR-2026-100005",
+      "name": "ECR-2026-100005",
+      "owner": "Administrator",
+      "ecr_owner": "engineer@netlink.com",
+      "created_by": null,
+      "creation_user": null,
+      "amended_from": null,
+      "assigned_to": null,
+      "current_stage": null,
+      "approval_status": null,
+      "workflow_state": null,
+      "workflow_status": "Approved",
+      "normalized_status": "Procurement Review",
+      "approval_tasks": [
+        {
+          "role": "Engineering Manager",
+          "required": 1,
+          "status": "Approved",
+          "approver": "engineering.manager@netlink.com"
+        }
+      ],
+      "isMine": false,
+      "isApprovedDashboardBefore": true,
+      "isApprovedList": true,
+      "isClosed": false,
+      "isPendingApproval": false,
+      "isSentBack": false
+    },
+    {
+      "id": "ECR-2026-100006",
+      "name": "ECR-2026-100006",
+      "owner": "Administrator",
+      "ecr_owner": "engineer@netlink.com",
+      "created_by": null,
+      "creation_user": null,
+      "amended_from": null,
+      "assigned_to": null,
+      "current_stage": null,
+      "approval_status": null,
+      "workflow_state": null,
+      "workflow_status": "Approved",
+      "normalized_status": "Procurement Review",
+      "approval_tasks": [
+        {
+          "role": "Engineering Manager",
+          "required": 1,
+          "status": "Approved",
+          "approver": "engineering.manager@netlink.com"
+        }
+      ],
+      "isMine": false,
+      "isApprovedDashboardBefore": true,
+      "isApprovedList": true,
+      "isClosed": false,
+      "isPendingApproval": false,
+      "isSentBack": false
+    },
+    {
+      "id": "ECR-2026-100007",
+      "name": "ECR-2026-100007",
+      "owner": "Administrator",
+      "ecr_owner": "engineer@netlink.com",
+      "created_by": null,
+      "creation_user": null,
+      "amended_from": null,
+      "assigned_to": null,
+      "current_stage": null,
+      "approval_status": null,
+      "workflow_state": null,
+      "workflow_status": "Implementation",
+      "normalized_status": "Procurement Review",
+      "approval_tasks": [
+        {
+          "role": "Engineering Manager",
+          "required": 1,
+          "status": "Approved",
+          "approver": "engineering.manager@netlink.com"
+        }
+      ],
+      "isMine": false,
+      "isApprovedDashboardBefore": true,
+      "isApprovedList": true,
+      "isClosed": false,
+      "isPendingApproval": false,
+      "isSentBack": false
+    },
+    {
+      "id": "ECR-2026-100008",
+      "name": "ECR-2026-100008",
+      "owner": "Administrator",
+      "ecr_owner": "engineer@netlink.com",
+      "created_by": null,
+      "creation_user": null,
+      "amended_from": null,
+      "assigned_to": null,
+      "current_stage": null,
+      "approval_status": null,
+      "workflow_state": null,
+      "workflow_status": "Implementation",
+      "normalized_status": "Procurement Review",
+      "approval_tasks": [
+        {
+          "role": "Engineering Manager",
+          "required": 1,
+          "status": "Approved",
+          "approver": "engineering.manager@netlink.com"
+        }
+      ],
+      "isMine": false,
+      "isApprovedDashboardBefore": true,
+      "isApprovedList": true,
+      "isClosed": false,
+      "isPendingApproval": false,
+      "isSentBack": false
+    },
+    {
+      "id": "ECR-2026-100009",
+      "name": "ECR-2026-100009",
+      "owner": "Administrator",
+      "ecr_owner": "engineer@netlink.com",
+      "created_by": null,
+      "creation_user": null,
+      "amended_from": null,
+      "assigned_to": null,
+      "current_stage": null,
+      "approval_status": null,
+      "workflow_state": null,
+      "workflow_status": "Implementation",
+      "normalized_status": "Procurement Review",
+      "approval_tasks": [
+        {
+          "role": "Engineering Manager",
+          "required": 1,
+          "status": "Approved",
+          "approver": "engineering.manager@netlink.com"
+        }
+      ],
+      "isMine": false,
+      "isApprovedDashboardBefore": true,
+      "isApprovedList": true,
+      "isClosed": false,
+      "isPendingApproval": false,
+      "isSentBack": false
+    },
+    {
+      "id": "ECR-2026-100010",
+      "name": "ECR-2026-100010",
+      "ecr_workflow_version": "extended_v1",
+      "owner": "Administrator",
+      "ecr_owner": "engineer@netlink.com",
+      "created_by": null,
+      "creation_user": null,
+      "amended_from": null,
+      "assigned_to": null,
+      "current_stage": null,
+      "approval_status": null,
+      "workflow_state": null,
+      "workflow_status": "Closed",
+      "normalized_status": "Closed",
+      "approval_tasks": [
+        {
+          "role": "Engineering Manager",
+          "required": 1,
+          "status": "Approved",
+          "approver": "engineeringmanager@netlink.com"
+        },
+        {
+          "role": "Finance Manager",
+          "required": 1,
+          "status": "Approved",
+          "approver": "finance@netlink.com"
+        },
+        {
+          "role": "Procurement Manager",
+          "required": 1,
+          "status": "Approved",
+          "approver": "procurement@netlink.com"
+        },
+        {
+          "role": "Quality Manager",
+          "required": 1,
+          "status": "Approved",
+          "approver": "quality.manager@netlink.com"
+        },
+        {
+          "role": "Program Manager",
+          "required": 1,
+          "status": "Approved",
+          "approver": "program.manager@netlink.com"
+        }
+      ],
+      "isMine": false,
+      "isApprovedDashboardBefore": true,
+      "isApprovedList": false,
+      "isClosed": true,
+      "isPendingApproval": false,
+      "isSentBack": false
+    }
+  ]
+}

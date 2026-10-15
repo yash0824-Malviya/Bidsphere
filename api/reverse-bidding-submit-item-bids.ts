@@ -54,8 +54,7 @@ export default async function handler(
           item_code: String(r.item_code ?? "").trim(),
           rate: Number(r.rate),
         };
-      })
-      .filter((i) => i.item_code && Number.isFinite(i.rate));
+      });
 
     const supplier = String(principal.supplier || principal.sub || "").trim();
 

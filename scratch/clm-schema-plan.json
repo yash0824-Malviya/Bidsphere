@@ -1,0 +1,942 @@
+{
+  "mode": "check",
+  "bindings": {
+    "Contract": {
+      "custom_clm_data": "custom_clm_data",
+      "custom_rfp": "custom_rfp",
+      "custom_rfp_response": "custom_rfp_response"
+    },
+    "Contract Request": {
+      "custom_clm_data": "custom_clm_data",
+      "custom_rfq": "custom_rfq",
+      "custom_supplier_quotation": "custom_supplier_quotation",
+      "custom_purchase_order": "custom_purchase_order",
+      "custom_project": "custom_project",
+      "custom_business_unit": "custom_business_unit"
+    },
+    "Contract Amendment": {
+      "custom_clm_data": "custom_clm_data"
+    },
+    "Contract Renewal": {
+      "custom_clm_data": "custom_clm_data"
+    },
+    "Contract Approval Matrix": {
+      "custom_conditions": "custom_conditions",
+      "custom_approval_stages": "custom_approval_stages"
+    },
+    "Contract Obligation": {
+      "custom_quantity": "custom_quantity",
+      "custom_frequency": "custom_frequency",
+      "custom_start_date": "custom_start_date",
+      "custom_end_date": "custom_end_date"
+    }
+  },
+  "contractTypes": [
+    "NDA",
+    "SCA",
+    "LTA",
+    "BAI",
+    "Service Agreement",
+    "Feasibility",
+    "Packaging",
+    "Other",
+    "Supplier Agreement",
+    "Purchase Agreement",
+    "Master Service Agreement",
+    "Tooling Agreement",
+    "Quality Agreement",
+    "Consulting Agreement",
+    "Lease Agreement"
+  ],
+  "operations": [
+    {
+      "kind": "create-custom-field",
+      "doctype": "Contract",
+      "document": {
+        "dt": "Contract",
+        "fieldname": "custom_clm_data",
+        "label": "CLM Runtime Data",
+        "fieldtype": "Long Text",
+        "hidden": 1,
+        "read_only": 1,
+        "no_copy": 1,
+        "reqd": 0,
+        "default": "",
+        "insert_after": "amended_from",
+        "description": "Server-managed CLM route, immutable version references, signature evidence and audit. Empty means an existing record has not entered the managed CLM lifecycle."
+      }
+    },
+    {
+      "kind": "create-custom-field",
+      "doctype": "Contract Request",
+      "document": {
+        "dt": "Contract Request",
+        "fieldname": "custom_clm_data",
+        "label": "CLM Runtime Data",
+        "fieldtype": "Long Text",
+        "hidden": 1,
+        "read_only": 1,
+        "no_copy": 1,
+        "reqd": 0,
+        "default": "",
+        "insert_after": "amended_from",
+        "description": "Server-managed CLM route, immutable version references, signature evidence and audit. Empty means an existing record has not entered the managed CLM lifecycle."
+      }
+    },
+    {
+      "kind": "create-custom-field",
+      "doctype": "Contract Amendment",
+      "document": {
+        "dt": "Contract Amendment",
+        "fieldname": "custom_clm_data",
+        "label": "CLM Runtime Data",
+        "fieldtype": "Long Text",
+        "hidden": 1,
+        "read_only": 1,
+        "no_copy": 1,
+        "reqd": 0,
+        "default": "",
+        "insert_after": "notes",
+        "description": "Server-managed CLM route, immutable version references, signature evidence and audit. Empty means an existing record has not entered the managed CLM lifecycle."
+      }
+    },
+    {
+      "kind": "create-custom-field",
+      "doctype": "Contract Renewal",
+      "document": {
+        "dt": "Contract Renewal",
+        "fieldname": "custom_clm_data",
+        "label": "CLM Runtime Data",
+        "fieldtype": "Long Text",
+        "hidden": 1,
+        "read_only": 1,
+        "no_copy": 1,
+        "reqd": 0,
+        "default": "",
+        "insert_after": "notes",
+        "description": "Server-managed CLM route, immutable version references, signature evidence and audit. Empty means an existing record has not entered the managed CLM lifecycle."
+      }
+    },
+    {
+      "kind": "create-custom-field",
+      "doctype": "Contract Request",
+      "document": {
+        "dt": "Contract Request",
+        "fieldname": "custom_rfq",
+        "label": "RFQ",
+        "fieldtype": "Link",
+        "options": "Request for Quotation",
+        "reqd": 0,
+        "default": "",
+        "insert_after": "amended_from"
+      }
+    },
+    {
+      "kind": "create-custom-field",
+      "doctype": "Contract Request",
+      "document": {
+        "dt": "Contract Request",
+        "fieldname": "custom_supplier_quotation",
+        "label": "Supplier Quotation",
+        "fieldtype": "Link",
+        "options": "Supplier Quotation",
+        "reqd": 0,
+        "default": "",
+        "insert_after": "amended_from"
+      }
+    },
+    {
+      "kind": "create-custom-field",
+      "doctype": "Contract Request",
+      "document": {
+        "dt": "Contract Request",
+        "fieldname": "custom_purchase_order",
+        "label": "Purchase Order",
+        "fieldtype": "Link",
+        "options": "Purchase Order",
+        "reqd": 0,
+        "default": "",
+        "insert_after": "amended_from"
+      }
+    },
+    {
+      "kind": "create-custom-field",
+      "doctype": "Contract Request",
+      "document": {
+        "dt": "Contract Request",
+        "fieldname": "custom_project",
+        "label": "Project",
+        "fieldtype": "Link",
+        "options": "Project",
+        "reqd": 0,
+        "default": "",
+        "insert_after": "amended_from"
+      }
+    },
+    {
+      "kind": "create-custom-field",
+      "doctype": "Contract Request",
+      "document": {
+        "dt": "Contract Request",
+        "fieldname": "custom_business_unit",
+        "label": "Business Unit",
+        "fieldtype": "Data",
+        "reqd": 0,
+        "default": "",
+        "insert_after": "amended_from"
+      }
+    },
+    {
+      "kind": "create-custom-field",
+      "doctype": "Contract",
+      "document": {
+        "dt": "Contract",
+        "fieldname": "custom_rfp",
+        "label": "RFP",
+        "fieldtype": "Link",
+        "options": "RFP",
+        "reqd": 0,
+        "default": "",
+        "insert_after": "amended_from"
+      }
+    },
+    {
+      "kind": "create-custom-field",
+      "doctype": "Contract",
+      "document": {
+        "dt": "Contract",
+        "fieldname": "custom_rfp_response",
+        "label": "RFP Response",
+        "fieldtype": "Link",
+        "options": "RFP Response",
+        "reqd": 0,
+        "default": "",
+        "insert_after": "amended_from"
+      }
+    },
+    {
+      "kind": "create-custom-field",
+      "doctype": "Contract Approval Matrix",
+      "document": {
+        "dt": "Contract Approval Matrix",
+        "fieldname": "custom_conditions",
+        "label": "CLM Rule Conditions",
+        "fieldtype": "Long Text",
+        "reqd": 0,
+        "default": "",
+        "insert_after": "approval_sequence"
+      }
+    },
+    {
+      "kind": "create-custom-field",
+      "doctype": "Contract Approval Matrix",
+      "document": {
+        "dt": "Contract Approval Matrix",
+        "fieldname": "custom_approval_stages",
+        "label": "Approval Stages",
+        "fieldtype": "Long Text",
+        "reqd": 0,
+        "default": "",
+        "insert_after": "approval_sequence"
+      }
+    },
+    {
+      "kind": "create-custom-field",
+      "doctype": "Contract Obligation",
+      "document": {
+        "dt": "Contract Obligation",
+        "fieldname": "custom_quantity",
+        "label": "Quantity",
+        "fieldtype": "Float",
+        "reqd": 0,
+        "default": "",
+        "insert_after": "is_critical"
+      }
+    },
+    {
+      "kind": "create-custom-field",
+      "doctype": "Contract Obligation",
+      "document": {
+        "dt": "Contract Obligation",
+        "fieldname": "custom_frequency",
+        "label": "Frequency",
+        "fieldtype": "Select",
+        "options": "\nOne Time\nDaily\nWeekly\nMonthly\nQuarterly\nAnnually",
+        "reqd": 0,
+        "default": "",
+        "insert_after": "is_critical"
+      }
+    },
+    {
+      "kind": "create-custom-field",
+      "doctype": "Contract Obligation",
+      "document": {
+        "dt": "Contract Obligation",
+        "fieldname": "custom_start_date",
+        "label": "Start Date",
+        "fieldtype": "Date",
+        "reqd": 0,
+        "default": "",
+        "insert_after": "is_critical"
+      }
+    },
+    {
+      "kind": "create-custom-field",
+      "doctype": "Contract Obligation",
+      "document": {
+        "dt": "Contract Obligation",
+        "fieldname": "custom_end_date",
+        "label": "End Date",
+        "fieldtype": "Date",
+        "reqd": 0,
+        "default": "",
+        "insert_after": "is_critical"
+      }
+    },
+    {
+      "kind": "update-custom-field",
+      "doctype": "Contract",
+      "name": "Contract-custom_contract_type",
+      "modified": "2026-09-02 17:38:30.420967",
+      "patch": {
+        "options": "NDA\nSCA\nLTA\nBAI\nService Agreement\nFeasibility\nPackaging\nOther\nSupplier Agreement\nPurchase Agreement\nMaster Service Agreement\nTooling Agreement\nQuality Agreement\nConsulting Agreement\nLease Agreement"
+      }
+    },
+    {
+      "kind": "update-native-field",
+      "doctype": "Contract Request",
+      "fieldname": "contract_type",
+      "patch": {
+        "options": "Supplier Agreement\nPurchase Agreement\nService Agreement\nNDA\nMaster Service Agreement\nTooling Agreement\nQuality Agreement\nConsulting Agreement\nLease Agreement\nOther\nSCA\nLTA\nBAI\nFeasibility\nPackaging"
+      }
+    },
+    {
+      "kind": "update-native-field",
+      "doctype": "Contract Approval Matrix",
+      "fieldname": "contract_type",
+      "patch": {
+        "options": "All\nSupplier Agreement\nPurchase Agreement\nService Agreement\nNDA\nMaster Service Agreement\nTooling Agreement\nQuality Agreement\nConsulting Agreement\nLease Agreement\nOther\nSCA\nLTA\nBAI\nFeasibility\nPackaging"
+      }
+    },
+    {
+      "kind": "update-custom-field",
+      "doctype": "Contract Template",
+      "name": "Contract Template-custom_contract_type",
+      "modified": "2026-09-03 13:02:58.363167",
+      "patch": {
+        "options": "NDA\nSCA\nLTA\nBAI\nService Agreement\nFeasibility\nPackaging\nOther\nSupplier Agreement\nPurchase Agreement\nMaster Service Agreement\nTooling Agreement\nQuality Agreement\nConsulting Agreement\nLease Agreement"
+      }
+    },
+    {
+      "kind": "update-native-field",
+      "doctype": "Contract Approval Matrix",
+      "fieldname": "approval_sequence",
+      "patch": {
+        "options": "Sequential\nParallel\nHybrid"
+      }
+    },
+    {
+      "kind": "create-workflow-state",
+      "document": {
+        "workflow_state_name": "Negotiation",
+        "style": "Primary"
+      }
+    },
+    {
+      "kind": "create-workflow-state",
+      "document": {
+        "workflow_state_name": "Pending Approval",
+        "style": "Primary"
+      }
+    },
+    {
+      "kind": "create-workflow-state",
+      "document": {
+        "workflow_state_name": "Pending Signature",
+        "style": "Primary"
+      }
+    },
+    {
+      "kind": "create-workflow-state",
+      "document": {
+        "workflow_state_name": "Executed",
+        "style": "Primary"
+      }
+    },
+    {
+      "kind": "create-workflow-state",
+      "document": {
+        "workflow_state_name": "Active",
+        "style": "Primary"
+      }
+    },
+    {
+      "kind": "create-workflow-state",
+      "document": {
+        "workflow_state_name": "Expired",
+        "style": "Primary"
+      }
+    },
+    {
+      "kind": "create-workflow-state",
+      "document": {
+        "workflow_state_name": "Terminated",
+        "style": "Primary"
+      }
+    },
+    {
+      "kind": "create-workflow-action",
+      "document": {
+        "workflow_action_name": "Negotiate"
+      }
+    },
+    {
+      "kind": "create-workflow-action",
+      "document": {
+        "workflow_action_name": "Route Approval"
+      }
+    },
+    {
+      "kind": "create-workflow-action",
+      "document": {
+        "workflow_action_name": "Approve Termination"
+      }
+    },
+    {
+      "kind": "create-workflow-action",
+      "document": {
+        "workflow_action_name": "Return Termination"
+      }
+    },
+    {
+      "kind": "create-workflow-action",
+      "document": {
+        "workflow_action_name": "Submit Revision"
+      }
+    },
+    {
+      "kind": "create-workflow-action",
+      "document": {
+        "workflow_action_name": "Revise Draft"
+      }
+    },
+    {
+      "kind": "create-workflow-action",
+      "document": {
+        "workflow_action_name": "Request Signature"
+      }
+    },
+    {
+      "kind": "create-workflow-action",
+      "document": {
+        "workflow_action_name": "Reopen"
+      }
+    },
+    {
+      "kind": "create-workflow-action",
+      "document": {
+        "workflow_action_name": "Redline"
+      }
+    },
+    {
+      "kind": "create-workflow-action",
+      "document": {
+        "workflow_action_name": "Execute"
+      }
+    },
+    {
+      "kind": "create-workflow-action",
+      "document": {
+        "workflow_action_name": "Activate"
+      }
+    },
+    {
+      "kind": "create-workflow-action",
+      "document": {
+        "workflow_action_name": "Expire"
+      }
+    },
+    {
+      "kind": "create-workflow-action",
+      "document": {
+        "workflow_action_name": "Request Termination"
+      }
+    },
+    {
+      "kind": "create-workflow-action",
+      "document": {
+        "workflow_action_name": "Close"
+      }
+    },
+    {
+      "kind": "create-workflow",
+      "doctype": "Contract",
+      "document": {
+        "workflow_name": "BidSphere Contract Lifecycle",
+        "document_type": "Contract",
+        "is_active": 1,
+        "override_status": 0,
+        "send_email_alert": 0,
+        "workflow_state_field": "custom_contract_status",
+        "states": [
+          {
+            "state": "Draft",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Under Review",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Negotiation",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Pending Approval",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Approved",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Pending Signature",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Executed",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Active",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Expired",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Terminated",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Closed",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          }
+        ],
+        "transitions": [
+          {
+            "state": "Draft",
+            "action": "Submit",
+            "next_state": "Under Review",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Draft",
+            "action": "Negotiate",
+            "next_state": "Negotiation",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Review",
+            "action": "Route Approval",
+            "next_state": "Pending Approval",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Review",
+            "action": "Approve",
+            "next_state": "Approved",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Review",
+            "action": "Negotiate",
+            "next_state": "Negotiation",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Review",
+            "action": "Send Back",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Review",
+            "action": "Reject",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Review",
+            "action": "Approve Termination",
+            "next_state": "Terminated",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Review",
+            "action": "Return Termination",
+            "next_state": "Active",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Approve",
+            "next_state": "Approved",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Send Back",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Reject",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Negotiate",
+            "next_state": "Negotiation",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Approve Termination",
+            "next_state": "Terminated",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Return Termination",
+            "next_state": "Active",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Negotiation",
+            "action": "Submit Revision",
+            "next_state": "Under Review",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Negotiation",
+            "action": "Revise Draft",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Approved",
+            "action": "Request Signature",
+            "next_state": "Pending Signature",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Approved",
+            "action": "Revise Draft",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Approved",
+            "action": "Reopen",
+            "next_state": "Negotiation",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Signature",
+            "action": "Redline",
+            "next_state": "Negotiation",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Signature",
+            "action": "Revise Draft",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Signature",
+            "action": "Execute",
+            "next_state": "Executed",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Executed",
+            "action": "Activate",
+            "next_state": "Active",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Active",
+            "action": "Expire",
+            "next_state": "Expired",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Active",
+            "action": "Request Termination",
+            "next_state": "Under Review",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Expired",
+            "action": "Close",
+            "next_state": "Closed",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Terminated",
+            "action": "Close",
+            "next_state": "Closed",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "create-workflow-state",
+      "document": {
+        "workflow_state_name": "Pending Review",
+        "style": "Primary"
+      }
+    },
+    {
+      "kind": "create-workflow-state",
+      "document": {
+        "workflow_state_name": "Under Legal Review",
+        "style": "Primary"
+      }
+    },
+    {
+      "kind": "create-workflow-state",
+      "document": {
+        "workflow_state_name": "Completed",
+        "style": "Primary"
+      }
+    },
+    {
+      "kind": "create-workflow-action",
+      "document": {
+        "workflow_action_name": "Create Contract"
+      }
+    },
+    {
+      "kind": "create-workflow",
+      "doctype": "Contract Request",
+      "document": {
+        "workflow_name": "BidSphere Contract Request",
+        "document_type": "Contract Request",
+        "is_active": 1,
+        "override_status": 0,
+        "send_email_alert": 0,
+        "workflow_state_field": "request_status",
+        "states": [
+          {
+            "state": "Draft",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Pending Review",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Under Legal Review",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Pending Approval",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Approved",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Rejected",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Completed",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Cancelled",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          }
+        ],
+        "transitions": [
+          {
+            "state": "Draft",
+            "action": "Submit",
+            "next_state": "Pending Review",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Review",
+            "action": "Approve",
+            "next_state": "Approved",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Review",
+            "action": "Send Back",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Review",
+            "action": "Reject",
+            "next_state": "Rejected",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Approved",
+            "action": "Create Contract",
+            "next_state": "Completed",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Legal Review",
+            "action": "Send Back",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Legal Review",
+            "action": "Approve",
+            "next_state": "Approved",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Legal Review",
+            "action": "Reject",
+            "next_state": "Rejected",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Send Back",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Approve",
+            "next_state": "Approved",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Reject",
+            "next_state": "Rejected",
+            "allowed": "System Manager",
+            "allow_self_approval": 1,
+            "condition": "doc.custom_clm_data"
+          }
+        ]
+      }
+    }
+  ],
+  "recordMigration": false,
+  "permissionChanges": false,
+  "newDoctypes": [],
+  "newRoles": []
+}

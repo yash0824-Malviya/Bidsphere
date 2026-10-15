@@ -41,6 +41,7 @@ import {
   type WarehouseReviewSummary,
 } from "../utils/warehouseReviewSummary";
 import { resolveStockUomFromItem } from "../utils/itemMasterUom";
+import { contractRequirementForCreate, savedRfqFromClmRoutingError, verifyCreatedRfqContractRequirement, type RfqContractRequiredInput, type RFQCreationResult } from "./rfqContractRequirement";
 
 const RFQ_DOCTYPE = "Request for Quotation";
 const RFQ_ITEM_DOCTYPE = "Request for Quotation Item";
@@ -59,12 +60,22 @@ export class ActiveRfqExistsError extends Error {
 }
 
 export interface CreateRFQFromMaterialRequestInput {
+  /** RFQ metadata only; a Contract Request may be created after the saved supplier award. */
+  contract_required?: RfqContractRequiredInput;
+  /** Used only when the source Material Request does not supply a department. */
+  custom_department?: string;
   material_request: string;
   suppliers: Array<{ supplier: string; supplier_name?: string }>;
   transaction_date?: string;
   message_for_supplier?: string;
   company?: string;
   procurement_remarks?: string;
+  /** Optional wizard prices saved with their RFQ child rows during the initial insert. */
+  item_target_pricing?: Array<{
+    item_code: string;
+    custom_target_price?: number | null;
+    custom_show_target_price_to_supplier?: 0 | 1 | boolean;
+  }>;
   /**
    * Optional per-item Procurement Final Qty overrides from the New RFQ wizard.
    * When set, RFQ Item.qty and custom_procurement_final_qty use these values.
@@ -412,7 +423,8 @@ export async function buildRFQPrefillFromMaterialRequest(
  */
 export async function createRFQFromMaterialRequest(
   input: CreateRFQFromMaterialRequestInput
-): Promise<RequestForQuotation> {
+): Promise<RFQCreationResult> {
+  const contractRequired = contractRequirementForCreate(input.contract_required);
   const mr = await fetchMaterialRequestWorkflow(input.material_request);
   const status = getMaterialRequestWorkflowStatus(mr);
 
@@ -456,6 +468,23 @@ export async function createRFQFromMaterialRequest(
       o,
     ] as const),
   );
+  const pricingByCode = new Map<string, NonNullable<CreateRFQFromMaterialRequestInput["item_target_pricing"]>>();
+  for (const line of input.item_target_pricing ?? []) {
+    const occurrences = pricingByCode.get(line.item_code) ?? [];
+    occurrences.push(line);
+    pricingByCode.set(line.item_code, occurrences);
+  }
+  const pricingFields = (itemCode: string) => {
+    const occurrences = pricingByCode.get(itemCode);
+    if (!occurrences) return {};
+    const line = occurrences.shift();
+    if (!line) throw new Error(`Target Pricing has fewer ${itemCode} rows than the RFQ. Review each line before creating the RFQ.`);
+    const price = line.custom_target_price;
+    return {
+      custom_target_price: price != null && Number.isFinite(Number(price)) && Number(price) > 0 ? Number(price) : null,
+      custom_show_target_price_to_supplier: line.custom_show_target_price_to_supplier === true || line.custom_show_target_price_to_supplier === 1 ? 1 : 0,
+    };
+  };
 
   const inheritedRows = prefill.items.map((item) => {
       const override = overrideByCode.get(item.item_code);
@@ -496,6 +525,7 @@ export async function createRFQFromMaterialRequest(
           ? String(override?.qty_change_reason || "").trim() || null
           : null,
         ...engineeringCustomFieldsForErp(item),
+        ...pricingFields(item.item_code),
       };
     });
 
@@ -539,6 +569,7 @@ export async function createRFQFromMaterialRequest(
       custom_qty_change_reason: changed
         ? String(item.custom_qty_change_reason || "").trim() || null
         : null,
+      ...pricingFields(item.item_code),
     };
     if (item.custom_part_name?.trim()) {
       row.custom_part_name = item.custom_part_name.trim();
@@ -555,6 +586,7 @@ export async function createRFQFromMaterialRequest(
 
   const doc: Record<string, unknown> = {
     doctype: RFQ_DOCTYPE,
+    contract_required: contractRequired,
     transaction_date: transactionDate,
     status: "Draft",
     company,
@@ -567,6 +599,10 @@ export async function createRFQFromMaterialRequest(
       supplier_name: s.supplier_name || s.supplier,
     })),
   };
+  for (const [itemCode, remaining] of pricingByCode) if (remaining.length) throw new Error(`Target Pricing has more ${itemCode} rows than the RFQ. Review each line before creating the RFQ.`);
+  if (input.item_target_pricing) doc.custom_show_target_price_to_supplier = [...inheritedRows, ...additionalRows].some(row => Number((row as Record<string, unknown>).custom_show_target_price_to_supplier) === 1) ? 1 : 0;
+  const requestDepartment = prefill.department?.trim() || input.custom_department?.trim();
+  if (requestDepartment) doc.custom_department = requestDepartment;
   if (prefill.procurement_type) {
     doc.custom_procurement_type = prefill.procurement_type;
   }
@@ -577,7 +613,11 @@ export async function createRFQFromMaterialRequest(
   const created = await apiPost<RequestForQuotation>(
     "/api/method/frappe.client.save",
     { doc }
-  );
+  ).catch(error => {
+    const saved = savedRfqFromClmRoutingError(error);
+    if (!saved) throw error;
+    return saved;
+  });
 
   await markMaterialRequestRfqCreated(
     mr.name,
@@ -585,7 +625,7 @@ export async function createRFQFromMaterialRequest(
     input.procurement_remarks
   );
 
-  return created;
+  return verifyCreatedRfqContractRequirement(created, contractRequired);
 }
 
 /**

@@ -59,7 +59,7 @@ function AttachmentCard({
   erpSupplierId: string;
   onPreview: (doc: SupplierRfqDocument) => void;
 }) {
-  const href = supplierRfqDocumentHref(doc.fileUrl, rfqName, erpSupplierId);
+  const href = supplierRfqDocumentHref(doc.fileUrl, rfqName, erpSupplierId, doc.id);
   const downloadOnly = isSupplierRfqDownloadOnly(doc.fileName, doc.fileType);
   const canPreview =
     !downloadOnly &&

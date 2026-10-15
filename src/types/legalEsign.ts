@@ -18,6 +18,123 @@ export type LegalEsignRole =
 
 export type LegalDocKey = "terms" | "warranty" | "insurance";
 
+export const LEGAL_DOC_KEYS: LegalDocKey[] = ["terms", "warranty", "insurance"];
+export const LEGAL_CHECKPOINT_IDS = ["rfq_terms", "sq_terms", "supplier_docs", "nda_confidentiality", "compliance_declarations", "regulatory_requirements", "commercial_exceptions", "contractual_requirements"];
+
+export function isFinanceApproved(review: {
+  finance_status?: string; custom_finance_status?: string;
+} | null | undefined): boolean {
+  const fs = String(review?.finance_status || "").trim();
+  if (fs === "Approved" || fs === "Budget Approved") return true;
+  const cfs = String(review?.custom_finance_status || "").trim();
+  return cfs === "Approved" || cfs === "Budget Approved";
+}
+
+export function isLegalApproved(review: {
+  review_status?: string; custom_legal_status?: string;
+} | null | undefined): boolean {
+  const rs = String(review?.review_status || "").trim();
+  if (rs === "Approved") return true;
+  const cls = String(review?.custom_legal_status || "").trim();
+  return cls === "Approved";
+}
+
+/** Server-enriched RFQ review; supports existing ERP rows without a requirement field. */
+export interface RfqLegalSignatureReview {
+  required_document_keys?: LegalDocKey[];
+  review_status?: string;
+  finance_status?: string;
+  custom_finance_status?: string;
+  custom_legal_status?: string;
+  workflow_state?: string;
+  current_owner?: string;
+  status?: string;
+  docstatus?: number;
+  terms_file_url?: string;
+  warranty_file_url?: string;
+  insurance_file_url?: string;
+  terms_approved?: number | boolean;
+  warranty_approved?: number | boolean;
+  insurance_approved?: number | boolean;
+  esign_envelope?: string;
+}
+
+export type LegalDocumentIntegrityStatus = "Verified" | "Failed" | "Unavailable";
+export interface LegalDocumentIntegrityResult {
+  documentKey: LegalDocKey;
+  status: LegalDocumentIntegrityStatus;
+  documentHash?: string;
+  signedFileHash?: string;
+  message?: string;
+}
+
+export function getRequiredLegalDocumentKeys(review: RfqLegalSignatureReview | null | undefined): LegalDocKey[] {
+  const keys = review?.required_document_keys;
+  // The deployed ERP schema has no separate mandatory-document configuration.
+  // Its existing policy is the review's populated legal attachment slots. An
+  // explicit server list, including an empty list, always overrides this legacy policy.
+  if (keys === undefined) return LEGAL_DOC_KEYS.filter(key => {
+    const fileUrl = review?.[`${key}_file_url`];
+    return typeof fileUrl === "string" && fileUrl.trim().length > 0;
+  });
+  if (!Array.isArray(keys) || keys.some(key => !LEGAL_DOC_KEYS.includes(key))) return [];
+  return [...new Set(keys)];
+}
+
+export function isSha256Hex(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+/** A checkbox alone is not a verified current PDF. The receipt comes from ERP. */
+export function isLegalDocumentVerified(review: RfqLegalSignatureReview | null | undefined, key: LegalDocKey): boolean {
+  if (!review || !(review[`${key}_approved`] === 1 || review[`${key}_approved`] === true)) return false;
+  const bundle = parseEsignBundle(review.esign_envelope);
+  const env = bundle.documents[key];
+  return Boolean(review[`${key}_file_url`] && env?.viewedAt && env.viewedBy && env.sourceFileId &&
+    env.sourceFileUrl === review[`${key}_file_url`] && isSha256Hex(env.documentHash) &&
+    (!env.approvedHash || env.approvedHash === env.documentHash));
+}
+
+export function areRequiredDocumentsVerified(review: RfqLegalSignatureReview | null | undefined): boolean {
+  const keys = getRequiredLegalDocumentKeys(review);
+  return keys.length > 0 && keys.every(key => isLegalDocumentVerified(review, key));
+}
+
+/** RFQ signing precedes both Finance approval and completion of the Legal stage. */
+export function canStartLegalSignature(review: RfqLegalSignatureReview | null | undefined, key?: LegalDocKey): boolean {
+  if (!review) return false;
+  const terminal = /^(rejected|cancelled|canceled|closed|completed|po created)$/i;
+  if ([review.review_status, review.workflow_state, review.status].some(value => terminal.test(String(value || "").trim())) || review.docstatus === 2) return false;
+  if (review.review_status !== "Pending" || review.current_owner === "Procurement") return false;
+  if (!["Pending Review", "Legal Review", "Pending Signature", "Ready for Signature"].includes(String(review.workflow_state || "").trim())) return false;
+  if (!areRequiredDocumentsVerified(review)) return false;
+  const bundle = parseEsignBundle(review.esign_envelope);
+  const keys = getRequiredLegalDocumentKeys(review);
+  const unsigned = (documentKey: LegalDocKey) => {
+    const env = bundle.documents[documentKey];
+    return !hasLegalSignature(env) && !env?.locked && !env?.signatureRequest?.completedAt;
+  };
+  return key ? keys.includes(key) && unsigned(key) : keys.some(unsigned);
+}
+
+/** Every required PDF needs persisted source-bound execution, independently of Finance. */
+export function isLegalReviewExecuted(review: RfqLegalSignatureReview | null | undefined): boolean {
+  if (!review || !areRequiredDocumentsVerified(review)) return false;
+  const bundle = parseEsignBundle(review.esign_envelope);
+  const keys = getRequiredLegalDocumentKeys(review);
+  return keys.length > 0 && keys.every(key => {
+    const env = bundle.documents[key];
+    return !!env?.signatureRequest?.completedAt && !!env.signedFileUrl && isSha256Hex(env.signedFileHash) &&
+      env.signatureRequest.sourceHash === env.documentHash && env.signatureRequest.sourceFileId === env.sourceFileId &&
+      hasLegalSignature(env);
+  });
+}
+
+/** Compatibility action only; successful final signature normally sends RFQ to Finance. */
+export function canFinalLegalApprove(review: RfqLegalSignatureReview | null | undefined): boolean {
+  return Boolean(review && review.review_status === "Pending" && isLegalReviewExecuted(review));
+}
+
 export type LegalEsignSignatureStatus = "pending" | "signed" | "locked";
 
 export type LegalEsignEnvelopeStatus =
@@ -61,6 +178,10 @@ export type LegalEsignAuditAction =
   | "signature_replaced"
   | "approval_completed"
   | "document_rejected"
+  | "changes_requested"
+  | "version_changed"
+  | "signature_initiated"
+  | "finance_decision"
   | "integrity_failed";
 
 export interface LegalEsignAuditEntry {
@@ -82,6 +203,9 @@ export interface LegalEsignEnvelope {
   documentHash: string;
   signedFileHash?: string;
   signedFileUrl?: string;
+  signedFileId?: string;
+  /** Typed PDF electronic signature, not a certificate/private-key digital signature. */
+  signatureMethod?: "typed_pdf";
   signatures: LegalEsignSignature[];
   auditTrail: LegalEsignAuditEntry[];
   status: LegalEsignEnvelopeStatus;
@@ -89,12 +213,32 @@ export interface LegalEsignEnvelope {
   approvalStatus?: "Pending" | "Approved" | "Rejected";
   approvalTimestamp?: string;
   reviewStartedAt?: string;
+  /** Server-verified source and review receipt; legacy flags are not evidence. */
+  sourceFileId?: string;
+  sourceFileUrl?: string;
+  viewedBy?: string;
+  viewedAt?: string;
+  approvedHash?: string;
+  approvedFileId?: string;
+  approvedBy?: string;
+  signatureRequest?: {
+    id: string;
+    sourceHash: string;
+    sourceFileId: string;
+    signerId: string;
+    startedAt: string;
+    completedAt?: string;
+    /** Persisted reservation prevents concurrent workers creating duplicate artifacts. */
+    saveAttempt?: { id: string; startedAt: string; failedAt?: string };
+  };
 }
 
 /** Multi-document store persisted on Legal Document Review.esign_envelope */
 export interface LegalEsignBundle {
   schemaVersion: 2;
   documents: Partial<Record<LegalDocKey, LegalEsignEnvelope>>;
+  reviewChecklist?: Array<{ id: string; status: string; remarks?: string; reviewedBy?: string; reviewedAt?: string }>;
+  auditTrail?: LegalEsignAuditEntry[];
 }
 
 export const DEFAULT_SIGNATURE_BOX: Pick<
@@ -181,6 +325,8 @@ function normalizeEnvelope(raw: unknown): LegalEsignEnvelope | null {
     documentHash: String(e.documentHash ?? ""),
     signedFileHash: e.signedFileHash,
     signedFileUrl: e.signedFileUrl,
+    signedFileId: e.signedFileId,
+    signatureMethod: e.signatureMethod,
     signatures,
     auditTrail: Array.isArray(e.auditTrail) ? e.auditTrail : [],
     status: (e.status as LegalEsignEnvelopeStatus) || "unsigned",
@@ -188,6 +334,14 @@ function normalizeEnvelope(raw: unknown): LegalEsignEnvelope | null {
     approvalStatus: e.approvalStatus,
     approvalTimestamp: e.approvalTimestamp,
     reviewStartedAt: e.reviewStartedAt,
+    sourceFileId: e.sourceFileId,
+    sourceFileUrl: e.sourceFileUrl,
+    viewedBy: e.viewedBy,
+    viewedAt: e.viewedAt,
+    approvedHash: e.approvedHash,
+    approvedFileId: e.approvedFileId,
+    approvedBy: e.approvedBy,
+    signatureRequest: e.signatureRequest,
   };
 }
 
@@ -207,7 +361,7 @@ export function parseEsignBundle(raw: unknown): LegalEsignBundle {
         const env = normalizeEnvelope(docs[key]);
         if (env) documents[key] = env;
       }
-      return { schemaVersion: 2, documents };
+      return { schemaVersion: 2, documents, reviewChecklist: Array.isArray(rec.reviewChecklist) ? rec.reviewChecklist : undefined, auditTrail: Array.isArray(rec.auditTrail) ? rec.auditTrail : undefined };
     }
     // Legacy single-document envelope
     const legacy = normalizeEnvelope(obj);
@@ -246,6 +400,7 @@ export function upsertDocEnvelope(
 ): LegalEsignBundle {
   const base = bundle ?? { schemaVersion: 2 as const, documents: {} };
   return {
+    ...base,
     schemaVersion: 2,
     documents: {
       ...base.documents,

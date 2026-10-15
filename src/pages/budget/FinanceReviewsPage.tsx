@@ -418,7 +418,7 @@ export default function FinanceReviewsPage() {
 
                 : diagnostics?.emptyReason ??
 
-                  "RFQs appear here after legal approval. Data is loaded from procurement workflow fields."
+                  "No RFQs are currently ready for Finance Review. RFQs appear here once the Legal Manager completes e-signature on all required supplier documents."
 
             }
 

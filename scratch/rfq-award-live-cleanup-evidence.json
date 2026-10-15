@@ -1,0 +1,59 @@
+{
+  "checked_at": "2026-09-25T06:31:41.303Z",
+  "evidence": [
+    {
+      "rfq": "PUR-RFQ-2026-00098",
+      "rfq_docstatus": 0,
+      "rfq_status": "Draft",
+      "request": "CTRQ-2026-0001",
+      "native_status": "Draft",
+      "workflow": {
+        "version": 1,
+        "phase": "awaiting_supplier_award",
+        "assigned_role": "procurement_team",
+        "status": "Invalidated",
+        "current_stage": "Awaiting Supplier Award"
+      },
+      "audit_preserved": true,
+      "terms_preserved": true,
+      "active_request": false,
+      "contract_count": 0
+    },
+    {
+      "rfq": "PUR-RFQ-2026-00099",
+      "rfq_docstatus": 0,
+      "rfq_status": "Draft",
+      "request": "CTRQ-2026-0002",
+      "native_status": "Draft",
+      "workflow": {
+        "version": 1,
+        "phase": "awaiting_supplier_award",
+        "assigned_role": "procurement_team",
+        "status": "Invalidated",
+        "current_stage": "Awaiting Supplier Award"
+      },
+      "audit_preserved": true,
+      "terms_preserved": true,
+      "active_request": false,
+      "contract_count": 0
+    },
+    {
+      "rfq": "PUR-RFQ-2026-00101",
+      "rfq_docstatus": 1,
+      "rfq_status": "Submitted",
+      "request": "CTRQ-2026-0003",
+      "native_status": "Draft",
+      "workflow": {
+        "version": 1,
+        "phase": "awaiting_supplier_award",
+        "assigned_role": "procurement_team",
+        "status": "Invalidated",
+        "current_stage": "Awaiting Supplier Award"
+      },
+      "audit_preserved": true,
+      "terms_preserved": true,
+      "active_request": false,
+      "contract_count": 0
+    }
+  ]
+}

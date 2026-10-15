@@ -45,7 +45,7 @@ export default function EngineeringAttachmentsView({
   attachments,
   compact = false,
   className = "",
-  emptyLabel = "No attachments available",
+  emptyLabel = "No attachments",
 }: EngineeringAttachmentsViewProps) {
   const list = attachments ?? [];
   const [preview, setPreview] = useState<EngineeringAttachment | null>(null);

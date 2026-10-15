@@ -9,11 +9,18 @@ import dayjs from "dayjs";
 
 export type RfqStatusFilter =
   | ""
-  | "Draft"
-  | "Submitted"
+  | "Supplier Invitation"
+  | "Supplier Response"
+  | "AI Analysis"
+  | "Supplier Selection"
+  | "Legal Review"
+  | "Finance Review"
+  | "Purchase Order"
   | "Completed"
+  | "Draft"
   | "Cancelled"
-  | "Closed";
+  | "Closed"
+  | "Submitted";
 
 export type RfqDatePreset =
   | ""
@@ -42,9 +49,15 @@ export const EMPTY_RFQ_FILTERS: RfqListFilterState = {
 
 export const RFQ_STATUS_OPTIONS: RfqStatusFilter[] = [
   "",
-  "Draft",
-  "Submitted",
+  "Supplier Invitation",
+  "Supplier Response",
+  "AI Analysis",
+  "Supplier Selection",
+  "Legal Review",
+  "Finance Review",
+  "Purchase Order",
   "Completed",
+  "Draft",
   "Cancelled",
   "Closed",
 ];
@@ -98,14 +111,23 @@ function statusFilters(status: RfqStatusFilter): Filter[] {
   switch (status) {
     case "Draft":
       return [["status", "=", "Draft"]];
-    case "Submitted":
-      return [["status", "in", ["Submitted", "Open", "Replied"]]];
-    case "Completed":
-      return [["status", "in", ["Ordered", "Closed", "Partially Ordered"]]];
     case "Cancelled":
       return [["status", "=", "Cancelled"]];
     case "Closed":
       return [["status", "=", "Closed"]];
+    case "Completed":
+      return [["status", "in", ["Ordered", "Closed", "Partially Ordered", "Completed"]]];
+    case "Purchase Order":
+      return [["status", "in", ["Ordered", "Closed", "Partially Ordered", "Awarded", "Submitted", "Open", "Replied"]]];
+    case "Supplier Invitation":
+    case "Supplier Response":
+    case "AI Analysis":
+    case "Supplier Selection":
+    case "Legal Review":
+    case "Finance Review":
+      return [["status", "in", ["Submitted", "Open", "Replied", "Draft"]]];
+    case "Submitted":
+      return [["status", "in", ["Submitted", "Open", "Replied"]]];
     default:
       return [];
   }

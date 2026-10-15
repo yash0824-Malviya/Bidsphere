@@ -3,13 +3,16 @@ import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
+  Ban,
   CheckCircle2,
   Copy,
+  Eye,
   LayoutTemplate,
   MoreHorizontal,
   Pencil,
   Play,
   Plus,
+  Power,
   RefreshCw,
 } from "lucide-react";
 import toast from "react-hot-toast";
@@ -19,11 +22,15 @@ import {
   createRFQTemplate,
   updateRFQTemplate,
   archiveRFQTemplate,
+  activateRFQTemplate,
+  deactivateRFQTemplate,
   cloneRFQTemplate,
   RFQ_TEMPLATE_CATEGORIES,
   type RFQTemplateInput,
 } from "../../api/rfqTemplates";
 import RFQTemplateFormDialog from "../../components/sourcing/RFQTemplateFormDialog";
+import RFQTemplatePreviewDialog from "../../components/sourcing/RFQTemplatePreviewDialog";
+import { getCategoryAvailability } from "../../api/rfqTemplatePopulation";
 import type {
   RFQTemplate,
   RFQTemplateCategory,
@@ -71,6 +78,7 @@ export default function RFQTemplatesPage() {
   const [categoryFilter, setCategoryFilter] = useState<
     "" | RFQTemplateCategory
   >("");
+  const [previewTemplate, setPreviewTemplate] = useState<RFQTemplate | null>(null);
   const debouncedSearch = useDebounce(search, 300);
 
   const {
@@ -178,6 +186,22 @@ export default function RFQTemplatesPage() {
     },
     onError: (err: Error) => {
       toast.error(err.message || "Failed to clone template");
+    },
+  });
+
+  const toggleStatusMutation = useMutation({
+    mutationFn: (template: RFQTemplate) =>
+      template.status === "Active"
+        ? deactivateRFQTemplate(template.name)
+        : activateRFQTemplate(template.name),
+    onSuccess: (updated) => {
+      toast.success(
+        `Template "${updated.template_name}" is now ${updated.status}`
+      );
+      queryClient.invalidateQueries({ queryKey: ["rfq-templates"] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to update template status");
     },
   });
 
@@ -329,18 +353,22 @@ export default function RFQTemplatesPage() {
                 <div
                   key={tpl.name}
                   className="data-card-row cursor-pointer"
-                  onClick={() => tpl.status === "Active" && useTemplate(tpl)}
+                  onClick={() => setPreviewTemplate(tpl)}
                 >
                   <div className="data-card-field">
                     <span className="data-card-label">Template Name</span>
-                    <span className="data-card-value font-medium">
+                    <span className="data-card-value font-medium text-neutral-900">
                       {tpl.template_name}
                     </span>
                   </div>
                   <div className="data-card-field">
                     <span className="data-card-label">Category</span>
                     <span className="data-card-value">
-                      <CategoryBadge category={tpl.category} />
+                      <CategoryBadge
+                        category={tpl.category}
+                        procurementType={tpl.procurement_type}
+                        itemCount={tpl.items?.length}
+                      />
                     </span>
                   </div>
                   <div className="data-card-field">
@@ -374,6 +402,13 @@ export default function RFQTemplatesPage() {
                     </span>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewTemplate(tpl)}
+                      className="btn-touch inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+                    >
+                      <Eye className="h-3 w-3" /> Preview
+                    </button>
                     {tpl.status === "Active" && (
                       <button
                         type="button"
@@ -383,6 +418,14 @@ export default function RFQTemplatesPage() {
                         <Play className="h-3 w-3" /> Create RFQ
                       </button>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => toggleStatusMutation.mutate(tpl)}
+                      disabled={toggleStatusMutation.isPending}
+                      className="btn-touch inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-2.5 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+                    >
+                      <Power className="h-3 w-3" /> {tpl.status === "Active" ? "Deactivate" : "Activate"}
+                    </button>
                     <button
                       type="button"
                       onClick={() => openEdit(tpl)}
@@ -462,16 +505,18 @@ export default function RFQTemplatesPage() {
                   {sortedRows.map((tpl) => (
                     <tr
                       key={tpl.name}
-                      className={tpl.status === "Active" ? "cursor-pointer" : ""}
-                      onClick={() =>
-                        tpl.status === "Active" && useTemplate(tpl)
-                      }
+                      className="cursor-pointer hover:bg-neutral-50/80"
+                      onClick={() => setPreviewTemplate(tpl)}
                     >
                       <td className="font-medium text-neutral-900">
                         {tpl.template_name}
                       </td>
                       <td>
-                        <CategoryBadge category={tpl.category} />
+                        <CategoryBadge
+                          category={tpl.category}
+                          procurementType={tpl.procurement_type}
+                          itemCount={tpl.items?.length}
+                        />
                       </td>
                       <td className="text-right tabular-nums">
                         {formatCurrency(tpl.estimated_value)}
@@ -488,7 +533,9 @@ export default function RFQTemplatesPage() {
                       <td onClick={(e) => e.stopPropagation()}>
                         <RowActions
                           template={tpl}
+                          onPreview={() => setPreviewTemplate(tpl)}
                           onCreateRFQ={() => useTemplate(tpl)}
+                          onToggleStatus={() => toggleStatusMutation.mutate(tpl)}
                           onEdit={() => openEdit(tpl)}
                           onClone={() => cloneMutation.mutate(tpl)}
                           onArchive={() => openArchiveConfirm(tpl)}
@@ -503,6 +550,16 @@ export default function RFQTemplatesPage() {
           </>
         )}
       </div>
+
+      {/* Preview Dialog */}
+      {previewTemplate && (
+        <RFQTemplatePreviewDialog
+          template={previewTemplate}
+          onClose={() => setPreviewTemplate(null)}
+          onCreateRFQ={(tpl) => useTemplate(tpl)}
+          onEdit={(tpl) => openEdit(tpl)}
+        />
+      )}
 
       {/* Create / Edit / Duplicate dialog */}
       {dialogOpen && (
@@ -535,25 +592,45 @@ export default function RFQTemplatesPage() {
 /* -------------------------------------------------------------------------- */
 
 const CATEGORY_COLORS: Record<string, string> = {
-  "Raw Materials": "bg-blue-100 text-blue-700",
-  "Manufacturing Components": "bg-violet-100 text-violet-700",
-  "Electrical Components": "bg-amber-100 text-amber-700",
-  "Packaging Materials": "bg-emerald-100 text-emerald-700",
-  "MRO Supplies": "bg-cyan-100 text-cyan-700",
-  "Warehouse Consumables": "bg-orange-100 text-orange-700",
-  "IT Equipment": "bg-indigo-100 text-indigo-700",
-  "Logistics & Transportation": "bg-rose-100 text-rose-700",
+  "Raw Materials Procurement": "bg-blue-100 text-blue-800 border-blue-200",
+  "Spare Parts & Maintenance": "bg-amber-100 text-amber-800 border-amber-200",
+  "Office Supplies": "bg-emerald-100 text-emerald-800 border-emerald-200",
+  "Electrical & Industrial Components": "bg-purple-100 text-purple-800 border-purple-200",
+  "General Procurement": "bg-cyan-100 text-cyan-800 border-cyan-200",
+  "Raw Materials": "bg-blue-100 text-blue-700 border-blue-200",
+  "Manufacturing Components": "bg-violet-100 text-violet-700 border-violet-200",
+  "Electrical Components": "bg-amber-100 text-amber-700 border-amber-200",
+  "Packaging Materials": "bg-emerald-100 text-emerald-700 border-emerald-200",
+  "MRO Supplies": "bg-cyan-100 text-cyan-700 border-cyan-200",
+  "Warehouse Consumables": "bg-orange-100 text-orange-700 border-orange-200",
+  "IT Equipment": "bg-indigo-100 text-indigo-700 border-indigo-200",
+  "Logistics & Transportation": "bg-rose-100 text-rose-700 border-rose-200",
 };
 
-function CategoryBadge({ category }: { category?: string }) {
+function CategoryBadge({
+  category,
+  procurementType,
+  itemCount,
+}: {
+  category?: string;
+  procurementType?: string;
+  itemCount?: number;
+}) {
   const label = category || "—";
-  const classes = CATEGORY_COLORS[label] ?? "bg-neutral-100 text-neutral-600";
+  const classes = CATEGORY_COLORS[label] ?? "bg-neutral-100 text-neutral-600 border-neutral-200";
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${classes}`}
-    >
-      {label}
-    </span>
+    <div className="flex flex-col gap-0.5">
+      <span
+        className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium w-fit ${classes}`}
+      >
+        {label}
+      </span>
+      {procurementType && (
+        <span className="text-[11px] text-neutral-500 font-normal">
+          {procurementType} • {itemCount === 0 ? "Manual config" : `${itemCount ?? 0} items`}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -563,14 +640,18 @@ function CategoryBadge({ category }: { category?: string }) {
 
 function RowActions({
   template,
+  onPreview,
   onCreateRFQ,
+  onToggleStatus,
   onEdit,
   onClone,
   onArchive,
   isCloning,
 }: {
   template: RFQTemplate;
+  onPreview: () => void;
   onCreateRFQ: () => void;
+  onToggleStatus: () => void;
   onEdit: () => void;
   onClone: () => void;
   onArchive: () => void;
@@ -599,6 +680,14 @@ function RowActions({
             aria-hidden
           />
           <div className="absolute right-0 z-40 mt-1 w-48 rounded-lg border border-neutral-200 bg-white py-1 shadow-lg">
+            <DropdownItem
+              icon={Eye}
+              label="Preview"
+              onClick={() => {
+                setOpen(false);
+                onPreview();
+              }}
+            />
             {template.status === "Active" && (
               <DropdownItem
                 icon={Play}
@@ -610,6 +699,15 @@ function RowActions({
                 className="font-semibold text-primary-700"
               />
             )}
+            <DropdownItem
+              icon={template.status === "Active" ? Ban : Power}
+              label={template.status === "Active" ? "Deactivate" : "Activate"}
+              onClick={() => {
+                setOpen(false);
+                onToggleStatus();
+              }}
+              className={template.status === "Active" ? "text-amber-600" : "text-emerald-600"}
+            />
             <DropdownItem
               icon={Pencil}
               label="Edit"

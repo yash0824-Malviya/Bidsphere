@@ -85,6 +85,7 @@ export function resolveStatusTone(status?: string | null): StatusTone {
     s === "ordered" ||
     s === "partially ordered" ||
     s === "purchase order created" ||
+    s === "purchase order" ||
     s === "po created"
   ) {
     return "awarded";
@@ -117,7 +118,9 @@ export function resolveStatusTone(status?: string | null): StatusTone {
     s === "to receive" ||
     s === "to receive and bill" ||
     s === "unpaid" ||
-    s.includes("awaiting rfq")
+    s.includes("awaiting rfq") ||
+    s === "supplier invitation" ||
+    s === "supplier response"
   ) {
     return "pending";
   }
@@ -135,7 +138,10 @@ export function resolveStatusTone(status?: string | null): StatusTone {
     s.includes("ai analysis") ||
     s.includes("forwarded") ||
     s.includes("procurement required") ||
-    s.includes("rfq")
+    s.includes("rfq") ||
+    s === "supplier selection" ||
+    s === "rfq created" ||
+    s === "material request"
   ) {
     return "review";
   }

@@ -28,6 +28,8 @@ export interface RFQCreationMeta {
   created_by?: string;
   /** Internal procurement notes — never shown to suppliers. */
   internal_notes?: string;
+  /** Optional ECR reference. */
+  ecr_reference?: string;
 }
 
 const META_PREFIX = "rfq_creation_meta_";
@@ -71,6 +73,7 @@ export function buildManualCreationMeta(input: {
   workflow_rules: RFQTemplateWorkflowRules;
   created_by: string;
   internal_notes?: string;
+  ecr_reference?: string;
 }): RFQCreationMeta {
   return {
     creation_source: "manual",
@@ -78,6 +81,7 @@ export function buildManualCreationMeta(input: {
     workflow_rules: input.workflow_rules,
     created_by: input.created_by,
     internal_notes: input.internal_notes?.trim() || undefined,
+    ecr_reference: input.ecr_reference?.trim() || undefined,
   };
 }
 

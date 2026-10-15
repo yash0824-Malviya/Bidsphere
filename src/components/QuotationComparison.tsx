@@ -3,6 +3,7 @@ import { Trophy } from "lucide-react";
 
 import type { RFQItem } from "../types/erpnext";
 import { formatCurrency } from "../utils/format";
+import { isSubmittedQuoteAmount } from "../utils/quotePrice";
 
 /** A single quotation cell — one row × one column in the comparison table. */
 export interface QuotationCell {
@@ -154,7 +155,13 @@ export default function QuotationComparison({
 
                   {safeQuotes.map((q, idx) => {
                     const cell = cells[idx];
-                    if (!cell || cell.unit_price <= 0) {
+                    if (
+                      !cell ||
+                      cell.unit_price === null ||
+                      cell.unit_price === undefined ||
+                      cell.unit_price < 0 ||
+                      isNaN(cell.unit_price)
+                    ) {
                       return (
                         <td
                           key={q.supplier_name}
@@ -226,7 +233,9 @@ export default function QuotationComparison({
                         : "font-semibold text-neutral-900"
                     }`}
                   >
-                    {formatCurrency(q.total)}
+                    {isSubmittedQuoteAmount(q.total)
+                      ? formatCurrency(q.total)
+                      : "Price Not Provided"}
                     {isWinner && (
                       <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide text-accent-700">
                         <Trophy className="h-3 w-3" />

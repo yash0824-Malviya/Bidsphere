@@ -2,8 +2,7 @@
  * Multi-provider AI integration for the Smart RFQ recommendation panel.
  * Fallback chain: Claude (retries) → OpenAI (retries) → Local scoring engine.
  *
- * SECURITY NOTE: browser-direct API calls expose keys in DevTools.
- * Acceptable for internal staging; use a server proxy in production.
+ * Claude credentials remain on the server-side gateway.
  */
 
 import type {
@@ -12,20 +11,24 @@ import type {
   AIPerItemAnalysis,
   SupplierAnalysisRow,
   SupplierVerdict,
+  QuotePriceStatus,
 } from "../types/erpnext";
 import { formatCurrency } from "../utils/format";
+import { isSubmittedQuoteAmount, priceFromLines } from "../utils/quotePrice";
 import type { ScoringEngineResult } from "./supplierScoringEngine";
+import type { SupplierPerformanceData } from "./supplierPerformance";
+import { applyEvaluationDecisionProjection } from "../utils/aiEvaluationDecision";
+import {
+  validateAndScoreEvaluation,
+  type EvaluationContext,
+} from "../utils/aiEvaluationScore";
+import { evaluateQuotationCompleteness } from "../utils/quotationCompleteness";
 
-const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
+import { ANTHROPIC_MODEL } from "../config/aiConfig";
+
 const OPENAI_ENDPOINT = "https://api.openai.com/v1/chat/completions";
-const ANTHROPIC_VERSION = "2023-06-01";
 
-const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
-
-const ANTHROPIC_MODEL =
-  (import.meta.env.VITE_ANTHROPIC_MODEL as string | undefined)?.trim() ||
-  DEFAULT_ANTHROPIC_MODEL;
 
 const OPENAI_MODEL =
   (import.meta.env.VITE_OPENAI_MODEL as string | undefined)?.trim() ||
@@ -55,21 +58,33 @@ export const AI_FALLBACK_NOTICE =
 export interface AIQuotationLine {
   item: string;
   requested_qty?: number;
-  unit_price: number;
-  total: number;
+  unit_price: number | null;
+  total: number | null;
   delivery_days?: number;
   notes?: string;
 }
 
+export interface AIQuotationDocuments {
+  warranty_certificate?: boolean;
+  terms_conditions?: boolean;
+  insurance_certificate?: boolean;
+}
+
 export interface AIQuotation {
+  quotation_id?: string;
+  supplier_id?: string;
   supplier_name: string;
   items: AIQuotationLine[];
-  total_value: number;
+  total_value: number | null;
+  price_status?: QuotePriceStatus;
   payment_terms?: string;
   notes?: string;
+  documents?: AIQuotationDocuments;
+  historical_data?: SupplierPerformanceData;
 }
 
 export interface AIRequest {
+  evaluation_run_id?: string;
   rfq_name: string;
   rfq_title: string;
   items_requested: Array<{
@@ -83,13 +98,6 @@ export interface AIRequest {
 export interface AIAnalysisResponse {
   recommendation: AIRecommendation;
   tokensUsed: number;
-}
-
-interface AnthropicMessageResponse {
-  content: Array<{ type: string; text?: string }>;
-  usage?: { input_tokens: number; output_tokens: number };
-  type?: string;
-  error?: { type: string; message: string };
 }
 
 export class AIRecommendationError extends Error {
@@ -119,29 +127,17 @@ function isRetryableHttpStatus(status: number): boolean {
 
 export function getAIProviderAvailability(): AIProviderAvailability {
   return {
-    claude: !!readAnthropicKeyOptional(),
+    claude: true, // BidSphere backend proxy /api/ai/claude is available server-side
     openai: !!readOpenAIKeyOptional(),
     local: true,
   };
-}
-
-function readAnthropicKeyOptional(): string {
-  return (import.meta.env.VITE_ANTHROPIC_API_KEY as string | undefined)?.trim() ?? "";
 }
 
 function readOpenAIKeyOptional(): string {
   return (import.meta.env.VITE_OPENAI_API_KEY as string | undefined)?.trim() ?? "";
 }
 
-function readApiKey(): string {
-  const key = readAnthropicKeyOptional();
-  if (!key) {
-    throw new AIRecommendationError("Anthropic API key not configured", {
-      retryable: false,
-    });
-  }
-  return key;
-}
+
 
 function readOpenAIKey(): string {
   const key = readOpenAIKeyOptional();
@@ -201,20 +197,20 @@ function isolateJson(raw: string): string {
 
 function parseAiJson(rawText: string): unknown {
   // eslint-disable-next-line no-console
-  console.log("[AI RAW RESPONSE]", rawText);
+  if (import.meta.env.DEV) console.log("[AI RAW RESPONSE]", rawText);
   let cleaned = "";
   try {
     // Strip markdown fences and extract the first { … last } JSON object.
     cleaned = isolateJson(rawText);
     // eslint-disable-next-line no-console
-    console.log("[AI CLEANED RESPONSE]", cleaned);
+    if (import.meta.env.DEV) console.log("[AI CLEANED RESPONSE]", cleaned);
     const parsed = JSON.parse(cleaned);
     // eslint-disable-next-line no-console
-    console.log("[AI JSON PARSE SUCCESS]");
+    if (import.meta.env.DEV) console.log("[AI JSON PARSE SUCCESS]");
     return parsed;
   } catch (err) {
     // eslint-disable-next-line no-console
-    console.error("[AI JSON PARSE FAILED]", {
+    if (import.meta.env.DEV) console.error("[AI JSON PARSE FAILED]", {
       error: err,
       cleaned,
       raw: rawText,
@@ -235,9 +231,23 @@ function mapRiskToSeverity(
   return "medium";
 }
 
-function verdictFromRank(rank: number, total: number): SupplierVerdict {
+function verdictFromRank(
+  rank: number,
+  total: number,
+  hasValidPrice: boolean = true,
+  score?: number,
+  risk?: string
+): SupplierVerdict {
+  if (!hasValidPrice) return "QUOTE INCOMPLETE";
+  if (risk === "High" || risk === "HIGH RISK") return "HIGH RISK / REVIEW";
   if (rank === 1) return "BEST VALUE";
   if (rank === 2) return "GOOD OPTION";
+  if (score !== undefined && score >= 70) {
+    return "GOOD OPTION";
+  }
+  if (score !== undefined && score >= 50) {
+    return rank >= total ? "GOOD OPTION" : "EXPENSIVE";
+  }
   if (rank >= total) return "AVOID";
   return "EXPENSIVE";
 }
@@ -264,7 +274,7 @@ function rowScore(row: Record<string, unknown>): number {
     row.overall ??
     row.rating;
   const n = typeof raw === "number" ? raw : Number(raw);
-  return Number.isFinite(n) ? n : 0;
+  return raw !== null && raw !== undefined && raw !== "" && Number.isFinite(n) ? n : -1;
 }
 
 /** Read a rank from a number or a numeric string. */
@@ -274,19 +284,59 @@ function rowRank(row: Record<string, unknown>): number {
   return Number.isFinite(n) ? n : 99;
 }
 
-/** Tolerant match of an AI supplier name to a real quotation total. */
-function findQuoteTotal(name: string, quotations: AIQuotation[]): number {
-  const key = name.trim().toLowerCase();
-  if (!key) return 0;
+function normalizeSupplierNameKey(str: string): string {
+  return str
+    .trim()
+    .replace(/^["']+|["']+$/g, "")
+    .replace(/[.,]+$/g, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+/** Tolerant match of an AI supplier name to a real quotation. */
+function findQuote(name: string, quotations: AIQuotation[]): AIQuotation | undefined {
+  const rawKey = name.trim().toLowerCase();
+  const normKey = normalizeSupplierNameKey(name);
+  if (!rawKey && !normKey) return undefined;
+
   const exact = quotations.find(
-    (q) => q.supplier_name.trim().toLowerCase() === key
+    (q) =>
+      q.supplier_name.trim().toLowerCase() === rawKey ||
+      normalizeSupplierNameKey(q.supplier_name) === normKey
   );
-  if (exact) return exact.total_value;
-  const partial = quotations.find((q) => {
+  if (exact) return exact;
+
+  return quotations.find((q) => {
     const s = q.supplier_name.trim().toLowerCase();
-    return s.includes(key) || key.includes(s);
+    const ns = normalizeSupplierNameKey(q.supplier_name);
+    return (
+      s.includes(rawKey) ||
+      rawKey.includes(s) ||
+      ns.includes(normKey) ||
+      normKey.includes(ns)
+    );
   });
-  return partial?.total_value ?? 0;
+}
+
+function quotePriceStatus(quote: AIQuotation | undefined): QuotePriceStatus {
+  if (!quote) return "not_submitted";
+  if (quote.price_status) return quote.price_status;
+  const total = findQuoteTotal(quote.supplier_name, [quote]);
+  return isSubmittedQuoteAmount(total)
+    ? "submitted"
+    : "price_not_provided";
+}
+
+/** Tolerant match of an AI supplier name to a real quotation total. */
+function findQuoteTotal(name: string, quotations: AIQuotation[]): number | null {
+  const quote = findQuote(name, quotations);
+  if (!quote) return null;
+  if (isSubmittedQuoteAmount(quote.total_value)) return quote.total_value;
+  if (Array.isArray(quote.items) && quote.items.length > 0) {
+    const lineTotal = priceFromLines(quote.items);
+    if (isSubmittedQuoteAmount(lineTotal)) return lineTotal;
+  }
+  return null;
 }
 
 /** Map the simplified ranking schema to the full UI model (tolerant). */
@@ -302,7 +352,7 @@ function coerceFromRankingFormat(
     );
   }
 
-  const ranking = (
+  const rawRanking = (
     rankingRaw.filter(
       (row) => row && typeof row === "object"
     ) as Record<string, unknown>[]
@@ -312,6 +362,30 @@ function coerceFromRankingFormat(
     rank: rowRank(row),
     score: rowScore(row),
   }));
+
+  // Stable deduplication by supplier/quotation identifier
+  const seenSuppliers = new Map<string, typeof rawRanking[0]>();
+  for (const item of rawRanking) {
+    // Stable IDs are opaque and case-sensitive. Only historical name-only
+    // responses use tolerant name normalization.
+    const key = typeof item.row.quotation_id === "string" && item.row.quotation_id
+      ? `quotation:${item.row.quotation_id}`
+      : typeof item.row.supplier_id === "string" && item.row.supplier_id
+        ? `supplier:${item.row.supplier_id}`
+        : normalizeSupplierNameKey(item.name);
+    if (!key) continue;
+    if (!seenSuppliers.has(key)) {
+      seenSuppliers.set(key, item);
+    } else {
+      const existing = seenSuppliers.get(key)!;
+      if (item.score > existing.score) {
+        seenSuppliers.set(key, item);
+      }
+    }
+  }
+  const ranking = Array.from(seenSuppliers.values());
+  ranking.sort((a, b) => a.rank - b.rank);
+  ranking.forEach((r, idx) => { r.rank = idx + 1; });
 
   const rankOne = ranking.find((r) => r.rank === 1) ?? ranking[0];
   const explicit = String(
@@ -329,33 +403,96 @@ function coerceFromRankingFormat(
     );
   }
 
-  const summary = String(
-    v.summary ?? v.recommendation_summary ?? v.final_verdict ?? v.reason ?? ""
+  const summary = appendPricingAvailability(
+    String(
+      v.summary ?? v.recommendation_summary ?? v.final_verdict ?? v.reason ?? ""
+    ),
+    quotations,
   );
 
   const supplier_analysis: SupplierAnalysisRow[] = ranking
     .map(({ row, name, rank, score }): SupplierAnalysisRow | null => {
       if (!name) return null;
       const reason = String(row.reason ?? row.why_best_or_worst ?? "");
+      const quote = row.quotation_id
+        ? quotations.find((quotation) => quotation.quotation_id === row.quotation_id)
+        : findQuote(name, quotations);
+      const grandTotal = quote ? findQuoteTotal(quote.supplier_name, [quote]) : null;
+      const hasValidPrice = isSubmittedQuoteAmount(grandTotal);
       // Extract per-dimension scores from AI response when available;
       // never copy a single overall score to all dimensions.
-      const priceScore = typeof row.price_score === "number" ? row.price_score : -1;
+      const priceScore = typeof row.price_score === "number" && row.price_score >= 0 && hasValidPrice
+        ? row.price_score
+        : -1;
       const deliveryScoreVal = typeof row.delivery_score === "number" ? row.delivery_score : -1;
       const reliabilityScoreVal = typeof row.reliability_score === "number" ? row.reliability_score : -1;
+
+      const validVerdicts: SupplierVerdict[] = [
+        "BEST VALUE",
+        "GOOD OPTION",
+        "EXPENSIVE",
+        "AVOID",
+        "QUOTE INCOMPLETE",
+        "HIGH RISK / REVIEW",
+        "NOT EVALUATED",
+      ];
+      const rawRisk = typeof row.risk === "string" ? row.risk.trim() : "";
+      const risk: SupplierAnalysisRow["risk"] =
+        rawRisk === "Low" || rawRisk === "Medium" || rawRisk === "High"
+          ? rawRisk : undefined;
+
+      const quotationId = String(row.quotation_id ?? quote?.quotation_id ?? "");
+      const supplierId = String(row.supplier_id ?? quote?.supplier_id ?? "");
+
+      const completeness = evaluateQuotationCompleteness(quote || {
+        supplier: name,
+        supplier_id: supplierId,
+        supplier_name: name,
+        grand_total: grandTotal,
+        quotation_id: quotationId,
+      });
+
+      const rawVerdict = typeof row.verdict === "string" ? row.verdict.toUpperCase().trim() : "";
+      let verdict: SupplierVerdict = validVerdicts.includes(rawVerdict as SupplierVerdict)
+        ? (rawVerdict as SupplierVerdict)
+        : verdictFromRank(rank, ranking.length, hasValidPrice, score, risk);
+
+      if (completeness.is_complete && verdict === "QUOTE INCOMPLETE") {
+        verdict = (risk === "High" || risk === "HIGH RISK") ? "HIGH RISK / REVIEW" : (rank === 1 ? "BEST VALUE" : "GOOD OPTION");
+      } else if (!completeness.is_complete && verdict !== "AVOID") {
+        verdict = "QUOTE INCOMPLETE";
+      }
+
       return {
         name,
         rank,
-        verdict: verdictFromRank(rank, ranking.length),
-        grand_total: findQuoteTotal(name, quotations),
-        strengths: reason ? [reason] : [],
-        weaknesses: [] as string[],
+        verdict,
+        risk,
+        grand_total: grandTotal,
+        quote_price_status: quotePriceStatus(quote),
+        quotation_status: completeness.quotation_status,
+        is_complete: completeness.is_complete,
+        missing_fields: completeness.missing_fields,
+        // General reasoning can describe a serious concern. Do not relabel it
+        // as a positive strength; preserve explicit evidence lists separately.
+        strengths: asStringArray(row.strengths),
+        weaknesses: !hasValidPrice
+          ? [...asStringArray(row.weaknesses), "Quotation pricing was not provided"]
+          : asStringArray(row.weaknesses),
         score: {
-          cost: priceScore >= 0 ? priceScore : score,
+          cost: priceScore,
           delivery: deliveryScoreVal >= 0 ? deliveryScoreVal : -1,
+          quality: typeof row.quality_score === "number" ? row.quality_score : -1,
           reliability: reliabilityScoreVal >= 0 ? reliabilityScoreVal : -1,
           overall: score,
         },
         why_best_or_worst: reason,
+        quotation_id: quotationId || undefined,
+        supplier_quotation_id: quotationId || undefined,
+        supplier_id: supplierId || undefined,
+        evaluation_run_id: typeof row.evaluation_run_id === "string" ? row.evaluation_run_id : undefined,
+        evaluation_status: row.evaluation_status === "incomplete" ? "incomplete" : "complete",
+        raw_ai_score: typeof row.raw_ai_score === "number" ? row.raw_ai_score : undefined,
       };
     })
     .filter((r): r is SupplierAnalysisRow => r !== null);
@@ -379,14 +516,23 @@ function coerceFromRankingFormat(
     })
     .filter((f): f is AIRiskFlag => f !== null);
 
-  const totals = quotations.map((q) => q.total_value).filter((t) => t > 0);
+  const totals = quotations
+    .map((q) => q.total_value)
+    .filter(isSubmittedQuoteAmount);
   const lowest = totals.length ? Math.min(...totals) : 0;
   const highest = totals.length ? Math.max(...totals) : 0;
 
   return {
+    rfq_id: typeof v.rfq_id === "string" ? v.rfq_id : undefined,
+    evaluation_run_id: typeof v.evaluation_run_id === "string" ? v.evaluation_run_id : undefined,
+    evaluation_weights: v.evaluation_weights as AIRecommendation["evaluation_weights"],
+    recommended_quotation_id: typeof v.recommended_quotation_id === "string" ? v.recommended_quotation_id : undefined,
+    recommended_supplier_id: typeof v.recommended_supplier_id === "string" ? v.recommended_supplier_id : undefined,
     recommended_supplier: recommendedSupplier,
     confidence_score,
     recommendation_summary: summary,
+    provider_summary: typeof v.provider_summary === "string" ? v.provider_summary : undefined,
+    preserved_evaluation_summary: typeof v.preserved_evaluation_summary === "string" ? v.preserved_evaluation_summary : undefined,
     supplier_analysis,
     cost_analysis: {
       savings_vs_expensive:
@@ -424,13 +570,19 @@ function asStringArray(val: unknown): string[] {
   return val.filter((x): x is string => typeof x === "string");
 }
 
-function coerceSupplierAnalysis(val: unknown): SupplierAnalysisRow[] {
+function coerceSupplierAnalysis(
+  val: unknown,
+  quotations: AIQuotation[],
+): SupplierAnalysisRow[] {
   if (!Array.isArray(val)) return [];
   const verdicts: SupplierVerdict[] = [
     "BEST VALUE",
     "GOOD OPTION",
     "EXPENSIVE",
     "AVOID",
+    "QUOTE INCOMPLETE",
+    "HIGH RISK / REVIEW",
+    "NOT EVALUATED",
   ];
   return val
     .filter((row) => row && typeof row === "object")
@@ -438,22 +590,44 @@ function coerceSupplierAnalysis(val: unknown): SupplierAnalysisRow[] {
       const r = row as Record<string, unknown>;
       const score = (r.score as Record<string, unknown>) ?? {};
       const verdict = String(r.verdict ?? "GOOD OPTION");
+      const name = String(r.name ?? "");
+      const quote = findQuote(name, quotations);
+      const grandTotal = findQuoteTotal(name, quotations);
+      const rowRisk = String(r.risk ?? "");
+      const completeness = evaluateQuotationCompleteness(quote || {
+        supplier: name,
+        supplier_name: name,
+        grand_total: grandTotal,
+      });
+      let rowVerdict: SupplierVerdict = verdicts.includes(verdict as SupplierVerdict)
+        ? (verdict as SupplierVerdict)
+        : "GOOD OPTION";
+      if (completeness.is_complete && rowVerdict === "QUOTE INCOMPLETE") {
+        rowVerdict = (rowRisk === "High" || rowRisk === "HIGH RISK") ? "HIGH RISK / REVIEW" : "GOOD OPTION";
+      } else if (!completeness.is_complete && rowVerdict !== "AVOID") {
+        rowVerdict = "QUOTE INCOMPLETE";
+      }
       return {
-        name: String(r.name ?? ""),
+        name,
         rank: typeof r.rank === "number" ? r.rank : 99,
-        verdict: verdicts.includes(verdict as SupplierVerdict)
-          ? (verdict as SupplierVerdict)
-          : "GOOD OPTION",
-        grand_total:
-          typeof r.grand_total === "number" ? r.grand_total : 0,
+        verdict: rowVerdict,
+        // The real quotation is authoritative; never accept an AI-invented
+        // zero for a supplier whose price is absent.
+        grand_total: grandTotal,
+        quote_price_status: quotePriceStatus(quote),
+        quotation_status: completeness.quotation_status,
+        is_complete: completeness.is_complete,
+        missing_fields: completeness.missing_fields,
         strengths: asStringArray(r.strengths),
-        weaknesses: asStringArray(r.weaknesses),
+        weaknesses: !hasValidPrice
+          ? [...asStringArray(r.weaknesses), "Quotation pricing was not provided"]
+          : asStringArray(r.weaknesses),
         score: {
-          cost: typeof score.cost === "number" ? score.cost : 0,
-          delivery: typeof score.delivery === "number" ? score.delivery : 0,
+          cost: hasValidPrice && typeof score.cost === "number" && score.cost >= 0 ? score.cost : -1,
+          delivery: typeof score.delivery === "number" ? score.delivery : -1,
           reliability:
-            typeof score.reliability === "number" ? score.reliability : 0,
-          overall: typeof score.overall === "number" ? score.overall : 0,
+            typeof score.reliability === "number" ? score.reliability : -1,
+          overall: typeof score.overall === "number" ? score.overall : -1,
         },
         why_best_or_worst: String(r.why_best_or_worst ?? ""),
       };
@@ -527,10 +701,14 @@ function coerceRecommendation(
   const costRaw = (v.cost_analysis as Record<string, unknown>) ?? {};
   const splitRaw = (v.split_order_option as Record<string, unknown>) ?? {};
 
-  const recommendation_summary = String(
-    v.recommendation_summary ?? v.reason ?? ""
+  const recommendation_summary = appendPricingAvailability(
+    String(v.recommendation_summary ?? v.reason ?? ""),
+    quotations,
   );
-  const supplier_analysis = coerceSupplierAnalysis(v.supplier_analysis);
+  const supplier_analysis = coerceSupplierAnalysis(
+    v.supplier_analysis,
+    quotations,
+  );
   const per_item_analysis = coercePerItemAnalysis(
     v.per_item_analysis ?? v.per_item_recommendation
   );
@@ -570,7 +748,10 @@ function coerceRecommendation(
       reason: String(splitRaw.reason ?? ""),
       suggestion: String(splitRaw.suggestion ?? ""),
     },
-    final_verdict: String(v.final_verdict ?? recommendation_summary),
+    final_verdict: appendPricingAvailability(
+      String(v.final_verdict ?? recommendation_summary),
+      quotations,
+    ),
     reason: recommendation_summary,
     cost_savings: cost_analysis.savings_vs_expensive,
     risk_factors: legacyRiskFactors.length
@@ -636,12 +817,14 @@ export function computeConfidenceScore(inputs: ConfidenceScoreInputs): number {
   return Math.max(0, Math.min(100, Math.round(weighted / 100)));
 }
 
-function buildAnalysisPrompt(
+export function buildAnalysisPrompt(
   payload: AIRequest,
   weights?: AnalysisWeights
 ): string {
   const w = weights ?? { price: 40, delivery: 25, quality: 20, reliability: 15 };
-  const totals = payload.quotations.map((q) => q.total_value).filter((t) => t > 0);
+  const totals = payload.quotations
+    .map((q) => q.total_value)
+    .filter(isSubmittedQuoteAmount);
   const lowestTotal = totals.length ? Math.min(...totals) : 0;
   const highestTotal = totals.length ? Math.max(...totals) : 0;
 
@@ -652,26 +835,50 @@ function buildAnalysisPrompt(
   const quotesBlock = payload.quotations
     .map((q, idx) => {
       const flags =
+        isSubmittedQuoteAmount(q.total_value) &&
         q.total_value === lowestTotal && totals.length > 1
           ? "⭐ LOWEST TOTAL"
-          : q.total_value === highestTotal && totals.length > 1
+          : isSubmittedQuoteAmount(q.total_value) &&
+            q.total_value === highestTotal && totals.length > 1
           ? "⚠️ HIGHEST TOTAL"
           : "";
       const lines = q.items
         .map((i) => {
           const qty = i.requested_qty ?? 1;
           const note = i.notes ? ` | Note: ${i.notes}` : "";
-          return `  - ${i.item}: ${formatCurrency(i.unit_price)}/unit × ${qty} = ${formatCurrency(i.total)} | Delivery: ${i.delivery_days ?? 7} days${note}`;
+          const unitPrice = isSubmittedQuoteAmount(i.unit_price)
+            ? `${formatCurrency(i.unit_price)}/unit`
+            : "Price Not Provided";
+          const lineTotal = isSubmittedQuoteAmount(i.total)
+            ? formatCurrency(i.total)
+            : "Price Not Provided";
+          const deliveryVal =
+            i.delivery_days && i.delivery_days > 0
+              ? `${i.delivery_days} days`
+              : "Unavailable (supplier did not provide delivery days)";
+          return `  - ${i.item}: ${unitPrice} × ${qty} = ${lineTotal} | Delivery: ${deliveryVal}${note}`;
         })
         .join("\n");
+
+      const docList: string[] = [];
+      if (q.documents?.warranty_certificate) docList.push("Warranty certificate attached; verification status unavailable");
+      if (q.documents?.terms_conditions) docList.push("Terms and conditions attached; verification status unavailable");
+      if (q.documents?.insurance_certificate) docList.push("Insurance certificate attached; verification status unavailable");
+      const complianceText = docList.length > 0 ? docList.join(", ") : "No attachment evidence provided";
+
       return `
 SUPPLIER ${idx + 1}: ${q.supplier_name}
-Grand Total: ${formatCurrency(q.total_value)}
+Quotation ID (JSON string; preserve escaped characters): ${JSON.stringify(q.quotation_id ?? "")}
+Supplier ID (JSON string; preserve escaped characters): ${JSON.stringify(q.supplier_id ?? "")}
+Grand Total: ${isSubmittedQuoteAmount(q.total_value) ? formatCurrency(q.total_value) : "Price Not Provided"}
 ${flags}
 Items:
 ${lines}
 Payment Terms: ${q.payment_terms ?? "Not specified"}
-Additional Notes: ${q.notes ?? ""}`;
+Compliance & Certificates: ${complianceText}
+Additional Notes: ${q.notes || "Unavailable"}
+Historical performance: ${q.historical_data ? JSON.stringify(q.historical_data) : "Unavailable"}
+Technical compliance: unavailable unless explicitly described in this quotation's item notes.`;
     })
     .join("\n---");
 
@@ -681,6 +888,8 @@ Additional Notes: ${q.notes ?? ""}`;
 
   return `You are an expert procurement analyst for Netlink, a manufacturing company.
 Analyze these ${payload.quotations.length} supplier quotations for RFQ: ${payload.rfq_name}
+RFQ ID: ${JSON.stringify(payload.rfq_name)}
+Evaluation run ID: ${JSON.stringify(payload.evaluation_run_id)}
 
 ITEMS REQUESTED:
 ${itemsBlock}
@@ -707,15 +916,22 @@ CRITICAL OUTPUT RULES — YOU MUST FOLLOW EXACTLY:
 
 Return exactly this JSON structure (fill with real analysis data from the quotations above):
 {
+  "rfq_id": ${JSON.stringify(payload.rfq_name)},
+  "evaluation_run_id": ${JSON.stringify(payload.evaluation_run_id)},
   "ranking": [
     {
+      "evaluation_run_id": ${JSON.stringify(payload.evaluation_run_id)},
+      "quotation_id": "exact quotation_id from quotation",
+      "supplier_id": "exact supplier_id from quotation",
       "supplier": "exact supplier name from quotations",
       "rank": 1,
       "score": 85,
       "price_score": 92,
       "delivery_score": 78,
+      "quality_score": 85,
       "reliability_score": 80,
       "risk": "Low",
+      "verdict": "BEST VALUE",
       "reason": "Specific explanation referencing actual price difference, delivery days, item coverage, and terms"
     }
   ],
@@ -724,69 +940,87 @@ Return exactly this JSON structure (fill with real analysis data from the quotat
 }
 
 SCORING RULES — FOLLOW STRICTLY:
-- "score": overall weighted integer 0-100 calculated using the formula above.
-- "price_score": 0-100 based ONLY on the actual quoted grand total. Lowest price = highest score.
-- "delivery_score": 0-100 based ONLY on actual quoted delivery days. Fastest = highest score.
-- "reliability_score": 0-100 based on quotation completeness (payment terms provided, notes provided, all items quoted with delivery data).
-- DO NOT assign 100 to all dimensions. Each score MUST reflect actual differences between suppliers.
-- If all suppliers quoted the same price, price_score should be equal for all. Otherwise scores MUST differ.
-- "risk": exactly "Low", "Medium", or "High".
-- "reason": MUST reference specific data points (e.g. "$5,000 lower than next bidder", "3 days faster delivery", "missing payment terms").
-- "ranking": include ONLY the ${payload.quotations.length} suppliers listed above, sorted best to worst (rank 1 = best).
+- Evaluate EACH supplier independently. Never copy the score, risk, verdict, or reasoning from another supplier.
+- "score": overall weighted number 0-100 calculated using the formula above.
+- "price_score": 0-100 based ONLY on the actual quoted grand total. Lowest price = highest score. If all suppliers quoted the exact same price, price_score must be equal for all.
+- If a grand total is "Price Not Provided", set price_score to -1 (insufficient data). Never treat it as $0.00 or as the cheapest quote.
+- Historical availability is dimension-specific: use a historical dimension only when its has_delivery_data, has_quality_data, or has_reliability_data flag is true and its corresponding score is a finite number from 0 to 100. The general has_sufficient_data flag alone does not establish that a particular metric is available. Never reinterpret or replace a supplied valid historical score.
+- "delivery_score": first check has_delivery_data. If valid history and actual quoted delivery days both exist, preserve the existing blend: round(quotedDeliveryScore * 0.40 + historical_data.delivery_score * 0.60). The quotedDeliveryScore uses the existing inverse linear comparison of actual average quoted days: fastest=100, slowest=0, equal quoted days=100. Exclude unavailable quoted days from that comparison. If history is valid but quoted days are unavailable, use historical_data.delivery_score unchanged; missing quotation days must NOT erase available delivery history. If only quoted days exist, use quotedDeliveryScore. Only when BOTH quoted days and valid delivery history are unavailable, retain the existing neutral scoring rule (70-75), explicitly identify that assumption in the reason, and use the same neutral value for equivalent missing-data situations. Never invent a quoted delivery timeline.
+- "quality_score": use the existing quoted-item coverage score (direct linear comparison of item coverage across quotations; equal coverage=100). If has_quality_data is true and historical_data.quality_score is valid, preserve the existing blend: round(coverageScore * 0.30 + historical_data.quality_score * 0.70). Otherwise use coverageScore and explicitly say historical quality is unavailable. Item coverage is a proxy, not an inspection result or technical-compliance verification.
+- "reliability_score": if has_reliability_data is true and historical_data.reliability_score is valid, use that supplied historical score unchanged. Only when reliability history is unavailable, apply the existing quotation-completeness assessment using payment terms, notes, delivery information, and attached warranty/insurance/terms evidence. Attachment presence does not verify its contents.
+- "risk": exactly "Low", "Medium", or "High", assessed from the supplier-specific evidence. A high numerical score does not mean Low risk. Explain the actual reason for risk in this same supplier's "reason"; do not invent compliance failures or evidence.
+- "verdict": exactly one of "BEST VALUE", "GOOD OPTION", "EXPENSIVE", "AVOID", "HIGH RISK / REVIEW", "QUOTE INCOMPLETE".
+- Complete quotations MUST NOT be marked "QUOTE INCOMPLETE". Only use "QUOTE INCOMPLETE" if mandatory quotation fields or quotation submission are missing. If a quotation is complete but carries high risk, assign "HIGH RISK / REVIEW" or "GOOD OPTION".
+- A supplier must NEVER be labeled "AVOID" simply for being lowest-ranked. Only assign "AVOID" if there is severe risk, non-compliance, missing quote, or unacceptable terms.
+- An AVOID verdict makes the supplier ineligible for supplier selection, reverse bidding and purchase order creation under the application's award policy. Preserve its numerical score and rank; explain the restriction in its reason and the summary. Do not invent an authorized risk-override workflow or describe AVOID as eligible for award.
+- Equal scores are valid when the supplier-specific scoring criteria genuinely match. Never force differences. Compare actual delivery, quality, warranty evidence, documentation, payment terms and history independently; do not invent missing data.
+- "reason": MUST reference specific data points (e.g. price difference, actual historical on-time/late deliveries, quoted delivery days, attachment presence, payment terms), and distinguish available history from missing quotation fields.
+- The summary MUST distinguish suppliers with submitted pricing from suppliers with missing pricing. Never describe missing pricing as "$0.00 pricing".
+- "ranking": include ONLY the ${payload.quotations.length} suppliers listed above, sorted by the configured weighted score (rank 1 = highest score, not an award approval).
 - Do NOT invent, add, or reference any supplier not in the SUPPLIER QUOTATIONS section.
-- "recommendedSupplier": must match the rank 1 supplier name exactly.
-- Use supplier names EXACTLY as shown in SUPPLIER QUOTATIONS — no abbreviations or alternatives.`;
+- "recommendedSupplier": must match the rank 1 supplier name exactly. This legacy field means the weighted-score leader only; it is not an endorsement of supplier suitability or an award decision. If the leader has High risk or AVOID, preserve those values and explicitly explain in the summary that review is required despite the high score. Never describe that supplier as an unqualified procurement recommendation. No alternative supplier may be silently promoted to score rank 1 because of risk.
+- Return exactly one result per quotation_id. Preserve its exact supplier_id and the current evaluation_run_id. IDs above are JSON strings: literal quotation marks inside an ID must be escaped, never removed.
+- Include all four dimension scores and their weighted overall score for EVERY quotation. The server validates identities and computes the final weighted arithmetic.
+- Use supplier names, quotation_id, and supplier_id EXACTLY as shown in SUPPLIER QUOTATIONS.`;
 }
 
-/** Generate raw model text from Claude (single attempt — use generateWithRetry). */
+/** Generate raw model text from Claude via the BidSphere server (single attempt — use generateWithRetry). */
 async function generateWithClaudeOnce(
-  prompt: string
+  prompt: string,
+  context: EvaluationContext,
 ): Promise<{ text: string; tokensUsed: number }> {
-  const apiKey = readApiKey();
-
+  const startTime = Date.now();
+  // Safe diagnostic logging — never logs keys, secrets, or quote contents.
   // eslint-disable-next-line no-console
-  console.log("[AI] Claude endpoint:", ANTHROPIC_ENDPOINT, "model:", ANTHROPIC_MODEL);
+  if (import.meta.env.DEV) console.log("[AI] Requesting Claude recommendation via BidSphere backend:", {
+    model: ANTHROPIC_MODEL,
+    rfq_id: context.rfq_id,
+  });
 
   let response: Response;
   try {
-    response = await fetch(ANTHROPIC_ENDPOINT, {
+    response = await fetch("/api/ai/claude", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": ANTHROPIC_VERSION,
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
-        max_tokens: 1024,
-        temperature: 0,
-        messages: [{ role: "user", content: prompt }],
+        prompt,
+        max_tokens: 2048,
+        rfq_id: context.rfq_id,
+        evaluation_context: context,
+        ...(import.meta.env.DEV ? { evaluation_debug: { enabled: true, evaluation_run_id: context.evaluation_run_id } } : {}),
+        request_type: "recommendation",
       }),
     });
   } catch (err) {
-    throw new AIRecommendationError("Claude network error", {
+    throw new AIRecommendationError("Claude backend network error", {
       cause: err,
       retryable: true,
     });
   }
 
-  let body: AnthropicMessageResponse;
+  const latency = Date.now() - startTime;
+  let body: { success?: boolean; text?: string; tokensUsed?: number; message?: string; evaluation_debug?: unknown };
   try {
-    body = (await response.json()) as AnthropicMessageResponse;
+    body = (await response.json()) as typeof body;
   } catch (err) {
-    throw new AIRecommendationError("Claude non-JSON response", {
+    throw new AIRecommendationError("Claude non-JSON response from backend", {
       cause: err,
       retryable: false,
       statusCode: response.status,
     });
   }
 
-  if (!response.ok || body.type === "error") {
+  if (!response.ok || !body.success || !body.text) {
     const status = response.status;
-    const apiMessage = body.error?.message ?? response.statusText;
+    const apiMessage = body.message || response.statusText || "Claude error";
     // eslint-disable-next-line no-console
-    console.error("[AI API] Claude error:", { status, message: apiMessage, body });
+    console.error("[AI API] Claude backend error:", {
+      status,
+      model: ANTHROPIC_MODEL,
+      rfq_id: context.rfq_id,
+      latency_ms: latency,
+      error: apiMessage,
+    });
 
     throw new AIRecommendationError(`Claude HTTP ${status}: ${apiMessage}`, {
       retryable: isRetryableHttpStatus(status),
@@ -794,17 +1028,19 @@ async function generateWithClaudeOnce(
     });
   }
 
-  const textBlock = body.content?.find((c) => c.type === "text" && c.text);
-  if (!textBlock?.text) {
-    throw new AIRecommendationError("Claude returned no text content", {
-      retryable: false,
-    });
+  // eslint-disable-next-line no-console
+  if (import.meta.env.DEV) console.log("[AI] Claude response received successfully:", {
+    model: ANTHROPIC_MODEL,
+    rfq_id: context.rfq_id,
+    tokens_used: body.tokensUsed ?? 0,
+    latency_ms: latency,
+  });
+
+  if (import.meta.env.DEV && body.evaluation_debug) {
+    console.log("[AI EVALUATION DEBUG] Claude gateway", body.evaluation_debug);
   }
 
-  const tokensUsed =
-    (body.usage?.input_tokens ?? 0) + (body.usage?.output_tokens ?? 0);
-
-  return { text: textBlock.text, tokensUsed };
+  return { text: body.text, tokensUsed: body.tokensUsed ?? 0 };
 }
 
 interface OpenAIChatResponse {
@@ -820,7 +1056,7 @@ async function generateWithOpenAIOnce(
   const apiKey = readOpenAIKey();
 
   // eslint-disable-next-line no-console
-  console.log("[AI] OpenAI endpoint:", OPENAI_ENDPOINT, "model:", OPENAI_MODEL);
+  if (import.meta.env.DEV) console.log("[AI] OpenAI endpoint:", OPENAI_ENDPOINT, "model:", OPENAI_MODEL);
 
   let response: Response;
   try {
@@ -877,54 +1113,14 @@ async function generateWithOpenAIOnce(
   return { text, tokensUsed: body.usage?.total_tokens ?? 0 };
 }
 
-/**
- * Strips suppliers that aren't in the eligible set from `supplier_analysis`,
- * re-ranks sequentially, and fixes `recommended_supplier` if needed.
- */
-function enforceEligibleSuppliers(
-  rec: AIRecommendation,
-  eligibleNames: Set<string>,
-  quotations: AIQuotation[]
-): AIRecommendation {
-  if (eligibleNames.size === 0) return rec;
-
-  const before = rec.supplier_analysis.length;
-  rec.supplier_analysis = rec.supplier_analysis.filter((row) =>
-    eligibleNames.has(row.name.trim().toLowerCase())
-  );
-
-  if (rec.supplier_analysis.length < before) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      "[AI] enforceEligibleSuppliers: removed",
-      before - rec.supplier_analysis.length,
-      "non-eligible supplier(s)"
-    );
-  }
-
-  rec.supplier_analysis
-    .sort((a, b) => a.rank - b.rank)
-    .forEach((row, idx) => { row.rank = idx + 1; });
-
-  if (!eligibleNames.has(rec.recommended_supplier.trim().toLowerCase())) {
-    const fallback =
-      rec.supplier_analysis[0]?.name ??
-      quotations[0]?.supplier_name ??
-      "";
-    // eslint-disable-next-line no-console
-    console.warn(
-      "[AI] recommended_supplier",
-      rec.recommended_supplier,
-      "not in eligible set — falling back to",
-      fallback
-    );
-    rec.recommended_supplier = fallback;
-  }
-
-  return rec;
-}
-
-function verdictFromEngineRank(rank: number, total: number): SupplierVerdict {
+function verdictFromEngineRank(
+  rank: number,
+  total: number,
+  hasValidPrice: boolean = true,
+  risk?: string
+): SupplierVerdict {
+  if (!hasValidPrice) return "QUOTE INCOMPLETE";
+  if (risk === "High" || risk === "HIGH RISK") return "HIGH RISK / REVIEW";
   if (rank === 1) return "BEST VALUE";
   if (rank === 2) return "GOOD OPTION";
   if (rank >= total) return "AVOID";
@@ -937,7 +1133,7 @@ function buildPerItemAnalysis(payload: AIRequest): AIPerItemAnalysis[] {
     const prices = payload.quotations
       .map((q) => {
         const line = q.items.find((i) => i.item === itemName);
-        return line && line.unit_price > 0
+        return line && isSubmittedQuoteAmount(line.unit_price)
           ? { supplier: q.supplier_name, price: line.unit_price }
           : null;
       })
@@ -975,6 +1171,48 @@ function buildPerItemAnalysis(payload: AIRequest): AIPerItemAnalysis[] {
   });
 }
 
+export function buildPricingAvailabilitySummary(
+  quotations: Array<Pick<AIQuotation, "total_value">>,
+): string {
+  const submitted = quotations.filter((q) =>
+    isSubmittedQuoteAmount(q.total_value),
+  );
+  const missing = quotations.length - submitted.length;
+  if (missing === 0) return "";
+
+  const supplierWord = (count: number) =>
+    count === 1 ? "supplier" : "suppliers";
+  if (submitted.length === 0) {
+    return "Quotation pricing was not provided by the suppliers, so a valid price comparison cannot be completed.";
+  }
+  return `${submitted.length} ${supplierWord(submitted.length)} submitted valid pricing. ${missing} ${supplierWord(missing)} did not provide a valid quotation amount.`;
+}
+
+function appendPricingAvailability(
+  summary: string,
+  quotations: AIQuotation[],
+): string {
+  const availability = buildPricingAvailabilitySummary(quotations);
+  if (!availability) return summary;
+
+  // When any supplier is missing pricing, remove ambiguous model-generated
+  // zero-price sentences and replace them with deterministic availability.
+  const sanitized = summary
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => !/\$0(?:\.00)?/i.test(sentence))
+    .join(" ")
+    .trim();
+  const genuineZeroCount = quotations.filter((q) => q.total_value === 0).length;
+  const zeroSummary = genuineZeroCount > 0
+    ? ` ${genuineZeroCount} supplier${genuineZeroCount === 1 ? "" : "s"} submitted a genuine zero-value quote.`
+    : "";
+  const availabilitySummary = `${availability}${zeroSummary}`;
+  if (sanitized.toLowerCase().includes(availabilitySummary.toLowerCase())) {
+    return sanitized.trim();
+  }
+  return `${sanitized} ${availabilitySummary}`.trim();
+}
+
 /**
  * Deterministic procurement recommendation when the Anthropic API is
  * unavailable. Uses quotation comparison + weighted scoring engine output.
@@ -984,34 +1222,56 @@ export function buildLocalProcurementRecommendation(
   engineResult: ScoringEngineResult
 ): AIRecommendation {
   const totals = payload.quotations
-    .map((q) => q.total_value)
-    .filter((t) => t > 0);
+    .map((q) => findQuoteTotal(q.supplier_name, payload.quotations))
+    .filter(isSubmittedQuoteAmount);
   const lowest = totals.length ? Math.min(...totals) : 0;
   const highest = totals.length ? Math.max(...totals) : 0;
   const winner = engineResult.suppliers[0];
 
   const supplier_analysis: SupplierAnalysisRow[] = engineResult.suppliers.map(
     (s) => {
-      const quote = payload.quotations.find(
-        (q) => q.supplier_name.toLowerCase() === s.supplier_name.toLowerCase()
-      );
+      const quote = findQuote(s.supplier_name, payload.quotations);
+      const grandTotal = findQuoteTotal(s.supplier_name, payload.quotations);
+      const hasValidPrice = isSubmittedQuoteAmount(grandTotal);
+      const completeness = evaluateQuotationCompleteness(quote || {
+        supplier: s.supplier_name,
+        supplier_id: s.supplier_id,
+        supplier_name: s.supplier_name,
+        grand_total: grandTotal,
+        quotation_id: s.quotation_id ?? quote?.quotation_id,
+      });
+      let verdict = verdictFromEngineRank(s.ranking, engineResult.suppliers.length, hasValidPrice, s.risk_level);
+      if (completeness.is_complete && verdict === "QUOTE INCOMPLETE") {
+        verdict = (s.risk_level === "High" || s.risk_level === "HIGH RISK") ? "HIGH RISK / REVIEW" : (s.ranking === 1 ? "BEST VALUE" : "GOOD OPTION");
+      }
       const strengths: string[] = [];
       const weaknesses: string[] = [];
-      if (s.dimensions.price_score >= 80) strengths.push("competitive pricing");
+      if (!hasValidPrice || s.dimensions.price_score < 0) weaknesses.push("quotation pricing not provided");
+      else if (s.dimensions.price_score >= 80) strengths.push("competitive pricing");
       else if (s.dimensions.price_score < 40) weaknesses.push("higher cost");
       if (s.dimensions.delivery_score >= 80) strengths.push("fast delivery");
       else if (s.dimensions.delivery_score < 40) weaknesses.push("slow delivery");
 
       return {
+        quotation_id: s.quotation_id ?? quote?.quotation_id,
+        supplier_quotation_id: s.quotation_id ?? quote?.quotation_id,
+        supplier_id: s.supplier_id ?? quote?.supplier_id,
+        evaluation_run_id: s.evaluation_run_id ?? payload.evaluation_run_id,
         name: s.supplier_name,
         rank: s.ranking,
-        verdict: verdictFromEngineRank(s.ranking, engineResult.suppliers.length),
-        grand_total: quote?.total_value ?? 0,
+        verdict,
+        grand_total: grandTotal,
+        quote_price_status: quotePriceStatus(quote),
+        quotation_status: completeness.quotation_status,
+        is_complete: completeness.is_complete,
+        missing_fields: completeness.missing_fields,
+        risk: s.risk_level === "Low" || s.risk_level === "Medium" || s.risk_level === "High" ? s.risk_level : undefined,
         strengths,
         weaknesses,
         score: {
-          cost: s.dimensions.price_score,
+          cost: hasValidPrice ? s.dimensions.price_score : -1,
           delivery: s.dimensions.delivery_score,
+          quality: s.dimensions.quality_score,
           reliability: s.dimensions.reliability_score,
           overall: s.final_score,
         },
@@ -1020,26 +1280,38 @@ export function buildLocalProcurementRecommendation(
     }
   );
 
-  const recommended_supplier =
-    winner?.supplier_name ?? payload.quotations[0]?.supplier_name ?? "";
-  const confidence_score = winner?.final_score ?? 0;
+  const validPricingExists = totals.length > 0;
+  const recommended_supplier = validPricingExists
+    ? (winner?.supplier_name ?? payload.quotations[0]?.supplier_name ?? "")
+    : (winner?.supplier_name ?? "");
+  const confidence_score = validPricingExists ? (winner?.final_score ?? 0) : 0;
   const savings = highest > lowest ? highest - lowest : 0;
 
-  const summary = winner
+  const baseSummary = !validPricingExists
+    ? "Quotation pricing was not provided by the suppliers, so a valid price comparison cannot be completed."
+    : winner
     ? `Local procurement analysis recommends ${winner.supplier_name} with a weighted score of ${winner.final_score}/100 based on price (${engineResult.weights.price_weight}%), delivery (${engineResult.weights.delivery_weight}%), quality (${engineResult.weights.quality_weight}%), and reliability (${engineResult.weights.reliability_weight}%) across ${payload.quotations.length} submitted quotations.`
     : "Local procurement analysis could not rank suppliers — insufficient quotation data.";
+  const summary = appendPricingAvailability(baseSummary, payload.quotations);
 
   const risk_flags: AIRiskFlag[] = engineResult.suppliers
-    .filter((s) => s.confidence_level === "low")
+    .filter((s) => s.confidence_level === "low" || s.dimensions.price_score < 0)
     .map(
       (s): AIRiskFlag => ({
-        type: "quality",
-        severity: "medium",
-        message: `${s.supplier_name}: limited historical data — scores based on quotation comparison only.`,
+        type: s.dimensions.price_score < 0 ? "cost" : "quality",
+        severity: s.dimensions.price_score < 0 ? "high" : "medium",
+        message: s.dimensions.price_score < 0
+          ? `${s.supplier_name}: quotation pricing was not provided.`
+          : `${s.supplier_name}: limited historical data — scores based on quotation comparison only.`,
       })
     );
 
   return {
+    rfq_id: payload.rfq_name,
+    evaluation_run_id: engineResult.evaluation_run_id ?? payload.evaluation_run_id,
+    evaluation_weights: engineResult.weights,
+    recommended_quotation_id: winner?.quotation_id,
+    recommended_supplier_id: winner?.supplier_id,
     recommended_supplier,
     confidence_score,
     recommendation_summary: summary,
@@ -1065,7 +1337,9 @@ export function buildLocalProcurementRecommendation(
       : [],
     split_order_option: {
       recommended: false,
-      reason: "Single-supplier award recommended based on weighted total score.",
+      reason: validPricingExists
+        ? "Single-supplier award recommended based on weighted total score."
+        : "Order split cannot be evaluated without valid supplier pricing.",
       suggestion: "",
     },
     final_verdict: summary,
@@ -1086,66 +1360,78 @@ export function buildLocalProcurementRecommendation(
 /**
  * Parse model JSON text into a normalized recommendation.
  */
-function parseGeneratedRecommendation(
+export function parseGeneratedRecommendation(
   rawText: string,
   payload: AIRequest,
-  eligibleNames: Set<string>
+  weights?: AnalysisWeights,
 ): AIRecommendation {
   const parsed = parseAiJson(rawText);
   // eslint-disable-next-line no-console
-  console.log("[AI PARSED]", parsed);
-  let recommendation = coerceRecommendation(parsed, payload.quotations);
-  recommendation = enforceEligibleSuppliers(
-    recommendation,
-    eligibleNames,
-    payload.quotations
-  );
+  if (import.meta.env.DEV) console.log("[AI PARSED]", parsed);
+  const validated = validateAndScoreEvaluation(parsed, buildEvaluationContext(payload, weights));
+  const recommendation = applyEvaluationDecisionProjection(coerceRecommendation(validated, payload.quotations));
+  if (import.meta.env.DEV) console.log("[AI EVALUATION DEBUG] Parsed supplier evaluations", {
+    rfq_id: payload.rfq_name,
+    evaluation_run_id: payload.evaluation_run_id,
+    suppliers: recommendation.supplier_analysis.map((row) => ({
+      quotation_id: row.quotation_id, supplier_id: row.supplier_id,
+      raw_ai_score: row.raw_ai_score, parsed_score: row.score.overall,
+      dimensions: row.score, risk: row.risk, verdict: row.verdict,
+    })),
+  });
   return recommendation;
+}
+
+function buildEvaluationContext(payload: AIRequest, weights?: AnalysisWeights): EvaluationContext {
+  const w = weights ?? { price: 40, delivery: 25, quality: 20, reliability: 15 };
+  return {
+    rfq_id: payload.rfq_name,
+    evaluation_run_id: payload.evaluation_run_id ?? "",
+    weights: { price_weight: w.price, delivery_weight: w.delivery,
+      quality_weight: w.quality, reliability_weight: w.reliability },
+    quotations: payload.quotations.map((quote) => ({
+      quotation_id: quote.quotation_id ?? "", supplier_id: quote.supplier_id ?? "",
+      supplier_name: quote.supplier_name, total_value: quote.total_value,
+    })),
+  };
 }
 
 /**
  * Cloud AI resolution: Claude (with retries) → OpenAI (with retries).
- * Returns null when both providers fail — caller should use local engine.
- * Errors are logged to console only; never surfaced to users.
+ * Returns null when both providers fail so the caller can show evaluation unavailable.
  */
 export async function resolveAIRecommendation(
   payload: AIRequest,
   weights?: AnalysisWeights
 ): Promise<ResolvedAIAnalysis | null> {
+  payload = { ...payload, evaluation_run_id: payload.evaluation_run_id ?? crypto.randomUUID() };
   // eslint-disable-next-line no-console
-  console.log("AI Request", payload);
+  if (import.meta.env.DEV) console.log("AI Request", payload);
 
   const prompt = buildAnalysisPrompt(payload, weights);
-  const eligibleNames = new Set(
-    payload.quotations.map((q) => q.supplier_name.trim().toLowerCase())
-  );
+  const context = buildEvaluationContext(payload, weights);
 
-  if (readAnthropicKeyOptional()) {
-    try {
-      const generated = await generateWithRetry(
-        "Claude",
-        generateWithClaudeOnce,
-        prompt
-      );
-      const recommendation = parseGeneratedRecommendation(
-        generated.text,
-        payload,
-        eligibleNames
-      );
-      // eslint-disable-next-line no-console
-      console.log("AI Response", recommendation);
-      return {
-        recommendation,
-        provider: "claude",
-        tokensUsed: generated.tokensUsed,
-      };
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("[AI] Claude exhausted retries:", err);
-    }
-  } else {
+  try {
+    const generated = await generateWithRetry(
+      "Claude",
+      (p) => generateWithClaudeOnce(p, context),
+      prompt
+    );
+    const recommendation = parseGeneratedRecommendation(
+      generated.text,
+      payload,
+      weights
+    );
     // eslint-disable-next-line no-console
-    console.warn("[AI] Claude skipped — VITE_ANTHROPIC_API_KEY not set");
+    if (import.meta.env.DEV) console.log("AI Response", recommendation);
+    return {
+      recommendation,
+      provider: "claude",
+      tokensUsed: generated.tokensUsed,
+    };
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[AI] Claude exhausted retries:", err);
   }
 
   if (readOpenAIKeyOptional()) {
@@ -1158,10 +1444,10 @@ export async function resolveAIRecommendation(
       const recommendation = parseGeneratedRecommendation(
         generated.text,
         payload,
-        eligibleNames
+        weights
       );
       // eslint-disable-next-line no-console
-      console.log("AI Response", recommendation);
+      if (import.meta.env.DEV) console.log("AI Response", recommendation);
       return {
         recommendation,
         provider: "openai",
@@ -1177,7 +1463,7 @@ export async function resolveAIRecommendation(
   }
 
   // eslint-disable-next-line no-console
-  console.warn("[AI] All cloud providers failed — falling back to local engine");
+  console.warn("[AI] All cloud providers failed — evaluation unavailable");
   return null;
 }
 

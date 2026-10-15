@@ -1,0 +1,199 @@
+[
+  {
+    "page": "Fresh reload Dashboard",
+    "active": [
+      "Dashboard"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "Supplier Dashboard",
+      "Supplier Overview",
+      "Requires Your Attention",
+      "Quick Actions",
+      "Recent Activity"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": false,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "Recheck Contracts",
+    "active": [
+      "Contracts"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "Contracts"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": false,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "Recheck RFQs",
+    "active": [
+      "RFQs"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "My RFQs"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "Recheck RFIs",
+    "active": [
+      "RFIs"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "My RFIs1 total"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "Recheck RFPs",
+    "active": [
+      "RFPs"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "My RFPs"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "Recheck Live Auctions",
+    "active": [
+      "Live Auctions"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "Live Auctions"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "Recheck Orders",
+    "active": [
+      "Orders"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "All Purchase Orders"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "Recheck Finance",
+    "active": [
+      "Finance"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "All Vouchers"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "Recheck Dashboard",
+    "active": [
+      "Dashboard"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "Supplier Dashboard",
+      "Supplier Overview",
+      "Requires Your Attention",
+      "Quick Actions",
+      "Recent Activity"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  }
+]

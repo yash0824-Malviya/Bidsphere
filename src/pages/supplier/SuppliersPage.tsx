@@ -93,14 +93,12 @@ export default function SuppliersPage() {
         limit_page_length: DIRECTORY_FETCH_LIMIT,
         order_by: "supplier_name asc",
       });
-      // eslint-disable-next-line no-console
-      console.log(
-        "[Supplier Directory] Total suppliers returned from ERP:",
-        rows.length
-      );
       return rows;
     },
     enabled: activeTab === "directory",
+    staleTime: 60_000,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
     placeholderData: (prev) => prev,
   });
 
@@ -115,6 +113,10 @@ export default function SuppliersPage() {
         order_by: "supplier_name asc",
       }),
     enabled: activeTab === "performance",
+    staleTime: 60_000,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
   });
 
   const suppliers = activeTab === "performance"
@@ -153,6 +155,8 @@ export default function SuppliersPage() {
         order_by: "supplier_group_name asc",
       }),
     staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const supplierNames = useMemo(
@@ -177,6 +181,8 @@ export default function SuppliersPage() {
       return counts;
     },
     staleTime: 60_000,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const { data: poSpend = {} } = useQuery({
@@ -197,6 +203,8 @@ export default function SuppliersPage() {
       return spend;
     },
     staleTime: 60_000,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
   });
 
   type PerformanceRow = {
@@ -340,7 +348,7 @@ export default function SuppliersPage() {
   );
 
   return (
-    <div>
+    <div className="space-y-4">
       <PageHeader
         title={activeTab === "performance" ? "Supplier Performance" : "Suppliers"}
         description={
@@ -375,7 +383,7 @@ export default function SuppliersPage() {
         }
       />
 
-      <div className="mb-4 flex gap-1 rounded-lg border border-neutral-200 bg-neutral-50 p-1">
+      <div className="flex gap-1 rounded-lg border border-neutral-200 bg-neutral-50 p-1">
         <button
           type="button"
           onClick={() => setTab("directory")}

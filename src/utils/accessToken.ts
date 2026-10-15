@@ -22,6 +22,7 @@ export function writeAccessToken(token: string, rememberMe = false): void {
     return;
   }
   sessionStorage.setItem(ACCESS_TOKEN_KEY, value);
+  localStorage.setItem(ACCESS_TOKEN_KEY, value);
   if (rememberMe) {
     localStorage.setItem(ACCESS_TOKEN_REMEMBER_KEY, value);
   } else {
@@ -33,6 +34,7 @@ export function readAccessToken(): string | null {
   if (typeof window === "undefined") return null;
   return (
     sessionStorage.getItem(ACCESS_TOKEN_KEY) ||
+    localStorage.getItem(ACCESS_TOKEN_KEY) ||
     localStorage.getItem(ACCESS_TOKEN_REMEMBER_KEY) ||
     null
   );
@@ -56,6 +58,7 @@ export function readErpProxyAccessToken(): string | null {
 export function clearAccessToken(): void {
   if (typeof window === "undefined") return;
   sessionStorage.removeItem(ACCESS_TOKEN_KEY);
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
   localStorage.removeItem(ACCESS_TOKEN_REMEMBER_KEY);
 }
 
@@ -91,6 +94,8 @@ export function clearSupplierAccessToken(): void {
 export function hydrateAccessTokenFromRemember(): void {
   if (typeof window === "undefined") return;
   if (sessionStorage.getItem(ACCESS_TOKEN_KEY)) return;
-  const remembered = localStorage.getItem(ACCESS_TOKEN_REMEMBER_KEY);
+  const remembered =
+    localStorage.getItem(ACCESS_TOKEN_REMEMBER_KEY) ||
+    localStorage.getItem(ACCESS_TOKEN_KEY);
   if (remembered) sessionStorage.setItem(ACCESS_TOKEN_KEY, remembered);
 }

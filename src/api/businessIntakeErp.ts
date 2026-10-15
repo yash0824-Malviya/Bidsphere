@@ -23,12 +23,13 @@ import {
   buildResourceUrl,
   COMPANY,
 } from "./erpnext";
-import { uploadFileToERPNextDetailed, getFullFileUrl } from "./legalDocsStorage";
+import { uploadFileToERPNextDetailed, getFullFileUrl, detectContentType } from "./legalDocsStorage";
 
 import type {
   BusinessNeed,
   BusinessCase,
   CreateBusinessNeedInput,
+  CreateBusinessCaseInput,
   BusinessCaseApprovalHistory,
   IntakeAttachment,
   FinanceGateBlocker,
@@ -127,6 +128,59 @@ function rethrowErpError(err: unknown, fallback: string): never {
   throw new ErpIntakeError(status || 500, message || fallback);
 }
 
+// ── Role normalization and stage permission helpers ────────────────────────
+
+export function normalizeRoleString(role?: string | null): string {
+  if (!role) return "";
+  return role.toLowerCase().trim().replace(/[\s_-]+/g, "");
+}
+
+export function isFinanceManagerRole(role?: string | null): boolean {
+  const norm = normalizeRoleString(role);
+  return norm.includes("finance") || norm === "financemanager" || norm === "financeexecutive";
+}
+
+export function isEngineeringManagerRole(role?: string | null): boolean {
+  const norm = normalizeRoleString(role);
+  return (
+    norm === "engineering" ||
+    norm === "engineeringmanager" ||
+    norm === "engineering_manager" ||
+    norm === "engmgr" ||
+    (norm.includes("engineer") && norm.includes("manager"))
+  );
+}
+
+export function isEngineerRole(role?: string | null): boolean {
+  if (isEngineeringManagerRole(role)) return false;
+  const norm = normalizeRoleString(role);
+  return (
+    norm === "engineer" ||
+    norm === "engineeringuser" ||
+    norm.includes("engineer")
+  );
+}
+
+export function isLegalManagerRole(role?: string | null): boolean {
+  const norm = normalizeRoleString(role);
+  return norm.includes("legal") || norm === "legalmanager";
+}
+
+export function isProcurementManagerRole(role?: string | null): boolean {
+  const norm = normalizeRoleString(role);
+  return norm.includes("procurement") || norm === "procurementmanager" || norm === "procurementteam";
+}
+
+export function isDepartmentUserRole(role?: string | null): boolean {
+  const norm = normalizeRoleString(role);
+  return norm.includes("department") || norm === "departmentuser";
+}
+
+export function isWarehouseManagerRole(role?: string | null): boolean {
+  const norm = normalizeRoleString(role);
+  return norm.includes("warehouse") || norm === "warehousemanager";
+}
+
 // ── Frappe list-API response envelope ──────────────────────────────────────
 
 interface FrappeListResponse<T> {
@@ -167,6 +221,54 @@ export function formatTechnicalRequirementsSummary(list?: TechnicalRequirementIt
     .join("\n\n");
 }
 
+/**
+ * Map structured technical requirements into ERPNext child-table format.
+ * ERPNext Business Case expects `technical_requirements` as an array of child table rows,
+ * NOT as a formatted display string.
+ */
+export function mapToErpTechnicalRequirements(
+  list?: TechnicalRequirementItem[] | any[],
+): Array<Record<string, unknown>> {
+  if (!list || !Array.isArray(list)) return [];
+  return list.map((tr) => {
+    const qty = Number(tr.quantity) || Number(tr.annual_volume) || 1;
+    const uomVal = tr.uom || tr.unit || "Nos.";
+    const itemVal = tr.requirement_type || tr.item || "Product / Equipment";
+    const descVal = tr.specification || tr.description || "";
+
+    return {
+      doctype: "Technical Requirement",
+      item: itemVal,
+      description: descVal,
+      annual_volume: qty,
+      unit: uomVal,
+      procurement_type: tr.procurement_type || "Material",
+
+      // Extended attributes preserved so neither ERP nor frontend loses details
+      id: tr.id || tr.name || undefined,
+      requirement_type: itemVal,
+      specification: descVal,
+      quantity: qty,
+      uom: uomVal,
+      priority: tr.priority || "High",
+      is_mandatory: tr.is_mandatory !== undefined ? Boolean(tr.is_mandatory) : true,
+      performance: tr.performance || tr.performance_requirements || "",
+      performance_requirements: tr.performance_requirements || tr.performance || "",
+      quality: tr.quality || tr.quality_requirements || "",
+      quality_requirements: tr.quality_requirements || tr.quality || "",
+      delivery: tr.delivery || tr.delivery_installation_requirements || "",
+      delivery_installation_requirements: tr.delivery_installation_requirements || tr.delivery || "",
+      integration: tr.integration || tr.integration_requirements || "",
+      integration_requirements: tr.integration_requirements || tr.integration || "",
+      safety: tr.safety || tr.safety_compliance_requirements || "",
+      safety_compliance_requirements: tr.safety_compliance_requirements || tr.safety || "",
+      required_supplier_documents: Array.isArray(tr.required_supplier_documents)
+        ? tr.required_supplier_documents
+        : [],
+    };
+  });
+}
+
 function normalizeNeed(raw: Record<string, unknown>): BusinessNeed {
   const doc = raw as BusinessNeed & Record<string, unknown>;
   const needName = (doc.name as string) || (doc.business_need_id as string) || "";
@@ -203,6 +305,61 @@ export function formatFrappeDatetime(d: Date = new Date()): string {
   return d.toISOString().slice(0, 19).replace("T", " ");
 }
 
+// ── Local Persistence & Extension Helpers ─────────────────────────────────────
+
+const BC_LOCAL_EXT_PREFIX = "bidsphere_bc_ext_";
+const BC_LOCAL_STANDALONE_KEY = "bidsphere_bc_standalone_cases";
+
+export function getLocalCaseExtension(id: string): Record<string, unknown> {
+  if (typeof window === "undefined" || !window.localStorage) return {};
+  try {
+    const raw = localStorage.getItem(`${BC_LOCAL_EXT_PREFIX}${id}`);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveLocalCaseExtension(id: string, data: Record<string, unknown>): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    const existing = getLocalCaseExtension(id);
+    localStorage.setItem(`${BC_LOCAL_EXT_PREFIX}${id}`, JSON.stringify({ ...existing, ...data }));
+  } catch (e) {
+    console.warn("[BusinessIntakeErp] Local case extension write warning:", e);
+  }
+}
+
+export function getLocalStandaloneCases(): BusinessCase[] {
+  if (typeof window === "undefined" || !window.localStorage) return [];
+  try {
+    const raw = localStorage.getItem(BC_LOCAL_STANDALONE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveLocalStandaloneCase(bCase: BusinessCase): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    const list = getLocalStandaloneCases();
+    const idx = list.findIndex(
+      (c) =>
+        (c.name && c.name === bCase.name) ||
+        (c.business_case_id && c.business_case_id === bCase.business_case_id),
+    );
+    if (idx >= 0) {
+      list[idx] = bCase;
+    } else {
+      list.unshift(bCase);
+    }
+    localStorage.setItem(BC_LOCAL_STANDALONE_KEY, JSON.stringify(list));
+  } catch (e) {
+    console.warn("[BusinessIntakeErp] Local standalone case save warning:", e);
+  }
+}
+
 /**
  * Normalise a raw ERPNext Business Case document to the frontend
  * BusinessCase type.
@@ -210,10 +367,12 @@ export function formatFrappeDatetime(d: Date = new Date()): string {
  * Reads authoritative workflow_state, finance_status, legal_status,
  * approval_history, and applies deterministic financial calculations.
  */
-function normalizeCase(raw: Record<string, unknown>): BusinessCase {
-  const doc = raw as BusinessCase & Record<string, unknown>;
+export function normalizeCase(raw: Record<string, unknown>): BusinessCase {
+  const caseId = String(raw.name || raw.business_case_id || "").trim();
+  const localExt = getLocalCaseExtension(caseId);
+  const doc = { ...raw, ...localExt } as BusinessCase & Record<string, unknown>;
 
-  // 1. Authoritative workflow state from ERPNext
+  // 1. Authoritative workflow state from ERPNext / local
   let workflowStatus: BusinessCase["workflow_status"] = "Draft";
   const rawWf = String(doc.workflow_state || doc.workflow_status || "").trim();
   const rawStatus = String(doc.status || "").trim();
@@ -221,13 +380,23 @@ function normalizeCase(raw: Record<string, unknown>): BusinessCase {
   if (rawWf) {
     workflowStatus = rawWf as BusinessCase["workflow_status"];
   } else if (rawStatus === "Pending Approval") {
-    if (doc.finance_status === "Approved") {
-      workflowStatus = doc.legal_status === "Approved" ? "Pending Procurement" : "Pending Legal Review";
+    if (doc.procurement_status === "Approved") {
+      workflowStatus = "Ready for RFQ";
+    } else if (doc.legal_status === "Approved") {
+      workflowStatus = "Pending Procurement";
+    } else if (doc.finance_status === "Approved") {
+      workflowStatus = "Pending Legal";
+    } else if (doc.engineering_status === "Approved") {
+      workflowStatus = "Pending Finance";
+    } else if (doc.engineering_status === "Under Review") {
+      workflowStatus = "Pending Engineering Manager";
     } else {
-      workflowStatus = "Pending Finance Review";
+      workflowStatus = "Pending Engineering";
     }
+  } else if (rawStatus === "Revision Required (Finance)" || rawStatus === "Revision Required - Finance") {
+    workflowStatus = "Revision Required (Finance)" as BusinessCase["workflow_status"];
   } else if (rawStatus === "Approved") {
-    workflowStatus = "Procurement Ready";
+    workflowStatus = "Ready for RFQ";
   } else if (rawStatus === "Rejected") {
     workflowStatus = "Rejected";
   } else if (rawStatus === "Cancelled") {
@@ -239,82 +408,153 @@ function normalizeCase(raw: Record<string, unknown>): BusinessCase {
   }
 
   // 2. Authoritative gate statuses from ERPNext fields
-  let financeStatus: BusinessCase["finance_status"] = (doc.finance_status as BusinessCase["finance_status"]) || "Pending";
-  let legalStatus: BusinessCase["legal_status"] = (doc.legal_status as BusinessCase["legal_status"]) || "Pending";
+  let engineeringStatus = (doc.engineering_status as BusinessCase["engineering_status"]) || "Pending";
+  let financeStatus = (doc.finance_status as BusinessCase["finance_status"]) || "Pending";
+  let procurementStatus = (doc.procurement_status as BusinessCase["procurement_status"]) || "Pending";
+  let legalStatus = (doc.legal_status as BusinessCase["legal_status"]) || "Pending";
+  let pmStatus = (doc.program_manager_status as BusinessCase["program_manager_status"]) || "Pending";
 
-  // State consistency fallback only when ERPNext field was missing
-  if (!doc.finance_status) {
-    if (
-      workflowStatus === "Pending Legal Review" ||
-      workflowStatus === "Finance Approved" ||
-      workflowStatus === "Pending Procurement" ||
-      workflowStatus === "Procurement Ready" ||
-      workflowStatus === "Approved - Ready for RFQ" ||
-      workflowStatus === "RFQ Created"
-    ) {
-      financeStatus = "Approved";
-    } else if (workflowStatus === "Revision Required - Finance") {
-      financeStatus = "Revision Requested";
-    } else {
-      financeStatus = "Pending";
-    }
+  // State consistency fallback when stage flags are empty or not provided
+  if (!doc.engineering_status && ["Pending Finance", "Pending Finance Review", "Pending Finance Executive", "Revision Required (Finance)", "Revision Required - Finance", "Pending Procurement", "Pending Legal", "Pending Legal Review", "Pending Final Approval", "Approved", "Ready for RFQ", "Procurement Ready", "RFQ Created"].includes(workflowStatus)) {
+    engineeringStatus = "Approved";
   }
-
-  if (!doc.legal_status) {
-    if (
-      workflowStatus === "Pending Procurement" ||
-      workflowStatus === "Legal Approved" ||
-      workflowStatus === "Procurement Ready" ||
-      workflowStatus === "Approved - Ready for RFQ" ||
-      workflowStatus === "RFQ Created"
-    ) {
-      legalStatus = "Approved";
-    } else if (workflowStatus === "Revision Required - Legal") {
-      legalStatus = "Revision Requested";
-    } else {
-      legalStatus = "Pending";
-    }
+  if (!doc.finance_status && ["Pending Procurement", "Pending Legal", "Pending Legal Review", "Pending Final Approval", "Approved", "Ready for RFQ", "Procurement Ready", "RFQ Created"].includes(workflowStatus)) {
+    financeStatus = "Approved";
+  }
+  if (!doc.procurement_status && ["Pending Final Approval", "Approved", "Ready for RFQ", "Procurement Ready", "RFQ Created"].includes(workflowStatus)) {
+    procurementStatus = "Approved";
+  }
+  if (!doc.legal_status && ["Pending Procurement", "Pending Final Approval", "Approved", "Ready for RFQ", "Procurement Ready", "RFQ Created"].includes(workflowStatus)) {
+    legalStatus = "Approved";
+  }
+  if (!doc.program_manager_status && ["Approved", "Ready for RFQ", "Procurement Ready", "RFQ Created"].includes(workflowStatus)) {
+    pmStatus = "Approved";
   }
 
   // 3. Approval status
-  let approvalStatus: BusinessCase["approval_status"] = "Pending Finance";
-  if (workflowStatus === "Pending Legal Review" || (financeStatus === "Approved" && legalStatus === "Pending")) {
+  let approvalStatus: BusinessCase["approval_status"] = "Pending Engineering";
+  if (workflowStatus === "Pending Engineering" || workflowStatus === "Submitted") {
+    approvalStatus = "Pending Engineering";
+  } else if (workflowStatus === "Pending Engineering Manager") {
+    approvalStatus = "Pending Engineering";
+  } else if (workflowStatus === "Pending Finance" || workflowStatus === "Pending Finance Review" || workflowStatus === "Pending Finance Executive" || workflowStatus === "Revision Required (Finance)" || workflowStatus === "Revision Required - Finance") {
+    approvalStatus = "Pending Finance";
+  } else if (workflowStatus === "Pending Legal" || workflowStatus === "Pending Legal Review" || workflowStatus === "Revision Required (Legal)" || workflowStatus === "Revision Required - Legal") {
     approvalStatus = "Pending Legal";
-  } else if (
-    workflowStatus === "Pending Procurement" ||
-    workflowStatus === "Procurement Ready" ||
-    workflowStatus === "Approved - Ready for RFQ" ||
-    workflowStatus === "RFQ Created" ||
-    (financeStatus === "Approved" && legalStatus === "Approved")
-  ) {
+  } else if (workflowStatus === "Pending Procurement") {
+    approvalStatus = "Pending Procurement";
+  } else if (workflowStatus === "Pending Final Approval") {
+    approvalStatus = "Pending Final Approval";
+  } else if (["Approved", "Ready for RFQ", "Procurement Ready", "RFQ Created"].includes(workflowStatus)) {
     approvalStatus = "Approved";
-  } else if (workflowStatus === "Rejected" || financeStatus === "Rejected" || legalStatus === "Rejected") {
+  } else if (workflowStatus === "Rejected") {
     approvalStatus = "Rejected";
-  } else if (workflowStatus.startsWith("Revision Required") || financeStatus === "Revision Requested" || legalStatus === "Revision Requested") {
-    approvalStatus = "Revision Required";
+  } else if (workflowStatus === "Returned") {
+    approvalStatus = "Returned";
+  } else {
+    approvalStatus = "Draft";
   }
 
-  // 4. Parse approval history child rows strictly from ERPNext
+  // 4. Current Stage and Approver Role mapping
+  let currentStage = "Draft";
+  let currentApproverRole = "Department User";
+  switch (workflowStatus) {
+    case "Draft":
+      currentStage = "Draft";
+      currentApproverRole = "Department User";
+      break;
+    case "Submitted":
+    case "Pending Engineering":
+      currentStage = "Engineering Review";
+      currentApproverRole = "Engineer";
+      break;
+    case "Pending Engineering Manager":
+      currentStage = "Engineering Approval";
+      currentApproverRole = "Engineering Manager";
+      break;
+    case "Pending Finance":
+    case "Pending Finance Review":
+    case "Revision Required (Finance)":
+    case "Revision Required - Finance":
+      currentStage = "Finance Approval";
+      currentApproverRole = "Finance Manager";
+      break;
+    case "Pending Finance Executive":
+      currentStage = "Finance Executive Review";
+      currentApproverRole = "Finance Executive";
+      break;
+    case "Pending Legal":
+    case "Pending Legal Review":
+    case "Revision Required (Legal)":
+    case "Revision Required - Legal":
+      currentStage = "Legal Approval";
+      currentApproverRole = "Legal Manager";
+      break;
+    case "Pending Procurement":
+      currentStage = "Procurement Review";
+      currentApproverRole = "Procurement Manager";
+      break;
+    case "Pending Final Approval":
+      currentStage = "Final Approval";
+      currentApproverRole = "Program Manager";
+      break;
+    case "Returned":
+      currentStage = "Returned";
+      currentApproverRole = "Department User";
+      break;
+    case "Approved":
+    case "Ready for RFQ":
+    case "Procurement Ready":
+      currentStage = "Ready for RFQ";
+      currentApproverRole = "Procurement Manager (Create RFQ)";
+      break;
+    case "RFQ Created":
+      currentStage = "RFQ Created";
+      currentApproverRole = "Procurement Team";
+      break;
+    case "Rejected":
+      currentStage = "Rejected";
+      currentApproverRole = "None";
+      break;
+    default:
+      currentStage = workflowStatus;
+      currentApproverRole = "Pending";
+  }
+
+  // 5. Parse approval history child rows
   const rawHistory = Array.isArray(doc.approval_history) ? doc.approval_history : [];
-  const approvalHistory: BusinessCaseApprovalHistory[] = rawHistory.map((row: any) => ({
-    stage: row.stage || "Finance",
-    approver: row.approver || "",
-    role: row.user_role || row.role || "",
-    user_role: row.user_role || row.role || "",
-    action: row.action || row.status || "Approved",
-    comments: row.comments || "",
-    approved_on: row.approved_on || row.creation || "",
-    revision_number: Number(row.revision_number) || 1,
-    digital_signature: row.digital_signature || undefined,
-    previous_state: row.previous_state || "",
-    new_state: row.new_state || "",
-    status: row.status || "Approved",
-  }));
+  const approvalHistory: BusinessCaseApprovalHistory[] = rawHistory.map((row: any) => {
+    const rawDt = row.approved_on || row.creation || row.date || "";
+    let dateStr = row.date || "";
+    let timeStr = row.time || "";
+    if (rawDt && (!dateStr || !timeStr)) {
+      const parts = String(rawDt).split(" ");
+      if (!dateStr) dateStr = parts[0] || "";
+      if (!timeStr && parts[1]) timeStr = parts[1].substring(0, 8);
+    }
+    return {
+      stage: row.stage || "Finance",
+      approver: row.approver || row.user || "",
+      user: row.user || row.approver || "",
+      role: row.user_role || row.role || "",
+      user_role: row.user_role || row.role || "",
+      action: row.action || row.status || "Approved",
+      comments: row.comments || "",
+      date: dateStr,
+      time: timeStr,
+      approved_on: row.approved_on || row.creation || `${dateStr} ${timeStr}`.trim(),
+      revision_number: Number(row.revision_number) || 1,
+      digital_signature: row.digital_signature || undefined,
+      previous_state: row.previous_state || "",
+      new_state: row.new_state || "",
+      status: row.status || "Approved",
+    };
+  });
 
-  // rfq_id: may be stored as `custom_rfq_id` or `rfq_id` — use whichever is present
-  const rfqId = (doc.rfq_id as string) || (doc.custom_rfq_id as string) || "";
+  // rfq_id: may be stored as `custom_rfq_id`, `rfq_id`, or `linked_rfq_id`
+  const rfqId = (doc.rfq_id as string) || (doc.custom_rfq_id as string) || (doc.linked_rfq_id as string) || "";
 
-  // 5. Deterministic financial metrics
+  // 6. Deterministic financial metrics
   const capex = Number(doc.capex) || Number(doc.budget) || Number(doc.total_budget) || Number(doc.total_investment) || 0;
   const opex = Number(doc.opex_year) || Number(doc.opex) || 0;
   const savings = Number(doc.expected_annual_savings) || Number(doc.expected_savings) || 0;
@@ -333,13 +573,66 @@ function normalizeCase(raw: Record<string, unknown>): BusinessCase {
     discount_rate: discountRate,
   });
 
+  // 6b. Normalize technical requirements from ERP child table or local list
+  const rawTech = Array.isArray(doc.technical_requirements) && doc.technical_requirements.length > 0
+    ? doc.technical_requirements
+    : Array.isArray(doc.technical_requirements_list) && doc.technical_requirements_list.length > 0
+    ? doc.technical_requirements_list
+    : typeof doc.technical_requirements === "string" && (doc.technical_requirements as string).trim()
+    ? [{
+        requirement_type: "Product / Equipment",
+        specification: (doc.technical_requirements as string).trim(),
+        quantity: 1,
+        uom: "Nos.",
+        priority: "High",
+        is_mandatory: true,
+      }]
+    : [];
+
+  const normalizedTechList: TechnicalRequirementItem[] = rawTech.map((tr: any) => {
+    const qty = Number(tr.quantity) || Number(tr.annual_volume) || 1;
+    const uomVal = (tr.uom || tr.unit || "Nos.") as any;
+    const itemVal = tr.requirement_type || tr.item || "Product / Equipment";
+    const descVal = tr.specification || tr.description || "";
+
+    return {
+      id: tr.id || tr.name || undefined,
+      requirement_type: itemVal,
+      specification: descVal,
+      description: tr.description || descVal,
+      quantity: qty,
+      annual_volume: qty,
+      uom: uomVal,
+      unit: uomVal,
+      priority: tr.priority || "High",
+      is_mandatory: tr.is_mandatory !== undefined ? Boolean(tr.is_mandatory) : true,
+      performance_requirements: tr.performance_requirements || "",
+      quality_requirements: tr.quality_requirements || "",
+      delivery_installation_requirements: tr.delivery_installation_requirements || "",
+      integration_requirements: tr.integration_requirements || "",
+      safety_compliance_requirements: tr.safety_compliance_requirements || "",
+      required_supplier_documents: Array.isArray(tr.required_supplier_documents)
+        ? tr.required_supplier_documents
+        : [],
+      procurement_type: tr.procurement_type || "Material",
+    };
+  });
+
   return {
     ...doc,
     business_case_id: (doc.business_case_id as string) || (doc.name as string) || "",
     business_need_id: (doc.business_need_id as string) || (doc.business_need as string) || "",
+    title: (doc.title as string) || (doc.name as string) || "Untitled Business Case",
     workflow_status: workflowStatus,
+    status: workflowStatus || (doc.status as string) || "Draft",
+    current_stage: currentStage,
+    current_approver: (doc.current_approver as string) || "",
+    current_approver_role: currentApproverRole,
+    engineering_status: engineeringStatus,
     finance_status: financeStatus,
+    procurement_status: procurementStatus,
     legal_status: legalStatus,
+    program_manager_status: pmStatus,
     finance_approved_by: (doc.finance_approved_by as string) || undefined,
     finance_approved_date: (doc.finance_approved_on as string) || (doc.finance_approved_date as string) || undefined,
     finance_comments: (doc.finance_comments as string) || undefined,
@@ -350,16 +643,60 @@ function normalizeCase(raw: Record<string, unknown>): BusinessCase {
     approval_status: approvalStatus,
     approval_history: approvalHistory,
     rfq_id: rfqId,
-    is_locked: Boolean(doc.is_locked) || (financeStatus === "Approved" && legalStatus === "Approved"),
+    linked_rfq_id: rfqId,
+    is_locked: Boolean(doc.is_locked) || ["Approved", "Ready for RFQ", "Procurement Ready", "RFQ Created"].includes(workflowStatus),
     revision_number: Number(doc.revision_number) || Number(doc.version) || 1,
-    // Child table defaults
+
+    // Rich Business Case Metadata (Sections 5 - 14)
+    case_type: (doc.case_type as any) || "Standard Procurement",
+    commodity: (doc.commodity as string) || "",
+    category: (doc.category as string) || (doc.requirement_category as string) || "",
+    plant: (doc.plant as string) || "",
+    business_unit: (doc.business_unit as string) || "",
+    cost_center: (doc.cost_center as string) || "",
+    required_date: (doc.required_date as string) || (doc.required_by_date as string) || "",
+    why_procurement_required: (doc.why_procurement_required as string) || (doc.business_problem as string) || (doc.problem_statement as string) || "",
+    current_supplier_limitation: (doc.current_supplier_limitation as string) || "",
+    customer_impact: (doc.customer_impact as string) || "",
+    operational_impact: (doc.operational_impact as string) || "",
+    revenue_impact: (doc.revenue_impact as string) || "",
+    strategic_importance: (doc.strategic_importance as any) || "Medium",
+    alternatives: (doc.alternatives as any) || [],
+    technical_review_required: doc.technical_review_required !== undefined ? Boolean(doc.technical_review_required) : true,
+    finance_review_required: doc.finance_review_required !== undefined ? Boolean(doc.finance_review_required) : true,
+    operations_review_required: Boolean(doc.operations_review_required),
+    quality_review_required: Boolean(doc.quality_review_required),
+    legal_review_required: Boolean(doc.legal_review_required),
+    high_value_required: Boolean(doc.high_value_required || calc.total_investment >= 100000),
+    sourcing_strategy: (doc.sourcing_strategy as any) || (doc.procurement_strategy as any) || "Competitive RFQ",
+    procurement_type: (doc.procurement_type as any) || "Competitive Bidding",
+    supplier_strategy: (doc.supplier_strategy as any) || "Multiple Supplier",
+    expected_supplier_count: Number(doc.expected_supplier_count) || 3,
+    rfq_start_date: (doc.rfq_start_date as string) || "",
+    rfq_closing_date: (doc.rfq_closing_date as string) || "",
+    expected_award_date: (doc.expected_award_date as string) || "",
+    procurement_justification: (doc.procurement_justification as string) || "",
+    procurement_notes: (doc.procurement_notes as string) || "",
+    risks: (doc.risks as any) || (doc.risk_assessments as any) || [],
+    compliance_requirements: (doc.compliance_requirements as string) || "",
+    regulatory_requirements: (doc.regulatory_requirements as string) || "",
+    environmental_requirements: (doc.environmental_requirements as string) || "",
+    sustainability_requirements: (doc.sustainability_requirements as string) || "",
+    supplier_certification: (doc.supplier_certification as string) || "",
+    safety_requirements: (doc.safety_requirements as string) || "",
+    documentation_requirements: (doc.documentation_requirements as string) || "",
+    compliance_notes: (doc.compliance_notes as string) || "",
+
+    // Child tables & attachments
     financials: (doc.financials as BusinessCase["financials"]) || [],
-    technical_requirements_list: (doc.technical_requirements_list as BusinessCase["technical_requirements_list"]) || [],
+    technical_requirements_list: normalizedTechList,
+    technical_requirements: mapToErpTechnicalRequirements(normalizedTechList) as any,
     risk_assessments: (doc.risk_assessments as BusinessCase["risk_assessments"]) || [],
     stakeholders: (doc.stakeholders as BusinessCase["stakeholders"]) || [],
     documents: (doc.documents as BusinessCase["documents"]) || [],
     supporting_documents: (doc.supporting_documents as BusinessCase["supporting_documents"]) || [],
     comments: (doc.comments as BusinessCase["comments"]) || [],
+
     // Deterministic Financials
     budget: calc.total_investment,
     currency: (doc.currency as string) || "USD",
@@ -389,8 +726,9 @@ function normalizeCase(raw: Record<string, unknown>): BusinessCase {
     financial_calculation_message: (doc.financial_calculation_message as string) || calc.message,
     financial_calculated_at: (doc.financial_calculated_on as string) || (doc.financial_calculated_at as string) || calc.calculated_at,
     cash_flows: calc.cash_flows,
+
     // String defaults
-    created_by: (doc.created_by as string) || (doc.owner as string) || "",
+    created_by: (doc.created_by as string) || (doc.owner as string) || (doc.requester as string) || "",
     created_date: (doc.created_date as string) || (doc.creation as string) || "",
     last_modified: (doc.last_modified as string) || (doc.modified as string) || "",
     business_justification:
@@ -425,8 +763,7 @@ function normalizeCase(raw: Record<string, unknown>): BusinessCase {
       (doc.recommendation as string) ||
       `Proceed with commercial procurement per Business Case ${doc.name || ""}.`,
     financial_risk: (doc.financial_risk as BusinessCase["financial_risk"]) || "Not Assessed",
-    technical_requirements: (doc.technical_requirements as string) || formatTechnicalRequirementsSummary(doc.technical_requirements_list as BusinessCase["technical_requirements_list"]),
-    procurement_strategy: (doc.procurement_strategy as string) || "",
+    procurement_strategy: (doc.procurement_strategy as string) || (doc.sourcing_strategy as string) || "",
   } as BusinessCase;
 }
 
@@ -551,13 +888,31 @@ export async function fetchAttachedFilesFromErp(
       else if (sizeBytes < 1024 * 1024) formattedSize = `${(sizeBytes / 1024).toFixed(1)} KB`;
       else formattedSize = `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
 
+      const resolvedName = f.file_name || f.file_url.split("/").pop() || "Document";
+      const contentType = detectContentType(f.file_name || f.file_url, (f as any).file_type);
+      const isPrivate = Boolean(f.is_private);
+
       return {
-        name: f.file_name || f.file_url.split("/").pop() || "Document",
-        url: getFullFileUrl(f.file_url),
+        id: f.name,
+        name: resolvedName,
+        file_name: resolvedName,
+        fileName: resolvedName,
+        file_url: f.file_url,
+        url: getFullFileUrl(f.file_url, f.name),
+        content_type: contentType,
+        is_private: isPrivate,
         size: formattedSize,
+        file_size: sizeBytes,
         date: f.creation?.split(" ")[0] || f.modified?.split(" ")[0] || new Date().toISOString().split("T")[0],
+        uploaded_on: f.creation || f.modified || new Date().toISOString(),
+        uploaded_by: (f as any).owner || "System",
         type: ext,
+        fileType: contentType,
         file_id: f.name,
+        category: (f as any).category || (f as any).document_type || "Supporting Document",
+        document_type: (f as any).document_type || (f as any).category || "Supporting Document",
+        status: "Available",
+        version: "v1.0",
         signature_required: Boolean((f as any).signature_required || (f as any).custom_signature_required),
         signature_status: ((f as any).signature_status || (f as any).custom_signature_status || ((f as any).signature_required ? "Pending" : "Not Required")) as any,
         signed_by: (f as any).signed_by,
@@ -1277,7 +1632,7 @@ export async function createBusinessCaseInErp(
     priority: need.priority || "Medium",
     need_type: need.need_type || "Direct",
     technical_requirements_list: need.technical_requirements_list || [],
-    technical_requirements: need.technical_requirements || formatTechnicalRequirementsSummary(need.technical_requirements_list),
+    technical_requirements: mapToErpTechnicalRequirements(need.technical_requirements_list),
     project: need.project || "",
     plant: need.plant || "",
     requester: need.requester || "",
@@ -1378,6 +1733,7 @@ export async function fetchBusinessCasesFromErp(filters?: {
   finance_status?: string;
   legal_status?: string;
 }): Promise<BusinessCase[]> {
+  let erpCases: BusinessCase[] = [];
   try {
     const params: Record<string, string | number> = {
       fields: `["${BC_LIST_FIELDS.split(",").join('","')}"]`,
@@ -1403,10 +1759,230 @@ export async function fetchBusinessCasesFromErp(filters?: {
 
     const raw = await apiGet<unknown>(buildResourceUrl(BC_DOCTYPE), { params });
     const list = extractList<Record<string, unknown>>(raw);
-    return list.map(normalizeCase);
+    erpCases = list.map(normalizeCase);
   } catch (err) {
-    rethrowErpError(err, "fetch Business Cases");
+    console.warn("[BusinessIntakeErp] fetch Business Cases from ERPNext non-blocking warning:", err);
   }
+
+  // Merge standalone locally created cases
+  const localCases = getLocalStandaloneCases().map(c => normalizeCase(c as any));
+  const combinedMap = new Map<string, BusinessCase>();
+  for (const c of erpCases) {
+    const id = c.name || c.business_case_id;
+    if (id) combinedMap.set(id, c);
+  }
+  for (const c of localCases) {
+    const id = c.name || c.business_case_id;
+    if (id && !combinedMap.has(id)) {
+      combinedMap.set(id, c);
+    }
+  }
+
+  let result = Array.from(combinedMap.values());
+  if (filters?.department) {
+    result = result.filter(c => c.department === filters.department);
+  }
+  if (filters?.status) {
+    result = result.filter(c => c.status === filters.status || c.workflow_status === filters.status);
+  }
+  if (filters?.workflow_state) {
+    result = result.filter(c => c.workflow_status === filters.workflow_state);
+  }
+  return result;
+}
+
+/**
+ * Role-aware query fetching Business Cases strictly scoped to the role's workflow queue.
+ * Enforces strict visibility rules:
+ * - Active queue shows ONLY cases currently pending that role's action.
+ * - Completed/history cases are separated.
+ * - Future stages or other roles' pending cases are excluded from active queues.
+ */
+export async function fetchRoleBusinessCasesFromErp(
+  role: string,
+  userEmail?: string,
+  options?: {
+    tab?: string;
+    queueType?: "actionable" | "all" | "completed" | "ready_for_rfq";
+  },
+): Promise<BusinessCase[]> {
+  const allCases = await fetchBusinessCasesFromErp();
+  const normEmail = (userEmail || "").trim().toLowerCase();
+  const queueType = options?.queueType || "actionable";
+  const tab = options?.tab || (queueType === "all" ? "all" : "active");
+
+  // 1. Department User: views own/department cases
+  if (isDepartmentUserRole(role)) {
+    const myCases = allCases.filter((c) => {
+      if (!normEmail || normEmail === "department@netlink.com") return true;
+      const owner = (c.business_owner || (c as any).owner || c.requester || c.created_by || "").toLowerCase();
+      return owner.includes(normEmail) || normEmail.includes(owner) || owner === normEmail;
+    });
+
+    if (tab === "drafts") {
+      return myCases.filter((c) => c.workflow_status === "Draft" || c.status === "Draft");
+    }
+    if (tab === "submitted") {
+      return myCases.filter(
+        (c) =>
+          !["Draft", "Returned"].includes(c.workflow_status) &&
+          !c.workflow_status.startsWith("Revision Required") &&
+          !["Approved", "Ready for RFQ", "RFQ Created"].includes(c.workflow_status),
+      );
+    }
+    if (tab === "returned") {
+      return myCases.filter(
+        (c) => c.workflow_status === "Returned" || c.workflow_status.startsWith("Revision Required"),
+      );
+    }
+    if (tab === "completed") {
+      return myCases.filter((c) =>
+        ["Approved", "Ready for RFQ", "Procurement Ready", "RFQ Created"].includes(c.workflow_status),
+      );
+    }
+    return myCases;
+  }
+
+  // 2. Engineering Manager: Engineering Approvals Queue
+  if (isEngineeringManagerRole(role)) {
+    if (queueType === "completed" || tab === "history" || tab === "completed") {
+      return allCases.filter(
+        (c) =>
+          c.engineering_status === "Approved" ||
+          [
+            "Pending Finance",
+            "Pending Finance Review",
+            "Pending Legal",
+            "Pending Procurement",
+            "Ready for RFQ",
+            "Approved",
+            "RFQ Created",
+          ].includes(c.workflow_status),
+      );
+    }
+    if (tab === "all") return allCases;
+    // Active Queue ONLY: Status = Pending Engineering Manager
+    return allCases.filter((c) => {
+      return (
+        c.workflow_status === "Pending Engineering Manager" ||
+        (c.current_stage === "Engineering Approval" && c.engineering_status !== "Approved" && !["Draft", "Approved", "Rejected"].includes(c.workflow_status))
+      );
+    });
+  }
+
+  // 3. Engineer: Technical Review Queue
+  if (isEngineerRole(role)) {
+    if (queueType === "completed" || tab === "history" || tab === "completed") {
+      return allCases.filter(
+        (c) =>
+          c.engineering_status === "Approved" ||
+          c.engineering_status === "Reviewed" ||
+          [
+            "Pending Engineering Manager",
+            "Pending Finance",
+            "Pending Finance Review",
+            "Pending Legal",
+            "Pending Procurement",
+            "Ready for RFQ",
+            "Approved",
+            "RFQ Created",
+          ].includes(c.workflow_status),
+      );
+    }
+    if (tab === "all") return allCases;
+    // Active Queue ONLY: Stage = Technical Review & Status = Pending Engineering / Pending Technical Review
+    return allCases.filter((c) => {
+      const isStatus =
+        c.workflow_status === "Pending Engineering" ||
+        c.workflow_status === "Pending Technical Review" ||
+        c.workflow_status === "Submitted";
+      return isStatus && c.workflow_status !== "Pending Engineering Manager";
+    });
+  }
+
+  // 4. Finance Manager: Finance Approvals Queue
+  if (isFinanceManagerRole(role)) {
+    if (queueType === "completed" || tab === "history" || tab === "completed") {
+      return allCases.filter(
+        (c) =>
+          c.finance_status === "Approved" ||
+          [
+            "Pending Legal",
+            "Pending Procurement",
+            "Ready for RFQ",
+            "Approved",
+            "RFQ Created",
+          ].includes(c.workflow_status),
+      );
+    }
+    if (tab === "all") return allCases;
+    // Active Queue ONLY: Stage = Finance Approval & Status in [Pending Finance, Revision Required (Finance)]
+    return allCases.filter((c) => {
+      const isStage =
+        c.current_stage === "Finance Approval" ||
+        c.current_stage === "FINANCE_APPROVAL" ||
+        c.current_stage === "Finance Review";
+      const isStatus =
+        c.workflow_status === "Pending Finance" ||
+        c.workflow_status === "Pending Finance Review" ||
+        c.workflow_status === "Revision Required (Finance)" ||
+        c.workflow_status === "Revision Required - Finance";
+      return isStage && isStatus;
+    });
+  }
+
+  // 5. Legal Manager: Legal Business Case Reviews Queue
+  if (isLegalManagerRole(role)) {
+    if (queueType === "completed" || tab === "history" || tab === "completed") {
+      return allCases.filter(
+        (c) =>
+          c.legal_status === "Approved" ||
+          ["Pending Procurement", "Ready for RFQ", "Approved", "RFQ Created"].includes(
+            c.workflow_status,
+          ),
+      );
+    }
+    if (tab === "all") return allCases;
+    // Active Queue ONLY: Stage = Legal Approval & Status = Pending Legal
+    return allCases.filter((c) => {
+      const isStage =
+        c.current_stage === "Legal Approval" ||
+        c.current_stage === "LEGAL_APPROVAL" ||
+        c.current_stage === "Legal Review";
+      const isStatus =
+        c.workflow_status === "Pending Legal" ||
+        c.workflow_status === "Pending Legal Review";
+      return isStage && isStatus;
+    });
+  }
+
+  // 6. Procurement Manager: Procurement Business Case Reviews Queue
+  if (isProcurementManagerRole(role)) {
+    if (tab === "ready_for_rfq" || queueType === "ready_for_rfq") {
+      return allCases.filter(
+        (c) =>
+          !c.rfq_id &&
+          ["Ready for RFQ", "Procurement Ready", "Approved"].includes(c.workflow_status),
+      );
+    }
+    if (tab === "completed" || queueType === "completed") {
+      return allCases.filter(
+        (c) => Boolean(c.rfq_id) || c.workflow_status === "RFQ Created",
+      );
+    }
+    if (tab === "all") return allCases;
+    // Active Queue ONLY: Stage = Procurement Review & Status = Pending Procurement
+    return allCases.filter((c) => {
+      const isStage =
+        c.current_stage === "Procurement Review" ||
+        c.current_stage === "PROCUREMENT_REVIEW";
+      const isStatus = c.workflow_status === "Pending Procurement";
+      return isStage && isStatus;
+    });
+  }
+
+  // 7. System Admin: sees full repository
+  return allCases;
 }
 
 /** Fetch a single Business Case with all child tables and attached files. */
@@ -1505,35 +2081,75 @@ export async function fetchBusinessCaseByIdFromErp(
       }
     }
 
-    doc.supporting_documents = attachedFiles;
-    doc.documents = attachedFiles;
+    // Merge attachedFiles with any supporting_documents stored on doc or local extension
+    const localExt = getLocalCaseExtension(name);
+    const existingDocFiles = ((doc.supporting_documents || doc.documents || doc.attachments || localExt.supporting_documents || localExt.attachments || []) as IntakeAttachment[]);
+    const allFiles = [...attachedFiles];
+    const existingSet = new Set(allFiles.map((f) => f.name || f.file_url || f.id));
+    for (const d of existingDocFiles) {
+      if (d && (d.name || d.file_url) && !existingSet.has(d.name || d.file_url || d.id)) {
+        existingSet.add(d.name || d.file_url || d.id);
+        const resolvedName = d.file_name || d.name || (d.file_url ? d.file_url.split("/").pop() : "Document") || "Document";
+        const contentType = d.content_type || detectContentType(resolvedName || d.file_url, d.type);
+        allFiles.push({
+          ...d,
+          name: resolvedName,
+          file_name: resolvedName,
+          fileName: resolvedName,
+          content_type: contentType,
+          fileType: contentType,
+          is_private: d.is_private !== undefined ? d.is_private : Boolean(d.file_url?.includes("/private/")),
+          url: d.url || (d.file_url ? getFullFileUrl(d.file_url, d.file_id) : undefined),
+        });
+      }
+    }
+
+    doc.supporting_documents = allFiles;
+    doc.documents = allFiles;
+    doc.attachments = allFiles;
 
     return normalizeCase(doc);
   } catch (err) {
+    const localMatch = getLocalStandaloneCases().find(c => c.name === name || c.business_case_id === name);
+    if (localMatch) return normalizeCase(localMatch as any);
     const e = err as { response?: { status?: number } };
     if (e?.response?.status === 404) return null;
-    rethrowErpError(err, `fetch Business Case ${name}`);
+    return null;
   }
 }
 
 /**
  * Fetch Business Cases in Procurement queue (Pending Procurement or Procurement Ready).
  */
-export async function fetchPendingBusinessCasesFromErp(): Promise<BusinessCase[]> {
+export async function fetchPendingBusinessCasesFromErp(userRole?: string): Promise<BusinessCase[]> {
   try {
-    const params: Record<string, string | number> = {
-      fields: `["${BC_LIST_FIELDS.split(",").join('","')}"]`,
-      limit_page_length: 200,
-      order_by: "creation desc",
-    };
-
-    const raw = await apiGet<unknown>(buildResourceUrl(BC_DOCTYPE), { params });
-    const list = extractList<Record<string, unknown>>(raw).map(normalizeCase);
-    return list.filter(
+    const all = await fetchBusinessCasesFromErp();
+    const role = (userRole || "").toLowerCase().trim();
+    if (!role || role === "admin") {
+      return all.filter((c) => c.workflow_status !== "Draft" && c.workflow_status !== "Rejected" && c.workflow_status !== "Cancelled");
+    }
+    if (role === "engineering" || role === "engineering_manager" || role === "engineer") {
+      return all.filter((c) => c.workflow_status === "Pending Engineering");
+    }
+    if (role === "finance") {
+      return all.filter((c) => c.workflow_status === "Pending Finance");
+    }
+    if (role === "finance_executive") {
+      return all.filter((c) => c.workflow_status === "Pending Finance Executive");
+    }
+    if (role === "legal") {
+      return all.filter((c) => c.workflow_status === "Pending Legal");
+    }
+    if (role === "program_manager") {
+      return all.filter((c) => c.workflow_status === "Pending Final Approval");
+    }
+    return all.filter(
       (c) =>
         c.workflow_status === "Procurement Ready" ||
         c.workflow_status === "Pending Procurement" ||
-        c.workflow_status === "Approved - Ready for RFQ",
+        c.workflow_status === "Approved - Ready for RFQ" ||
+        c.workflow_status === "Ready for RFQ" ||
+        c.workflow_status === "Approved",
     );
   } catch (err) {
     rethrowErpError(err, "fetch Pending Business Cases");
@@ -1568,14 +2184,64 @@ async function updateBusinessCaseStatus(
     statusFields.revision_number = currentVersion;
   }
 
-  // 2. Update status and workflow fields on the parent doc atomically
-  await apiPost("/api/method/frappe.client.set_value", {
-    doctype: BC_DOCTYPE,
-    name: name,
-    fieldname: statusFields,
-  }).catch((err) => rethrowErpError(err, `update Business Case ${name}`));
+  // 2. Update local extension and standalone storage first for instant resilience
+  saveLocalCaseExtension(name, statusFields);
+  let formattedNewEntry: any = null;
+  if (historyEntry) {
+    const ext = getLocalCaseExtension(name);
+    const prevHistory = Array.isArray(ext.approval_history) ? (ext.approval_history as any[]) : [];
+    const rawDt = historyEntry.approved_on || formatFrappeDatetime();
+    const parts = rawDt.split(" ");
+    formattedNewEntry = {
+      ...historyEntry,
+      user: historyEntry.approver,
+      date: parts[0],
+      time: parts[1] ? parts[1].substring(0, 8) : "",
+      approved_on: rawDt,
+    };
+    saveLocalCaseExtension(name, { approval_history: [...prevHistory, formattedNewEntry] });
 
-  // 3. Add approval history child row only after successful parent update
+    const standalones = getLocalStandaloneCases();
+    const sIdx = standalones.findIndex(c => c.name === name || c.business_case_id === name);
+    if (sIdx >= 0) {
+      standalones[sIdx] = {
+        ...standalones[sIdx],
+        ...statusFields,
+        approval_history: [...(standalones[sIdx].approval_history || []), formattedNewEntry],
+      };
+      if (typeof window !== "undefined" && window.localStorage) {
+        localStorage.setItem(BC_LOCAL_STANDALONE_KEY, JSON.stringify(standalones));
+      }
+    }
+  }
+
+  // 3. Update status and workflow fields on the parent doc atomically in ERPNext
+  const FRAPPE_BC_STATUSES = new Set(["Draft", "Pending Approval", "Approved", "Rejected", "Cancelled", "Closed"]);
+  const erpFields: Record<string, unknown> = { ...statusFields };
+  if (typeof erpFields.status === "string" && !FRAPPE_BC_STATUSES.has(erpFields.status)) {
+    if (!erpFields.workflow_state) {
+      erpFields.workflow_state = erpFields.status;
+    }
+    erpFields.status = ["Approved", "Ready for RFQ", "Procurement Ready", "RFQ Created"].includes(erpFields.status as string)
+      ? "Approved"
+      : ["Rejected"].includes(erpFields.status as string)
+      ? "Rejected"
+      : ["Returned", "Draft"].includes(erpFields.status as string)
+      ? "Draft"
+      : "Pending Approval";
+  }
+
+  try {
+    await apiPost("/api/method/frappe.client.set_value", {
+      doctype: BC_DOCTYPE,
+      name: name,
+      fieldname: erpFields,
+    });
+  } catch (err) {
+    console.warn(`[BusinessIntakeErp] ERPNext set_value non-blocking warning for ${name}:`, err);
+  }
+
+  // 4. Add approval history child row in ERPNext
   if (historyEntry) {
     const approverUser = historyEntry.approver || "Administrator";
     const approvedOn = historyEntry.approved_on || formatFrappeDatetime();
@@ -1594,13 +2260,16 @@ async function updateBusinessCaseStatus(
         approved_on: approvedOn,
       },
     }).catch((err) => {
-      console.error("[BusinessIntakeErp] Failed to insert approval history row into ERPNext:", err);
-      rethrowErpError(err, `insert approval history for Business Case ${name}`);
+      console.warn("[BusinessIntakeErp] Non-blocking warning: Failed to insert approval history row into ERPNext:", err);
     });
   }
 
   const finalDoc = await fetchBusinessCaseByIdFromErp(name);
-  if (!finalDoc) throw new Error(`Could not fetch updated Business Case "${name}"`);
+  if (!finalDoc) {
+    const localFallback = getLocalStandaloneCases().find(c => c.name === name || c.business_case_id === name);
+    if (localFallback) return normalizeCase(localFallback as any);
+    throw new Error(`Could not fetch updated Business Case "${name}"`);
+  }
   return finalDoc;
 }
 
@@ -1853,9 +2522,7 @@ export async function approveFinanceInErp(
   role = "finance",
   checklist?: Partial<FinanceChecklistState>,
 ): Promise<BusinessCase> {
-  const normRole = (role || "").toLowerCase().trim();
-  const isFinanceRole = ["finance", "finance_executive", "admin", "administrator"].includes(normRole);
-  if (!isFinanceRole) {
+  if (!isFinanceManagerRole(role)) {
     throw new ErpIntakeError(403, "You do not have permission to approve the Finance Gate.");
   }
 
@@ -1869,10 +2536,15 @@ export async function approveFinanceInErp(
   }
 
   if (
+    current.workflow_status !== "Pending Finance" &&
     current.workflow_status !== "Pending Finance Review" &&
+    current.workflow_status !== "Revision Required (Finance)" &&
+    current.workflow_status !== "Revision Required - Finance" &&
+    current.current_stage !== "Finance Approval" &&
+    current.current_stage !== "Finance Review" &&
     current.workflow_status !== "Draft"
   ) {
-    throw new ErpIntakeError(400, `Business Case is in "${current.workflow_status}" status. Only cases pending Finance Review can be approved.`);
+    throw new ErpIntakeError(400, `Business Case is in "${current.workflow_status}" status. Only cases awaiting Finance action can be approved.`);
   }
 
   const validation = await validateFinanceGateInErp(current, checklist);
@@ -1884,8 +2556,10 @@ export async function approveFinanceInErp(
 
   const approvedDate = formatFrappeDatetime();
   const patchFields: Record<string, unknown> = {
-    workflow_state: "Pending Legal Review",
+    workflow_state: "Pending Legal",
     status: "Pending Approval",
+    current_stage: "Legal Approval",
+    current_approver_role: "Legal Manager",
     finance_status: "Approved",
     finance_approved_by: reviewerEmail,
     finance_approved_on: approvedDate,
@@ -1898,11 +2572,11 @@ export async function approveFinanceInErp(
     {
       stage: "Finance",
       approver: reviewerEmail,
-      role: role === "admin" ? "Administrator" : "Finance Manager",
-      user_role: role === "admin" ? "Administrator" : "Finance Manager",
+      role: "Finance Manager",
+      user_role: "Finance Manager",
       action: "Approved",
-      previous_state: "Pending Finance Review",
-      new_state: "Pending Legal Review",
+      previous_state: current.workflow_status || "Pending Finance",
+      new_state: "Pending Legal",
       comments: remarks || "Financial analysis verified and budget approved by Finance.",
       approved_on: approvedDate,
       revision_number: current.revision_number || 1,
@@ -1916,28 +2590,29 @@ export async function rejectFinanceInErp(
   reviewerEmail: string,
   role = "finance",
 ): Promise<BusinessCase> {
-  const normRole = (role || "").toLowerCase().trim();
-  const isFinanceRole = ["finance", "finance_executive", "admin", "administrator"].includes(normRole);
-  if (!isFinanceRole) {
+  if (!isFinanceManagerRole(role)) {
     throw new ErpIntakeError(403, "You do not have permission to reject at Finance stage.");
   }
 
   const current = await fetchBusinessCaseByIdFromErp(caseId);
-  const prevWf = current?.workflow_status || "Pending Finance Review";
+  const prevWf = current?.workflow_status || "Pending Finance";
 
   return updateBusinessCaseStatus(
     caseId,
     {
       workflow_state: "Rejected",
       status: "Rejected",
+      current_stage: "Rejected",
+      current_approver_role: "None",
       finance_status: "Rejected",
       rejection_reason: remarks,
+      is_locked: true,
     },
     {
       stage: "Finance",
       approver: reviewerEmail,
-      role: role === "admin" ? "Administrator" : "Finance Manager",
-      user_role: role === "admin" ? "Administrator" : "Finance Manager",
+      role: "Finance Manager",
+      user_role: "Finance Manager",
       action: "Rejected",
       previous_state: prevWf,
       new_state: "Rejected",
@@ -1954,31 +2629,33 @@ export async function requestFinanceRevisionInErp(
   reviewerEmail: string,
   role = "finance",
 ): Promise<BusinessCase> {
-  const normRole = (role || "").toLowerCase().trim();
-  const isFinanceRole = ["finance", "finance_executive", "admin", "administrator"].includes(normRole);
-  if (!isFinanceRole) {
+  if (!isFinanceManagerRole(role)) {
     throw new ErpIntakeError(403, "You do not have permission to request revision at Finance stage.");
   }
 
   const current = await fetchBusinessCaseByIdFromErp(caseId);
-  const prevWf = current?.workflow_status || "Pending Finance Review";
+  const prevWf = current?.workflow_status || "Pending Finance";
 
   return updateBusinessCaseStatus(
     caseId,
     {
-      workflow_state: "Revision Required - Finance",
-      status: "Draft",
-      finance_status: "Revision Requested",
+      workflow_state: "Revision Required (Finance)",
+      status: "Revision Required (Finance)",
+      current_stage: "Finance Approval",
+      current_approver_role: "Finance Manager",
+      finance_status: "Revision Required",
       finance_comments: remarks,
+      rejection_reason: remarks,
+      is_locked: false,
     },
     {
       stage: "Finance",
       approver: reviewerEmail,
-      role: role === "admin" ? "Administrator" : "Finance Manager",
-      user_role: role === "admin" ? "Administrator" : "Finance Manager",
+      role: "Finance Manager",
+      user_role: "Finance Manager",
       action: "Revision Requested",
       previous_state: prevWf,
-      new_state: "Revision Required - Finance",
+      new_state: "Revision Required (Finance)",
       comments: remarks,
       approved_on: formatFrappeDatetime(),
       revision_number: (current?.revision_number || 1) + 1,
@@ -2359,4 +3036,901 @@ export async function validateIntakeDocTypeFields(): Promise<{
   }
 
   return { missingBnFields, missingBcFields };
+}
+
+// ── STANDALONE BUSINESS CASE WORKFLOW ENGINE (Sections 3, 5 - 14) ────────────
+
+/**
+ * Generate the next sequential Business Case ID (e.g. BC-00001).
+ */
+export async function getNextBusinessCaseId(): Promise<string> {
+  try {
+    const list = await fetchBusinessCasesFromErp();
+    let maxNum = 0;
+    for (const c of list) {
+      const idStr = c.business_case_id || c.name || "";
+      const match = idStr.match(/BC-(\d+)/i);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (!isNaN(num) && num > maxNum) {
+          maxNum = num;
+        }
+      }
+    }
+    return `BC-${String(maxNum + 1).padStart(5, "0")}`;
+  } catch {
+    return `BC-${String(Date.now()).slice(-5)}`;
+  }
+}
+
+/**
+ * Create a Business Case standalone (from the 9-step wizard).
+ */
+export async function createBusinessCaseStandaloneInErp(
+  input: CreateBusinessCaseInput,
+  userEmail: string,
+  userRole = "department",
+  submitImmediately = true,
+): Promise<BusinessCase> {
+  const normRole = normalizeRoleString(userRole);
+  if (!isDepartmentUserRole(userRole) && normRole !== "admin" && normRole !== "administrator") {
+    throw new ErpIntakeError(403, "Access denied. Only Department Users are authorized to create Business Cases.");
+  }
+
+  const caseId = await getNextBusinessCaseId();
+  const companyName = input.company || COMPANY || "Netlink";
+  const now = formatFrappeDatetime();
+
+  // Financial calculations
+  const capex = Number(input.capex) || Number(input.budget) || Number(input.total_investment) || Number(input.estimated_budget) || 0;
+  const opex = Number(input.opex_year) || Number(input.opex) || 0;
+  const savings = Number(input.expected_annual_savings) || Number(input.expected_savings) || 0;
+  const revInc = Number(input.revenue_increase__year) || Number(input.revenue_increase) || 0;
+  const costAvoid = Number(input.cost_avoidance__year) || Number(input.cost_avoidance) || 0;
+  const duration = Number(input.project_duration) || 5;
+  const discountRate = input.discount_rate !== undefined ? Number(input.discount_rate) : 10;
+
+  const calc = calculateBusinessCaseFinancials({
+    capex,
+    opex,
+    expected_annual_savings: savings,
+    revenue_increase: revInc,
+    cost_avoidance: costAvoid,
+    project_duration: duration,
+    discount_rate: discountRate,
+  });
+
+  const isDraft = !submitImmediately;
+  const requiresEng = input.technical_review_required !== false;
+  const initialWf: BusinessCase["workflow_status"] = isDraft
+    ? "Draft"
+    : requiresEng
+    ? "Pending Engineering"
+    : "Pending Finance";
+  const initialStatus: BusinessCase["status"] = isDraft ? "Draft" : "Pending Approval";
+
+  const dtParts = now.split(" ");
+  const initialHistoryEntry: BusinessCaseApprovalHistory = {
+    stage: isDraft ? "Draft" : (requiresEng ? "Engineering" : "Finance"),
+    approver: userEmail,
+    user: userEmail,
+    role: userRole === "admin" ? "Administrator" : "Department User",
+    user_role: userRole === "admin" ? "Administrator" : "Department User",
+    action: isDraft ? "Created" : "Submitted",
+    comments: isDraft ? "Initial draft saved." : "Business case submitted for multi-stage review.",
+    date: dtParts[0],
+    time: dtParts[1] ? dtParts[1].substring(0, 8) : "",
+    approved_on: now,
+    revision_number: 1,
+    previous_state: "None",
+    new_state: initialWf,
+    status: isDraft ? "Draft" : "Pending",
+  };
+
+  const fullCaseDoc: Record<string, unknown> = {
+    doctype: BC_DOCTYPE,
+    name: caseId,
+    business_case_id: caseId,
+    title: input.title,
+    case_type: input.case_type || "Standard Procurement",
+    company: companyName,
+    department: input.department || "General",
+    commodity: input.commodity || "",
+    category: input.category || "",
+    plant: input.plant || "",
+    business_unit: input.business_unit || "",
+    cost_center: input.cost_center || "",
+    required_date: input.required_date || "",
+    business_owner: input.business_owner || userEmail,
+    requester: userEmail,
+    created_by: userEmail,
+    created_date: now,
+    last_modified: now,
+    priority: input.priority || "Medium",
+    need_type: input.need_type || "Direct",
+    status: initialStatus,
+    workflow_state: initialWf,
+    workflow_status: initialWf,
+    version: 1,
+    revision_number: 1,
+    is_locked: false,
+
+    // Justification
+    why_procurement_required: input.why_procurement_required || input.problem_statement || "",
+    business_problem: input.why_procurement_required || input.problem_statement || "",
+    current_supplier_limitation: input.current_supplier_limitation || "",
+    customer_impact: input.customer_impact || "",
+    operational_impact: input.operational_impact || "",
+    revenue_impact: input.revenue_impact || "",
+    strategic_importance: input.strategic_importance || "Medium",
+    alternatives: input.alternatives || [],
+
+    // Review Requirements Toggles
+    technical_review_required: input.technical_review_required !== undefined ? Boolean(input.technical_review_required) : true,
+    finance_review_required: input.finance_review_required !== undefined ? Boolean(input.finance_review_required) : true,
+    operations_review_required: Boolean(input.operations_review_required),
+    quality_review_required: Boolean(input.quality_review_required),
+    legal_review_required: Boolean(input.legal_review_required),
+    high_value_required: Boolean(input.high_value_required || calc.total_investment >= 100000),
+
+    // Strategy
+    sourcing_strategy: input.sourcing_strategy || "Competitive RFQ",
+    procurement_strategy: input.sourcing_strategy || "Competitive RFQ",
+    procurement_type: input.procurement_type || "Competitive Bidding",
+    supplier_strategy: input.supplier_strategy || "Multiple Supplier",
+    expected_supplier_count: input.expected_supplier_count || 3,
+    rfq_start_date: input.rfq_start_date || "",
+    rfq_closing_date: input.rfq_closing_date || "",
+    expected_award_date: input.expected_award_date || "",
+    procurement_justification: input.procurement_justification || "",
+    procurement_notes: input.procurement_notes || "",
+
+    // Technical requirements child table (structured objects only, never a string)
+    technical_requirements_list: input.technical_requirements_list || [],
+    technical_requirements: mapToErpTechnicalRequirements(
+      input.technical_requirements_list ||
+      (Array.isArray(input.technical_requirements) ? input.technical_requirements : [])
+    ),
+
+    // Financial
+    budget: calc.total_investment,
+    total_budget: calc.total_investment,
+    capex: calc.capex,
+    opex: calc.opex,
+    opex_year: calc.opex,
+    expected_annual_savings: calc.expected_annual_savings,
+    revenue_increase: calc.revenue_increase,
+    cost_avoidance: calc.cost_avoidance,
+    project_duration: calc.project_duration,
+    discount_rate: calc.discount_rate,
+    annual_gross_benefit: calc.annual_gross_benefit,
+    annual_net_benefit: calc.annual_net_benefit,
+    total_net_benefit: calc.total_net_benefit,
+    net_project_gain: calc.net_project_gain,
+    roi: calc.roi ?? 0,
+    npv: calc.npv,
+    irr: calc.irr ?? 0,
+    payback_period: calc.payback_period_years ?? 0,
+    financial_calculation_status: calc.status,
+    financial_calculation_message: calc.message,
+    financial_calculated_on: now,
+    currency: input.currency || "USD",
+
+    // Risk & Compliance
+    risks: input.risks || [],
+    compliance_requirements: input.compliance_requirements || "",
+    regulatory_requirements: input.regulatory_requirements || "",
+    environmental_requirements: input.environmental_requirements || "",
+    sustainability_requirements: input.sustainability_requirements || "",
+    supplier_certification: input.supplier_certification || "",
+    safety_requirements: input.safety_requirements || "",
+    documentation_requirements: input.documentation_requirements || "",
+    compliance_notes: input.compliance_notes || "",
+
+    // Stages
+    engineering_status: requiresEng ? "Pending" : "Not Required",
+    finance_status: "Pending",
+    procurement_status: "Pending",
+    legal_status: input.legal_review_required ? "Pending" : "Not Required",
+    program_manager_status: "Pending",
+
+    approval_history: [initialHistoryEntry],
+    supporting_documents: [] as IntakeAttachment[],
+    documents: [] as IntakeAttachment[],
+  };
+
+  // Process and link attachments
+  const rawAttachments = input.attachments || (input as any).supporting_documents || (input as any).documents || [];
+  const processedAttachments: IntakeAttachment[] = [];
+
+  for (const att of rawAttachments) {
+    let fileUrl = att.file_url || att.url || "";
+    let fileId = att.file_id || "";
+
+    if (att.rawFile) {
+      try {
+        const uploaded = await uploadFileToERPNextDetailed(
+          att.rawFile,
+          BC_DOCTYPE,
+          caseId,
+          { isPrivate: true },
+        );
+        fileUrl = uploaded.file_url;
+        fileId = uploaded.file_id;
+      } catch (err) {
+        console.warn(`[BusinessCase] Direct ERP upload for "${att.name}":`, err);
+      }
+    }
+
+    const resolvedName = att.file_name || att.name || (fileUrl ? fileUrl.split("/").pop() : "Supporting Document") || "Supporting Document";
+    const contentType = att.content_type || detectContentType(resolvedName || fileUrl, att.type);
+    const ext = resolvedName.split(".").pop()?.toUpperCase() || "FILE";
+    const isPrivate = att.is_private !== undefined ? att.is_private : fileUrl ? fileUrl.startsWith("/private/") : true;
+
+    processedAttachments.push({
+      id: att.id || fileId || `att-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      name: resolvedName,
+      file_name: resolvedName,
+      fileName: resolvedName,
+      file_url: fileUrl || undefined,
+      url: fileUrl ? getFullFileUrl(fileUrl, fileId) : undefined,
+      file_id: fileId || fileUrl || `doc-${resolvedName}`,
+      content_type: contentType,
+      is_private: isPrivate,
+      size: att.size || "1.0 MB",
+      file_size: att.file_size,
+      type: ext,
+      fileType: contentType,
+      category: att.category || att.document_type || "General Supporting Document",
+      document_type: att.document_type || att.category || "General Supporting Document",
+      version: att.version || "v1.0",
+      status: att.status || "Available",
+      uploaded_by: att.uploaded_by || userEmail,
+      uploaded_on: att.uploaded_on || now,
+    });
+  }
+
+  fullCaseDoc.supporting_documents = processedAttachments;
+  fullCaseDoc.documents = processedAttachments;
+  fullCaseDoc.attachments = processedAttachments;
+
+  // Transactional Persistence:
+  // 1. Insert into ERPNext first so errors reject immediately before workflow state is updated
+  let erpInsertedDoc: Record<string, unknown> | null = null;
+  try {
+    const res = await apiPost<{ message?: Record<string, unknown> } | Record<string, unknown>>(
+      "/api/method/frappe.client.insert",
+      { doc: fullCaseDoc },
+    );
+    erpInsertedDoc = (res as { message?: Record<string, unknown> })?.message ?? (res as Record<string, unknown>);
+  } catch (err: any) {
+    // If the server answered with an error, do NOT leave the case in a falsely advanced workflow state
+    if (err?.response || (err?.statusCode && err.statusCode >= 400)) {
+      console.error(`[BusinessIntakeErp] ERPNext insert rejected for ${caseId}:`, err);
+      const errMsg = extractErpMessage(err) || err?.message || "Business Case could not be submitted because the technical requirements could not be saved.";
+      throw new ErpIntakeError(err?.response?.status || 500, errMsg);
+    }
+    // Offline / unit-test fallback (when ERPNext server is not reachable)
+    console.warn(`[BusinessIntakeErp] ERPNext offline/test fallback for ${caseId}:`, err);
+  }
+
+  // 2. Only after ERP persistence succeeds (or validated offline fallback):
+  const finalDoc = erpInsertedDoc ? { ...fullCaseDoc, ...erpInsertedDoc } : fullCaseDoc;
+  const normalized = normalizeCase(finalDoc);
+  saveLocalCaseExtension(caseId, finalDoc);
+  saveLocalStandaloneCase(normalized);
+
+  return normalized;
+}
+
+/**
+ * Complete Engineer Technical Review.
+ * Moves case from Pending Engineering to Pending Engineering Manager.
+ */
+export async function completeEngineerTechnicalReviewInErp(
+  caseId: string,
+  comments: string,
+  reviewerEmail: string,
+  role = "engineer",
+): Promise<BusinessCase> {
+  if (!isEngineerRole(role)) {
+    throw new ErpIntakeError(403, "You do not have permission to complete technical review.");
+  }
+
+  const current = await fetchBusinessCaseByIdFromErp(caseId);
+  const prevWf = current?.workflow_status || "Pending Engineering";
+  const approvedDate = formatFrappeDatetime();
+  const nextStage = "Pending Engineering Manager";
+
+  return updateBusinessCaseStatus(
+    caseId,
+    {
+      workflow_state: nextStage,
+      status: "Pending Approval",
+      current_stage: "Engineering Approval",
+      current_approver_role: "Engineering Manager",
+      engineering_status: "Under Review",
+    },
+    {
+      stage: "Engineering",
+      approver: reviewerEmail,
+      role: "Engineer",
+      user_role: "Engineer",
+      action: "Technical Review Completed",
+      previous_state: prevWf,
+      new_state: nextStage,
+      comments: comments || "Technical specifications and requirements verified by Engineer.",
+      approved_on: approvedDate,
+      revision_number: current?.revision_number || 1,
+    },
+  );
+}
+
+/**
+ * Approve Engineering Stage (Engineering Manager).
+ * Moves case from Pending Engineering Manager to Pending Finance.
+ */
+export async function approveEngineeringStageInErp(
+  caseId: string,
+  comments: string,
+  reviewerEmail: string,
+  role = "engineering_manager",
+): Promise<BusinessCase> {
+  if (!isEngineeringManagerRole(role)) {
+    throw new ErpIntakeError(403, "You do not have permission to approve at the Engineering stage.");
+  }
+
+  const current = await fetchBusinessCaseByIdFromErp(caseId);
+  const prevWf = current?.workflow_status || "Pending Engineering Manager";
+  const approvedDate = formatFrappeDatetime();
+  const nextStage = "Pending Finance";
+
+  return updateBusinessCaseStatus(
+    caseId,
+    {
+      workflow_state: nextStage,
+      status: "Pending Approval",
+      current_stage: "Finance Approval",
+      current_approver_role: "Finance Manager",
+      engineering_status: "Approved",
+    },
+    {
+      stage: "Engineering",
+      approver: reviewerEmail,
+      role: "Engineering Manager",
+      user_role: "Engineering Manager",
+      action: "Approved",
+      previous_state: prevWf,
+      new_state: nextStage,
+      comments: comments || "Technical specifications and engineering feasibility approved by Engineering Manager.",
+      approved_on: approvedDate,
+      revision_number: current?.revision_number || 1,
+    },
+  );
+}
+
+/**
+ * Approve Finance Stage (Finance Manager).
+ * Moves case from Pending Finance to Pending Legal.
+ */
+export async function approveFinanceStageInErp(
+  caseId: string,
+  comments: string,
+  reviewerEmail: string,
+  role = "finance",
+  checklist?: Partial<FinanceChecklistState>,
+): Promise<BusinessCase> {
+  if (!isFinanceManagerRole(role)) {
+    throw new ErpIntakeError(403, "You do not have permission to approve at the Finance stage.");
+  }
+
+  const current = await fetchBusinessCaseByIdFromErp(caseId);
+  const prevWf = current?.workflow_status || "Pending Finance";
+  const approvedDate = formatFrappeDatetime();
+  const nextStage = "Pending Legal";
+
+  return updateBusinessCaseStatus(
+    caseId,
+    {
+      workflow_state: nextStage,
+      status: "Pending Approval",
+      current_stage: "Legal Approval",
+      current_approver_role: "Legal Manager",
+      finance_status: "Approved",
+      finance_approved_by: reviewerEmail,
+      finance_approved_on: approvedDate,
+      finance_comments: comments || "Financial evaluation verified and budget approved by Finance.",
+      ...(checklist ? { custom_finance_checklist: JSON.stringify(checklist) } : {}),
+    },
+    {
+      stage: "Finance",
+      approver: reviewerEmail,
+      role: "Finance Manager",
+      user_role: "Finance Manager",
+      action: "Approved",
+      previous_state: prevWf,
+      new_state: nextStage,
+      comments: comments || "Financial evaluation verified and budget approved by Finance.",
+      approved_on: approvedDate,
+      revision_number: current?.revision_number || 1,
+    },
+  );
+}
+
+/**
+ * Approve Finance Executive Stage.
+ */
+export async function approveFinanceExecutiveStageInErp(
+  caseId: string,
+  comments: string,
+  reviewerEmail: string,
+  role = "finance_executive",
+): Promise<BusinessCase> {
+  if (!isFinanceManagerRole(role)) {
+    throw new ErpIntakeError(403, "You do not have permission to approve at Finance Executive stage.");
+  }
+
+  const current = await fetchBusinessCaseByIdFromErp(caseId);
+  const prevWf = current?.workflow_status || "Pending Finance Executive";
+  const approvedDate = formatFrappeDatetime();
+
+  return updateBusinessCaseStatus(
+    caseId,
+    {
+      workflow_state: "Pending Legal",
+      status: "Pending Approval",
+      current_stage: "Legal Approval",
+      current_approver_role: "Legal Manager",
+      finance_status: "Approved",
+    },
+    {
+      stage: "Finance Executive",
+      approver: reviewerEmail,
+      role: "Finance Executive",
+      user_role: "Finance Executive",
+      action: "Approved",
+      previous_state: prevWf,
+      new_state: "Pending Legal",
+      comments: comments || "High-value expenditure approved by Finance Executive.",
+      approved_on: approvedDate,
+      revision_number: current?.revision_number || 1,
+    },
+  );
+}
+
+/**
+ * Approve Legal Stage (Legal Manager).
+ * Moves case from Pending Legal to Pending Procurement.
+ */
+export async function approveLegalStageInErp(
+  caseId: string,
+  comments: string,
+  reviewerEmail: string,
+  role = "legal",
+  esignData?: {
+    signatureName?: string;
+    signedAt?: string;
+    fontId?: string;
+    checklist?: Record<string, boolean>;
+    documentReviews?: Array<{ name: string; status: string; comments?: string }> | Record<string, { status: string; comment?: string }>;
+    auditMetadata?: Record<string, unknown>;
+  },
+): Promise<BusinessCase> {
+  if (!isLegalManagerRole(role)) {
+    throw new ErpIntakeError(403, "You do not have permission to approve at Legal stage.");
+  }
+
+  const current = await fetchBusinessCaseByIdFromErp(caseId);
+  if (!current) {
+    throw new ErpIntakeError(404, `Business Case ${caseId} not found.`);
+  }
+
+  // Backend enforcement as per requirement 12:
+  // IF currentStage !== LEGAL_APPROVAL (or LEGAL)
+  // IF currentUser is not Legal Manager
+  // IF status !== PENDING_LEGAL (or PENDING_APPROVAL)
+  const normStage = (current.current_stage || "").toUpperCase().replace(/\s+/g, "_");
+  const normWf = (current.workflow_status || current.status || "").toUpperCase().replace(/\s+/g, "_");
+
+  const isLegalStage = normStage === "LEGAL" || normStage === "LEGAL_APPROVAL" || normStage === "LEGAL_REVIEW";
+  const isPendingLegalStatus = normWf === "PENDING_LEGAL" || normWf === "PENDING_LEGAL_REVIEW" || normWf === "PENDING_APPROVAL";
+
+  if (!isLegalStage) {
+    throw new ErpIntakeError(
+      400,
+      `Cannot approve Legal stage: Legal approval could not be completed because this Business Case is no longer in the Legal Approval stage (current stage: "${current.current_stage || "Unknown"}").`,
+    );
+  }
+  if (!isPendingLegalStatus) {
+    throw new ErpIntakeError(
+      400,
+      `Cannot approve Legal stage: Legal approval could not be completed because this Business Case is not in Pending Legal status (current status: "${current.workflow_status || current.status || "Unknown"}").`,
+    );
+  }
+
+  const prevWf = current?.workflow_status || "Pending Legal";
+  const approvedDate = esignData?.signedAt || formatFrappeDatetime();
+  const nextStage = "Pending Procurement";
+
+  return updateBusinessCaseStatus(
+    caseId,
+    {
+      workflow_state: nextStage,
+      workflow_status: "Pending Procurement",
+      status: "Pending Approval",
+      current_stage: "Procurement Review",
+      current_approver_role: "Procurement Manager",
+      assigned_role: "Procurement Manager",
+      legal_status: "Approved",
+      legal_approved_by: reviewerEmail,
+      legal_approved_on: approvedDate,
+      legal_comments: comments || "Legal terms, compliance, and regulatory requirements approved.",
+      legal_signature: esignData?.signatureName || reviewerEmail,
+      legal_signed_at: approvedDate,
+      legal_checklist: esignData?.checklist ? JSON.stringify(esignData.checklist) : undefined,
+    },
+    {
+      stage: "Legal",
+      approver: reviewerEmail,
+      role: "Legal Manager",
+      user_role: "Legal Manager",
+      action: "Approved",
+      previous_state: prevWf,
+      new_state: nextStage,
+      comments: comments || `Legal review approved with electronic signature (${esignData?.signatureName || reviewerEmail}).`,
+      approved_on: approvedDate,
+      revision_number: current?.revision_number || 1,
+    },
+  );
+}
+
+/**
+ * Approve Procurement Stage (Procurement Manager).
+ * Completes final review and transitions case to Ready for RFQ.
+ */
+export async function approveProcurementStageInErp(
+  caseId: string,
+  comments: string,
+  reviewerEmail: string,
+  role = "procurement",
+): Promise<BusinessCase> {
+  if (!isProcurementManagerRole(role)) {
+    throw new ErpIntakeError(403, "You do not have permission to approve at Procurement stage.");
+  }
+
+  const current = await fetchBusinessCaseByIdFromErp(caseId);
+  const prevWf = current?.workflow_status || "Pending Procurement";
+  const approvedDate = formatFrappeDatetime();
+  const nextStage = "Ready for RFQ";
+
+  return updateBusinessCaseStatus(
+    caseId,
+    {
+      workflow_state: nextStage,
+      status: "Approved",
+      current_stage: "Ready for RFQ",
+      current_approver_role: "Procurement Manager (Create RFQ)",
+      procurement_status: "Approved",
+      is_locked: true,
+    },
+    {
+      stage: "Procurement",
+      approver: reviewerEmail,
+      role: "Procurement Manager",
+      user_role: "Procurement Manager",
+      action: "Approved",
+      previous_state: prevWf,
+      new_state: nextStage,
+      comments: comments || "Procurement strategy confirmed. Business Case is approved and ready for RFQ.",
+      approved_on: approvedDate,
+      revision_number: current?.revision_number || 1,
+    },
+  );
+}
+
+/**
+ * Approve Program Manager Stage (Final Approval fallback).
+ */
+export async function approveProgramManagerStageInErp(
+  caseId: string,
+  comments: string,
+  reviewerEmail: string,
+  role = "program_manager",
+): Promise<BusinessCase> {
+  const normRole = normalizeRoleString(role);
+  if (normRole !== "programmanager" && normRole !== "admin" && normRole !== "administrator") {
+    throw new ErpIntakeError(403, "You do not have permission to grant Final Program Manager approval.");
+  }
+
+  const current = await fetchBusinessCaseByIdFromErp(caseId);
+  const prevWf = current?.workflow_status || "Pending Final Approval";
+  const approvedDate = formatFrappeDatetime();
+
+  return updateBusinessCaseStatus(
+    caseId,
+    {
+      workflow_state: "Ready for RFQ",
+      status: "Approved",
+      current_stage: "Ready for RFQ",
+      current_approver_role: "Procurement Manager (Create RFQ)",
+      program_manager_status: "Approved",
+      is_locked: true,
+    },
+    {
+      stage: "Program Manager",
+      approver: reviewerEmail,
+      role: "Program Manager",
+      user_role: "Program Manager",
+      action: "Approved",
+      previous_state: prevWf,
+      new_state: "Ready for RFQ",
+      comments: comments || "Final approval granted. Business Case approved and unlocked for RFQ creation.",
+      approved_on: approvedDate,
+      revision_number: current?.revision_number || 1,
+    },
+  );
+}
+
+/**
+ * Send Back / Request Revision from any review stage.
+ */
+export async function sendBackBusinessCaseInErp(
+  caseId: string,
+  reason: string,
+  reviewerEmail: string,
+  role: string,
+  _targetStage = "Draft",
+): Promise<BusinessCase> {
+  if (!reason?.trim()) {
+    throw new ErpIntakeError(400, "A reason is mandatory when sending back a Business Case.");
+  }
+
+  const current = await fetchBusinessCaseByIdFromErp(caseId);
+  const prevWf = current?.workflow_status || "Under Review";
+  const approvedDate = formatFrappeDatetime();
+  const isFinance = isFinanceManagerRole(role);
+  const isLegal = isLegalManagerRole(role);
+  const nextState = isFinance ? "Revision Required (Finance)" : "Returned";
+  const stageName = isFinance ? "Finance" : isLegal ? "Legal" : (current?.current_stage || "Review");
+  const approverRole = isFinance ? "Finance Manager" : "Department User";
+
+  return updateBusinessCaseStatus(
+    caseId,
+    {
+      workflow_state: nextState,
+      status: nextState,
+      current_stage: isFinance ? "Finance Approval" : "Returned",
+      current_approver_role: approverRole,
+      assigned_role: approverRole,
+      rejection_reason: reason,
+      finance_comments: isFinance ? reason : current?.finance_comments,
+      finance_status: isFinance ? "Revision Required" : current?.finance_status,
+      legal_comments: isLegal ? reason : current?.legal_comments,
+      legal_status: isLegal ? "Revision Requested" : current?.legal_status,
+      is_locked: false,
+    },
+    {
+      stage: stageName,
+      approver: reviewerEmail,
+      role: isFinance ? "Finance Manager" : isLegal ? "Legal Manager" : (role || "Reviewer"),
+      user_role: isFinance ? "Finance Manager" : isLegal ? "Legal Manager" : (role || "Reviewer"),
+      action: "Returned",
+      previous_state: prevWf,
+      new_state: nextState,
+      comments: reason,
+      approved_on: approvedDate,
+      revision_number: (current?.revision_number || 1) + 1,
+    },
+    true, // incrementRevision
+  );
+}
+
+/**
+ * Reject Business Case.
+ */
+export async function rejectBusinessCaseInErp(
+  caseId: string,
+  reason: string,
+  reviewerEmail: string,
+  role: string,
+): Promise<BusinessCase> {
+  if (!reason?.trim()) {
+    throw new ErpIntakeError(400, "A rejection reason is mandatory.");
+  }
+
+  const current = await fetchBusinessCaseByIdFromErp(caseId);
+  const prevWf = current?.workflow_status || "Under Review";
+  const approvedDate = formatFrappeDatetime();
+  const isFinance = isFinanceManagerRole(role);
+  const isLegal = isLegalManagerRole(role);
+
+  return updateBusinessCaseStatus(
+    caseId,
+    {
+      workflow_state: "Rejected",
+      status: "Rejected",
+      current_stage: "Rejected",
+      current_approver_role: "None",
+      assigned_role: "None",
+      finance_status: isFinance ? "Rejected" : current?.finance_status,
+      legal_status: isLegal ? "Rejected" : current?.legal_status,
+      legal_comments: isLegal ? reason : current?.legal_comments,
+      rejection_reason: reason,
+      is_locked: true,
+    },
+    {
+      stage: isFinance ? "Finance" : isLegal ? "Legal" : (current?.current_stage || "Review"),
+      approver: reviewerEmail,
+      role: isFinance ? "Finance Manager" : isLegal ? "Legal Manager" : (role || "Reviewer"),
+      user_role: isFinance ? "Finance Manager" : isLegal ? "Legal Manager" : (role || "Reviewer"),
+      action: "Rejected",
+      previous_state: prevWf,
+      new_state: "Rejected",
+      comments: reason,
+      approved_on: approvedDate,
+      revision_number: current?.revision_number || 1,
+    },
+  );
+}
+
+/**
+ * Resubmit a Returned Business Case.
+ */
+export async function resubmitBusinessCaseInErp(
+  caseId: string,
+  updatedData: Partial<CreateBusinessCaseInput>,
+  userEmail: string,
+  role = "department",
+): Promise<BusinessCase> {
+  const current = await fetchBusinessCaseByIdFromErp(caseId);
+  if (!current) throw new ErpIntakeNotFoundError(BC_DOCTYPE, caseId);
+
+  const prevWf = current.workflow_status;
+  const requiresEng = updatedData.technical_review_required !== undefined
+    ? Boolean(updatedData.technical_review_required)
+    : Boolean(current.technical_review_required);
+
+  const nextStage: BusinessCase["workflow_status"] = requiresEng
+    ? "Pending Engineering"
+    : "Pending Finance";
+
+  const approvedDate = formatFrappeDatetime();
+  const techList = updatedData.technical_requirements_list ||
+    (Array.isArray(updatedData.technical_requirements) ? updatedData.technical_requirements : current.technical_requirements_list);
+  const patchFields: Record<string, unknown> = {
+    ...updatedData,
+    technical_requirements_list: techList,
+    technical_requirements: mapToErpTechnicalRequirements(techList as any),
+    workflow_state: nextStage,
+    status: "Pending Approval",
+    engineering_status: requiresEng ? "Pending" : "Not Required",
+    finance_status: "Pending",
+    is_locked: false,
+  };
+
+  return updateBusinessCaseStatus(
+    caseId,
+    patchFields,
+    {
+      stage: "Department",
+      approver: userEmail,
+      role: role === "admin" ? "Administrator" : "Department User",
+      user_role: role === "admin" ? "Administrator" : "Department User",
+      action: "Resubmitted",
+      previous_state: prevWf,
+      new_state: nextStage,
+      comments: "Revised Business Case resubmitted for approval.",
+      approved_on: approvedDate,
+      revision_number: (current.revision_number || 1) + 1,
+    },
+    true,
+  );
+}
+
+/**
+ * Update a specific section of a Business Case enforcing role write permissions.
+ */
+export async function updateBusinessCaseSectionInErp(
+  caseId: string,
+  section: "business_info" | "justification" | "financial" | "technical" | "strategy" | "risk" | "compliance" | "general",
+  data: Record<string, unknown>,
+  _userEmail: string,
+  userRole: string,
+): Promise<BusinessCase> {
+  const current = await fetchBusinessCaseByIdFromErp(caseId);
+  if (!current) throw new ErpIntakeNotFoundError(BC_DOCTYPE, caseId);
+
+  const normRole = (userRole || "").toLowerCase().trim();
+  const isDraftOrReturned = current.workflow_status === "Draft" || current.workflow_status === "Returned";
+
+  // Check section write permissions
+  if (normRole === "admin" || isDraftOrReturned) {
+    // Permitted to edit all sections
+  } else if (section === "technical" && ["engineer", "engineering_manager", "engineering"].includes(normRole)) {
+    // Engineer permitted to edit technical specs
+  } else if (section === "financial" && ["finance", "finance_executive"].includes(normRole)) {
+    // Finance permitted to edit financials
+  } else if (section === "strategy" && ["procurement", "procurement_team", "sourcing_manager"].includes(normRole)) {
+    // Procurement permitted to edit procurement strategy
+  } else if (section === "compliance" && ["legal"].includes(normRole)) {
+    // Legal permitted to edit legal compliance
+  } else {
+    throw new ErpIntakeError(403, `Role "${userRole}" is not authorized to edit the "${section}" section while status is "${current.workflow_status}".`);
+  }
+
+  // If financial assumptions are updated, recalculate financials
+  let calculatedMetrics: Record<string, unknown> = {};
+  if (section === "financial" || data.capex !== undefined || data.opex_year !== undefined) {
+    const capex = Number(data.capex ?? current.capex) || 0;
+    const opex = Number(data.opex_year ?? data.opex ?? current.opex) || 0;
+    const savings = Number(data.expected_annual_savings ?? data.expected_savings ?? current.expected_annual_savings) || 0;
+    const revInc = Number(data.revenue_increase__year ?? data.revenue_increase ?? current.revenue_increase) || 0;
+    const costAvoid = Number(data.cost_avoidance__year ?? data.cost_avoidance ?? current.cost_avoidance) || 0;
+    const duration = Number(data.project_duration ?? current.project_duration) || 5;
+    const discountRate = data.discount_rate !== undefined ? Number(data.discount_rate) : Number(current.discount_rate || 10);
+
+    const calc = calculateBusinessCaseFinancials({
+      capex,
+      opex,
+      expected_annual_savings: savings,
+      revenue_increase: revInc,
+      cost_avoidance: costAvoid,
+      project_duration: duration,
+      discount_rate: discountRate,
+    });
+
+    calculatedMetrics = {
+      budget: calc.total_investment,
+      total_budget: calc.total_investment,
+      capex: calc.capex,
+      opex: calc.opex,
+      opex_year: calc.opex,
+      expected_annual_savings: calc.expected_annual_savings,
+      revenue_increase: calc.revenue_increase,
+      cost_avoidance: calc.cost_avoidance,
+      project_duration: calc.project_duration,
+      discount_rate: calc.discount_rate,
+      annual_gross_benefit: calc.annual_gross_benefit,
+      annual_net_benefit: calc.annual_net_benefit,
+      total_net_benefit: calc.total_net_benefit,
+      net_project_gain: calc.net_project_gain,
+      roi: calc.roi ?? 0,
+      npv: calc.npv,
+      irr: calc.irr ?? 0,
+      payback_period: calc.payback_period_years ?? 0,
+      financial_calculation_status: calc.status,
+      financial_calculation_message: calc.message,
+    };
+  }
+
+  const patchFields: Record<string, unknown> = {
+    ...data,
+    ...calculatedMetrics,
+    last_modified: formatFrappeDatetime(),
+  };
+
+  saveLocalCaseExtension(caseId, patchFields);
+
+  // Update standalone list if present
+  const standalones = getLocalStandaloneCases();
+  const sIdx = standalones.findIndex(c => c.name === caseId || c.business_case_id === caseId);
+  if (sIdx >= 0) {
+    standalones[sIdx] = normalizeCase({ ...standalones[sIdx], ...patchFields } as any);
+    if (typeof window !== "undefined" && window.localStorage) {
+      localStorage.setItem(BC_LOCAL_STANDALONE_KEY, JSON.stringify(standalones));
+    }
+  }
+
+  try {
+    await apiPost("/api/method/frappe.client.set_value", {
+      doctype: BC_DOCTYPE,
+      name: caseId,
+      fieldname: patchFields,
+    });
+  } catch (err) {
+    console.warn(`[BusinessIntakeErp] Non-blocking set_value error for section ${section}:`, err);
+  }
+
+  const updated = await fetchBusinessCaseByIdFromErp(caseId);
+  return updated || normalizeCase({ ...current, ...patchFields } as any);
 }

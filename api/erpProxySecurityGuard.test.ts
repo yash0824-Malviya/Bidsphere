@@ -2,9 +2,31 @@ import { describe, expect, it } from "vitest";
 import {
   assertErpProxySecurityBoundary,
   ErpProxySecurityError,
+  assertNoGenericPoShipmentMutation,
+  assertNoGenericSupplierShipmentRead,
 } from "./erpProxySecurityGuard";
 
 describe("ERP proxy security boundary", () => {
+  it.each([
+    ["resource/PO%20Shipment", "POST"], ["resource/PO Shipment/SHIP-1", "PUT"],
+    ["resource/PO Shipment/SHIP-1", "DELETE"], ["method/frappe.client.insert", "POST"],
+    ["method/frappe.client.save", "POST"], ["method/frappe.client.set_value", "GET"],
+    ["method/frappe.client.submit", "GET"], ["method/frappe.model.workflow.apply_workflow", "GET"],
+  ])("does not permit generic shipment bypass through %s %s", (path, method) => {
+    expect(() => assertNoGenericPoShipmentMutation(path, method, ["PO Shipment"])).toThrow("authenticated PO Shipment");
+  });
+  it("retains staff read access but requires supplier-scoped shipment reads", () => {
+    for (const path of ["resource/PO Shipment/SHIP-1", "method/frappe.client.get_list"]) {
+      expect(() => assertNoGenericPoShipmentMutation(path, "GET", ["PO Shipment"])).not.toThrow();
+      expect(() => assertNoGenericSupplierShipmentRead(path, ["PO Shipment"], "internal")).not.toThrow();
+      expect(() => assertNoGenericSupplierShipmentRead(path, ["PO Shipment"], "supplier")).toThrow("supplier-scoped");
+      expect(() => assertNoGenericSupplierShipmentRead(path, ["PO Shipment"])).toThrow("supplier-scoped");
+    }
+    expect(() => assertNoGenericPoShipmentMutation("resource/Purchase Receipt", "POST", ["Purchase Receipt"])).not.toThrow();
+  });
+  it.each(["GET", "POST"])("keeps the trusted RFQ transaction RPC off the generic browser gateway for %s", method => {
+    for (const principalRole of ["admin", "procurement", "supplier"]) expect(() => assertErpProxySecurityBoundary({ apiPath: "method/bidsphere_workflows.rfq_clm.decide", method, principalRole })).toThrow("authenticated RFQ contract decision");
+  });
   it.each([
     ["resource/Workflow/ECR Approval Workflow", ["Workflow"]],
     ["resource/DocShare", ["DocShare"]],

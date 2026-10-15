@@ -32,18 +32,27 @@ export function enterpriseStatusToKpiBucket(
   status: RfqEnterpriseListStatus | string,
 ): RfqKpiBucket {
   switch (status) {
+    case "Supplier Response":
     case "Awaiting Supplier Response":
       return "awaiting";
+    case "Purchase Order":
     case "Purchase Order Created":
+    case "PO Created":
     case "Completed":
       return "poCreated";
     case "Closed":
     case "Cancelled":
       return "closed";
+    case "Supplier Invitation":
+    case "RFQ Created":
+    case "Material Request":
     case "Draft":
     case "Open":
     case "AI Analysis":
+    case "Supplier Selection":
+    case "Legal Review":
     case "Under Legal Review":
+    case "Finance Review":
     case "Under Finance Review":
     default:
       return "draftOpen";

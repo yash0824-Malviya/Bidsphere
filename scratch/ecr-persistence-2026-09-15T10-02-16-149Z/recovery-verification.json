@@ -1,0 +1,16 @@
+{
+  "ecr": "ECR-2026-100010",
+  "schemaAndVersionQuery": "passed",
+  "payloadResponseAndRefetchComparison": "passed",
+  "stage": "Engineering Review",
+  "version": "extended_v1",
+  "assignedReviewer": "Engineering Manager",
+  "pendingTasks": 1,
+  "approvalHistoryStage": "Engineering Review (current)",
+  "submissionActivityExists": false,
+  "activityRestored": false,
+  "engineeringDashboardPending": 1,
+  "targetInEngineeringQueue": true,
+  "targetInDraftList": false,
+  "workflowTransitionsReplayed": 0
+}

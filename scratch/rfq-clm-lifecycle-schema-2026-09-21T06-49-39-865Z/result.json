@@ -1,0 +1,11 @@
+{
+  "verified": true,
+  "operations": 1,
+  "recordsPreserved": 23,
+  "workflowsPreserved": true,
+  "permissionsPreserved": true,
+  "rolesPreserved": true,
+  "bindings": {
+    "award_state": "custom_clm_state"
+  }
+}

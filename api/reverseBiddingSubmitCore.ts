@@ -6,10 +6,10 @@
  * config endpoints or missing child-table permissions.
  */
 import { randomUUID } from "node:crypto";
-import { sanitizeErpPayloadDates } from "./erpDateSanitize.js";
 import { ensureReverseBiddingChildNaming } from "./reverseBiddingNamingCore.js";
 import { formatERPNextDatetime } from "../src/utils/erpNextDate.js";
 import {
+  bidRateCents,
   recomputeBidItemState,
   toBidRate,
   validateItemBidCore,
@@ -238,11 +238,6 @@ function bidValues(suppliers: ReverseBiddingSupplier[]): number[] {
     .filter((v) => v > 0);
 }
 
-function isPersistedChildRow(name?: string): boolean {
-  const trimmed = (name ?? "").trim();
-  return trimmed.length > 0 && !trimmed.startsWith("new-");
-}
-
 function extractErpErrorMessage(json: unknown, fallback: string): string {
   const data = (json ?? {}) as {
     exception?: string;
@@ -283,10 +278,10 @@ async function erpFetch<T = unknown>(
       Accept: "application/json",
       "Content-Type": "application/json",
     },
-    body:
-      init?.body !== undefined
-        ? JSON.stringify(sanitizeErpPayloadDates(init.body))
-        : undefined,
+    // The only write body is the authoritative ERP parent plus server-created
+    // bid fields. Keep existing timestamps (including history microseconds)
+    // byte-for-byte; new bid_time values are already ERP-formatted below.
+    body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
   });
   const text = await res.text();
   let json: unknown;
@@ -342,196 +337,107 @@ function supplierIsInvited(doc: ReverseBiddingDoc, supplier: string): boolean {
   );
 }
 
-function bidItemRowChanged(before: ReverseBidItem, after: ReverseBidItem): boolean {
-  return (
-    toBidRate(before.current_rate) !== toBidRate(after.current_rate) ||
-    toBidRate(before.amount) !== toBidRate(after.amount) ||
-    toBidRate(before.latest_rate) !== toBidRate(after.latest_rate) ||
-    (before.rank ?? 0) !== (after.rank ?? 0) ||
-    (before.is_lowest ?? 0) !== (after.is_lowest ?? 0) ||
-    (before.round_number ?? 0) !== (after.round_number ?? 0) ||
-    (before.status ?? "") !== (after.status ?? "")
-  );
-}
-
-function supplierRowChanged(
-  before: ReverseBiddingSupplier,
-  after: ReverseBiddingSupplier,
-): boolean {
-  return (
-    toBidRate(before.current_bid) !== toBidRate(after.current_bid) ||
-    (before.rank ?? 0) !== (after.rank ?? 0) ||
-    (before.joined_auction ?? 0) !== (after.joined_auction ?? 0) ||
-    (before.invitation_status ?? "") !== (after.invitation_status ?? "")
-  );
-}
-
-async function saveChildDocument(
+/**
+ * A single parent save commits rates, ranks, totals and history together.
+ * Frappe locks the current parent and checks its original modified timestamp
+ * before saving any children. Never remove that stamp or save children alone.
+ */
+async function persistBidChangesAtomic(
   cfg: ErpAdminConfig,
-  doc: Record<string, unknown>,
-): Promise<void> {
-  const payload = { ...doc };
-  delete payload.creation;
-  delete payload.modified;
-  delete payload.modified_by;
-  delete payload.owner;
-  delete payload.docstatus;
-  await erpFetch(cfg, "method/frappe.client.save", {
+  doc: ReverseBiddingDoc,
+  payload: ReturnType<typeof buildSavePayload>,
+): Promise<ReverseBiddingDoc> {
+  if (!doc.modified) {
+    throw new ReverseBiddingSubmitError(
+      "The auction version is missing. Reload the auction before submitting bids.",
+      409,
+      { auction: doc, reasonCode: "other" },
+    );
+  }
+  return erpFetch<ReverseBiddingDoc>(cfg, "method/frappe.client.save", {
     method: "POST",
-    body: { doc: payload },
-  });
-}
-
-async function insertChildDocument(
-  cfg: ErpAdminConfig,
-  doc: Record<string, unknown>,
-): Promise<void> {
-  const payload = { ...doc };
-  delete payload.name;
-  delete payload.creation;
-  delete payload.modified;
-  delete payload.modified_by;
-  delete payload.owner;
-  delete payload.docstatus;
-  await erpFetch(cfg, "method/frappe.client.insert", {
-    method: "POST",
-    body: { doc: payload },
+    body: { doc: { ...doc, ...payload, doctype: RB_DOCTYPE } },
   });
 }
 
 /**
- * Persist bid changes row-by-row instead of replacing the full parent document.
- * Avoids optimistic-lock failures on `modified` when the auction is polled concurrently.
+ * The existing supplier round is the batch identity. Recognize a repeated
+ * successful submission without appending duplicate history. A matching price
+ * on its own, a subset of a round, or an older higher bid is never a replay.
  */
-async function persistBidChangesIncremental(
-  cfg: ErpAdminConfig,
+function isRecordedBidBatch(
   doc: ReverseBiddingDoc,
   supplier: string,
   clean: ItemBidInput[],
-  payload: ReturnType<typeof buildSavePayload>,
-  txId: string,
-  attempt: number,
-): Promise<void> {
-  const rateByItem = new Map(clean.map((l) => [l.item_code, toBidRate(l.rate)]));
-  const beforeItems = new Map(
-    (doc.bid_items ?? [])
-      .filter((r) => isPersistedChildRow(r.name))
-      .map((r) => [String(r.name), r]),
+): boolean {
+  const supplierHistory = (doc.bid_history ?? []).filter((row) =>
+    sameSupplier(row.supplier, supplier),
   );
-
-  for (const row of payload.bid_items) {
-    if (!isPersistedChildRow(row.name)) continue;
-    const before = beforeItems.get(String(row.name));
-    if (before && !bidItemRowChanged(before, row)) continue;
-
-    const submittedBid = sameSupplier(row.supplier, supplier)
-      ? rateByItem.get(String(row.item_code))
-      : undefined;
-
-    logBidSaveOperation({
-      transactionId: txId,
-      attempt,
-      action: submittedBid != null ? "update_bid_item" : "update_bid_item_rank",
-      auctionId: doc.name,
-      itemId: row.item_code,
-      supplierId: row.supplier,
-      existingBid: toBidRate(before?.current_rate),
-      submittedBid: submittedBid ?? null,
-      databaseVersion: doc.modified,
-      rowName: row.name,
-    });
-
-    await saveChildDocument(cfg, {
-      ...row,
-      doctype: "Reverse Bid Item",
-      name: row.name,
-      parent: doc.name,
-      parenttype: RB_DOCTYPE,
-      parentfield: "bid_items",
-    });
-  }
-
-  const prevHistoryLen = (doc.bid_history ?? []).length;
-  const newHistoryRows = payload.bid_history.slice(prevHistoryLen);
-  for (const [i, row] of newHistoryRows.entries()) {
-    logBidSaveOperation({
-      transactionId: txId,
-      attempt,
-      action: "insert_bid_history",
-      auctionId: doc.name,
-      itemId: row.item_code,
-      supplierId: row.supplier,
-      submittedBid: toBidRate(row.bid_amount),
-      existingBid: toBidRate(row.previous_rate),
-      databaseVersion: doc.modified,
-      historyIdx: prevHistoryLen + i + 1,
-    });
-
-    await insertChildDocument(cfg, {
-      ...row,
-      doctype: RB_BID_DOCTYPE,
-      parent: doc.name,
-      parenttype: RB_DOCTYPE,
-      parentfield: "bid_history",
-      idx: prevHistoryLen + i + 1,
-    });
-  }
-
-  const beforeSuppliers = new Map(
-    (doc.invited_suppliers ?? [])
-      .filter((r) => isPersistedChildRow(r.name))
-      .map((r) => [String(r.name), r]),
+  const latestRound = supplierHistory.reduce(
+    (round, row) => Math.max(round, toBidRate(row.round_number)),
+    0,
   );
-
-  for (const row of payload.invited_suppliers) {
-    if (!isPersistedChildRow(row.name)) continue;
-    const before = beforeSuppliers.get(String(row.name));
-    if (before && !supplierRowChanged(before, row)) continue;
-
-    logBidSaveOperation({
-      transactionId: txId,
-      attempt,
-      action: "update_supplier_rank",
-      auctionId: doc.name,
-      supplierId: row.supplier,
-      existingBid: toBidRate(before?.current_bid),
-      submittedBid: toBidRate(row.current_bid),
-      databaseVersion: doc.modified,
-      rowName: row.name,
-      rank: row.rank,
-    });
-
-    await saveChildDocument(cfg, {
-      ...row,
-      doctype: "Reverse Bidding Supplier",
-      name: row.name,
-      parent: doc.name,
-      parenttype: RB_DOCTYPE,
-      parentfield: "invited_suppliers",
-    });
+  if (!(latestRound > 0)) return false;
+  const rows = supplierHistory.filter(
+    (row) => toBidRate(row.round_number) === latestRound,
+  );
+  if (rows.length !== clean.length || rows.some((row) => !row.name || row.status !== "Accepted")) {
+    return false;
   }
+  const rowsByItem = new Map(rows.map((row) => [String(row.item_code), row]));
+  if (rowsByItem.size !== rows.length) return false;
+  return clean.every((line) => {
+    const history = rowsByItem.get(line.item_code);
+    const ownItem = (doc.bid_items ?? []).find((row) =>
+      sameSupplier(row.supplier, supplier) && row.item_code === line.item_code,
+    );
+    const currentRate = toBidRate(ownItem?.current_rate);
+    return !!history && currentRate > 0 &&
+      bidRateCents(history.bid_amount) === bidRateCents(line.rate) &&
+      bidRateCents(currentRate) <= bidRateCents(line.rate);
+  });
+}
 
-  if (toBidRate(doc.lowest_bid) !== toBidRate(payload.lowest_bid)) {
-    logBidSaveOperation({
-      transactionId: txId,
-      attempt,
-      action: "update_lowest_bid",
-      auctionId: doc.name,
-      supplierId: supplier,
-      existingBid: toBidRate(doc.lowest_bid),
-      submittedBid: toBidRate(payload.lowest_bid),
-      databaseVersion: doc.modified,
-    });
+function cleanItemBids(items: ItemBidInput[]): ItemBidInput[] {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new ReverseBiddingSubmitError("Enter at least one lower item price to submit.", 400);
+  }
+  const seen = new Set<string>();
+  return items.map((line) => {
+    const itemCode = typeof line?.item_code === "string" ? line.item_code.trim() : "";
+    if (!itemCode || !Number.isFinite(line?.rate) || !(line.rate > 0)) {
+      throw new ReverseBiddingSubmitError(
+        "Every submitted item must have an item code and a valid price greater than zero.",
+        400,
+        { itemCode: itemCode || undefined, reasonCode: "invalid_rate" },
+      );
+    }
+    if (seen.has(itemCode)) {
+      throw new ReverseBiddingSubmitError(
+        `Item ${itemCode} appears more than once. Submit each item only once.`,
+        400,
+        { itemCode, reasonCode: "other" },
+      );
+    }
+    seen.add(itemCode);
+    return { item_code: itemCode, rate: line.rate };
+  });
+}
 
-    await erpFetch(cfg, "method/frappe.client.set_value", {
-      method: "POST",
-      body: {
-        doctype: RB_DOCTYPE,
-        name: doc.name,
-        fieldname: "lowest_bid",
-        value: payload.lowest_bid,
-      },
-    });
+function requireSupplierBidSheet(doc: ReverseBiddingDoc, supplier: string): void {
+  if (!supplierIsInvited(doc, supplier)) {
+    throw new ReverseBiddingSubmitError(
+      "You are not invited to this reverse auction.",
+      403,
+      { auction: doc, reasonCode: "not_invited" },
+    );
+  }
+  if (!(doc.bid_items ?? []).some((row) => sameSupplier(row.supplier, supplier))) {
+    throw new ReverseBiddingSubmitError(
+      "Your bid sheet is not ready yet. Refresh the page and try again.",
+      409,
+      { auction: doc, reasonCode: "missing_item" },
+    );
   }
 }
 
@@ -700,7 +606,12 @@ function validateAllItemBids(
       clientSnapshot: opts.clientSnapshot,
     });
     if (!v.ok) {
-      throw new ReverseBiddingSubmitError(v.reason ?? "Invalid bid.", 409, {
+      const reason = v.reasonCode === "not_live" && deriveAuctionStatus(doc) === "Completed"
+        ? "The auction has ended. New bids are no longer accepted."
+        : v.reasonCode === "outbid"
+          ? `Another supplier submitted a lower bid. Current lowest is ${formatServerAmount(v.currentLowest, doc.currency)}. Please enter a lower price.`
+          : v.reason ?? "Invalid bid.";
+      throw new ReverseBiddingSubmitError(reason, 409, {
         submittedBid: rate,
         latestLowestBid: v.currentLowest,
         itemCode: line.item_code,
@@ -726,55 +637,22 @@ export async function submitItemBidsCore(input: {
     throw new ReverseBiddingSubmitError("Supplier identity is missing.", 401);
   }
 
+  const clean = cleanItemBids(input.items);
   await ensureReverseBiddingChildNaming();
 
   const cfg = readErpAdminConfig();
-  let doc = await loadAuction(cfg, auctionName);
-
-  console.log("[reverse-bidding-submit] loaded auction", {
-    authenticatedSupplier: supplier,
-    auctionId: doc.name,
-    rfqId: doc.rfq,
-    auctionStatus: doc.auction_status,
-    derivedStatus: deriveAuctionStatus(doc),
-    bidItems: (doc.bid_items ?? []).length,
-    historyRows: (doc.bid_history ?? []).length,
-  });
-
-  if (!supplierIsInvited(doc, supplier)) {
-    throw new ReverseBiddingSubmitError(
-      "You are not invited to this reverse auction.",
-      403,
-    );
-  }
-
-  const ownItems = (doc.bid_items ?? []).filter((i) =>
-    sameSupplier(i.supplier, supplier),
-  );
-  if (ownItems.length === 0) {
-    throw new ReverseBiddingSubmitError(
-      "Your bid sheet is not ready yet. Refresh the page and try again.",
-      409,
-    );
-  }
-
-  const clean = (input.items ?? []).filter(
-    (i) => i.item_code && Number.isFinite(i.rate) && i.rate > 0,
-  );
-  if (clean.length === 0) {
-    throw new ReverseBiddingSubmitError(
-      "Enter at least one lower item price to submit.",
-      400,
-    );
-  }
-
   const txId = randomUUID();
-  let lastError: unknown;
 
   for (let attempt = 1; attempt <= REVERSE_BID_MAX_SAVE_ATTEMPTS; attempt += 1) {
-    doc = await loadAuction(cfg, auctionName);
+    // Fetch again and rebuild the entire business operation after any conflict.
+    // Replacing only the timestamp on an old payload would lose another bid.
+    const doc = await loadAuction(cfg, auctionName);
+    requireSupplierBidSheet(doc, supplier);
+    if (isRecordedBidBatch(doc, supplier, clean)) {
+      logBidSaveOperation({ transactionId: txId, attempt, action: "already_recorded", auctionId: doc.name });
+      return doc;
+    }
     const phase = attempt === 1 ? "pre-save" : "retry";
-
     validateAllItemBids(doc, supplier, clean, {
       phase,
       attempt,
@@ -782,40 +660,27 @@ export async function submitItemBidsCore(input: {
     });
 
     const payload = buildSavePayload(doc, supplier, clean);
-    const ownExistingBids = Object.fromEntries(
-      (doc.bid_items ?? [])
-        .filter((i) => sameSupplier(i.supplier, supplier))
-        .map((i) => [String(i.item_code), toBidRate(i.current_rate)]),
-    );
-
     logBidSaveOperation({
       transactionId: txId,
       attempt,
-      phase: "start",
+      action: "save_parent_transaction",
       auctionId: doc.name,
       rfqId: doc.rfq,
       supplierId: supplier,
       databaseVersion: doc.modified,
-      existingBids: ownExistingBids,
-      submittedBids: Object.fromEntries(
-        clean.map((c) => [c.item_code, toBidRate(c.rate)]),
+      existingBids: Object.fromEntries(
+        (doc.bid_items ?? [])
+          .filter((row) => sameSupplier(row.supplier, supplier))
+          .map((row) => [String(row.item_code), toBidRate(row.current_rate)]),
       ),
+      submittedBids: Object.fromEntries(clean.map((row) => [row.item_code, row.rate])),
       backendTotalLowest: supplierTotalLowest(doc),
+      appendedHistoryRows: clean.length,
     });
 
     try {
-      await persistBidChangesIncremental(
-        cfg,
-        doc,
-        supplier,
-        clean,
-        payload,
-        txId,
-        attempt,
-      );
-
+      await persistBidChangesAtomic(cfg, doc, payload);
       const saved = await loadAuction(cfg, auctionName);
-
       console.log("[reverse-bidding-submit] success", {
         transactionId: txId,
         authenticatedSupplier: supplier,
@@ -825,14 +690,10 @@ export async function submitItemBidsCore(input: {
         lowest_bid: saved.lowest_bid,
         historyRows: (saved.bid_history ?? []).length,
       });
-
       return saved;
     } catch (err) {
-      lastError = err;
-      const httpStatus =
-        err instanceof ReverseBiddingSubmitError ? err.status : undefined;
+      const httpStatus = err instanceof ReverseBiddingSubmitError ? err.status : undefined;
       const isConflict = isTimestampConflictError(err) || httpStatus === 409;
-
       console.warn("[reverse-bidding-submit] save failed", {
         transactionId: txId,
         auctionId: auctionName,
@@ -841,24 +702,43 @@ export async function submitItemBidsCore(input: {
         isConflict,
         error: extractErrorMessage(err),
       });
-
-      if (attempt >= REVERSE_BID_MAX_SAVE_ATTEMPTS || !isRetryableSaveError(err)) {
-        if (err instanceof ReverseBiddingSubmitError) {
-          throw err;
-        }
+      if (!isRetryableSaveError(err)) {
+        if (err instanceof ReverseBiddingSubmitError) throw err;
         throw new ReverseBiddingSubmitError(extractErrorMessage(err), httpStatus ?? 502);
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      if (attempt < REVERSE_BID_MAX_SAVE_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        continue;
+      }
+
+      // Even after the last failure, a lost response may conceal a committed
+      // transaction. Read once, check history, and return current business state.
+      const latest = await loadAuction(cfg, auctionName);
+      requireSupplierBidSheet(latest, supplier);
+      if (isRecordedBidBatch(latest, supplier, clean)) return latest;
+      validateAllItemBids(latest, supplier, clean, {
+        phase: "post-conflict",
+        attempt,
+        clientSnapshot: input.clientSnapshot,
+      });
+      const first = clean[0];
+      const validation = validateItemBid(latest, supplier, first.item_code, first.rate);
+      throw new ReverseBiddingSubmitError(
+        isConflict
+          ? "The auction changed while your bids were being submitted. Your prices are still valid against the latest state; please submit them again."
+          : "The server could not confirm your bids. The latest auction state has been loaded; please review it and try again.",
+        isConflict ? 409 : 503,
+        {
+          auction: latest,
+          reasonCode: "other",
+          itemCode: first.item_code,
+          submittedBid: first.rate,
+          latestLowestBid: validation.currentLowest,
+        },
+      );
     }
   }
 
-  throw new ReverseBiddingSubmitError(
-    extractErrorMessage(lastError) ||
-      "Could not save your bid after retrying due to a server conflict.",
-    lastError instanceof ReverseBiddingSubmitError
-      ? lastError.status
-      : 503,
-    { auction: await loadAuction(cfg, auctionName), reasonCode: "other" },
-  );
+  throw new ReverseBiddingSubmitError("Could not submit your bids. Please try again.", 503);
 }

@@ -1,6 +1,7 @@
 import type { AxiosError } from "axios";
 import { apiGet, apiPost, buildResourceUrl, withSilent } from "./erpnext";
 import { readErpProxyAccessToken } from "../utils/accessToken";
+import { fetchRfpResponseAttachmentBlob, isRfpResponseAttachmentUrl } from "./rfpResponseAttachment";
 
 /**
  * Upload a file to ERPNext via `/api/method/upload_file`.
@@ -348,7 +349,7 @@ export async function confirmUploadedErpFile(
   }
 
   // 2) Confirm bytes are served through file-proxy (commit timing).
-  const proxyUrl = getFullFileUrl(uploaded.file_url);
+  const proxyUrl = getFullFileUrl(uploaded.file_url, uploaded.file_id);
   if (!proxyUrl) {
     throw new Error("Could not build a readable URL for the uploaded file.");
   }
@@ -452,28 +453,41 @@ export async function openErpFileInBrowser(
     throw new Error("Could not resolve a readable URL for this file.");
   }
 
-  const res = await fetch(openUrl);
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
-    try {
-      const body = (await res.json()) as { message?: string; detail?: string };
-      detail = String(body?.message || body?.detail || detail).trim() || detail;
-    } catch {
-      /* ignore */
+  let blob: Blob;
+  if (isRfpResponseAttachmentUrl(openUrl)) {
+    blob = await fetchRfpResponseAttachmentBlob(openUrl);
+  } else {
+    const requestUrl = new URL(openUrl, window.location.origin);
+    const scopedLegalProxy = requestUrl.origin === window.location.origin &&
+      requestUrl.pathname === "/api/file-proxy" && requestUrl.searchParams.has("legal_review");
+    const accessToken = scopedLegalProxy ? readErpProxyAccessToken() : null;
+    const res = await fetch(openUrl, scopedLegalProxy ? {
+      credentials: "omit",
+      cache: "no-store",
+      headers: { ...(accessToken ? { "X-Bidsphere-Access-Token": accessToken } : {}), "ngrok-skip-browser-warning": "1" },
+    } : undefined);
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const body = (await res.json()) as { message?: string; detail?: string };
+        detail = String(body?.message || body?.detail || detail).trim() || detail;
+      } catch {
+        /* ignore */
+      }
+      // eslint-disable-next-line no-console
+      console.error(mode === "download" ? "[DOWNLOAD:failed]" : "[VIEW:failed]", {
+        status: res.status,
+        detail,
+      });
+      throw new Error(
+        mode === "download"
+          ? `Download failed: ${detail}`
+          : `View failed: ${detail}`,
+      );
     }
-    // eslint-disable-next-line no-console
-    console.error(mode === "download" ? "[DOWNLOAD:failed]" : "[VIEW:failed]", {
-      status: res.status,
-      detail,
-    });
-    throw new Error(
-      mode === "download"
-        ? `Download failed: ${detail}`
-        : `View failed: ${detail}`,
-    );
-  }
 
-  const blob = await res.blob();
+    blob = await res.blob();
+  }
   const objectUrl = URL.createObjectURL(blob);
   // eslint-disable-next-line no-console
   console.log(mode === "download" ? "[DOWNLOAD:ok]" : "[VIEW:ok]", {
@@ -493,3 +507,10 @@ export async function openErpFileInBrowser(
   }
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
 }
+
+export {
+  resolveAttachmentUrl,
+  detectContentType,
+  isImageAttachment,
+  isPdfAttachment,
+} from "../utils/attachmentResolver";

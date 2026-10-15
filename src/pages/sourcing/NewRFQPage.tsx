@@ -32,6 +32,8 @@ import { apiGet, ENV_DEFAULTS } from "../../api/erpnext";
 import { queryClient } from "../../queryClient";
 import { createRFQ, getItemGroups, updateRFQ } from "../../api/sourcing";
 import { persistRfqTargetPricing } from "../../api/rfqTargetPricingPersist";
+import type { RfqContractRequired } from "../../api/rfqContractRequirement";
+import RfqContractRequirementField from "../../components/sourcing/RfqContractRequirementField";
 import {
   ActiveRfqExistsError,
   buildRFQPrefillFromMaterialRequest,
@@ -42,7 +44,7 @@ import {
   fetchMaterialRequestWorkflow,
 } from "../../api/materialRequestWorkflow";
 import { findActiveRfqForMaterialRequest } from "../../api/mrRfqAction";
-import { getRFQTemplates, getRFQTemplate } from "../../api/rfqTemplates";
+import { getRFQTemplates, getRFQTemplate, createRFQTemplate } from "../../api/rfqTemplates";
 import { incrementLocalTemplateUsage } from "../../api/rfqTemplateStorage";
 import {
   buildManualCreationMeta,
@@ -50,7 +52,7 @@ import {
   formatRequiredDocumentsList,
   stashRFQCreationMeta,
 } from "../../api/rfqCreationMeta";
-import type { RFQTemplate } from "../../types/erpnext";
+import type { RFQTemplate, RFQTemplateCategory } from "../../types/erpnext";
 import {
   DEFAULT_REQUIRED_DOCUMENTS,
   DEFAULT_WORKFLOW_RULES,
@@ -174,13 +176,17 @@ export default function NewRFQPage() {
   const mrAppliedRef = useRef(false);
 
   const mrParam = searchParams.get("mr");
+  const ecrParam = searchParams.get("ecr");
   const [title, setTitle] = useState("");
   const [validTill, setValidTill] = useState(isoDateOffset(7));
   // Supplier-facing Terms & Conditions (goes into message_for_supplier).
   const [supplierTerms, setSupplierTerms] = useState("");
   const [requireCostBreakdown, setRequireCostBreakdown] = useState(false);
+  const [contractRequired, setContractRequired] = useState<RfqContractRequired | "">("");
   // Internal procurement notes — never sent to suppliers.
   const [internalNotes, setInternalNotes] = useState("");
+  // Optional ECR Reference document.
+  const [ecrReference, setEcrReference] = useState(ecrParam || "");
   // Read-only Material Request context (only when created from an MR).
   const [mrContext, setMrContext] = useState<MrContext | null>(null);
   const [procurementType, setProcurementType] =
@@ -221,7 +227,26 @@ export default function NewRFQPage() {
     setApplyingTemplate(true);
     try {
       setTitle(template.template_name);
-      setSupplierTerms(buildTemplateTermsBlock(template));
+      if (template.procurement_type) {
+        setProcurementType(template.procurement_type);
+      }
+      if (template.category) {
+        setProcurementCategory(template.category);
+      }
+      if (template.cost_breakdown_required !== undefined) {
+        setRequireCostBreakdown(template.cost_breakdown_required);
+      }
+      if (template.contract_required !== undefined) {
+        setContractRequired(template.contract_required ? "Yes" : "No");
+      }
+      if (template.supplier_terms?.trim()) {
+        setSupplierTerms(template.supplier_terms.trim());
+      } else {
+        setSupplierTerms(buildTemplateTermsBlock(template));
+      }
+
+      // Requirement 6: Require the user to set a fresh Valid Till date for the new RFQ
+      setValidTill("");
 
       // Resolve items — fetch item_group from Item master for each item_code
       if (template.items?.length) {
@@ -270,6 +295,7 @@ export default function NewRFQPage() {
           const baseDesc =
             spec ||
             detail?.description ||
+            tplItem.description ||
             tplItem.item_name ||
             "";
           const tplTarget = Number(tplItem.target_price);
@@ -284,11 +310,13 @@ export default function NewRFQPage() {
             target_price:
               Number.isFinite(tplTarget) && tplTarget > 0 ? tplTarget : null,
             show_to_supplier: false,
-            required_by: validTill || "",
+            required_by: "",
           };
         });
 
-        setItems(itemRows.length > 0 ? itemRows : [newItemRow(validTill)]);
+        setItems(itemRows.length > 0 ? itemRows : [newItemRow("")]);
+      } else {
+        setItems([newItemRow("")]);
       }
 
       // Resolve suppliers — fetch full Supplier records for the template's defaults
@@ -323,13 +351,51 @@ export default function NewRFQPage() {
       }
 
       setAppliedTemplate(template);
-      toast.success(`Template "${template.template_name}" applied`);
+      toast.success(
+        `Template "${template.template_name}" applied. Please set a fresh Valid Till date.`
+      );
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn("[NewRFQ] Error applying template — proceeding with available data:", err);
       setAppliedTemplate(template);
     } finally {
       setApplyingTemplate(false);
+    }
+  }
+
+  async function handleSaveAsTemplate() {
+    if (!title.trim()) {
+      toast.error("Please enter a title for the RFQ to name the template.");
+      return;
+    }
+    const validItems = items.filter((i) => i.item_code?.trim());
+    try {
+      await createRFQTemplate({
+        template_name: `${title.trim()} Template`,
+        category: (procurementCategory || "General Procurement") as RFQTemplateCategory,
+        procurement_type: procurementType,
+        rfq_type: "Standard RFQ",
+        description: internalNotes || supplierTerms || `Reusable template saved from ${title}`,
+        status: "Active",
+        cost_breakdown_required: requireCostBreakdown,
+        contract_required: contractRequired === "Yes",
+        supplier_terms: supplierTerms,
+        items: validItems.map((i) => ({
+          item_code: i.item_code,
+          item_name: i.item_name || i.item_code,
+          description: i.description,
+          qty: i.qty,
+          uom: i.uom,
+          target_price: i.target_price ?? 0,
+        })),
+        suppliers: selectedSuppliers.map((s) => ({
+          supplier: s.name,
+          supplier_name: s.supplier_name || s.name,
+        })),
+      });
+      toast.success(`Saved "${title.trim()} Template" to Template Library!`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to save template");
     }
   }
 
@@ -358,9 +424,9 @@ export default function NewRFQPage() {
         }
 
         const prefill = await buildRFQPrefillFromMaterialRequest(mrParam);
-        const dept = prefill.department?.trim() || "General";
+        const dept = prefill.department?.trim() || "";
         // Professional title — no "RFQ from MAT-MR-xxxx".
-        setTitle(`Procurement RFQ – ${dept}`);
+        setTitle(dept ? `Procurement RFQ – ${dept}` : "Procurement RFQ");
         setSupplierTerms(prefill.message_for_supplier);
         setMrContext({
           material_request: prefill.material_request,
@@ -620,6 +686,10 @@ export default function NewRFQPage() {
   }
 
   async function handleSubmit() {
+    if (contractRequired !== "Yes" && contractRequired !== "No") {
+      toast.error("Select Yes or No for Contract Required before creating the RFQ.");
+      return;
+    }
     if (!step1Valid || !step2Valid || !step3Valid) {
       toast.error("Please complete all steps.");
       return;
@@ -676,6 +746,7 @@ export default function NewRFQPage() {
       const anyShowToSupplier = items.some((r) => !!r.show_to_supplier);
 
       const rfqPayload = {
+        contract_required: contractRequired === "Yes",
         transaction_date: todayIso(),
         message_for_supplier: message,
         company: ENV_DEFAULTS.company || undefined,
@@ -713,10 +784,12 @@ export default function NewRFQPage() {
       const created = mrParam
         ? await createRFQFromMaterialRequest({
             material_request: mrParam,
+            contract_required: rfqPayload.contract_required,
             transaction_date: rfqPayload.transaction_date,
             message_for_supplier: message,
             company: rfqPayload.company,
             suppliers: rfqPayload.suppliers,
+            item_target_pricing: rfqPayload.items.map(({ item_code, custom_target_price, custom_show_target_price_to_supplier }) => ({ item_code, custom_target_price, custom_show_target_price_to_supplier })),
             // Internal notes persist to the MR (custom_procurement_remarks),
             // never to the supplier message.
             procurement_remarks: internalNotes.trim() || undefined,
@@ -726,6 +799,7 @@ export default function NewRFQPage() {
             custom_procurement_type: procurementType,
             custom_procurement_category: procurementCategory || undefined,
             custom_request_mode: requestMode,
+            custom_ecr: ecrReference.trim() || undefined,
           });
 
       const creationMeta = appliedTemplate
@@ -736,6 +810,7 @@ export default function NewRFQPage() {
               workflow_rules: { ...DEFAULT_WORKFLOW_RULES },
               created_by: formatRfqOwnerLabel(user?.email ?? user?.name),
               internal_notes: internalNotes.trim() || undefined,
+              ecr_reference: ecrReference.trim() || undefined,
             })
           : null;
 
@@ -746,9 +821,7 @@ export default function NewRFQPage() {
         incrementLocalTemplateUsage(appliedTemplate.name);
       }
 
-      // Header flags + Target Prices are written after create. ERPNext
-      // silently drops unknown custom fields, so this second write is the
-      // reliable path once setup-rfq-target-price.mjs has been run.
+      // Preserve the existing independent cost-breakdown flag update.
       if (requireCostBreakdown) {
         try {
           await updateRFQ(created.name, { custom_require_cost_breakdown: 1 });
@@ -761,44 +834,32 @@ export default function NewRFQPage() {
         }
       }
 
-      /* Persist per-line Target Price + Show-to-Supplier after create. */
+      /* Verify per-line targets from the initial insert, saving only missing differences. */
+      let targetPricingWarning = "";
+      let contractRoutingWarning = created.contractRequirementWarning;
       try {
-        const linesByItemCode = new Map<
-          string,
-          { target_price: number | null; show_to_supplier: boolean }
-        >();
-        for (const row of items) {
-          if (!row.item_code) continue;
-          linesByItemCode.set(row.item_code, {
-            target_price:
-              row.target_price != null &&
-              Number.isFinite(Number(row.target_price)) &&
-              Number(row.target_price) > 0
-                ? Number(row.target_price)
-                : null,
-            show_to_supplier: !!row.show_to_supplier,
-          });
-        }
-        await persistRfqTargetPricing({
+        const pricing = await persistRfqTargetPricing({
           rfqName: created.name,
-          linesByItemCode,
+          lines: rfqPayload.items.map(row => ({ item_code: row.item_code, target_price: row.custom_target_price, show_to_supplier: row.custom_show_target_price_to_supplier === 1 })),
           audit: true,
         });
+        if (pricing?.contractRequirementWarning) contractRoutingWarning = pricing.contractRequirementWarning;
       } catch (tpErr) {
         // eslint-disable-next-line no-console
         console.warn("[RFQ] Could not persist Target Pricing:", tpErr);
-        toast.error(
-          "RFQ created, but Target Pricing could not be saved. Re-open the RFQ and confirm line Target Prices.",
-        );
+        targetPricingWarning = `RFQ ${created.name} was saved, but Target Pricing could not be verified. ${tpErr instanceof Error ? tpErr.message : "Re-open the RFQ and confirm line Target Prices."}`;
+        toast.error(targetPricingWarning, { duration: 10000 });
       }
 
-      toast.success(`RFQ ${created.name} created`);
+      if (contractRoutingWarning) toast.error(contractRoutingWarning, { duration: 10000 });
+      else if (!targetPricingWarning) toast.success(`RFQ ${created.name} created`);
       // Creating an RFQ (especially from a forwarded MR) moves the request out
       // of "awaiting RFQ" — keep the Warehouse & procurement dashboards live.
       void queryClient.invalidateQueries({ queryKey: ["mr-procurement-queue"] });
       void queryClient.invalidateQueries({ queryKey: ["mr-forwarded-history"] });
       void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
       void queryClient.invalidateQueries({ queryKey: ["material-requests-workflow"] });
+      void queryClient.invalidateQueries({ queryKey: ["clm", "list", "Contract Request"] });
       navigate(`/sourcing/rfq/${encodeURIComponent(created.name)}`);
     } catch (err) {
       if (err instanceof ActiveRfqExistsError) {
@@ -996,6 +1057,16 @@ export default function NewRFQPage() {
       <PageHeader
         title="Create RFQ"
         description="Issue a quote request to multiple suppliers in four steps."
+        actions={
+          <button
+            type="button"
+            onClick={handleSaveAsTemplate}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 shadow-sm"
+          >
+            <LayoutTemplate className="h-4 w-4 text-primary-600" />
+            Save as Template
+          </button>
+        }
       />
 
       {mrContext && <MrContextBanner ctx={mrContext} />}
@@ -1012,6 +1083,11 @@ export default function NewRFQPage() {
       </div>
 
       <div className="mt-6 card">
+        {appliedTemplate && !validTill && (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+            Template &quot;{appliedTemplate.template_name}&quot; applied. Please select a fresh <strong>Valid Till</strong> date below to proceed.
+          </div>
+        )}
         {step === 1 && (
           <Step1
             title={title}
@@ -1022,6 +1098,8 @@ export default function NewRFQPage() {
             setSupplierTerms={setSupplierTerms}
             internalNotes={internalNotes}
             setInternalNotes={setInternalNotes}
+            ecrReference={ecrReference}
+            setEcrReference={setEcrReference}
             warehouseRemarks={mrContext?.warehouse_remarks ?? ""}
             isFromMaterialRequest={isFromMaterialRequest}
             procurementType={procurementType}
@@ -1077,18 +1155,24 @@ export default function NewRFQPage() {
         )}
 
         {step === 4 && (
-          <Step4
+          <><Step4
             title={title}
             validTill={validTill}
             supplierTerms={supplierTerms}
             internalNotes={internalNotes}
+            ecrReference={ecrReference}
             items={items}
             selectedSuppliers={selectedSuppliers}
             totalItems={totalItems}
             totalQty={totalQty}
             mrContext={mrContext}
             requireCostBreakdown={requireCostBreakdown}
+            contractRequired={contractRequired}
           />
+          <section aria-labelledby="rfq-contract-management-heading" className="space-y-3 px-5 pb-5">
+            <h3 id="rfq-contract-management-heading" className="text-sm font-semibold uppercase tracking-wide text-neutral-800">Contract Management</h3>
+            <RfqContractRequirementField value={contractRequired} onChange={setContractRequired} disabled={submitting} />
+          </section></>
         )}
 
         <div className="flex items-center justify-between gap-3 border-t border-neutral-200 px-5 py-3">
@@ -1224,6 +1308,8 @@ interface Step1Props {
   setSupplierTerms: (v: string) => void;
   internalNotes: string;
   setInternalNotes: (v: string) => void;
+  ecrReference: string;
+  setEcrReference: (v: string) => void;
   warehouseRemarks: string;
   isFromMaterialRequest: boolean;
   procurementType: MaterialRequestProcurementType;
@@ -1248,6 +1334,8 @@ function Step1({
   setSupplierTerms,
   internalNotes,
   setInternalNotes,
+  ecrReference,
+  setEcrReference,
   warehouseRemarks,
   isFromMaterialRequest,
   procurementType,
@@ -1265,7 +1353,7 @@ function Step1({
     <div className="space-y-5 p-5">
       {/* Responsive two-column grid for the core fields */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div>
+        <div className="sm:col-span-2">
           <label
             htmlFor="rfq-title"
             className="mb-1.5 block text-sm font-medium text-neutral-700"
@@ -1274,63 +1362,52 @@ function Step1({
           </label>
           <input
             id="rfq-title"
+            type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="e.g. Production Procurement – Bearings"
+            placeholder="e.g. Q3 Precision Machined Fasteners Supply"
             className={FIELD_CLASS}
           />
         </div>
 
         <div>
-          <label
-            htmlFor="rfq-valid"
-            className="mb-1.5 block text-sm font-medium text-neutral-700"
-          >
+          <label className="mb-1.5 block text-sm font-medium text-neutral-700">
             Valid Till <span className="text-danger-600">*</span>
           </label>
           <ErpNextDatePicker
             value={validTill}
-            min={todayIso()}
             onChange={setValidTill}
-            required
+            className={FIELD_CLASS}
           />
           <p className="mt-1 text-xs text-neutral-500">
-            Defaults to 7 days from today. Adjust if needed.
+            Deadline for suppliers to submit their quotations.
           </p>
         </div>
 
-        {isFromMaterialRequest ? (
-          <>
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-neutral-700">
-                Procurement Type
-                <span className="ml-2 text-xs font-normal text-neutral-400">
-                  (inherited from Material Request)
-                </span>
-              </label>
-              <input
-                readOnly
-                value={procurementType}
-                className="w-full rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-700"
-              />
-            </div>
-            {procurementCategory ? (
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-neutral-700">
-                  Procurement Category
-                  <span className="ml-2 text-xs font-normal text-neutral-400">
-                    (inherited from Material Request)
-                  </span>
-                </label>
-                <input
-                  readOnly
-                  value={procurementCategory}
-                  className="w-full rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-700"
-                />
-              </div>
-            ) : null}
-          </>
-        ) : (
+        <div>
+          <label
+            htmlFor="rfq-ecr-reference"
+            className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-neutral-700"
+          >
+            <Factory className="h-3.5 w-3.5 text-neutral-400" />
+            ECR Reference
+            <span className="text-xs font-normal text-neutral-400">(optional)</span>
+          </label>
+          <input
+            id="rfq-ecr-reference"
+            type="text"
+            value={ecrReference}
+            onChange={(e) => setEcrReference(e.target.value)}
+            placeholder="e.g. ECR-2026-100006"
+            className={FIELD_CLASS}
+          />
+          <p className="mt-1 text-xs text-neutral-500">
+            Engineering Change Request providing reference requirements.
+          </p>
+        </div>
+
+        {/* Direct-RFQ categorization */}
+        {!isFromMaterialRequest && (
           <>
             <div>
               <label className="mb-1.5 block text-sm font-medium text-neutral-700">
@@ -1342,10 +1419,14 @@ function Step1({
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-neutral-700">
-                Procurement Category <span className="text-danger-600">*</span>
+              <label
+                htmlFor="rfq-procurement-category"
+                className="mb-1.5 block text-sm font-medium text-neutral-700"
+              >
+                Category <span className="text-danger-600">*</span>
               </label>
               <select
+                id="rfq-procurement-category"
                 value={procurementCategory}
                 onChange={(e) => onProcurementCategoryChange(e.target.value)}
                 className={FIELD_CLASS}
@@ -1904,10 +1985,12 @@ function SupplierPickCard({
  * ========================================================================== */
 
 interface Step4Props {
+  contractRequired: RfqContractRequired | "";
   title: string;
   validTill: string;
   supplierTerms: string;
   internalNotes: string;
+  ecrReference: string;
   items: ItemRow[];
   selectedSuppliers: SupplierWithMeta[];
   totalItems: number;
@@ -1917,10 +2000,12 @@ interface Step4Props {
 }
 
 function Step4({
+  contractRequired,
   title,
   validTill,
   supplierTerms,
   internalNotes,
+  ecrReference,
   items,
   selectedSuppliers,
   totalItems,
@@ -1931,6 +2016,7 @@ function Step4({
   const shownLines = items.filter((r) => !!r.show_to_supplier).length;
   const detailRows: Array<{ label: string; value: string }> = [
     { label: "RFQ Title", value: title || "—" },
+    { label: "Contract Required", value: contractRequired || "Not selected" },
     { label: "Valid Till", value: validTill || "—" },
     { label: "Total Items", value: String(totalItems) },
     { label: "Total Quantity", value: String(totalQty) },
@@ -1947,12 +2033,18 @@ function Step4({
           : "Hidden on all lines",
     },
   ];
+  if (ecrReference.trim()) {
+    detailRows.splice(2, 0, {
+      label: "ECR Reference",
+      value: ecrReference.trim(),
+    });
+  }
   if (mrContext) {
     detailRows.splice(
       2,
       0,
       { label: "Material Request", value: mrContext.material_request },
-      { label: "Department", value: mrContext.department },
+      { label: "Department", value: mrContext.department || "—" },
       { label: "Priority", value: mrContext.priority },
     );
   }

@@ -1,6 +1,8 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { assertNoGenericClmAccess, authorizeClmUpload } from "./clmGatewayGuard.js";
 import { sanitizeErpPayloadDates } from "./erpDateSanitize.js";
 import {
+  enforceBusinessCaseMutationRbac,
   enforceEcrMutationRbac,
   enforcePayablesMutationRbac,
   enforcePrMutationRbac,
@@ -48,6 +50,8 @@ import {
 import { multipartProxyPolicy } from "./multipartProxyGuard.js";
 import {
   assertErpProxySecurityBoundary,
+  assertNoGenericPoShipmentMutation,
+  assertNoGenericSupplierShipmentRead,
   ErpProxySecurityError,
 } from "./erpProxySecurityGuard.js";
 import {
@@ -69,6 +73,18 @@ import {
   ProxyRequestError,
 } from "./proxyRequestGuard.js";
 import { buildEngineerEcrReadScope } from "./ecrReadScope.js";
+import { assertRfqPurchaseOrderRequest, listPurchaseOrderLegalReviews } from "./rfqPurchaseOrderGuard.js";
+import { normalizeRfqContractRequirementRequest, RfqContractRequirementError } from "./rfqContractRequirementGuard.js";
+import { assertRfqClmBranchRequest } from "./rfqClmBranchGuard.js";
+import { assertSupplierAwardEligible, assertSupplierSelectionRequest } from "./supplierAwardEligibilityGuard.js";
+
+async function assertRfqContractReady(rfqName: string, options?: { allowHistoricalOrder?: boolean }): Promise<void> {
+  const [{ assertRfqClmReadyForProcurement }, { createClmDependencies }] = await Promise.all([
+    import("./rfqClmCore.js"), import("./clmErp.js"),
+  ]);
+  try { await assertRfqClmReadyForProcurement(rfqName, createClmDependencies(), options); }
+  catch (error) { throw new RbacError(error instanceof Error ? error.message : "RFQ contract decision could not be verified.", 403); }
+}
 
 console.log("[erpnext-proxy] module loaded");
 
@@ -258,6 +274,7 @@ function ecrReferenceFromRequest(
 
 interface EcrSecuritySnapshot {
   name: string;
+  ecr_workflow_version?: string;
   select_pxfp?: string;
   ecr_owner?: string;
   amended_from?: string;
@@ -289,7 +306,7 @@ async function readErpResource<T extends object>(
 async function readEcrSecuritySnapshot(name: string): Promise<EcrSecuritySnapshot> {
   const creds = readApiCredentials();
   if (!creds) throw new Error("ERP API credentials are not configured.");
-  const fields = encodeURIComponent(JSON.stringify(["name", "select_pxfp", "ecr_owner", "amended_from", "owner"]));
+  const fields = encodeURIComponent(JSON.stringify(["name", "select_pxfp", "ecr_owner", "amended_from", "owner", "ecr_workflow_version"]));
   const response = await fetch(
     `${readErpnextBaseUrl()}/api/resource/${encodeURIComponent("Engineering Change Request")}/${encodeURIComponent(name)}?fields=${fields}`,
     {
@@ -378,6 +395,8 @@ async function authorizeMultipartUpload(
     requestDoctypes: upload.doctype ? [upload.doctype] : [],
   });
   if (!upload.doctype) return;
+
+  if (await authorizeClmUpload(principal, upload, (doctype, name) => readErpResource<Record<string, unknown>>(doctype, name))) return;
 
   if (upload.doctype === "Engineering Change Request") {
     if (principal.typ !== "internal") {
@@ -492,6 +511,8 @@ export default async function handler(
       );
       // Finance payables: invoice / payment / voucher mutations are role-gated.
       enforcePayablesMutationRbac(principal, apiPath, method, req.body);
+      // Business Case intake: creation is restricted to Department Users only.
+      enforceBusinessCaseMutationRbac(principal, apiPath, method, req.body);
     } catch (err) {
       if (err instanceof RbacError) {
         res.status(err.status).json({ error: err.message });
@@ -552,6 +573,26 @@ export default async function handler(
     const requestPayload = bodyRecord(req.body);
     const requestDocument = bodyRecord(requestPayload.doc);
     const requestQuery = bodyRecord(req.query);
+    // Frappe mutation RPCs can carry doc/query arguments with GET. Resolve their
+    // identity before the RFQ gate too, including existing query-token callers.
+    if (!principal && normalizedPath.startsWith("method/") &&
+        !isReadOnlyGenericDocumentMethod(normalizedPath) &&
+        requestDoctypesFromBodyOrQuery(req.body, req.query).some(doctype => ["Purchase Order", "Reverse Bidding", "Request for Quotation"].includes(doctype))) {
+      principal = requireAnyAuth(req.headers as Record<string, unknown>, requestPayload, requestQuery);
+    }
+    if (principal) {
+      await assertRfqPurchaseOrderRequest({ apiPath: normalizedPath, method, principal, body: req.body, query: requestQuery }, {
+        loadDocument: (doctype, name) => readErpResource<Record<string, unknown>>(doctype, name),
+        listReviews: listPurchaseOrderLegalReviews,
+        assertClmReady: assertRfqContractReady,
+        assertAwardEligible: assertSupplierAwardEligible,
+        assertReady: async (name, actor) => {
+          const { assertLegalReviewReadyForPurchaseOrder } = await import("./legalReviewCore.js");
+          try { return await assertLegalReviewReadyForPurchaseOrder(name, actor); }
+          catch (error) { throw new RbacError(error instanceof Error ? error.message : "RFQ approval could not be verified.", 403); }
+        },
+      });
+    }
     const isFileResource =
       normalizedPath === "resource/File" || normalizedPath.startsWith("resource/File/");
     if (isFileResource) {
@@ -591,6 +632,9 @@ export default async function handler(
     const requestDoctype = requestDoctypeFromBodyOrQuery(req.body, req.query) ||
       String(requestTransitionDocument.doctype || "");
     assertNoGenericFileAccess(normalizedPath, [requestDoctype, ...requestDoctypes]);
+    assertNoGenericClmAccess(normalizedPath, [requestDoctype, ...requestDoctypes]);
+    assertNoGenericPoShipmentMutation(normalizedPath, method, [requestDoctype, ...requestDoctypes]);
+    assertNoGenericSupplierShipmentRead(normalizedPath, [requestDoctype, ...requestDoctypes], principal?.typ);
     if (isMutation && principal) {
       assertErpProxySecurityBoundary({
         apiPath: normalizedPath,
@@ -847,7 +891,15 @@ export default async function handler(
           403,
         );
       }
+      const normalized = normalizeRfqContractRequirementRequest({ apiPath: normalizedPath, method, body: req.body, query: req.query as Record<string, unknown> });
+      req.body = normalized.body;
+      if (normalized.query) req.query = normalized.query as VercelRequest["query"];
+      await assertRfqClmBranchRequest({ apiPath: normalizedPath, method, principal: rfqPrincipal, body: req.body, query: req.query as Record<string, unknown> }, {
+        loadDocument: (doctype, name) => readErpResource<Record<string, unknown>>(doctype, name),
+        assertClmReady: assertRfqContractReady,
+      });
     }
+    if (principal) await assertSupplierSelectionRequest({ apiPath: normalizedPath, method, principal, body: req.body, query: req.query as Record<string, unknown> });
     if (
       (isMutation && isPurchaseOrderResource) ||
       (isPurchaseOrderGenericRequest && !isReadOnlyGenericDocumentRequest)
@@ -878,6 +930,7 @@ export default async function handler(
       );
       principal = internal;
       requireRoles(internal, [
+        "finance",
         "engineer",
         "engineering",
         "operations",
@@ -976,7 +1029,7 @@ export default async function handler(
       });
       return;
     }
-    if (err instanceof RbacError) {
+    if (err instanceof RbacError || err instanceof RfqContractRequirementError) {
       res.status(err.status).json({ error: err.message });
       return;
     }

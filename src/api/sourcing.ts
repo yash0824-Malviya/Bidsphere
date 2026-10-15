@@ -52,6 +52,7 @@ import { itemMatchesTransactionalFilters } from "../utils/itemMasterProcurement"
 import { resolveItemProcurement } from "../utils/itemProcurementInfer";
 import type { MaterialRequestProcurementType } from "../types/materialRequestWorkflow";
 import { nextFieldsAfterPermissionError } from "../utils/erpListFieldRetry";
+import { contractRequirementForCreate, savedRfqFromClmRoutingError, verifyCreatedRfqContractRequirement, type RfqContractRequiredInput, type RFQCreationResult } from "./rfqContractRequirement";
 
 const RFQ_DOCTYPE = "Request for Quotation";
 const RFQ_ITEM_DOCTYPE = "Request for Quotation Item";
@@ -289,14 +290,76 @@ export async function getRFQsPaged(options: {
     hasRfqChildTableFilter(filters) || hasRfqChildTableFilter(or_filters);
 
   if (usesChildJoin) {
-    const raw = await getList<RFQListRow>(RFQ_DOCTYPE, {
-      fields: [...SAFE_RFQ_FIELDS],
-      filters,
-      or_filters,
-      order_by,
-      limit_start: 0,
-      limit_page_length: RFQ_CHILD_FILTER_FETCH_CAP,
-    });
+    let raw: RFQListRow[] = [];
+    try {
+      raw = await getList<RFQListRow>(RFQ_DOCTYPE, {
+        fields: [...SAFE_RFQ_FIELDS],
+        filters,
+        or_filters,
+        order_by,
+        limit_start: 0,
+        limit_page_length: RFQ_CHILD_FILTER_FETCH_CAP,
+      });
+    } catch (joinErr) {
+      // If ERPNext rejects child doctype syntax in get_list or_filters (HTTP 417 "Field not permitted in query"),
+      // fallback to querying child tables directly and filtering parent RFQs by matching document names.
+      const isFieldErr =
+        joinErr instanceof Error &&
+        /Field not permitted in query/i.test(joinErr.message);
+      if (!isFieldErr) throw joinErr;
+
+      // Extract search terms from child table filters if any
+      const matchingParentIds = new Set<string>();
+      const safeOrFilters: Filter[] = [];
+
+      for (const f of or_filters ?? []) {
+        if (!Array.isArray(f)) continue;
+        const [docOrField, col, op, val] = f;
+        if (docOrField === RFQ_ITEM_DOCTYPE) {
+          try {
+            const itemRows = await getList<{ parent: string }>(RFQ_ITEM_DOCTYPE, {
+              fields: ["parent"],
+              filters: [[col as string, op as string, val]],
+              limit_page_length: 500,
+            });
+            for (const r of itemRows) {
+              if (r.parent) matchingParentIds.add(r.parent);
+            }
+          } catch {
+            /* ignore child query failure */
+          }
+        } else if (docOrField === RFQ_SUPPLIER_DOCTYPE) {
+          try {
+            const supRows = await getList<{ parent: string }>(RFQ_SUPPLIER_DOCTYPE, {
+              fields: ["parent"],
+              filters: [[col as string, op as string, val]],
+              limit_page_length: 500,
+            });
+            for (const r of supRows) {
+              if (r.parent) matchingParentIds.add(r.parent);
+            }
+          } catch {
+            /* ignore child query failure */
+          }
+        } else {
+          safeOrFilters.push(f as Filter);
+        }
+      }
+
+      if (matchingParentIds.size > 0) {
+        safeOrFilters.push(["name", "in", Array.from(matchingParentIds)]);
+      }
+
+      raw = await getList<RFQListRow>(RFQ_DOCTYPE, {
+        fields: [...SAFE_RFQ_FIELDS],
+        filters,
+        or_filters: safeOrFilters.length > 0 ? safeOrFilters : undefined,
+        order_by,
+        limit_start: 0,
+        limit_page_length: RFQ_CHILD_FILTER_FETCH_CAP,
+      });
+    }
+
     const unique = uniqueByDocName(raw);
     const total_records = unique.length;
     const total_pages = Math.max(1, Math.ceil(total_records / safePageSize));
@@ -497,6 +560,10 @@ export interface CreateRFQSupplierInput {
 }
 
 export interface CreateRFQInput {
+  /** RFQ metadata only; a Contract Request may be created after the saved supplier award. */
+  contract_required?: RfqContractRequiredInput;
+  /** Selected existing Department for a manual RFQ's initial Contract Request. */
+  custom_department?: string;
   /** Defaults to today (YYYY-MM-DD). */
   transaction_date?: string;
   message_for_supplier?: string;
@@ -512,6 +579,8 @@ export interface CreateRFQInput {
   custom_procurement_category?: string;
   /** Existing vs New item entry (direct RFQ only). */
   custom_request_mode?: string;
+  /** Optional ECR reference. */
+  custom_ecr?: string;
 }
 
 /**
@@ -529,7 +598,8 @@ export interface CreateRFQInput {
  * ERPNext doesn't ship by default (`valid_till`, `title`, …) so the
  * request can't 400 on a missing custom field.
  */
-export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
+export async function createRFQ(data: CreateRFQInput): Promise<RFQCreationResult> {
+  const contractRequired = contractRequirementForCreate(data.contract_required);
   if (!data.items || data.items.length === 0) {
     throw new Error("RFQ requires at least one item.");
   }
@@ -573,6 +643,7 @@ export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
 
   const doc: Record<string, unknown> = {
     doctype: RFQ_DOCTYPE,
+    contract_required: contractRequired,
     transaction_date: transactionDate,
     status: data.status || "Draft",
     message_for_supplier: data.message_for_supplier || "",
@@ -677,6 +748,7 @@ export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
     })),
   };
 
+  if (data.custom_department?.trim()) doc.custom_department = data.custom_department.trim();
   if (data.custom_show_target_price_to_supplier != null) {
     doc.custom_show_target_price_to_supplier =
       data.custom_show_target_price_to_supplier === true ||
@@ -701,10 +773,14 @@ export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
   const API_METHOD = "/api/method/frappe.client.save";
 
   try {
-    const created = await apiPost<RFQ>(API_METHOD, { doc });
+    const created = await apiPost<RFQ>(API_METHOD, { doc }).catch(error => {
+      const saved = savedRfqFromClmRoutingError(error);
+      if (!saved) throw error;
+      return saved;
+    });
 
     // eslint-disable-next-line no-console
-    console.log("[RFQ Create] SUCCESS:", {
+    console.log("[RFQ Create] Saved RFQ:", {
       rfqName: created.name,
       status: created.status,
       method: API_METHOD,
@@ -724,7 +800,7 @@ export async function createRFQ(data: CreateRFQInput): Promise<RFQ> {
       );
     }
 
-    return created;
+    return await verifyCreatedRfqContractRequirement(created, contractRequired);
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
     // eslint-disable-next-line no-console
@@ -781,6 +857,8 @@ export interface CreateSQItemInput {
   delivery_days?: number;
   /** Standard ERPNext "expected delivery" date (YYYY-MM-DD). */
   delivery_date?: string;
+  expected_delivery_date?: string;
+  schedule_date?: string;
   /**
    * The `name` of the specific `Request for Quotation Item` child-table row
    * that this line responds to (e.g. "PUR-RFQ-2026-00001-1").
@@ -816,6 +894,9 @@ export interface CreateSQInput {
   company?: string;
   warehouse?: string;
   valid_till?: string;
+  delivery_date?: string;
+  expected_delivery_date?: string;
+  schedule_date?: string;
   notes?: string;
   terms?: string;
   legal_documents?: {
@@ -863,7 +944,14 @@ function num(value: unknown, fallback = 0): number {
  * Buyer- and supplier-side callsites wrap this call in their own
  * try/catch so a failure here doesn't lose the user's data.
  */
-export const createSupplierQuotation = async (data: CreateSQInput) => {
+export interface CreateSQOptions {
+  submitOnCreate?: boolean;
+}
+
+export const createSupplierQuotation = async (
+  data: CreateSQInput,
+  options?: CreateSQOptions
+) => {
   const stripDataUrls = (obj: any): any => {
     if (Array.isArray(obj)) return obj.map(stripDataUrls);
     if (obj && typeof obj === "object") {
@@ -882,14 +970,34 @@ export const createSupplierQuotation = async (data: CreateSQInput) => {
   };
 
   const cleanData = stripDataUrls(data);
-  return createSupplierQuotationInternal(cleanData);
+  return createSupplierQuotationInternal(cleanData, options);
 };
 
 async function createSupplierQuotationInternal(
-  data: CreateSQInput
+  data: CreateSQInput,
+  options?: CreateSQOptions
 ): Promise<SupplierQuotation> {
+  const submitOnCreate = options?.submitOnCreate ?? false;
+
   if (!data.items || data.items.length === 0) {
     throw new Error("Supplier Quotation requires at least one item.");
+  }
+
+  // Backend validation: enforce mandatory Expected Delivery Date when submitting
+  if (submitOnCreate) {
+    const missingDeliveryItem = data.items.find(
+      (item) =>
+        !(
+          (item.expected_delivery_date && item.expected_delivery_date.trim()) ||
+          (item.delivery_date && item.delivery_date.trim()) ||
+          (typeof item.delivery_days === "number" && item.delivery_days > 0)
+        )
+    );
+    if (missingDeliveryItem) {
+      throw new Error(
+        "Please provide the expected delivery date before submitting your quotation."
+      );
+    }
   }
 
   // Pre-flight: ensure no Server Scripts block creation or submission
@@ -953,6 +1061,18 @@ async function createSupplierQuotationInternal(
       };
       if (data.rfq_no) row.request_for_quotation = data.rfq_no;
       if (item.rfq_item_name) row.request_for_quotation_item = item.rfq_item_name;
+      // Persist the supplier's delivery commitment to standard ERPNext fields
+      // so the AI evaluation engine can read it back.
+      const dDate = item.expected_delivery_date || item.delivery_date;
+      if (dDate) {
+        row.expected_delivery_date = dDate;
+        row.delivery_date = dDate;
+        row.schedule_date = dDate;
+      }
+      if (typeof item.delivery_days === "number" && item.delivery_days > 0) {
+        row.lead_time_days = item.delivery_days;
+        row.delivery_days = item.delivery_days;
+      }
       return row;
     }),
   };
@@ -960,18 +1080,23 @@ async function createSupplierQuotationInternal(
   if (data.rfq_no) payload.request_for_quotation = data.rfq_no;
   if (data.rfq_supplier_name) payload.request_for_quotation_supplier = data.rfq_supplier_name;
   if (data.rfq_round) payload.custom_rfq_round = data.rfq_round;
+  if (data.valid_till) payload.valid_till = data.valid_till;
+  const headerDeliveryDate =
+    data.expected_delivery_date ||
+    data.delivery_date ||
+    data.schedule_date ||
+    data.items.find((it) => it.expected_delivery_date || it.delivery_date)?.expected_delivery_date ||
+    data.items.find((it) => it.expected_delivery_date || it.delivery_date)?.delivery_date;
+  if (headerDeliveryDate) {
+    payload.expected_delivery_date = headerDeliveryDate;
+    payload.delivery_date = headerDeliveryDate;
+    payload.schedule_date = headerDeliveryDate;
+  }
 
   if (data.legal_documents) {
     const ld = data.legal_documents;
     // Actual ERPNext custom field names — verified directly via
-    // `Custom Field` metadata query (dt = "Supplier Quotation"). The
-    // previous field names here (custom_terms_pdf / custom_warranty_pdf /
-    // custom_insurance_pdf) do NOT exist on the doctype, so ERPNext's REST
-    // API silently dropped them (no error, no persisted value) on every
-    // save — this was the root cause of Legal Document Review being
-    // created with empty PDF fields. `custom_terms__condition` (double
-    // underscore) and `custom_warenty_certificate` (upstream typo
-    // "warenty") must match exactly.
+    // `Custom Field` metadata query (dt = "Supplier Quotation").
     payload.custom_terms__condition = ld.terms_conditions_pdf ?? "";
     payload.custom_terms_note = ld.terms_conditions_note ?? "";
     payload.custom_warenty_certificate = ld.warranty_certificate_pdf ?? "";
@@ -1010,9 +1135,6 @@ async function createSupplierQuotationInternal(
     console.log("[SQ] Saved as draft:", docName);
 
     // ── Post-save: explicitly PUT legal doc fields ──
-    // Belt-and-suspenders: even though the POST includes the fields,
-    // do a separate PUT with ONLY the custom_ prefixed fields to ensure
-    // they survive ERPNext's document creation pipeline.
     if (docName && data.legal_documents) {
       const ld = data.legal_documents;
       const legalPutPayload: Record<string, string> = {
@@ -1061,12 +1183,8 @@ async function createSupplierQuotationInternal(
       }
     }
 
-    if (docName) {
-      // ── Auto-submit via PUT with docstatus: 1 ──────────────────────────
-      // The PUT body also carries `update_item_prices: 0` to ensure the
-      // on_submit hook doesn't attempt Item Price creation (the trigger
-      // for the Server Script error).
-
+    if (docName && submitOnCreate) {
+      // ── Explicit submit requested via PUT with docstatus: 1 ────────────
       let modified: string | undefined;
       try {
         const fresh = await apiGet<{ modified?: string; data?: { modified?: string } }>(
@@ -1094,6 +1212,7 @@ async function createSupplierQuotationInternal(
           ...(saved as object),
           name: docName,
           status: "Submitted",
+          docstatus: 1,
         } as unknown as SupplierQuotation;
       } catch (putErr) {
         const putMsg = putErr instanceof Error ? putErr.message : String(putErr);
@@ -1105,24 +1224,21 @@ async function createSupplierQuotationInternal(
           putMsg
         );
 
-        if (isScriptError) {
-          // eslint-disable-next-line no-console
-          console.warn(
-            "[SQ] Server Script blocked submission. The quotation was saved as a draft. " +
-            "Item Price creation has been suppressed but ERPNext may have additional " +
-            "Server Scripts on the Supplier Quotation DocType."
-          );
-        }
-
         return {
           ...(saved as object),
           name: docName,
           status: "Draft",
+          docstatus: 0,
         } as unknown as SupplierQuotation;
       }
     }
 
-    return saved;
+    return {
+      ...(saved as object),
+      name: docName || "",
+      status: "Draft",
+      docstatus: 0,
+    } as unknown as SupplierQuotation;
   } catch (err) {
     const ax = err as {
       message?: string;
@@ -1291,8 +1407,27 @@ export async function updateSupplierQuotation(
       };
       if (data.rfq_no) row.request_for_quotation = data.rfq_no;
       if (item.rfq_item_name) row.request_for_quotation_item = item.rfq_item_name;
+      const dDate = item.expected_delivery_date || item.delivery_date;
+      if (dDate) {
+        row.expected_delivery_date = dDate;
+        row.delivery_date = dDate;
+        row.schedule_date = dDate;
+      }
+      if (typeof item.delivery_days === "number" && item.delivery_days > 0) {
+        row.lead_time_days = item.delivery_days;
+        row.delivery_days = item.delivery_days;
+      }
       return row;
     });
+  }
+  if (data.expected_delivery_date || data.delivery_date || data.schedule_date) {
+    const d = data.expected_delivery_date || data.delivery_date || data.schedule_date;
+    payload.expected_delivery_date = d;
+    payload.delivery_date = d;
+    payload.schedule_date = d;
+  }
+  if (data.valid_till) {
+    payload.valid_till = data.valid_till;
   }
   if (data.legal_documents) {
     const ld = data.legal_documents;
@@ -1312,12 +1447,23 @@ export async function saveDraftSupplierQuotation(
 ): Promise<SupplierQuotation> {
   if (existingName) {
     try {
+      const existing = await apiGet<{ docstatus?: number; status?: string; data?: { docstatus?: number; status?: string } }>(
+        buildResourceUrl(SQ_DOCTYPE, existingName)
+      );
+      const doc = (existing as { data?: { docstatus?: number; status?: string } })?.data ?? existing;
+      if (doc?.docstatus === 1 || doc?.status === "Submitted") {
+        // eslint-disable-next-line no-console
+        console.log(`[SQ Draft] ${existingName} is already submitted. Skipping draft overwrite.`);
+        return { name: existingName, status: "Submitted", docstatus: 1 } as unknown as SupplierQuotation;
+      }
       return await updateSupplierQuotation(existingName, data);
-    } catch {
+    } catch (err) {
       // If update fails (e.g. document deleted or draft changed), create a new draft
+      // eslint-disable-next-line no-console
+      console.warn("[SQ Draft] Update existing draft failed, creating new draft:", err);
     }
   }
-  return createSupplierQuotation(data);
+  return createSupplierQuotation(data, { submitOnCreate: false });
 }
 
 export async function getSupplierQuotation(
@@ -1330,7 +1476,7 @@ export async function getSupplierQuotation(
   // eslint-disable-next-line no-console
   console.log("Supplier:", sq?.supplier);
   // eslint-disable-next-line no-console
-  console.log("FULL SQ OBJECT:", JSON.stringify(sq, null, 2));
+  if (import.meta.env.DEV) console.log("FULL SQ OBJECT:", JSON.stringify(sq, null, 2));
   const sqObj = sq as Record<string, unknown>;
   // eslint-disable-next-line no-console
   console.log("Legal doc fields (actual ERPNext names):", {
@@ -1632,36 +1778,112 @@ export async function getSupplierQuotationsBySupplier(
 }
 
 /**
+ * Fetch all Supplier Quotation records for a given RFQ and supplier.
+ */
+export async function getSupplierQuotationsForRfqAndSupplier(
+  rfqName: string,
+  supplierName: string
+): Promise<
+  Array<{
+    name: string;
+    supplier?: string;
+    status?: string;
+    docstatus?: number;
+    valid_till?: string;
+    grand_total?: number;
+    modified?: string;
+    creation?: string;
+  }>
+> {
+  try {
+    const raw = String(supplierName || "").trim();
+    const unquoted = raw.replace(/^["']+|["']+$/g, "").trim();
+    const noDot = unquoted.replace(/[.,]+$/g, "").trim();
+    const withDot = `${noDot}.`;
+    const candidates = Array.from(
+      new Set(
+        [
+          raw,
+          `"${raw}"`,
+          unquoted,
+          `"${unquoted}"`,
+          noDot,
+          `"${noDot}"`,
+          withDot,
+          `"${withDot}"`,
+        ].filter(Boolean)
+      )
+    );
+
+    const quotes = await apiGet<
+      Array<{
+        name: string;
+        supplier?: string;
+        status?: string;
+        docstatus?: number;
+        valid_till?: string;
+        grand_total?: number;
+        modified?: string;
+        creation?: string;
+      }>
+    >(buildResourceUrl(SQ_DOCTYPE), {
+      params: {
+        fields: JSON.stringify([
+          "name",
+          "supplier",
+          "status",
+          "docstatus",
+          "valid_till",
+          "grand_total",
+          "modified",
+          "creation",
+        ]),
+        filters: JSON.stringify([
+          ["supplier", "in", candidates],
+          ["items.request_for_quotation", "=", rfqName],
+        ]),
+        order_by: "modified desc, creation desc",
+        limit_page_length: 10,
+      },
+    });
+    return quotes ?? [];
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[getSupplierQuotationsForRfqAndSupplier] ERPNext query failed:",
+      err instanceof Error ? err.message : err
+    );
+    return [];
+  }
+}
+
+/**
  * Check whether `supplierName` has already submitted a Supplier Quotation
- * against `rfqName`. Returns `"Submitted"` if at least one quotation is
- * linked to that RFQ via `items.request_for_quotation`, otherwise
- * `"Pending"`.
+ * against `rfqName`. Returns `"Submitted"` only when a quotation has been
+ * formally submitted (docstatus === 1 or status === "Submitted"),
+ * `"Draft"` if a draft quotation exists (docstatus === 0),
+ * otherwise `"Pending"`.
  */
 export async function checkQuotationStatus(
   rfqName: string,
   supplierName: string
-): Promise<"Submitted" | "Pending"> {
+): Promise<"Submitted" | "Draft" | "Pending"> {
   try {
-    const quotes = await apiGet<Array<{ name: string }>>(
-      buildResourceUrl(SQ_DOCTYPE),
-      {
-        params: {
-          fields: JSON.stringify(["name"]),
-          filters: JSON.stringify([
-            ["supplier", "=", supplierName],
-            ["items.request_for_quotation", "=", rfqName],
-          ]),
-          limit_page_length: 1,
-        },
-      }
+    const quotes = await getSupplierQuotationsForRfqAndSupplier(
+      rfqName,
+      supplierName
     );
-    return (quotes ?? []).length > 0 ? "Submitted" : "Pending";
+    if (!quotes || quotes.length === 0) return "Pending";
+    const submitted = quotes.find(
+      (q) => Number(q.docstatus) === 1 || q.status === "Submitted"
+    );
+    if (submitted) return "Submitted";
+    const draft = quotes.find(
+      (q) => Number(q.docstatus) === 0 || q.status === "Draft"
+    );
+    if (draft) return "Draft";
+    return "Pending";
   } catch (err) {
-    // Non-fatal by design: the caller (SupplierRFQPage) always falls back
-    // to the RFQ row's authoritative `quote_status` field on failure, so a
-    // transient error here must never block the supplier from viewing the
-    // page. Still log loudly — a silent "Pending" default previously made
-    // real outages indistinguishable from "not yet submitted".
     // eslint-disable-next-line no-console
     console.warn(
       "[checkQuotationStatus] ERPNext check failed — falling back to Pending:",
@@ -1683,12 +1905,28 @@ export async function submitSupplierQuotation(
 ): Promise<SupplierQuotation> {
   await disableServerScriptsFor(SQ_DOCTYPE);
 
-  const fresh = await apiGet<{ modified?: string; data?: { modified?: string } }>(
-    buildResourceUrl(SQ_DOCTYPE, name)
-  );
-  const modified =
-    (fresh as { modified?: string }).modified ??
-    (fresh as { data?: { modified?: string } }).data?.modified;
+  const fresh = await apiGet<{
+    modified?: string;
+    docstatus?: number;
+    status?: string;
+    data?: { modified?: string; docstatus?: number; status?: string };
+  }>(buildResourceUrl(SQ_DOCTYPE, name));
+
+  const doc =
+    (fresh as { data?: { modified?: string; docstatus?: number; status?: string } })
+      ?.data ?? fresh;
+
+  if (doc?.docstatus === 1 || doc?.status === "Submitted") {
+    // eslint-disable-next-line no-console
+    console.log(`[SQ Submit] ${name} is already submitted. Returning idempotent success.`);
+    return {
+      name,
+      status: "Submitted",
+      docstatus: 1,
+    } as unknown as SupplierQuotation;
+  }
+
+  const modified = doc?.modified;
 
   const body: Record<string, unknown> = {
     docstatus: 1,
@@ -1702,6 +1940,8 @@ export async function submitSupplierQuotation(
       buildResourceUrl(SQ_DOCTYPE, name),
       body
     );
+    // eslint-disable-next-line no-console
+    console.log(`[SQ Submit] Submitted successfully: ${name}`);
     return result;
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);

@@ -1,0 +1,55 @@
+{
+  "checked_at": "2026-09-24T07:50:02.689Z",
+  "mode": "real ERP draft creation plus the same shared backend post-save hook; authenticated ERP integration identity, no forged browser session",
+  "actor": "Administrator",
+  "cases": [
+    {
+      "decision": "Yes",
+      "rfq_id": "PUR-RFQ-2026-00099",
+      "subject": "BidSphere CLM routing acceptance 2026-09-24 YES",
+      "rfq_saved": true,
+      "request_id": "CTRQ-2026-0002",
+      "workflow": {
+        "phase": "procurement_team",
+        "status": "Pending",
+        "stage": "Procurement",
+        "owner": "Procurement Team",
+        "ownerRole": "procurement_team",
+        "assignedRole": "procurement_team",
+        "instruction": "Procurement Team must review this request and create the Contract before Legal Review begins.",
+        "initialRequest": true,
+        "contractRequired": "Yes",
+        "department": "Production - NSGAI",
+        "requester": "Administrator",
+        "supplier": "",
+        "assignedUser": "",
+        "rfq": "PUR-RFQ-2026-00099",
+        "award": "",
+        "createdBy": "Administrator",
+        "createdAt": "2026-09-24 13:20:03",
+        "purchaseOrder": ""
+      },
+      "duplicate_retry_same_id": true,
+      "request_count": 1,
+      "contract_count": 0,
+      "request_count_before": 1,
+      "request_count_after": 2,
+      "rfq_status": "Draft",
+      "docstatus": 0,
+      "passed": true
+    },
+    {
+      "decision": "No",
+      "rfq_id": "PUR-RFQ-2026-00100",
+      "subject": "BidSphere CLM routing acceptance 2026-09-24 NO",
+      "rfq_saved": true,
+      "request_count": 0,
+      "contract_count": 0,
+      "request_count_before": 2,
+      "request_count_after": 2,
+      "rfq_status": "Draft",
+      "docstatus": 0,
+      "passed": true
+    }
+  ]
+}

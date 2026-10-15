@@ -1,4 +1,6 @@
 import erpnextClient, { buildResourceUrl } from "./erpnext";
+import type { LegalDocKey, LegalEsignSignature, LegalEsignBundle } from "../types/legalEsign";
+import { readErpProxyAccessToken } from "../utils/accessToken";
 
 const DOCTYPE = "Legal Document Review";
 
@@ -17,17 +19,15 @@ const DOCTYPE = "Legal Document Review";
  * "Pending" on create, and de-duplicates by `rfq_name` (backed by a
  * DB-level unique constraint on that field in ERPNext).
  *
- * Reads are unaffected — `getLegalDocs` / `getAllLegalDocs` still read
- * directly from ERPNext, which remains the single source of truth.
+ * Record reads and signing preflight use the authorized backend gateway;
+ * ERPNext remains the single source of truth for the returned state.
  */
 async function callLegalReviewApi<T>(action: string, body: unknown): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
   try {
-    const token =
-      sessionStorage.getItem("bidsphere-access-token") ||
-      localStorage.getItem("bidsphere-access-token-remember");
+    const token = readErpProxyAccessToken();
     if (token) headers["X-Bidsphere-Access-Token"] = token;
   } catch {
     /* ignore */
@@ -49,12 +49,47 @@ async function callLegalReviewApi<T>(action: string, body: unknown): Promise<T> 
   if (!res.ok || json.success === false) {
     const message = json.error || `Legal review request failed (${res.status}).`;
     // eslint-disable-next-line no-console
-    console.error(`[LegalDocs] backend action="${action}" FAILED:`, message, body);
-    throw new Error(message);
+    console.error(`[LegalDocs] backend action="${action}" failed`, { status: res.status });
+    throw Object.assign(new Error(message), { status: res.status });
   }
 
   return json as T;
 }
+
+async function recordAction(action: string, body: unknown): Promise<LegalDocumentSet> {
+  const { record } = await callLegalReviewApi<{ record: LegalDocumentSet }>(action, body);
+  if (!record?.name) throw new Error("The backend did not return a persisted review record.");
+  return record;
+}
+export const recordLegalDocumentViewed = (name: string, documentKey: LegalDocKey, hash: string) =>
+  recordAction("document-viewed", { name, documentKey, hash });
+export const saveLegalChecklist = (name: string, items: LegalEsignBundle["reviewChecklist"]) =>
+  recordAction("save-checklist", { name, items });
+export const requestLegalChanges = (name: string, comments: string) =>
+  recordAction("request-changes", { name, comments });
+export const beginLegalSignature = (name: string, documentKey: LegalDocKey) =>
+  recordAction("begin-signature", { name, documentKey });
+export const completeLegalSignature = (name: string, documentKey: LegalDocKey, requestId: string, signature: LegalEsignSignature) =>
+  recordAction("complete-signature", { name, documentKey, requestId, signature });
+export interface LegalDocumentIntegrityResult {
+  record: LegalDocumentSet;
+  documents: Array<{ documentKey: LegalDocKey; status: "Verified" | "Failed" | "Unavailable"; documentHash?: string; signedFileHash?: string; message?: string }>;
+}
+export const verifyLegalDocumentIntegrity = (name: string) =>
+  callLegalReviewApi<LegalDocumentIntegrityResult>("verify-integrity", { name });
+
+export interface LegalSignatureEligibilityResult {
+  record: LegalDocumentSet;
+  requiredDocumentKeys: LegalDocKey[];
+  verifiedDocumentKeys: LegalDocKey[];
+  pendingDocumentKeys: LegalDocKey[];
+  canSignDocumentKeys: LegalDocKey[];
+  eligible: boolean;
+  reason?: string;
+  checkedAt: string;
+}
+export const getLegalSignatureEligibility = (name: string) =>
+  callLegalReviewApi<LegalSignatureEligibilityResult>("signature-eligibility", { name });
 
 export interface LegalDocumentSet {
   name?: string;
@@ -97,8 +132,11 @@ export interface LegalDocumentSet {
   rejection_reason?: string;
   /**
    * Finance Review verdict on this SAME record — no separate Finance
-   * DocType exists. Unset until Legal approves; the backend stamps this
-   * "Pending" automatically the moment `review_status` becomes "Approved".
+   * DocType exists. Set to "Pending" automatically when the Legal Manager
+   * completes e-signature on all required documents. The signature completion
+   * simultaneously sets `review_status` = "Approved", `workflow_state` =
+   * "Finance Review", and `finance_status` = "Pending". Finance Review
+   * is NOT triggered by a manual Legal Final Approval action.
    */
   finance_status?: "Pending" | "Approved" | "Rejected" | "";
   /** Active queue owner (persisted on LDR). */
@@ -121,6 +159,8 @@ export interface LegalDocumentSet {
   esign_signed_file_url?: string;
   esign_signed_by?: string;
   esign_signed_on?: string;
+  /** Computed by the server from its current persisted review instruments. */
+  required_document_keys?: LegalDocKey[];
 }
 
 export interface LegalDocumentItemSummary {
@@ -212,9 +252,7 @@ export const getLegalDocs = async (
 
     if (!Array.isArray(list) || list.length === 0) return null;
 
-    const full = (await erpnextClient.get(
-      `${resourceBase()}/${encodeURIComponent(list[0].name)}`
-    )) as LegalDocumentSet;
+    const full = await recordAction("get", { name: list[0].name });
     return full ?? null;
   } catch (err: unknown) {
     logFullFailure(`getLegalDocs(${sqName})`, err);
@@ -237,9 +275,7 @@ export const getLegalDocsByRfq = async (
 
     if (!Array.isArray(list) || list.length === 0) return null;
 
-    const full = (await erpnextClient.get(
-      `${resourceBase()}/${encodeURIComponent(list[0].name)}`
-    )) as LegalDocumentSet;
+    const full = await recordAction("get", { name: list[0].name });
     return full ?? null;
   } catch (err: unknown) {
     logFullFailure(`getLegalDocsByRfq(${rfqName})`, err);

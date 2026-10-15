@@ -52,19 +52,19 @@ vi.mock("@tanstack/react-query", () => ({
 
 import ECRListPage from "./ECRListPage";
 
-describe("Procurement Manager RFQ Creation route", () => {
-  it("keeps /ecr?filter=rfq-pending on the actionable RFQ queue", () => {
+describe("Procurement Manager ECR Reference route", () => {
+  it("renders /ecr as ECR Reference view with View ECR action and no RFQ creation queue tabs", () => {
     const html = renderToStaticMarkup(
-      <MemoryRouter initialEntries={["/ecr?filter=rfq-pending"]}>
+      <MemoryRouter initialEntries={["/ecr"]}>
         <ECRListPage />
       </MemoryRouter>,
     );
 
-    expect(html).toContain("RFQ Creation");
-    expect(html).toContain("RFQ Pending");
-    expect(html).toContain(">RFQ<");
-    expect(html).toContain("All ECRs");
-    expect(html).toContain("Create RFQ");
-    expect(html).not.toContain("Procurement Manager Dashboard");
+    expect(html).toContain("ECR Reference");
+    expect(html).toContain("View engineering change records referenced by procurement activities.");
+    expect(html).toContain("Referenced RFQ");
+    expect(html).toContain("View ECR");
+    expect(html).not.toContain("RFQ Creation");
+    expect(html).not.toContain("Create RFQ");
   });
 });

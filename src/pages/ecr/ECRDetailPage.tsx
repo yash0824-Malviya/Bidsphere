@@ -64,13 +64,21 @@ import {
   isECRSupplierSourcingRequired,
 } from "../../components/ecr/ecrDetailModel";
 import { formatMediumDisplayDate } from "../../utils/erpNextDate";
+import { parseECRBusinessCase } from "../../types/ecrBusinessCase";
+import { notifyECRStageChange } from "../../api/ecrBusinessCase";
+import ECRBusinessCaseSummary from "../../components/ecr/ECRBusinessCaseSummary";
+import ECRBusinessCaseReviewPanel from "../../components/ecr/ECRBusinessCaseReviewPanel";
+import { isEcrOwnedBy } from "../../config/ecrRoles";
+import { refreshECRQueries } from "../../utils/ecrQueryCache";
 
 type DetailTab =
   | "overview"
   | "parts"
   | "impacts"
   | "documents"
-  | "procurement";
+  | "procurement"
+  | "business-case"
+  | "approval-history";
 
 export default function ECRDetailPage() {
   const { name } = useParams<{ name: string }>();
@@ -82,6 +90,8 @@ export default function ECRDetailPage() {
   const [commentText, setCommentText] = useState("");
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [rfqLoading, setRfqLoading] = useState(false);
+  const [rfqRequired, setRfqRequired] = useState<"Yes" | "No">("Yes");
+  const [decisionReason, setDecisionReason] = useState("");
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
 
   const {
@@ -98,6 +108,19 @@ export default function ECRDetailPage() {
   });
 
   useEffect(() => {
+    if (!ecr) return;
+    const currentStage = canonicalECRStage(ecr.select_pxfp, ecr);
+    if (ecr.ecr_workflow_version === "extended_v1") {
+      if (["Technical Approved", "Finance Review", "Procurement BC Review", "Quality Review", "Business Case Approved", "Final ECR Approval"].includes(currentStage)) setActiveTab("business-case");
+      else if (["ECR Approved", "Procurement Decision", "Closed"].includes(currentStage)) setActiveTab("procurement");
+      else setActiveTab("overview");
+    } else setActiveTab("overview");
+    const preliminaryDecision = parseECRBusinessCase(ecr.ecr_business_case);
+    setRfqRequired(ecr.rfq_required || preliminaryDecision?.rfq_required || "Yes");
+    setDecisionReason(ecr.rfq_decision_reason || (!ecr.rfq_required ? preliminaryDecision?.rfq_decision_reason : "") || "");
+  }, [ecr?.name, ecr?.select_pxfp, ecr?.ecr_workflow_version]);
+
+  useEffect(() => {
     if (!ecr || !name) return;
     const publicNumber = formatECRNumber(ecr);
     if (name.toUpperCase() !== publicNumber.toUpperCase()) {
@@ -105,7 +128,7 @@ export default function ECRDetailPage() {
     }
   }, [ecr, name, navigate]);
 
-  const { data: comments = [], refetch: refetchComments } = useQuery({
+  const { data: comments = [] } = useQuery({
     queryKey: ["ecr-comments", ecr?.name],
     queryFn: () => getECRComments(ecr!.name),
     enabled: Boolean(ecr?.name),
@@ -176,10 +199,6 @@ export default function ECRDetailPage() {
               }
             : current,
         );
-        void qc.invalidateQueries({ queryKey: ["ecr", name] });
-        void qc.invalidateQueries({ queryKey: ["ecr-list"] });
-        void qc.invalidateQueries({ queryKey: ["ecr-dashboard"] });
-        void refetchComments();
       } else {
         setFeedback({ type: "error", msg: res.message || "Failed to execute workflow action." });
       }
@@ -189,6 +208,13 @@ export default function ECRDetailPage() {
         type: "error",
         msg: mutationError instanceof Error ? mutationError.message : "Failed to execute workflow action.",
       });
+    },
+    onSettled: async (res) => {
+      await refreshECRQueries(qc, [name, ecr?.name, ecr?.ecr_number]);
+      if (res?.success && res.newStatus && ecr?.ecr_workflow_version === "extended_v1") {
+        const updated = qc.getQueryData<EngineeringChangeRequest>(["ecr", name]);
+        if (updated) notifyECRStageChange(updated);
+      }
     },
   });
 
@@ -272,8 +298,12 @@ export default function ECRDetailPage() {
   const businessEcrNumber = formatECRNumber(ecr);
   const hasSupplierReq = isECRSupplierSourcingRequired(ecr);
   const rfqReference = getECRRFQReference(ecr);
-  const stage = rfqReference ? "RFQ" : canonicalECRStage(currentStatus);
-  const procurementVisible = hasReachedECRApproval(currentStatus);
+  const stage = rfqReference ? "RFQ" : canonicalECRStage(currentStatus, ecr);
+  const extended = ecr.ecr_workflow_version === "extended_v1";
+  const businessCase = parseECRBusinessCase(ecr.ecr_business_case);
+  const canPrepareBusinessCase = extended && stage === "Technical Approved" && userRole === "engineer" && isEcrOwnedBy(ecr, user);
+  const canRecordDecision = extended && stage === "ECR Approved" && userRole === "procurement";
+  const procurementVisible = extended ? ["ECR Approved", "Procurement Decision", "RFQ", "Closed"].includes(stage) : hasReachedECRApproval(currentStatus);
   const procurementStatus = getECRProcurementStatus(ecr);
   const canCreateRFQ = canCreateECRRFQ(userRole, currentStatus, ecr);
   const canEdit = canEditECR(userRole, currentStatus, ecr, user);
@@ -289,6 +319,8 @@ export default function ECRDetailPage() {
     { id: "impacts", label: "Impact & Supplier", icon: ShieldCheck },
     { id: "documents", label: `Documents (${attachments.length})`, icon: FileCode },
   ];
+  if (extended) detailTabs.push({ id: "business-case", label: "Business Case", icon: FileText });
+  detailTabs.push({ id: "approval-history", label: "Approval History", icon: Clock });
   if (procurementVisible) {
     detailTabs.push({ id: "procurement", label: "Procurement", icon: Building2 });
   }
@@ -475,7 +507,7 @@ export default function ECRDetailPage() {
             <span className="text-[11px] font-semibold text-rose-700">Workflow stopped · {stage}</span>
           ) : null}
         </div>
-        <ECRWorkflowStepper status={currentStatus} rfqReference={rfqReference} />
+        <ECRWorkflowStepper status={currentStatus} rfqReference={rfqReference} ecr={ecr} />
       </section>
 
       {canEdit && stage === "Draft" ? (
@@ -514,10 +546,13 @@ export default function ECRDetailPage() {
       ) : null}
 
       {/* ── Active Reviewer Decision Section (Role + Stage Based) ── */}
+      {extended && <ECRBusinessCaseReviewPanel key={`${ecr.name}:${stage}`} ecr={ecr} businessCase={businessCase} role={userRole} queryName={name} />}
+      {canPrepareBusinessCase && <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-primary-200 bg-primary-50 p-4"><div><h2 className="text-sm font-bold text-primary-900">Business Case preparation required</h2><p className="mt-1 text-xs text-primary-700">Technical approval is complete. Prepare or revise the Business Case for the review team.</p></div><Link className="rounded-lg bg-primary-600 px-4 py-2 text-xs font-semibold text-white hover:bg-primary-700" to={`/ecr/${encodeURIComponent(businessEcrNumber)}/business-case`}>{businessCase ? "Edit Business Case" : "Prepare Business Case"}</Link></section>}
       <ECRApprovalPanel
         key={currentStatus}
         role={userRole}
         status={currentStatus}
+        ecr={ecr}
         approvalRequirements={ecr.approval_requirements ?? []}
         pending={workflowMutation.isPending}
         error={feedback?.type === "error" ? feedback.msg : null}
@@ -576,6 +611,8 @@ export default function ECRDetailPage() {
       {/* ── Tab Content Workspace ── */}
       <div className="rounded-b-xl border border-t-0 border-neutral-200 bg-white p-4 shadow-sm">
         {/* Tab 1: Overview */}
+        {activeTab === "business-case" && extended && <section className="space-y-4"><div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-sm font-bold text-neutral-900">Linked Business Case</h2>{(businessCase || canPrepareBusinessCase) && <Link className="inline-flex items-center gap-1 rounded-lg bg-primary-600 px-3 py-2 text-xs font-semibold text-white hover:bg-primary-700" to={`/ecr/${encodeURIComponent(businessEcrNumber)}/business-case`}>{canPrepareBusinessCase ? "Prepare / edit Business Case" : "View Business Case"}<ArrowUpRight className="h-3 w-3" /></Link>}</div>{businessCase ? <ECRBusinessCaseSummary businessCase={businessCase} /> : <p className="rounded-lg border border-dashed border-neutral-200 p-5 text-sm text-neutral-500">{stage === "Draft" || stage === "Engineering Review" ? "The engineer can prepare the Business Case after technical approval." : "The Business Case is awaiting preparation by the engineer."}</p>}</section>}
+        {activeTab === "approval-history" && <ECRApprovalHistory status={currentStatus} ecr={ecr} comments={comments} />}
         {activeTab === "overview" && (
           <div className="space-y-4">
             {roleFocus.length > 0 ? (
@@ -961,13 +998,15 @@ export default function ECRDetailPage() {
               <div>
                 <h2 className="text-sm font-bold text-neutral-900">Sourcing &amp; Supplier Decisions</h2>
                 <p className="mt-0.5 text-[11px] text-neutral-600">
-                  Engineering approval is complete. Procurement can create the RFQ directly from this ECR.
+                  {extended ? "Final ECR approval is complete. Procurement records whether an RFQ is required." : "Engineering approval is complete. Procurement can create the RFQ directly from this ECR."}
                 </p>
               </div>
               <span className="self-start rounded-full bg-primary-100 px-2.5 py-1 text-[11px] font-bold text-primary-800 sm:self-center">
                 {procurementStatus}
               </span>
             </div>
+
+            {extended && <section className="space-y-3 rounded-lg border border-neutral-200 bg-white p-4"><h3 className="text-sm font-bold text-neutral-900">Procurement decision</h3>{canRecordDecision ? <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); if (decisionReason.trim()) workflowMutation.mutate({ action: "Record Procurement Decision", reviewFields: { "RFQ Required": rfqRequired, "Decision Reason": decisionReason.trim() } }); }}><label className="block text-xs font-semibold text-neutral-600">RFQ required<select className="mt-1 w-full rounded-lg border border-neutral-300 p-2 text-sm" value={rfqRequired} disabled={workflowMutation.isPending} onChange={(event) => setRfqRequired(event.target.value as "Yes" | "No")}><option value="Yes">Yes — create an RFQ</option><option value="No">No — continue with the current supplier</option></select></label><label className="block text-xs font-semibold text-neutral-600">Decision reason<textarea required maxLength={2000} rows={3} className="mt-1 w-full rounded-lg border border-neutral-300 p-2 text-sm" value={decisionReason} disabled={workflowMutation.isPending} onChange={(event) => setDecisionReason(event.target.value)} /></label>{rfqRequired === "No" && <p className="text-xs text-neutral-600">Current supplier: {ecr.selected_supplier || ecr.suggested_supplier || "Not recorded"}. Saving this decision closes the ECR without creating an RFQ.</p>}<button type="submit" disabled={workflowMutation.isPending || !decisionReason.trim()} className="rounded-lg bg-primary-600 px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">Record procurement decision</button></form> : <dl className="space-y-2 text-sm"><div><dt className="text-xs text-neutral-500">RFQ required</dt><dd className="font-semibold">{ecr.rfq_required || "Awaiting procurement decision"}</dd></div><div><dt className="text-xs text-neutral-500">Reason</dt><dd className="whitespace-pre-wrap">{ecr.rfq_decision_reason || "No decision recorded."}</dd></div>{ecr.rfq_required === "No" && <div><dt className="text-xs text-neutral-500">Current supplier</dt><dd>{ecr.selected_supplier || ecr.suggested_supplier || "Not recorded"}</dd><p className="mt-2 text-emerald-700">No RFQ required. The ECR is closed.</p></div>}</dl>}</section>}
 
             <dl className="grid grid-cols-1 gap-2 rounded-lg border border-neutral-200 bg-white p-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
               <div>
@@ -976,7 +1015,7 @@ export default function ECRDetailPage() {
               </div>
               <div>
                 <dt className="text-[10px] font-semibold uppercase text-neutral-400">RFQ</dt>
-                <dd className="mt-0.5 font-bold text-neutral-800">{hasSupplierReq ? "Required" : "Not Required"}</dd>
+                <dd className="mt-0.5 font-bold text-neutral-800">{extended && !ecr.rfq_required ? "Decision pending" : hasSupplierReq ? "Required" : "Not Required"}</dd>
               </div>
               <div>
                 <dt className="text-[10px] font-semibold uppercase text-neutral-400">Suggested Supplier</dt>
@@ -1062,7 +1101,7 @@ export default function ECRDetailPage() {
         </div>
       </section>
 
-      <ECRApprovalHistory status={currentStatus} ecr={ecr} comments={comments} />
+      {activeTab !== "approval-history" && <ECRApprovalHistory status={currentStatus} ecr={ecr} comments={comments} />}
     </div>
   );
 }

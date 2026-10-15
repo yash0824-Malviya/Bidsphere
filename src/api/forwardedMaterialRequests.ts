@@ -331,7 +331,9 @@ export async function fetchForwardedHistory(): Promise<ForwardedHistoryRow[]> {
   const hydrated = await Promise.all(
     toHydrate.map(async (doc) => {
       try {
-        return await fetchMaterialRequestWorkflow(doc.name);
+        return await fetchMaterialRequestWorkflow(doc.name, {
+          skipItemAttachmentHydration: true,
+        });
       } catch {
         return doc;
       }

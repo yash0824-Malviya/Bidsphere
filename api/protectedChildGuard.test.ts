@@ -9,6 +9,8 @@ import {
 const TRACEABILITY_CHILDREN = [
   "ECR Affected Part",
   "Purchase Requisition Item",
+  "Reverse Bidding Supplier",
+  "Reverse Bid Item",
 ] as const;
 
 describe("protected child access", () => {

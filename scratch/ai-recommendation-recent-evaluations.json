@@ -1,0 +1,2454 @@
+[
+  {
+    "name": "SCORE-PUR-RFQ-2026-00094-00120",
+    "rfq": "PUR-RFQ-2026-00094",
+    "modified": "2026-09-23 11:35:15.678017",
+    "creation": "2026-09-23 11:35:15.678017",
+    "recommended_supplier": "\"Atlantic Precision Manufacturing.\"",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "evaluation_run_id",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "rfq_id",
+      "evaluation_run_id",
+      "evaluation_weights",
+      "recommended_quotation_id",
+      "recommended_supplier_id",
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "quotation_id": "PUR-SQTN-2026-00265",
+        "supplier_id": "\"Atlantic Precision Manufacturing.\"",
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "quality": 59,
+          "reliability": 95,
+          "overall": 91
+        },
+        "risk": "High",
+        "verdict": "AVOID",
+        "grand_total": 2500,
+        "evaluation_run_id": "2bb6e50d-78b2-4967-9cdd-1e9d0652fbe7"
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00267",
+        "supplier_id": "FEMSA",
+        "name": "FEMSA",
+        "score": {
+          "cost": 67,
+          "delivery": 100,
+          "quality": 100,
+          "reliability": 100,
+          "overall": 87
+        },
+        "risk": "Low",
+        "verdict": "GOOD OPTION",
+        "grand_total": 2600,
+        "evaluation_run_id": "2bb6e50d-78b2-4967-9cdd-1e9d0652fbe7"
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00269",
+        "supplier_id": "\"Blue Ridge Manufacturing Inc\"",
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 100,
+          "delivery": 41,
+          "quality": 100,
+          "reliability": 100,
+          "overall": 85
+        },
+        "risk": "Medium",
+        "verdict": "GOOD OPTION",
+        "grand_total": 2500,
+        "evaluation_run_id": "2bb6e50d-78b2-4967-9cdd-1e9d0652fbe7"
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00094-00119",
+    "rfq": "PUR-RFQ-2026-00094",
+    "modified": "2026-09-21 16:18:50.551565",
+    "creation": "2026-09-21 16:18:50.551565",
+    "recommended_supplier": "\"Atlantic Precision Manufacturing.\"",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "evaluation_run_id",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "rfq_id",
+      "evaluation_run_id",
+      "evaluation_weights",
+      "recommended_quotation_id",
+      "recommended_supplier_id",
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "quotation_id": "PUR-SQTN-2026-00265",
+        "supplier_id": "\"Atlantic Precision Manufacturing.\"",
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "quality": 59,
+          "reliability": 95,
+          "overall": 91
+        },
+        "risk": "Medium",
+        "verdict": "BEST VALUE",
+        "grand_total": 2500,
+        "evaluation_run_id": "5698d8c4-6e56-4e4c-9a5c-bef6104d0b67"
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00267",
+        "supplier_id": "FEMSA",
+        "name": "FEMSA",
+        "score": {
+          "cost": 67,
+          "delivery": 100,
+          "quality": 100,
+          "reliability": 100,
+          "overall": 87
+        },
+        "risk": "Low",
+        "verdict": "GOOD OPTION",
+        "grand_total": 2600,
+        "evaluation_run_id": "5698d8c4-6e56-4e4c-9a5c-bef6104d0b67"
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00269",
+        "supplier_id": "\"Blue Ridge Manufacturing Inc\"",
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 100,
+          "delivery": 41,
+          "quality": 100,
+          "reliability": 100,
+          "overall": 85
+        },
+        "risk": "Medium",
+        "verdict": "GOOD OPTION",
+        "grand_total": 2500,
+        "evaluation_run_id": "5698d8c4-6e56-4e4c-9a5c-bef6104d0b67"
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00093-00118",
+    "rfq": "PUR-RFQ-2026-00093",
+    "modified": "2026-09-21 11:44:21.036604",
+    "creation": "2026-09-21 11:44:21.036604",
+    "recommended_supplier": "Apex Fasteners Ltd",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "evaluation_run_id",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "rfq_id",
+      "evaluation_run_id",
+      "evaluation_weights",
+      "recommended_quotation_id",
+      "recommended_supplier_id",
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "quotation_id": "PUR-SQTN-2026-00263",
+        "supplier_id": "Apex Fasteners Ltd",
+        "name": "Apex Fasteners Ltd",
+        "score": {
+          "cost": 100,
+          "delivery": 70,
+          "quality": 100,
+          "reliability": 70,
+          "overall": 88
+        },
+        "risk": "Medium",
+        "verdict": "BEST VALUE",
+        "grand_total": 2500,
+        "evaluation_run_id": "579c755e-1df8-4014-90c2-06ab730c74f4"
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00262",
+        "supplier_id": "\"Blue Ridge Manufacturing Inc\"",
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 100,
+          "delivery": 41,
+          "quality": 100,
+          "reliability": 100,
+          "overall": 85
+        },
+        "risk": "Low",
+        "verdict": "GOOD OPTION",
+        "grand_total": 2500,
+        "evaluation_run_id": "579c755e-1df8-4014-90c2-06ab730c74f4"
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00264",
+        "supplier_id": "\"Eagle Peak Technologies Inc.\"",
+        "name": "Eagle Peak Technologies Inc.",
+        "score": {
+          "cost": 100,
+          "delivery": 35,
+          "quality": 100,
+          "reliability": 100,
+          "overall": 84
+        },
+        "risk": "Low",
+        "verdict": "GOOD OPTION",
+        "grand_total": 2500,
+        "evaluation_run_id": "579c755e-1df8-4014-90c2-06ab730c74f4"
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00092-00117",
+    "rfq": "PUR-RFQ-2026-00092",
+    "modified": "2026-09-18 12:20:40.554721",
+    "creation": "2026-09-18 12:20:40.554721",
+    "recommended_supplier": "FEMSA",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "evaluation_run_id",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "rfq_id",
+      "evaluation_run_id",
+      "evaluation_weights",
+      "recommended_quotation_id",
+      "recommended_supplier_id",
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "quotation_id": "PUR-SQTN-2026-00258",
+        "supplier_id": "FEMSA",
+        "name": "FEMSA",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "quality": 100,
+          "reliability": 100,
+          "overall": 100
+        },
+        "risk": "Low",
+        "verdict": "BEST VALUE",
+        "grand_total": 50,
+        "evaluation_run_id": "ea8b4ea0-c17b-49a8-91c7-6d397869ec88"
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00261",
+        "supplier_id": "\"Titan Industrial Products LLC\"",
+        "name": "Titan Industrial Products LLC",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "quality": 100,
+          "reliability": 100,
+          "overall": 100
+        },
+        "risk": "Low",
+        "verdict": "GOOD OPTION",
+        "grand_total": 50,
+        "evaluation_run_id": "ea8b4ea0-c17b-49a8-91c7-6d397869ec88"
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00260",
+        "supplier_id": "\"Atlantic Precision Manufacturing.\"",
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "quality": 59,
+          "reliability": 95,
+          "overall": 91
+        },
+        "risk": "Medium",
+        "verdict": "GOOD OPTION",
+        "grand_total": 50,
+        "evaluation_run_id": "ea8b4ea0-c17b-49a8-91c7-6d397869ec88"
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00092-00116",
+    "rfq": "PUR-RFQ-2026-00092",
+    "modified": "2026-09-18 11:45:39.656155",
+    "creation": "2026-09-18 11:45:39.656155",
+    "recommended_supplier": "\"Titan Industrial Products LLC\"",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "evaluation_run_id",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "rfq_id",
+      "evaluation_run_id",
+      "evaluation_weights",
+      "recommended_quotation_id",
+      "recommended_supplier_id",
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "quotation_id": "PUR-SQTN-2026-00261",
+        "supplier_id": "\"Titan Industrial Products LLC\"",
+        "name": "Titan Industrial Products LLC",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "quality": 100,
+          "reliability": 100,
+          "overall": 100
+        },
+        "risk": "Low",
+        "verdict": "BEST VALUE",
+        "grand_total": 50,
+        "evaluation_run_id": "bc4affd7-e234-456e-b9f8-6afd65d14928"
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00258",
+        "supplier_id": "FEMSA",
+        "name": "FEMSA",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "quality": 100,
+          "reliability": 100,
+          "overall": 100
+        },
+        "risk": "Low",
+        "verdict": "GOOD OPTION",
+        "grand_total": 50,
+        "evaluation_run_id": "bc4affd7-e234-456e-b9f8-6afd65d14928"
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00260",
+        "supplier_id": "\"Atlantic Precision Manufacturing.\"",
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "quality": 59,
+          "reliability": 95,
+          "overall": 91
+        },
+        "risk": "Medium",
+        "verdict": "GOOD OPTION",
+        "grand_total": 50,
+        "evaluation_run_id": "bc4affd7-e234-456e-b9f8-6afd65d14928"
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00091-00115",
+    "rfq": "PUR-RFQ-2026-00091",
+    "modified": "2026-09-17 16:30:35.383547",
+    "creation": "2026-09-17 16:30:35.383547",
+    "recommended_supplier": "FEMSA",
+    "snapshot_keys": [
+      "rfq_name",
+      "evaluation_run_id",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "rfq_id",
+      "evaluation_run_id",
+      "evaluation_weights",
+      "recommended_quotation_id",
+      "recommended_supplier_id",
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "quotation_id": "PUR-SQTN-2026-00256",
+        "supplier_id": "FEMSA",
+        "name": "FEMSA",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "quality": 100,
+          "reliability": 100,
+          "overall": 100
+        },
+        "risk": "Low",
+        "verdict": "BEST VALUE",
+        "grand_total": 15,
+        "evaluation_run_id": "86ebda3c-27bb-4acf-a908-0cdb30e4ff55"
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00253",
+        "supplier_id": "\"Titan Industrial Products LLC\"",
+        "name": "Titan Industrial Products LLC",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "quality": 100,
+          "reliability": 100,
+          "overall": 100
+        },
+        "risk": "Low",
+        "verdict": "GOOD OPTION",
+        "grand_total": 15,
+        "evaluation_run_id": "86ebda3c-27bb-4acf-a908-0cdb30e4ff55"
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00257",
+        "supplier_id": "\"Eagle Peak Technologies Inc.\"",
+        "name": "Eagle Peak Technologies Inc.",
+        "score": {
+          "cost": 100,
+          "delivery": 35,
+          "quality": 100,
+          "reliability": 100,
+          "overall": 84
+        },
+        "risk": "Medium",
+        "verdict": "GOOD OPTION",
+        "grand_total": 15,
+        "evaluation_run_id": "86ebda3c-27bb-4acf-a908-0cdb30e4ff55"
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00091-00114",
+    "rfq": "PUR-RFQ-2026-00091",
+    "modified": "2026-09-17 16:09:48.388070",
+    "creation": "2026-09-17 16:09:48.388070",
+    "recommended_supplier": "FEMSA",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation",
+      "rfq_id"
+    ],
+    "suppliers": [
+      {
+        "quotation_id": "PUR-SQTN-2026-00253",
+        "supplier_id": "\"Titan Industrial Products LLC\"",
+        "name": "Titan Industrial Products LLC",
+        "score": {
+          "cost": 100,
+          "delivery": 72,
+          "reliability": 80,
+          "overall": 75
+        },
+        "risk": "Low",
+        "verdict": "GOOD OPTION",
+        "grand_total": 15
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00256",
+        "supplier_id": "FEMSA",
+        "name": "FEMSA",
+        "score": {
+          "cost": 100,
+          "delivery": 72,
+          "reliability": 80,
+          "overall": 75
+        },
+        "risk": "Low",
+        "verdict": "GOOD OPTION",
+        "grand_total": 15
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00257",
+        "supplier_id": "\"Eagle Peak Technologies Inc.\"",
+        "name": "Eagle Peak Technologies Inc.",
+        "score": {
+          "cost": 100,
+          "delivery": 72,
+          "reliability": 80,
+          "overall": 75
+        },
+        "risk": "Low",
+        "verdict": "BEST VALUE",
+        "grand_total": 15
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00089-00113",
+    "rfq": "PUR-RFQ-2026-00089",
+    "modified": "2026-09-11 14:00:07.079311",
+    "creation": "2026-09-11 14:00:07.079311",
+    "recommended_supplier": "Eagle Peak Technologies Inc.",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation",
+      "rfq_id"
+    ],
+    "suppliers": [
+      {
+        "quotation_id": "PUR-SQTN-2026-00249",
+        "supplier_id": "\"Atlantic Precision Manufacturing.\"",
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 100,
+          "delivery": 72,
+          "reliability": 90,
+          "overall": 82.5
+        },
+        "risk": "Low",
+        "verdict": "GOOD OPTION",
+        "grand_total": 2500
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00251",
+        "supplier_id": "Apex Fasteners Ltd",
+        "name": "Apex Fasteners Ltd",
+        "score": {
+          "cost": 100,
+          "delivery": 72,
+          "reliability": 90,
+          "overall": 82.5
+        },
+        "risk": "Low",
+        "verdict": "GOOD OPTION",
+        "grand_total": 2500
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00252",
+        "supplier_id": "\"Eagle Peak Technologies Inc.\"",
+        "name": "Eagle Peak Technologies Inc.",
+        "score": {
+          "cost": 100,
+          "delivery": 72,
+          "reliability": 90,
+          "overall": 82.5
+        },
+        "risk": "Low",
+        "verdict": "BEST VALUE",
+        "grand_total": 2500
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00089-00112",
+    "rfq": "PUR-RFQ-2026-00089",
+    "modified": "2026-09-11 13:43:17.787477",
+    "creation": "2026-09-11 13:43:17.787477",
+    "recommended_supplier": "Eagle Peak Technologies Inc.",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation",
+      "rfq_id"
+    ],
+    "suppliers": [
+      {
+        "quotation_id": "PUR-SQTN-2026-00249",
+        "supplier_id": "\"Atlantic Precision Manufacturing.\"",
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "AVOID",
+        "grand_total": 2500
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00251",
+        "supplier_id": "Apex Fasteners Ltd",
+        "name": "Apex Fasteners Ltd",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 2500
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00252",
+        "supplier_id": "\"Eagle Peak Technologies Inc.\"",
+        "name": "Eagle Peak Technologies Inc.",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 2500
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00089-00111",
+    "rfq": "PUR-RFQ-2026-00089",
+    "modified": "2026-09-11 12:17:15.829802",
+    "creation": "2026-09-11 12:17:15.829802",
+    "recommended_supplier": "Apex Fasteners Ltd",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Eagle Peak Technologies Inc.",
+        "score": {
+          "cost": 0,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 53
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 2500
+      },
+      {
+        "name": "Eagle Peak Technologies Inc.",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 0,
+          "overall": 60
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 2500
+      },
+      {
+        "name": "Apex Fasteners Ltd",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "EXPENSIVE",
+        "grand_total": 0
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "EXPENSIVE",
+        "grand_total": 0
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": -1,
+          "delivery": 100,
+          "reliability": 0,
+          "overall": -1
+        },
+        "verdict": "AVOID",
+        "grand_total": 0
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00089-00110",
+    "rfq": "PUR-RFQ-2026-00089",
+    "modified": "2026-09-11 12:00:09.677679",
+    "creation": "2026-09-11 12:00:09.677679",
+    "recommended_supplier": "Atlantic Precision Manufacturing.",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Eagle Peak Technologies Inc.",
+        "score": {
+          "cost": 0,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 53
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 2500
+      },
+      {
+        "name": "Eagle Peak Technologies Inc.",
+        "score": {
+          "cost": 100,
+          "delivery": 50,
+          "reliability": 40,
+          "overall": 71
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 2500
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "EXPENSIVE",
+        "grand_total": 0
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 0,
+          "delivery": 50,
+          "reliability": 20,
+          "overall": 24
+        },
+        "verdict": "EXPENSIVE",
+        "grand_total": 0
+      },
+      {
+        "name": "Apex Fasteners Ltd",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "AVOID",
+        "grand_total": 0
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00089-00109",
+    "rfq": "PUR-RFQ-2026-00089",
+    "modified": "2026-09-11 11:58:54.590426",
+    "creation": "2026-09-11 11:58:54.590426",
+    "recommended_supplier": "Atlantic Precision Manufacturing.",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Eagle Peak Technologies Inc.",
+        "score": {
+          "cost": 0,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 53
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 2500
+      },
+      {
+        "name": "Eagle Peak Technologies Inc.",
+        "score": {
+          "cost": 100,
+          "delivery": 50,
+          "reliability": 40,
+          "overall": 71
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 2500
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "EXPENSIVE",
+        "grand_total": 0
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 0,
+          "delivery": 50,
+          "reliability": 20,
+          "overall": 24
+        },
+        "verdict": "EXPENSIVE",
+        "grand_total": 0
+      },
+      {
+        "name": "Apex Fasteners Ltd",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "AVOID",
+        "grand_total": 0
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00088-00108",
+    "rfq": "PUR-RFQ-2026-00088",
+    "modified": "2026-09-09 12:11:10.992126",
+    "creation": "2026-09-09 12:11:10.992126",
+    "recommended_supplier": "Aptiv",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 0
+      },
+      {
+        "name": "Aptiv",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 100,
+          "overall": 100
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 0
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "AVOID",
+        "grand_total": 0
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00087-00107",
+    "rfq": "PUR-RFQ-2026-00087",
+    "modified": "2026-09-01 11:52:46.522641",
+    "creation": "2026-09-01 11:52:46.522641",
+    "recommended_supplier": "Blue Ridge Manufacturing Inc",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 0
+      },
+      {
+        "name": "Apex Fasteners Ltd",
+        "score": {
+          "cost": 13,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 58
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 8750
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 0,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 53
+        },
+        "verdict": "AVOID",
+        "grand_total": 10000
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00087-00106",
+    "rfq": "PUR-RFQ-2026-00087",
+    "modified": "2026-09-01 11:17:33.435249",
+    "creation": "2026-09-01 11:17:33.435249",
+    "recommended_supplier": "Blue Ridge Manufacturing Inc",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 0
+      },
+      {
+        "name": "Apex Fasteners Ltd",
+        "score": {
+          "cost": 13,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 58
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 8750
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 0,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 53
+        },
+        "verdict": "AVOID",
+        "grand_total": 10000
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00087-00105",
+    "rfq": "PUR-RFQ-2026-00087",
+    "modified": "2026-08-31 22:20:20.946607",
+    "creation": "2026-08-31 22:20:20.946607",
+    "recommended_supplier": "Blue Ridge Manufacturing Inc",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 0,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 53
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 10000
+      },
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 0
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00086-00104",
+    "rfq": "PUR-RFQ-2026-00086",
+    "modified": "2026-08-31 21:21:37.533701",
+    "creation": "2026-08-31 21:21:37.533701",
+    "recommended_supplier": "Apex Fasteners Ltd",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Apex Fasteners Ltd",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 0
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 0
+      },
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "AVOID",
+        "grand_total": 0
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00086-00103",
+    "rfq": "PUR-RFQ-2026-00086",
+    "modified": "2026-08-31 18:46:02.354310",
+    "creation": "2026-08-31 18:46:02.354310",
+    "recommended_supplier": "Apex Fasteners Ltd",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Apex Fasteners Ltd",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 0
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 0
+      },
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "AVOID",
+        "grand_total": 0
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00086-00102",
+    "rfq": "PUR-RFQ-2026-00086",
+    "modified": "2026-08-31 18:25:44.824822",
+    "creation": "2026-08-31 18:25:44.824822",
+    "recommended_supplier": "Apex Fasteners Ltd",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Apex Fasteners Ltd",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 0
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 0
+      },
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "AVOID",
+        "grand_total": 0
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00086-00101",
+    "rfq": "PUR-RFQ-2026-00086",
+    "modified": "2026-08-31 17:04:04.025992",
+    "creation": "2026-08-31 17:04:04.025992",
+    "recommended_supplier": "Apex Fasteners Ltd",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Apex Fasteners Ltd",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 0
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 0
+      },
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "AVOID",
+        "grand_total": 0
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00086-00100",
+    "rfq": "PUR-RFQ-2026-00086",
+    "modified": "2026-08-31 16:51:49.673767",
+    "creation": "2026-08-31 16:51:49.673767",
+    "recommended_supplier": "Apex Fasteners Ltd",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Apex Fasteners Ltd",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 0
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 0
+      },
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "AVOID",
+        "grand_total": 0
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00086-00099",
+    "rfq": "PUR-RFQ-2026-00086",
+    "modified": "2026-08-31 16:38:09.364125",
+    "creation": "2026-08-31 16:38:09.364125",
+    "recommended_supplier": "Blue Ridge Manufacturing Inc",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 0
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 0
+      },
+      {
+        "name": "Apex Fasteners Ltd",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "AVOID",
+        "grand_total": 0
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00085-00098",
+    "rfq": "PUR-RFQ-2026-00085",
+    "modified": "2026-08-31 13:15:19.288140",
+    "creation": "2026-08-31 13:15:19.288140",
+    "recommended_supplier": "Atlantic Precision Manufacturing.",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 0
+      },
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 0
+      },
+      {
+        "name": "Apex Fasteners Ltd",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "AVOID",
+        "grand_total": 0
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00085-00097",
+    "rfq": "PUR-RFQ-2026-00085",
+    "modified": "2026-08-27 20:18:38.051331",
+    "creation": "2026-08-27 20:18:38.051331",
+    "recommended_supplier": "Apex Fasteners Ltd",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Apex Fasteners Ltd",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 0
+      },
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 0
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "AVOID",
+        "grand_total": 0
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00082-00096",
+    "rfq": "PUR-RFQ-2026-00082",
+    "modified": "2026-08-18 12:31:49.969051",
+    "creation": "2026-08-18 12:31:49.969051",
+    "recommended_supplier": "Blue Ridge Manufacturing Inc",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 100,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 93
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 1200
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 0,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 53
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 1250
+      },
+      {
+        "name": "Titan Industrial Products LLC",
+        "score": {
+          "cost": 0,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 53
+        },
+        "verdict": "AVOID",
+        "grand_total": 1250
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00081-00095",
+    "rfq": "PUR-RFQ-2026-00081",
+    "modified": "2026-08-07 09:59:09.599634",
+    "creation": "2026-08-07 09:59:09.599634",
+    "recommended_supplier": "Blue Ridge Manufacturing Inc",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 516
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 15,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 59
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 528
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00081-00094",
+    "rfq": "PUR-RFQ-2026-00081",
+    "modified": "2026-08-03 12:24:14.134930",
+    "creation": "2026-08-03 12:24:14.134930",
+    "recommended_supplier": "Blue Ridge Manufacturing Inc",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 516
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 15,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 59
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 528
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00081-00093",
+    "rfq": "PUR-RFQ-2026-00081",
+    "modified": "2026-08-03 12:22:32.299612",
+    "creation": "2026-08-03 12:22:32.299612",
+    "recommended_supplier": "Blue Ridge Manufacturing Inc",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 516
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 15,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 59
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 528
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00078-00092",
+    "rfq": "PUR-RFQ-2026-00078",
+    "modified": "2026-07-31 18:26:21.003809",
+    "creation": "2026-07-31 18:26:21.003809",
+    "recommended_supplier": "Blue Ridge Manufacturing Inc",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 1380
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 15,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 59
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 1656
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00078-00091",
+    "rfq": "PUR-RFQ-2026-00078",
+    "modified": "2026-07-31 18:24:38.552314",
+    "creation": "2026-07-31 18:24:38.552314",
+    "recommended_supplier": "Blue Ridge Manufacturing Inc",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 1380
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 15,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 59
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 1656
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00081-00082",
+    "rfq": "PUR-RFQ-2026-00081",
+    "modified": "2026-07-31 17:58:23.866590",
+    "creation": "2026-07-31 17:58:23.866590",
+    "recommended_supplier": "Blue Ridge Manufacturing Inc",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 516
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 15,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 59
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 528
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00080-00081",
+    "rfq": "PUR-RFQ-2026-00080",
+    "modified": "2026-07-31 17:16:59.233914",
+    "creation": "2026-07-31 17:16:59.233914",
+    "recommended_supplier": "Aptiv",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Aptiv",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 100,
+          "overall": 94
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 1200
+      },
+      {
+        "name": "FEMSA",
+        "score": {
+          "cost": 15,
+          "delivery": 100,
+          "reliability": 100,
+          "overall": 66
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 1300
+      },
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 15,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 59
+        },
+        "verdict": "AVOID",
+        "grand_total": 1300
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00079-00080",
+    "rfq": "PUR-RFQ-2026-00079",
+    "modified": "2026-07-31 17:01:45.499826",
+    "creation": "2026-07-31 17:01:45.499826",
+    "recommended_supplier": "Blue Ridge Manufacturing Inc",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 1080
+      },
+      {
+        "name": "Redwood Supply Chain Partners",
+        "score": {
+          "cost": 70,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 81
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 1164
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 15,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 59
+        },
+        "verdict": "AVOID",
+        "grand_total": 1488
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00079-00079",
+    "rfq": "PUR-RFQ-2026-00079",
+    "modified": "2026-07-31 17:01:42.347888",
+    "creation": "2026-07-31 17:01:42.347888",
+    "recommended_supplier": "Blue Ridge Manufacturing Inc",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 1080
+      },
+      {
+        "name": "Redwood Supply Chain Partners",
+        "score": {
+          "cost": 70,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 81
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 1164
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 15,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 59
+        },
+        "verdict": "AVOID",
+        "grand_total": 1488
+      }
+    ]
+  },
+  {
+    "name": "SCORE-PUR-RFQ-2026-00079-00078",
+    "rfq": "PUR-RFQ-2026-00079",
+    "modified": "2026-07-31 16:59:34.780123",
+    "creation": "2026-07-31 16:59:34.780123",
+    "recommended_supplier": "Blue Ridge Manufacturing Inc",
+    "snapshot_keys": [
+      "rfq_name",
+      "analysed_at",
+      "recommended_supplier",
+      "confidence_score",
+      "analysis",
+      "quotations_snapshot"
+    ],
+    "analysis_keys": [
+      "recommended_supplier",
+      "confidence_score",
+      "recommendation_summary",
+      "supplier_analysis",
+      "cost_analysis",
+      "per_item_analysis",
+      "risk_flags",
+      "negotiation_tips",
+      "split_order_option",
+      "final_verdict",
+      "reason",
+      "cost_savings",
+      "risk_factors",
+      "per_item_recommendation"
+    ],
+    "suppliers": [
+      {
+        "name": "Blue Ridge Manufacturing Inc",
+        "score": {
+          "cost": 85,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 87
+        },
+        "verdict": "BEST VALUE",
+        "grand_total": 1080
+      },
+      {
+        "name": "Redwood Supply Chain Partners",
+        "score": {
+          "cost": 70,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 81
+        },
+        "verdict": "GOOD OPTION",
+        "grand_total": 1164
+      },
+      {
+        "name": "Atlantic Precision Manufacturing.",
+        "score": {
+          "cost": 15,
+          "delivery": 100,
+          "reliability": 50,
+          "overall": 59
+        },
+        "verdict": "AVOID",
+        "grand_total": 1488
+      }
+    ]
+  }
+]

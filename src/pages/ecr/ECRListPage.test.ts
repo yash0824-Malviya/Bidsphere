@@ -51,23 +51,13 @@ describe("ECR list procurement role presentation", () => {
       .not.toContain("Create RFQ");
   });
 
-  it("gives Procurement Manager the separate RFQ Creation queues", () => {
-    expect(queueFiltersForRole("procurement")).toEqual([
-      { label: "RFQ Pending", value: "rfq-pending" },
-      { label: "RFQ", value: "rfq-created" },
-      { label: "All ECRs", value: "all" },
-    ]);
+  it("gives Procurement Manager clean reference view without RFQ queues", () => {
+    expect(queueFiltersForRole("procurement")).toEqual([]);
     const pending = ecr("RFQ Pending", {
       approval_requirements: [pendingTask("Procurement Manager")],
     });
-    expect(matchesVisibleQueueFilter("rfq-pending", "procurement", pending, null))
-      .toBe(true);
     expect(getVisibleECRListActionLabel("procurement", pending, null))
-      .toBe("Create RFQ");
-
-    const created = ecr("RFQ", { rfq: "RFQ-00001" });
-    expect(matchesVisibleQueueFilter("rfq-created", "procurement", created, null))
-      .toBe(true);
+      .toBe("View");
   });
 
   it("keeps Procurement Team review-only at its exact persisted stage", () => {

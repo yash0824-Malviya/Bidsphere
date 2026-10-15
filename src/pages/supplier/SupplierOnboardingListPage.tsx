@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -22,14 +22,11 @@ import DashboardKpiCard, {
   DashboardKpiGrid,
 } from "../../components/dashboard/DashboardKpiCard";
 import { useClientPagination } from "../../hooks/usePagination";
-import NewOnboardingModal from "../../components/supplier-onboarding/NewOnboardingModal";
 import {
   getOnboardingStats,
   listOnboardings,
   listSupplierCategories,
 } from "../../api/supplierOnboarding";
-import { useAuthStore } from "../../store/authStore";
-import { queryClient } from "../../queryClient";
 import { ONB } from "../../components/supplier-onboarding/enterprise/onboardingUi";
 import ExportButton from "../../components/export/ExportButton";
 import StatusBadge from "../../components/StatusBadge";
@@ -39,12 +36,10 @@ import type { OnboardingListRow } from "../../api/supplierOnboarding";
 
 export default function SupplierOnboardingListPage() {
   const navigate = useNavigate();
-  const user = useAuthStore((s) => s.user);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
   const [supplierType, setSupplierType] = useState("");
   const [category, setCategory] = useState("");
-  const [modalOpen, setModalOpen] = useState(false);
 
   const statsQuery = useQuery({
     queryKey: ["onboarding-stats"],
@@ -194,15 +189,14 @@ export default function SupplierOnboardingListPage() {
               columns={exportColumns}
               rows={exportRows}
             />
-            <button
-              type="button"
-              onClick={() => setModalOpen(true)}
-              className="inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:opacity-95"
+            <Link
+              to="/suppliers/onboarding/new"
+              className="inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:opacity-95 no-underline"
               style={{ backgroundColor: ONB.primary }}
             >
               <Plus className="h-4 w-4" />
               New Onboarding
-            </button>
+            </Link>
           </div>
         }
       />
@@ -393,16 +387,6 @@ export default function SupplierOnboardingListPage() {
           />
         </div>
       </div>
-
-      <NewOnboardingModal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        createdBy={user?.email || user?.full_name || "Procurement"}
-        onCreated={() => {
-          void queryClient.invalidateQueries({ queryKey: ["onboarding-list"] });
-          void queryClient.invalidateQueries({ queryKey: ["onboarding-stats"] });
-        }}
-      />
     </div>
   );
 }

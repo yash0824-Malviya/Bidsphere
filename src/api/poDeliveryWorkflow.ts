@@ -132,6 +132,11 @@ export async function persistDeliveryStateToErp(
       // Omit supplier — gateway resolves Link from the Purchase Order document.
       supplier: undefined,
     });
+    if (record.po_name !== state.po_name || record.shipment_status !== state.status) {
+      throw new Error("The saved Purchase Order shipment status could not be confirmed. Refresh before retrying.");
+    }
+    Object.assign(state, shipmentRecordToDeliveryState(record));
+    saveDeliveryState(state);
 
     // eslint-disable-next-line no-console
     console.log("[PO Delivery] PO updated / Ready for GRN flag", {
@@ -355,11 +360,12 @@ export async function hydrateDeliveryStateFromErp(
 export async function acceptPO(
   poName: string,
   payload: AcceptPOPayload,
-  supplierName?: string
+  supplierName?: string,
+  options: { reconfirmContractAcceptance?: boolean } = {},
 ): Promise<PODeliveryState> {
   // Re-read ERP first so a prior accept (other tab / failed UI refresh) is visible.
   const state = await hydrateDeliveryStateFromErp(poName, supplierName);
-  if (state.status !== "Pending Acceptance") {
+  if (state.status !== "Pending Acceptance" && !(options.reconfirmContractAcceptance && state.status === "Accepted")) {
     throw new Error(`Cannot accept PO in status "${state.status}".`);
   }
 
@@ -375,7 +381,6 @@ export async function acceptPO(
   state.shipping_notes = payload.shipping_notes;
   state.updated_at = now;
   state.updated_by = supplierName;
-  saveDeliveryState(state);
 
   // eslint-disable-next-line no-console
   console.log("[PO Delivery] Accepted:", { poName, payload, supplierName });
@@ -419,7 +424,6 @@ export async function rejectPO(
   state.rejected_date = now;
   state.updated_at = now;
   state.updated_by = supplierName;
-  saveDeliveryState(state);
 
   // eslint-disable-next-line no-console
   console.log("[PO Delivery] Rejected:", { poName, payload, supplierName });
@@ -461,7 +465,6 @@ export async function updateDeliveryDetails(
   if (patch.shipping_notes !== undefined) state.shipping_notes = patch.shipping_notes;
   state.updated_at = now;
   state.updated_by = supplierName;
-  saveDeliveryState(state);
 
   await persistDeliveryStateToErp(state, supplierName);
 
@@ -493,7 +496,6 @@ export async function markInTransit(
   state.dispatch_date = now;
   state.updated_at = now;
   state.updated_by = supplierName;
-  saveDeliveryState(state);
 
   await persistDeliveryStateToErp(state, supplierName);
 

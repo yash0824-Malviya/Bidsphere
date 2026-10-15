@@ -19,6 +19,7 @@ import {
   ECR_WORKSPACES,
   formatECRNumber,
   isEcrOwnedBy,
+  isExtendedECRWorkflow,
   type ECRRole,
 } from "../../../config/ecrRoles";
 import {
@@ -28,6 +29,7 @@ import {
   getECRListActionRoute,
   getECRQueueSummary,
   isECRActionableForRole,
+  matchesECRQueueFilter,
 } from "../../../config/ecrQueues";
 import { useAuthStore } from "../../../store/authStore";
 import type { EngineeringChangeRequest } from "../../../types/erpnext";
@@ -52,7 +54,7 @@ function reviewDashboardCards(
   user: DashboardUser,
 ): DashboardCard[] {
   const summary = getECRQueueSummary(role, ecrs, user);
-  return [
+  const cards: DashboardCard[] = [
     {
       label: "My ECRs",
       value: summary.mine,
@@ -89,6 +91,28 @@ function reviewDashboardCards(
       to: "/ecr?filter=closed",
     },
   ];
+  if (role === "engineer") cards.splice(1, 0, {
+    label: "Business Cases to Prepare", value: ecrs.filter((ecr) => matchesECRQueueFilter("business-case-preparation", role, ecr, user)).length,
+    hint: "Technically approved ECRs", icon: FileSearch, to: "/ecr?filter=business-case-preparation",
+  });
+  if (role === "engineering") cards[1].hint = "Technical approval required";
+  return cards;
+}
+
+export function extendedReviewDashboardCards(role: Extract<ECRRole, "finance" | "quality" | "program_manager">, ecrs: EngineeringChangeRequest[]): DashboardCard[] {
+  const count = (filter: string) => ecrs.filter((ecr) => matchesECRQueueFilter(filter, role, ecr)).length;
+  if (role === "finance") return [
+    { label: "Pending Financial Reviews", value: count("finance-review"), hint: "ECR Business Cases assigned to Finance", icon: Clock3, to: "/ecr?filter=finance-review" },
+    { label: "Business Cases Awaiting Finance", value: count("finance-review"), hint: "Review financial impact and risk", icon: FileSearch, to: "/ecr?filter=finance-review" },
+  ];
+  if (role === "quality") return [
+    { label: "Quality Reviews", value: count("quality-review"), hint: "Business Cases assigned to Quality", icon: Clock3, to: "/ecr?filter=quality-review" },
+    { label: "ECR Quality Impact", value: count("quality-impact"), hint: "ECRs with quality impact", icon: FileSearch, to: "/ecr?filter=quality-impact" },
+  ];
+  return [
+    { label: "Pending ECR Approvals", value: count("final-approval"), hint: "Start or complete final ECR approval", icon: Clock3, to: "/ecr?filter=final-approval" },
+    { label: "Business Cases Approved", value: count("business-case-approved"), hint: "Ready to start final review", icon: CheckCircle2, to: "/ecr?filter=business-case-approved" },
+  ];
 }
 
 export function procurementDashboardCards(
@@ -100,7 +124,7 @@ export function procurementDashboardCards(
   ).length;
   const atRFQPending = ecrs.filter(
     (ecr) =>
-      getECRCurrentStage(ecr.select_pxfp, ecr) === "RFQ Pending" &&
+      matchesECRQueueFilter("rfq-pending", "procurement", ecr) &&
       isECRActionableForRole("procurement", ecr) &&
       !String(ecr.rfq ?? "").trim(),
   ).length;
@@ -126,7 +150,7 @@ export function procurementDashboardCards(
     ];
   }
 
-  return [
+  const managerCards: DashboardCard[] = [
     {
       label: "RFQ Pending",
       value: atRFQPending,
@@ -149,6 +173,11 @@ export function procurementDashboardCards(
       to: "/ecr",
     },
   ];
+  if (ecrs.some(isExtendedECRWorkflow)) managerCards.unshift(
+    { label: "Business Case Reviews", value: ecrs.filter((ecr) => matchesECRQueueFilter("procurement-bc-review", role, ecr)).length, hint: "Assess supplier and sourcing impact", icon: ClipboardList, to: "/ecr?filter=procurement-bc-review" },
+    { label: "Procurement Decisions", value: ecrs.filter((ecr) => matchesECRQueueFilter("procurement-decision", role, ecr)).length, hint: "Record whether an RFQ is required", icon: FileSearch, to: "/ecr?filter=procurement-decision" },
+  );
+  return managerCards;
 }
 
 function readOnlyDashboardCards(ecrs: EngineeringChangeRequest[]): DashboardCard[] {
@@ -215,9 +244,13 @@ export function roleQueueRoute(role: ECRRole): string {
     case "engineering":
       return "/ecr?filter=engineering";
     case "operations":
-    case "quality":
-    case "program_manager":
       return "/ecr";
+    case "finance":
+      return "/ecr?filter=finance-review";
+    case "quality":
+      return "/ecr?filter=quality-review";
+    case "program_manager":
+      return "/ecr?filter=final-approval";
     case "procurement_team":
       return "/ecr?filter=procurement-review";
     case "procurement":
@@ -267,14 +300,9 @@ export function getRoleDashboardQueue(
     return ecrs.filter((ecr) => isECRActionableForRole(role, ecr, user));
   }
   if (role === "procurement") {
-    return ecrs.filter(
-      (ecr) =>
-        getECRCurrentStage(ecr.select_pxfp, ecr) === "RFQ Pending" &&
-        isECRActionableForRole(role, ecr, user) &&
-        !String(ecr.rfq ?? "").trim(),
-    );
+    return ecrs.filter((ecr) => isECRActionableForRole(role, ecr, user));
   }
-  if (["operations", "quality", "program_manager"].includes(role)) {
+  if (role === "operations") {
     return ecrs;
   }
   return ecrs.filter((ecr) => isECRActionableForRole(role, ecr, user));
@@ -381,7 +409,8 @@ export default function RoleECRDashboard({ role }: { role: ECRRole }) {
     if (role === "procurement" || role === "procurement_team") {
       return procurementDashboardCards(role, scopedEcrs);
     }
-    if (["operations", "quality", "program_manager"].includes(role)) {
+    if (role === "finance" || role === "quality" || role === "program_manager") return extendedReviewDashboardCards(role, scopedEcrs);
+    if (role === "operations") {
       return readOnlyDashboardCards(scopedEcrs);
     }
     if (role === "admin") return adminDashboardCards(scopedEcrs);
@@ -459,18 +488,29 @@ export default function RoleECRDashboard({ role }: { role: ECRRole }) {
         ))}
       </section>
 
-      <section className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
+      {role === "engineer" ? scopedEcrs.filter((ecr) => matchesECRQueueFilter("business-case-preparation", role, ecr, user)).map((ecr) => (
+        <Link key={ecr.name} to={getECRListActionRoute(role, ecr, user)} className="block rounded-xl border border-primary-200 bg-primary-50 px-4 py-3 text-sm font-medium text-primary-800">
+          {formatECRNumber(ecr)} is ready for Business Case preparation.
+        </Link>
+      )) : null}
+
+      <section
+        aria-label={role === "engineering" ? "Engineering Review Queue" : undefined}
+        className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm"
+      >
         <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
           <div>
             <h2 className="text-sm font-bold text-neutral-900">
               {role === "procurement_team"
                 ? "Procurement Review"
                 : role === "procurement"
-                  ? "RFQ Pending"
+                  ? "Procurement Actions"
                   : workspace.queueTitle}
             </h2>
             <p className="mt-0.5 text-[11px] text-neutral-500">
-              {queue.length} item{queue.length === 1 ? "" : "s"} assigned to this role at the current stage
+              {role === "engineering"
+                ? `${queue.length} ECR${queue.length === 1 ? "" : "s"} awaiting your engineering review`
+                : `${queue.length} item${queue.length === 1 ? "" : "s"} assigned to this role at the current stage`}
             </p>
           </div>
           <Link to={roleQueueRoute(role)} className="text-xs font-semibold text-primary-700 hover:underline">

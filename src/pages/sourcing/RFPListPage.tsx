@@ -81,6 +81,8 @@ export default function RFPListPage() {
       return pageResult;
     },
     staleTime: LIST_STALE,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
     placeholderData: (prev) => prev,
   });
 
@@ -88,6 +90,8 @@ export default function RFPListPage() {
     queryKey: ["rfp-stats"],
     queryFn: () => getRfpStats(),
     staleTime: LIST_STALE,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const rows = listQuery.data?.data ?? [];
@@ -97,8 +101,8 @@ export default function RFPListPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="RFP"
-        description="Request for Proposal — collect supplier proposals."
+        title="All RFP"
+        description="View and manage Requests for Proposal."
         actions={
           <Link to="/sourcing/rfp/new" className="btn-primary">
             <Plus />
@@ -169,8 +173,8 @@ export default function RFPListPage() {
         ) : rows.length === 0 ? (
           <EmptyState
             icon={FileText}
-            title="No RFPs yet"
-            description="Create a Request for Proposal to invite suppliers and collect proposal documents."
+            title="No RFP found"
+            description="There are currently no Requests for Proposal available."
             action={
               <Link to="/sourcing/rfp/new" className="btn-primary">
                 <Plus className="h-4 w-4" />

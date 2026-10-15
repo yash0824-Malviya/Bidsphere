@@ -1,0 +1,98 @@
+{
+  "checked_at": "2026-09-28T07:54:05.114Z",
+  "mode": "read-only ERPNext inspection",
+  "contract": {
+    "name": "CON-2026-00001",
+    "modified": "2026-09-25 13:22:23.139023",
+    "docstatus": 0,
+    "custom_contract_status": "Pending Signature",
+    "custom_esign_status": "Pending Supplier",
+    "custom_final_version_locked": 1,
+    "custom_current_version": "1.0",
+    "custom_inteva_signatory": "legal@netlink.com",
+    "custom_supplier": "\"Atlantic Precision Manufacturing.\"",
+    "party_name": "\"Atlantic Precision Manufacturing.\"",
+    "custom_rfq": "PUR-RFQ-2026-00104",
+    "custom_supplier_quotation": "PUR-SQTN-2026-00273",
+    "custom_contract_value": 4500,
+    "custom_currency": "USD",
+    "start_date": "2026-09-25",
+    "end_date": "2026-10-25"
+  },
+  "phase": {
+    "version": 1,
+    "phase": "signature"
+  },
+  "approvals": [
+    {
+      "id": "0259e465-5198-462f-b659-b8dfdb597733",
+      "role": "legal",
+      "stage": 0,
+      "rule": "RFQ Award: Legal Manager Review",
+      "status": "Approved",
+      "by": "legal@netlink.com",
+      "at": "2026-09-25 13:22:03",
+      "comment": "Approved"
+    }
+  ],
+  "signatures": [],
+  "locked_file": {
+    "file_id": "be1e1f2d01",
+    "file_url": "/private/files/CON-2026-00001-locked-1.0-42f8bd8f489c49a4.pdf",
+    "hash": "42f8bd8f489c49a4efd088167e106ae068bf527b2d0f1841593de328d9c75cfe",
+    "signature_page": 2
+  },
+  "locked_hash_present": true,
+  "audit": [
+    {
+      "action": "create_from_rfq_award",
+      "by": "procurement.team@netlink.com",
+      "at": "2026-09-25 13:20:51",
+      "previous_status": "",
+      "new_status": "Draft"
+    },
+    {
+      "action": "save",
+      "by": "procurement.team@netlink.com",
+      "at": "2026-09-25 13:20:52",
+      "previous_status": "Draft",
+      "new_status": "Draft"
+    },
+    {
+      "action": "submit_review",
+      "by": "procurement.team@netlink.com",
+      "at": "2026-09-25 13:20:52",
+      "previous_status": "Draft",
+      "new_status": "Pending Legal"
+    },
+    {
+      "action": "legal_review_started",
+      "by": "procurement.team@netlink.com",
+      "at": "2026-09-25 13:20:52",
+      "previous_status": "Draft",
+      "new_status": "Pending Legal"
+    },
+    {
+      "action": "approve",
+      "by": "legal@netlink.com",
+      "at": "2026-09-25 13:22:03",
+      "previous_status": "Pending Legal",
+      "new_status": "Approved"
+    },
+    {
+      "action": "legal_approved",
+      "by": "legal@netlink.com",
+      "at": "2026-09-25 13:22:03",
+      "previous_status": "Pending Legal",
+      "new_status": "Approved"
+    },
+    {
+      "action": "begin_signature",
+      "by": "legal@netlink.com",
+      "at": "2026-09-25 13:22:19",
+      "previous_status": "Approved",
+      "new_status": "Pending Signature"
+    }
+  ],
+  "award": "LDC2026-00027"
+}

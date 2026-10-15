@@ -13,8 +13,16 @@ import {
   Send,
   Trash2,
   Truck,
+  Warehouse,
   XCircle,
 } from "lucide-react";
+
+import {
+  parseStructuredWarehouseProcessing,
+  sanitizeHumanRemarks,
+} from "../../utils/materialIssueRemarksDisplay";
+import MaterialIssueAuditPanel from "../../components/warehouse/MaterialIssueAuditPanel";
+import { ACCEPTANCE_CHECKLIST_LABELS } from "../../types/materialIssueReceipt";
 
 import {
   checkMaterialRequestStock,
@@ -414,11 +422,7 @@ function TimelineShell({ children }: { children: React.ReactNode }) {
  * JSON. Returns the human-readable remainder (may be empty).
  */
 function cleanRemarks(raw?: string): string {
-  if (!raw) return "";
-  return raw
-    .replace(/\[BidSphere:ForwardedItems:\[.*?\]\]/gs, "")
-    .replace(/\[BidSphere:[^\]]*\]/gs, "")
-    .trim();
+  return sanitizeHumanRemarks(raw);
 }
 
 export default function MaterialRequestDetailPage() {
@@ -453,7 +457,7 @@ export default function MaterialRequestDetailPage() {
     isError,
   } = useQuery<MaterialRequestWorkflowRecord>({
     queryKey: ["material-request-workflow", name],
-    queryFn: () => fetchMaterialRequestWorkflow(name),
+    queryFn: () => fetchMaterialRequestWorkflow(name, { fresh: true }),
     // Once deleted, keep the query permanently disabled so neither cache
     // removal nor window-focus can trigger a refetch of the missing record.
     enabled: !!name && !deleted,
@@ -559,8 +563,10 @@ export default function MaterialRequestDetailPage() {
         name: user?.name,
         full_name: user?.full_name,
       }),
-    onSuccess: () => {
-      toast.success("Submitted — assigned to Warehouse for review");
+    onSuccess: (verified) => {
+      // This is the post-transition ERP GET, never an optimistic status patch.
+      queryClient.setQueryData(["material-request-workflow", name], verified);
+      toast.success(`Material Request ${name} submitted to Warehouse.`);
       invalidate();
       void queryClient.invalidateQueries({
         queryKey: ["warehouse", "pending-requests"],
@@ -845,7 +851,7 @@ export default function MaterialRequestDetailPage() {
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => submitMutation.mutate()}
+                onClick={() => { if (!submitMutation.isPending) submitMutation.mutate(); }}
                 className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 disabled:opacity-60"
               >
                 {submitMutation.isPending ? (
@@ -853,7 +859,7 @@ export default function MaterialRequestDetailPage() {
                 ) : (
                   <Send className="h-4 w-4" />
                 )}
-                Submit Request
+                {submitMutation.isPending ? "Submitting..." : "Submit Request"}
               </button>
             ) : null}
             {showDelete ? (
@@ -1055,7 +1061,13 @@ export default function MaterialRequestDetailPage() {
       </div>
 
       {(() => {
+        const structuredProcessing = parseStructuredWarehouseProcessing(mr.custom_warehouse_remarks);
+        const hasStructured =
+          structuredProcessing.hasData ||
+          effectiveStatus === "Material Issued" ||
+          effectiveStatus === "Completed";
         const warehouseRemarkText =
+          structuredProcessing.humanRemarks ||
           cleanRemarks(mr.custom_warehouse_remarks) ||
           (effectiveStatus === "Material Issued" || effectiveStatus === "Completed"
             ? `Issued successfully${
@@ -1066,22 +1078,146 @@ export default function MaterialRequestDetailPage() {
         const showProcurementRemarks =
           procurementInvolved && Boolean(procurementRemarkText);
 
-        if (!warehouseRemarkText && !showProcurementRemarks) return null;
+        if (!hasStructured && !warehouseRemarkText && !showProcurementRemarks) return null;
 
         return (
-          <div
-            className={`mb-6 grid gap-4 ${
-              warehouseRemarkText && showProcurementRemarks
-                ? "lg:grid-cols-2"
-                : "grid-cols-1"
-            }`}
-          >
-            {warehouseRemarkText ? (
+          <div className="mb-6 space-y-4">
+            {hasStructured ? (
+              <div className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-xs">
+                <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-50 text-sky-700">
+                    <Warehouse className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">
+                      WAREHOUSE PROCESSING
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Fulfillment summary and acceptance verification
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+                  <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase">Status</span>
+                    <div className="mt-1 flex items-center gap-1.5 font-bold text-emerald-800 text-sm">
+                      <Check className="h-4 w-4 text-emerald-600 stroke-[3]" />
+                      {structuredProcessing.status}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase">Material Issue Receipt</span>
+                    <div className="mt-1 font-mono font-bold text-slate-900 text-sm">
+                      {structuredProcessing.issueNumber}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase">Stock Entry</span>
+                    <div className="mt-1 font-mono font-bold text-slate-900 text-sm">
+                      {structuredProcessing.stockEntry}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase">Warehouse</span>
+                    <div className="mt-1 font-semibold text-slate-800 text-sm">
+                      {structuredProcessing.warehouse !== "—" ? structuredProcessing.warehouse : (warehouseName || "—")}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase">Received By</span>
+                    <div className="mt-1 font-semibold text-slate-800 text-sm">
+                      {structuredProcessing.receivedBy}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase">Issue Type</span>
+                    <div className="mt-1 font-semibold text-slate-800 text-sm">
+                      {structuredProcessing.issueType}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase">Issue Date</span>
+                    <div className="mt-1 font-semibold text-slate-800 text-sm">
+                      {structuredProcessing.issueDate}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase">Department Acceptance</span>
+                    <div className="mt-1 flex items-center gap-1.5 font-bold text-emerald-800 text-sm">
+                      {effectiveStatus === "Completed" || structuredProcessing.departmentAcceptance === "Confirmed" ? (
+                        <>
+                          <Check className="h-4 w-4 text-emerald-600 stroke-[3]" />
+                          Confirmed {structuredProcessing.acceptanceDate !== "—" ? `(${structuredProcessing.acceptanceDate})` : ""}
+                        </>
+                      ) : (
+                        <span className="text-amber-700">Pending</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {structuredProcessing.acceptanceChecklist && (
+                  <div className="mt-4 rounded-lg border border-slate-200/80 bg-slate-50/40 p-4">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 mb-2.5">
+                      Acceptance Checklist
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                      {(
+                        Object.keys(ACCEPTANCE_CHECKLIST_LABELS) as Array<
+                          keyof typeof ACCEPTANCE_CHECKLIST_LABELS
+                        >
+                      ).map((key) => {
+                        const checked = Boolean(structuredProcessing.acceptanceChecklist?.[key]);
+                        return (
+                          <div
+                            key={key}
+                            className="flex items-center gap-2 rounded-md bg-white border border-slate-200/80 px-3 py-2 text-xs font-medium text-slate-800 shadow-2xs"
+                          >
+                            {checked ? (
+                              <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                            ) : (
+                              <XCircle className="h-4 w-4 text-slate-300 shrink-0" />
+                            )}
+                            <span>{ACCEPTANCE_CHECKLIST_LABELS[key]}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <div className="mt-4 rounded-lg border border-slate-100 bg-slate-50/60 p-4">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                    Warehouse Remarks
+                  </h4>
+                  <p className="text-sm text-slate-700">
+                    {warehouseRemarkText || "No warehouse remarks added."}
+                  </p>
+                </div>
+
+                <div className="mt-4">
+                  <MaterialIssueAuditPanel
+                    audit={structuredProcessing.audit}
+                    documentHash={structuredProcessing.audit.document_hash}
+                    verificationToken={structuredProcessing.audit.verification_token}
+                  />
+                </div>
+              </div>
+            ) : warehouseRemarkText ? (
               <div className="card p-5">
                 <h3 className="mb-2 text-sm font-bold">Warehouse Remarks</h3>
                 <p className="text-sm text-neutral-700">{warehouseRemarkText}</p>
               </div>
             ) : null}
+
             {showProcurementRemarks ? (
               <div className="card p-5">
                 <h3 className="mb-2 text-sm font-bold">Procurement Remarks</h3>

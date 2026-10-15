@@ -252,7 +252,7 @@ In ERPNext (Frappe Cloud or self-hosted): open the user's record → **API Acces
 | **P2P — Invoices** | `Purchase Invoice`, `Purchase Invoice Item`, `Purchase Receipt`, `Purchase Order` | `frappe.client.submit` |
 | **P2P — Payments** | `Payment Entry`, `Payment Entry Reference`, `Purchase Invoice` | `frappe.client.submit` |
 | **Suppliers** | `Supplier`, `Supplier Group`, `Address`, `Contact`, `Country`, `Payment Term` | — |
-| **Sourcing (RFx) — Smart RFQ** | `Request for Quotation` (+ child `Item` / `Supplier`), `Supplier Quotation` (+ child `Item`), `Item`, `Purchase Order` (PO‑count metric) | `frappe.client.submit`; **Anthropic Claude** (`claude-sonnet-4-5-20250929`) for `AIRecommendation` |
+| **Sourcing (RFx) — Smart RFQ** | `Request for Quotation` (+ child `Item` / `Supplier`), `Supplier Quotation` (+ child `Item`), `Item`, `Purchase Order` (PO‑count metric) | `frappe.client.submit`; **Anthropic Claude** (`claude-haiku-4-5-20251001`) for `AIRecommendation` |
 | **Budget** | `Budget`, `Budget Account`, `Cost Center`, `Account`, `Fiscal Year` | `erpnext.accounts.utils.get_balance_on` |
 | **Contracts** | `Contract`, `Purchase Order` (linked POs by supplier within window) | — |
 | **Inventory** | `Item`, `Item Group`, `Bin`, `Stock Ledger Entry` | — |
@@ -275,11 +275,11 @@ The Sourcing module ships a **3-page Smart RFQ** flow:
 
 ### AI Recommendation panel
 
-The "Get AI Recommendation" button calls Anthropic Claude **directly from the browser**:
+The "Get AI Recommendation" button calls Anthropic Claude via the BidSphere backend proxy endpoint:
 
 ```
-POST https://api.anthropic.com/v1/messages
-model: claude-sonnet-4-5-20250929
+POST /api/ai/claude → https://api.anthropic.com/v1/messages
+model: claude-haiku-4-5-20251001
 system: "You are a procurement specialist AI. Analyze supplier quotations …"
 ```
 

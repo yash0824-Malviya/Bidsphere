@@ -47,7 +47,7 @@ export function AttachmentsCell({
     <EngineeringAttachmentsView
       attachments={list}
       compact
-      emptyLabel="No attachments available"
+      emptyLabel="No attachments"
     />
   );
 }

@@ -1,0 +1,69 @@
+{
+  "created_at": "2026-09-23T11:01:06.988706+00:00",
+  "app": "bidsphere_workflows",
+  "version": "0.1.0",
+  "release_kind": "source",
+  "live_deployment_performed": false,
+  "file_count": 14,
+  "files": [
+    {
+      "path": "bidsphere_workflows/bidsphere_workflows/__init__.py",
+      "sha256": "da7b2c1ff4745a275386558f84ff031f9a187825ffa35fc08d077757af41ac7f"
+    },
+    {
+      "path": "bidsphere_workflows/bidsphere_workflows/hooks.py",
+      "sha256": "72123b6387cff92b6f5c997d5e315eb5da0442522f8e93f1183b5747df43e92b"
+    },
+    {
+      "path": "bidsphere_workflows/bidsphere_workflows/modules.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "bidsphere_workflows/bidsphere_workflows/patches.txt",
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "bidsphere_workflows/bidsphere_workflows/rfq_clm.py",
+      "sha256": "2898750b4bea0ac2904174237ad3b4e0598a5f7a02d79c067f5be711ab0a2c26"
+    },
+    {
+      "path": "bidsphere_workflows/pyproject.toml",
+      "sha256": "cc8e2a554be96f133f3a03ba685c9b343a63db480064d5f9a4a6114e9631d0d5"
+    },
+    {
+      "path": "bidsphere_workflows/README.md",
+      "sha256": "00cdd135ca19d4583fa7681fab05c90db5c31e23ed6a3de551032c75ac45a2a7"
+    },
+    {
+      "path": "bidsphere_workflows/register_on_bench.py",
+      "sha256": "951245462a85fc1afd704f3cdfa9f62717b4971f51e7368b2ffebe76f2584e71"
+    },
+    {
+      "path": "bidsphere_workflows/tests/contract-hashes.json",
+      "sha256": "f19ba995614b271f1f12076e06168500fd3c3145e6e4741e1a7174b4059561f1"
+    },
+    {
+      "path": "bidsphere_workflows/tests/contract-hashes.test.ts",
+      "sha256": "565ae7c58c7594d64fc07ac162ea9f03e469a2555dcfac499ad1288cb9dcf88d"
+    },
+    {
+      "path": "bidsphere_workflows/tests/schema.test.mjs",
+      "sha256": "a83db5463975df041380897ead7155b2b9ebce6bb08cf5a72c961389cdd925ff"
+    },
+    {
+      "path": "bidsphere_workflows/tests/test_rfq_clm.py",
+      "sha256": "857d0e4a9d1978c6544055aa61e647069adaa9e2a51960c1c0a14869caf14b36"
+    },
+    {
+      "path": "bidsphere_workflows/tests/vitest.config.ts",
+      "sha256": "07de2f7ac69797447d46947e4acee3a931d87944854b5fb871652d514ed2675e"
+    },
+    {
+      "path": "bidsphere_workflows/vitest.config.mjs",
+      "sha256": "af8b8d58484ba43e51d265c81677a1a9b86c2d53bddff12abcfc6ac54af4cb96"
+    }
+  ],
+  "package": "C:\\Users\\VICTUS\\Desktop\\Netlink @7\\Bidsphere\\scratch\\bidsphere_workflows-rfq95-2026-09-23.zip",
+  "sha256": "55258964e5a8b44dc06f1d524c01bedee2e8ce0f5c6b35e5230224be95a0b6b8",
+  "verified": true
+}

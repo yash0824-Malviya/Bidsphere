@@ -5,6 +5,8 @@ import {
   formatECRNumber,
   isEcrOwnedBy,
   normalizeECRRoleAlias,
+  isExtendedECRWorkflow,
+  getECRStageConfig,
 } from "./ecrRoles";
 import type { EngineeringChangeRequest } from "../types/erpnext";
 
@@ -36,12 +38,22 @@ const REVIEW_STAGE_BY_ROLE: Partial<Record<ECRRole, CanonicalECRStage>> = {
   engineering: "Engineering Review",
   procurement_team: "Procurement Review",
   procurement: "RFQ Pending",
+  finance: "Finance Review",
+  quality: "Quality Review",
+  program_manager: "Final ECR Approval",
 };
 
 const APPROVAL_ROLE_BY_REVIEW_STAGE: Partial<Record<CanonicalECRStage, string>> = {
   "Engineering Review": "Engineering Manager",
   "Procurement Review": "Procurement Team",
   "RFQ Pending": "Procurement Manager",
+  "Finance Review": "Finance Manager",
+  "Procurement BC Review": "Procurement Manager",
+  "Quality Review": "Quality Manager",
+  "Business Case Approved": "Program Manager",
+  "Final ECR Approval": "Program Manager",
+  "ECR Approved": "Procurement Manager",
+  "Procurement Decision": "Procurement Manager",
 };
 
 function hasSingleRequiredTask(
@@ -62,12 +74,14 @@ function hasSingleRequiredTask(
 const REVIEW_STAGES = new Set<CanonicalECRStage>([
   "Engineering Review",
   "Procurement Review",
+  "Finance Review", "Procurement BC Review", "Quality Review", "Final ECR Approval",
 ]);
 
 const PROCUREMENT_STAGES = new Set<CanonicalECRStage>([
   "Procurement Review",
   "RFQ Pending",
   "RFQ",
+  "Procurement BC Review", "Quality Review", "Business Case Approved", "Final ECR Approval", "ECR Approved", "Procurement Decision", "Closed",
 ]);
 
 const PROCUREMENT_REACHED_STAGES = new Set<CanonicalECRStage>([
@@ -84,10 +98,10 @@ function normalizedFilter(value?: string | null): string {
  */
 export function getECRCurrentStage(
   status?: EngineeringChangeRequest["select_pxfp"] | string | null,
-  ecr?: Pick<EngineeringChangeRequest, "rfq"> | null,
+  ecr?: Partial<EngineeringChangeRequest> | null,
 ): CanonicalECRStage {
   if (String(ecr?.rfq ?? "").trim()) return "RFQ";
-  return canonicalECRStage(status);
+  return canonicalECRStage(status, ecr);
 }
 
 export function getRolePendingApprovalStage(
@@ -102,6 +116,13 @@ export function isPendingApprovalForRole(
   ecr: EngineeringChangeRequest,
 ): boolean {
   const currentStage = getECRCurrentStage(ecr.select_pxfp, ecr);
+  if (isExtendedECRWorkflow(ecr)) {
+    const config = getECRStageConfig(currentStage, ecr);
+    const approvalRole = APPROVAL_ROLE_BY_REVIEW_STAGE[currentStage];
+    return Boolean(config && config.responsibleRole === role && approvalRole &&
+      hasSingleRequiredTask(ecr, approvalRole) &&
+      (currentStage !== "Procurement Decision" || ecr.rfq_required === "Yes"));
+  }
   const expectedStage = getRolePendingApprovalStage(role);
   if (!expectedStage || currentStage !== expectedStage) {
     return false;
@@ -136,22 +157,28 @@ export function getECRProcurementQueueSummary(
     getECRCurrentStage(ecr.select_pxfp, ecr);
 
   return {
-    approved: ecrs.filter((ecr) => stageOf(ecr) === "Procurement Review").length,
+    approved: ecrs.filter((ecr) => ["Procurement Review", "Procurement BC Review", "ECR Approved"].includes(stageOf(ecr))).length,
     requisitionReady: 0,
     rfqReady: ecrs.filter((ecr) =>
-      stageOf(ecr) === "RFQ Pending" && !ecr.rfq,
+      (stageOf(ecr) === "RFQ Pending" || (stageOf(ecr) === "Procurement Decision" && ecr.rfq_required === "Yes")) && !ecr.rfq,
     ).length,
     supplierResponses: 0,
     evaluations: 0,
     selections: 0,
     pendingSelectionApproval: 0,
-    completed: ecrs.filter((ecr) => stageOf(ecr) === "RFQ").length,
+    completed: ecrs.filter((ecr) => stageOf(ecr) === "RFQ" || (isExtendedECRWorkflow(ecr) && stageOf(ecr) === "Closed")).length,
   };
 }
 
 export function getECRAssignedTo(ecr: EngineeringChangeRequest): string {
   const stage = getECRCurrentStage(ecr.select_pxfp, ecr);
   const owner = ecr.ecr_owner || ecr.owner || "Engineer";
+  if (isExtendedECRWorkflow(ecr)) {
+    if (["Draft", "Technical Approved", "Business Case Preparation"].includes(stage)) return owner;
+    const approvalRole = APPROVAL_ROLE_BY_REVIEW_STAGE[stage];
+    if (approvalRole) return hasSingleRequiredTask(ecr, approvalRole) ? approvalRole : "Unassigned";
+    if (stage === "Closed") return "Procurement Manager";
+  }
 
   switch (stage) {
     case "Draft":
@@ -188,7 +215,7 @@ export function isECRActionableForRole(
   }
   if (role === "engineer") {
     return (
-      stage === "Draft" &&
+      (stage === "Draft" || (isExtendedECRWorkflow(ecr) && ["Technical Approved", "Business Case Preparation"].includes(stage))) &&
       isEcrOwnedBy(ecr, user)
     );
   }
@@ -200,10 +227,16 @@ export function getECRListActionLabel(
   role: AppRole | string | null | undefined,
   ecr: EngineeringChangeRequest,
   user?: ECRQueueUser | null,
-): "Edit" | "Review" | "Create RFQ" | "View" {
+): "Edit" | "Prepare Business Case" | "Review" | "Start Final Review" | "Procurement Decision" | "Create RFQ" | "View" {
   if (!isECRActionableForRole(role, ecr, user)) return "View";
 
-  const stage = getECRCurrentStage(ecr.select_pxfp);
+  const stage = getECRCurrentStage(ecr.select_pxfp, ecr);
+  if (isExtendedECRWorkflow(ecr)) {
+    if (role === "engineer" && stage !== "Draft") return "Prepare Business Case";
+    if (stage === "Business Case Approved") return "Start Final Review";
+    if (stage === "ECR Approved") return "Procurement Decision";
+    if (stage === "Procurement Decision") return "Create RFQ";
+  }
   if (role === "engineer") return "Edit";
   if (REVIEW_STAGES.has(stage)) return "Review";
   if (role === "procurement" && stage === "RFQ Pending") {
@@ -218,6 +251,11 @@ export function getECRListActionRoute(
   user?: ECRQueueUser | null,
 ): string {
   const encodedName = encodeURIComponent(formatECRNumber(ecr));
+  const stage = getECRCurrentStage(ecr.select_pxfp, ecr);
+  if (isExtendedECRWorkflow(ecr) &&
+      ["Technical Approved", "Business Case Preparation", "Finance Review", "Procurement BC Review", "Quality Review"].includes(stage)) {
+    return `/ecr/${encodedName}/business-case`;
+  }
   return getECRListActionLabel(role, ecr, user) === "Edit"
     ? `/ecr/${encodedName}/edit`
     : `/ecr/${encodedName}`;
@@ -227,6 +265,7 @@ export function getProcurementStageLabel(ecr: EngineeringChangeRequest): string 
   if (!hasECRReachedProcurement(ecr)) return "Not Started";
   if (ecr.rfq) return "RFQ Created";
   const stage = getECRCurrentStage(ecr.select_pxfp, ecr);
+
   if (stage === "Procurement Review") return "Procurement Review";
   if (stage === "RFQ Pending") return "RFQ Pending";
   return stage;
@@ -241,6 +280,24 @@ export function matchesECRQueueFilter(
   const value = normalizedFilter(filter);
   const stage = getECRCurrentStage(ecr.select_pxfp, ecr);
 
+  if (isExtendedECRWorkflow(ecr)) {
+    switch (value) {
+      case "finance": case "financial-review": case "finance-review": return role === "finance" && isPendingApprovalForRole(role, ecr);
+      case "quality": case "quality-review": case "quality-actions": return role === "quality" && isPendingApprovalForRole(role, ecr);
+      case "quality-impact": return Number(ecr.quality_impact) === 1;
+      case "program": case "program-review": case "final-approval": return role === "program_manager" && isPendingApprovalForRole(role, ecr);
+      case "business-case": return Boolean(ecr.ecr_business_case) || ["Technical Approved", "Business Case Preparation", "Business Case Submitted", "Finance Review", "Procurement BC Review", "Quality Review", "Business Case Approved"].includes(stage);
+      case "business-case-preparation": return role === "engineer" && isEcrOwnedBy(ecr, user) && ["Technical Approved", "Business Case Preparation"].includes(stage);
+      case "business-case-approved": return stage === "Business Case Approved";
+      case "procurement": case "procurement-review": case "procurement-bc-review": return role === "procurement" && stage === "Procurement BC Review" && isPendingApprovalForRole(role, ecr);
+      case "procurement-decision": return role === "procurement" && stage === "ECR Approved" && isPendingApprovalForRole(role, ecr);
+      case "rfq-pending": case "rfq-required": case "create-rfq": return role === "procurement" && stage === "Procurement Decision" && ecr.rfq_required === "Yes" && isPendingApprovalForRole(role, ecr);
+      case "approved": return ["ECR Approved", "Procurement Decision", "RFQ", "Closed"].includes(stage);
+      case "closed": case "completed": return stage === "Closed" || stage === "RFQ";
+      case "rejected": return stage === "Rejected";
+      case "sent-back": case "needs-revision": return ["Draft", "Technical Approved"].includes(stage) && Boolean(ecr.approval_requirements?.some((row) => row.status === "Sent Back")) && (role !== "engineer" || isEcrOwnedBy(ecr, user));
+    }
+  }
   switch (value) {
     case "":
     case "all":
@@ -322,7 +379,7 @@ export function getECRQueueSummary(
     approved: ecrs.filter((ecr) =>
       matchesECRQueueFilter("approved", role, ecr, user),
     ).length,
-    closed: ecrs.filter((ecr) => getECRCurrentStage(ecr.select_pxfp, ecr) === "RFQ").length,
+    closed: ecrs.filter((ecr) => matchesECRQueueFilter("closed", role, ecr, user)).length,
   };
 }
 

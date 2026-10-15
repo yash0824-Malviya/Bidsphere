@@ -1,0 +1,26 @@
+[
+  {
+    "origin": "http://127.0.0.1:5175",
+    "module": "/src/main.tsx",
+    "status": 200,
+    "react": "/node_modules/.vite/bidsphere/deps/react.js?v=4a1464d0"
+  },
+  {
+    "origin": "http://127.0.0.1:5175",
+    "module": "/src/components/contracts/ContractCreationWizard.tsx",
+    "status": 200,
+    "react": "/node_modules/.vite/bidsphere/deps/react.js?v=4a1464d0"
+  },
+  {
+    "origin": "http://localhost:5175",
+    "module": "/src/main.tsx",
+    "status": 200,
+    "react": "/node_modules/.vite/bidsphere/deps/react.js?v=4a1464d0"
+  },
+  {
+    "origin": "http://localhost:5175",
+    "module": "/src/components/contracts/ContractCreationWizard.tsx",
+    "status": 200,
+    "react": "/node_modules/.vite/bidsphere/deps/react.js?v=4a1464d0"
+  }
+]

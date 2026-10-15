@@ -44,6 +44,7 @@ function payload(overrides: Record<string, unknown> = {}): Record<string, unknow
 
 function dependencies(
   insertEcr = vi.fn(async () => ({
+    ecr_workflow_version: "extended_v1",
     name: "ECR-2026-00042",
     ecr_title: "Door latch redesign",
     ecr_owner: "engineer@netlink.com",
@@ -75,8 +76,49 @@ function dependencies(
 }
 
 describe("trusted ECR Draft creation", () => {
+  it("creates supplier-involved ECRs without a procurement source and preserves every supplier requirement", async () => {
+    const deps = dependencies();
+    const supplierFields = {
+      supplier_response_required: "Yes",
+      suggested_supplier: "SUP-001",
+      supplier_impact: 1,
+      supplier_response_type: "Quotation",
+      required_quantity: 10,
+      quantity_uom: "Nos",
+      engineering_notes: "Technical Requirements: Drawing\nCommercial Requirements: Quote\nDelivery Requirements: Four weeks\nQuality Requirements: Certificate\nSupplier Impact: Tooling",
+      supplier_response_requirements: [{ response_type: "Quotation", requirement: "Quote ten parts", mandatory: 1 }],
+    };
+    const request = payload({
+      ...supplierFields,
+      affected_parts: [{ partitem: "LAT-4401", quantity: 10, uom: "Nos", source_reference_type: "RFQ" }],
+    });
+    await expect(createEcrDraftCore({ payload: request, principal: principal() }, deps)).resolves.toMatchObject({ select_pxfp: "Draft" });
+    expect(deps.loadProcurementDocument).not.toHaveBeenCalled();
+    expect(deps.insertEcr).toHaveBeenCalledWith(expect.objectContaining({
+      ...supplierFields,
+      procurement_reference_type: "None",
+      affected_parts: [{ partitem: "LAT-4401", quantity: 10, uom: "Nos", source_reference_type: "" }],
+    }));
+    expect(request.affected_parts).toEqual([{ partitem: "LAT-4401", quantity: 10, uom: "Nos", source_reference_type: "RFQ" }]);
+  });
+
+  it("fails closed when ERP drops the server-owned extended workflow version", async () => {
+    const deps = dependencies();
+    deps.insertEcr = vi.fn(async () => ({ name: "ECR-MISSING-SCHEMA" }));
+    await expect(createEcrDraftCore({ payload: payload(), principal: principal() }, deps)).rejects.toMatchObject({ status: 409 });
+    expect(deps.insertEcr).toHaveBeenCalledWith(expect.objectContaining({ ecr_workflow_version: "extended_v1" }));
+  });
+
+  it("fails closed when ERP drops the server-owned extended workflow version", async () => {
+    const deps = dependencies();
+    deps.insertEcr = vi.fn(async () => ({ name: "ECR-MISSING-SCHEMA" }));
+    await expect(createEcrDraftCore({ payload: payload(), principal: principal() }, deps)).rejects.toMatchObject({ status: 409 });
+    expect(deps.insertEcr).toHaveBeenCalledWith(expect.objectContaining({ ecr_workflow_version: "extended_v1" }));
+  });
+
   it("forces the signed-in owner and creates only an unsubmitted Draft", async () => {
     const insertEcr = vi.fn(async () => ({
+      ecr_workflow_version: "extended_v1",
       name: "ECR-2026-00042",
       ecr_title: "Door latch redesign",
       ecr_owner: "engineer.one@netlink.com",
@@ -118,7 +160,7 @@ describe("trusted ECR Draft creation", () => {
   });
 
   it("uses canonical User.name rather than email for Link-field ownership", async () => {
-    const insertEcr = vi.fn(async () => ({ name: "ECR-2026-100042" }));
+    const insertEcr = vi.fn(async () => ({ name: "ECR-2026-100042", ecr_workflow_version: "extended_v1" }));
     const deps = dependencies(insertEcr);
     const canonicalPrincipal = principal();
     canonicalPrincipal.sub = "engineer";
@@ -134,7 +176,7 @@ describe("trusted ECR Draft creation", () => {
   });
 
   it("canonicalizes unique master display-name matches before procurement validation and insert", async () => {
-    const insertEcr = vi.fn(async () => ({ name: "ECR-2026-100043" }));
+    const insertEcr = vi.fn(async () => ({ name: "ECR-2026-100043", ecr_workflow_version: "extended_v1" }));
     const deps = dependencies(insertEcr);
     deps.loadMasterReferenceCandidates = vi.fn(async (kind) => {
       switch (kind) {
@@ -273,7 +315,7 @@ describe("trusted ECR Draft creation", () => {
   it("retries an ERP autoname collision without generating a number in application code", async () => {
     const insertEcr = vi.fn()
       .mockRejectedValueOnce(new EcrAutonameCollisionError())
-      .mockResolvedValueOnce({ name: "ECR-2026-00043" });
+      .mockResolvedValueOnce({ name: "ECR-2026-00043", ecr_workflow_version: "extended_v1" });
     const deps = dependencies(insertEcr);
 
     await expect(createEcrDraftCore({
@@ -404,7 +446,7 @@ describe("trusted ECR Draft creation", () => {
   });
 
   it("validates the Supplier -> RFQ -> item relationship before insert", async () => {
-    const insertEcr = vi.fn(async () => ({ name: "ECR-2026-00044" }));
+    const insertEcr = vi.fn(async () => ({ name: "ECR-2026-00044", ecr_workflow_version: "extended_v1" }));
     const deps = dependencies(insertEcr);
     deps.loadProcurementDocument = vi.fn(async () => ({
       name: "PUR-RFQ-2026-00015",

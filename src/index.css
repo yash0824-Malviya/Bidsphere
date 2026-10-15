@@ -37,58 +37,58 @@
   color-scheme: light;
 
   /* Primary brand tokens — single source of truth */
-  --color-primary: #1f3a6d;
-  --color-primary-hover: #17315d;
-  --color-primary-active: #12284d;
-  --color-primary-light: #eef3fa;
-  --color-primary-border: #d6e2f5;
-  --color-primary-text: #1f3a6d;
+  --color-primary: #1554D1;
+  --color-primary-hover: #1042B0;
+  --color-primary-active: #0D338C;
+  --color-primary-light: #EEF4FF;
+  --color-primary-border: #C7D9FE;
+  --color-primary-text: #1554D1;
 
   /* Semantic surface / text / border */
-  --color-page-bg: #f7f9fc;
-  --color-card: #ffffff;
-  --color-border: #e5eaf2;
-  --color-border-soft: #e5eaf2;
-  --color-text: #1e293b;
-  --color-text-secondary: #64748b;
-  --color-text-faint: #94a3b8;
+  --color-page-bg: #F5F7FA;
+  --color-card: #FFFFFF;
+  --color-border: #E2E8F0;
+  --color-border-soft: #E2E8F0;
+  --color-text: #12213F;
+  --color-text-secondary: #64748B;
+  --color-text-faint: #94A3B8;
 
   /* Typography scale */
-  --text-page-title: 32px;
-  --text-section-title: 24px;
-  --text-card-title: 16px;
-  --text-table-header: 13px;
+  --text-page-title: 28px;
+  --text-section-title: 18px;
+  --text-card-title: 15px;
+  --text-table-header: 11px;
   --text-body: 14px;
   --text-secondary: 13px;
   --text-caption: 12px;
-  --text-kpi: 34px; /* desktop */
-  --text-kpi-laptop: 32px;
-  --text-kpi-tablet: 28px;
-  --text-kpi-mobile: 25px;
-  --text-button: 14px;
+  --text-kpi: 30px; /* desktop */
+  --text-kpi-laptop: 28px;
+  --text-kpi-tablet: 26px;
+  --text-kpi-mobile: 24px;
+  --text-button: 13px;
 
   /* Control / component metrics */
-  --btn-height: 44px;
-  --btn-height-lg: 48px;
-  --btn-radius: 12px;
-  --btn-padding-x: 20px;
-  --control-height: 48px;
-  --search-height: 48px;
-  --search-radius: 14px;
-  --filter-radius: 12px;
-  --table-header-height: 52px;
-  --table-row-height: 56px;
-  --kpi-height: 130px;
-  --kpi-radius: 16px;
-  --kpi-padding: 20px;
-  --kpi-icon: 44px;
+  --btn-height: 38px;
+  --btn-height-lg: 42px;
+  --btn-radius: 8px;
+  --btn-padding-x: 16px;
+  --control-height: 38px;
+  --search-height: 40px;
+  --search-radius: 8px;
+  --filter-radius: 8px;
+  --table-header-height: 44px;
+  --table-row-height: 48px;
+  --kpi-height: 110px;
+  --kpi-radius: 10px;
+  --kpi-padding: 16px;
+  --kpi-icon: 38px;
   --kpi-gap: 8px;
 
   /* Icon sizes */
-  --icon-nav: 20px;
-  --icon-card: 24px;
-  --icon-button: 18px;
-  --icon-table: 16px;
+  --icon-nav: 18px;
+  --icon-card: 20px;
+  --icon-button: 16px;
+  --icon-table: 15px;
 
   /* Main-content design system aliases */
   --ds-paper: var(--color-page-bg);
@@ -100,20 +100,19 @@
   --ds-text-faint: var(--color-text-faint);
   --ds-accent: var(--color-primary);
   --ds-accent-soft: var(--color-primary-light);
-  --ds-teal: #0e7c6e;
-  --ds-teal-soft: #e7f5f1;
-  --ds-success: #12805c;
-  --ds-success-soft: #e6f5ee;
-  --ds-warn: #a66418;
-  --ds-warn-soft: #fbf1e1;
-  --ds-danger: #b3392e;
-  --ds-danger-soft: #fbeae8;
-  --ds-gray: #475569;
-  --ds-gray-soft: #f1f5f9;
+  --ds-teal: #059669;
+  --ds-teal-soft: #ECFDF5;
+  --ds-success: #059669;
+  --ds-success-soft: #ECFDF5;
+  --ds-warn: #D97706;
+  --ds-warn-soft: #FFFBEB;
+  --ds-danger: #DC2626;
+  --ds-danger-soft: #FEF2F2;
+  --ds-gray: #64748B;
+  --ds-gray-soft: #F1F5F9;
   --ds-radius-card: var(--kpi-radius);
   --ds-radius-control: var(--filter-radius);
-  --ds-shadow: 0 1px 2px rgba(16, 24, 40, 0.04),
-    0 1px 3px rgba(16, 24, 40, 0.04);
+  --ds-shadow: 0 1px 3px rgba(15, 27, 54, 0.05);
 
   /* Back-compat aliases used by RFQ detail */
   --rfq-paper: var(--ds-paper);
@@ -145,57 +144,57 @@
   --radius: 0.5rem;
 
   /* Enterprise SaaS design system */
-  --color-sidebar: #0f172a;
-  --color-sidebar-hover: #1e293b;
-  --color-sidebar-text: #94a3b8;
+  --color-sidebar: #0B1630;
+  --color-sidebar-hover: #152449;
+  --color-sidebar-text: #94A3B8;
   --shadow-card: var(--ds-shadow);
-  --shadow-card-hover: 0 2px 6px rgba(15, 23, 42, 0.06);
-  --radius-card: 12px;
-  --radius-control: 12px;
+  --shadow-card-hover: 0 4px 12px rgba(15, 27, 54, 0.08);
+  --radius-card: 10px;
+  --radius-control: 8px;
   --space-1: 8px;
   --space-2: 16px;
   --space-3: 24px;
   --space-4: 32px;
   --space-5: 48px;
-  --page-padding: 32px;
-  --page-padding-top: 24px;
-  --page-padding-bottom: 32px;
-  --page-max-width: 1920px;
-  --card-padding: 24px;
-  --card-radius: 12px;
-  --gap: 24px;
-  --card-gap: 20px;
-  --header-height: 64px;
-  --sidebar-width: 272px;
+  --page-padding: 24px;
+  --page-padding-top: 20px;
+  --page-padding-bottom: 28px;
+  --page-max-width: 1536px;
+  --card-padding: 20px;
+  --card-radius: 10px;
+  --gap: 20px;
+  --card-gap: 16px;
+  --header-height: 52px;
+  --sidebar-width: 240px;
   --sidebar-width-collapsed: 64px;
-  --sidebar-width-expanded: 272px;
-  --sidebar-width-laptop: 272px;
-  --sidebar-width-desktop: 272px;
-  --card-min-width: 260px;
+  --sidebar-width-expanded: 240px;
+  --sidebar-width-laptop: 240px;
+  --sidebar-width-desktop: 240px;
+  --card-min-width: 240px;
   --form-max-width: 960px;
   --chart-height: 200px;
-  --color-badge-completed-bg: #dcfce7;
-  --color-badge-completed-fg: #15803d;
-  --color-badge-submitted-bg: #dcfce7;
-  --color-badge-submitted-fg: #15803d;
-  --color-badge-pending-bg: #fef3c7;
-  --color-badge-pending-fg: #b45309;
-  --color-badge-warning-bg: #fef3c7;
-  --color-badge-warning-fg: #b45309;
-  --color-badge-rejected-bg: #fee2e2;
-  --color-badge-rejected-fg: #dc2626;
-  --color-badge-draft-bg: #f3f4f6;
-  --color-badge-draft-fg: #6b7280;
-  --color-badge-cancelled-bg: #f3f4f6;
-  --color-badge-cancelled-fg: #6b7280;
-  --color-badge-closed-bg: #e0e7ff;
-  --color-badge-closed-fg: #4338ca;
-  --color-badge-review-bg: #dbeafe;
-  --color-badge-review-fg: #1d4ed8;
-  --color-badge-awarded-bg: #dcfce7;
-  --color-badge-awarded-fg: #166534;
-  --color-badge-info-bg: #dbeafe;
-  --color-badge-info-fg: #1d4ed8;
+  --color-badge-completed-bg: #ECFDF5;
+  --color-badge-completed-fg: #059669;
+  --color-badge-submitted-bg: #ECFDF5;
+  --color-badge-submitted-fg: #059669;
+  --color-badge-pending-bg: #FFFBEB;
+  --color-badge-pending-fg: #D97706;
+  --color-badge-warning-bg: #FFFBEB;
+  --color-badge-warning-fg: #D97706;
+  --color-badge-rejected-bg: #FEF2F2;
+  --color-badge-rejected-fg: #DC2626;
+  --color-badge-draft-bg: #F1F5F9;
+  --color-badge-draft-fg: #64748B;
+  --color-badge-cancelled-bg: #F1F5F9;
+  --color-badge-cancelled-fg: #64748B;
+  --color-badge-closed-bg: #EEF2FF;
+  --color-badge-closed-fg: #4F46E5;
+  --color-badge-review-bg: #EFF6FF;
+  --color-badge-review-fg: #2563EB;
+  --color-badge-awarded-bg: #ECFDF5;
+  --color-badge-awarded-fg: #059669;
+  --color-badge-info-bg: #EFF6FF;
+  --color-badge-info-fg: #2563EB;
 }
 
 html,
@@ -419,8 +418,7 @@ input[type="number"] {
 
   .filter-card,
   .filter-toolbar {
-    @apply sticky z-20 mb-5 flex min-w-0 flex-col gap-2.5 border bg-white sm:flex-row sm:flex-wrap sm:items-end;
-    top: var(--header-height);
+    @apply relative mb-5 flex min-w-0 flex-col gap-2.5 border bg-white sm:flex-row sm:flex-wrap sm:items-end;
     border-radius: var(--card-radius);
     border-color: var(--color-border-soft);
     box-shadow: var(--shadow-card);
@@ -647,12 +645,13 @@ input[type="number"] {
     justify-content: center;
     gap: 6px;
     border-radius: 9999px;
-    padding: 0 12px;
+    padding: 0 10px;
     font-size: 12px;
     font-weight: 600;
     line-height: 1;
     white-space: nowrap;
     vertical-align: middle;
+    max-width: 100%;
   }
 
   .status-badge-icon {
@@ -663,6 +662,9 @@ input[type="number"] {
 
   .status-badge-label {
     line-height: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .badge-completed,
@@ -2672,11 +2674,12 @@ input[type="number"] {
 }
 
 .rfq-list-ds .rfq-filter-panel {
+  position: relative;
   border: 1px solid var(--color-border);
   border-radius: var(--card-radius);
-  background: var(--color-card);
+  background: #ffffff;
   box-shadow: var(--shadow-card);
-  padding: var(--card-padding);
+  padding: 16px;
 }
 
 .rfq-list-ds .rfq-filter-panel .rfq-filter-reset {
@@ -2703,9 +2706,8 @@ input[type="number"] {
   }
 }
 
-/* Tighten filter → table spacing (collapse duplicate results header space) */
 .rfq-list-ds .rfq-table-block {
-  margin-top: -8px;
+  margin-top: 0;
 }
 
 .rfq-list-ds .rfq-table-shell {
@@ -4225,6 +4227,77 @@ a.spd-list-item:hover {
   --page-max-width: 100%;
   padding-top: 24px;
   padding-bottom: 0;
+}
+
+/* ── Department User Dashboard (enterprise procurement center) ── */
+.page-container:has(.department-dashboard) {
+  --page-max-width: 100%;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+}
+
+/* ── Warehouse Dashboard (enterprise warehouse command center) ── */
+.page-container:has(.warehouse-dashboard),
+.page-container:has(.wh-dash) {
+  --page-max-width: 100%;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+}
+
+/* ── Finance Review Detail Page (enterprise RFQ financial review) ── */
+.page-container:has(.finance-review-detail-page) {
+  --page-max-width: 1440px;
+  max-width: 1440px;
+  width: min(1440px, calc(100% - 48px));
+  margin-inline: auto;
+  padding-top: 20px;
+  padding-bottom: 32px;
+}
+
+@media (min-width: 1024px) {
+  .page-container:has(.finance-review-detail-page) {
+    width: min(1440px, calc(100% - 64px));
+    padding-top: 24px;
+  }
+}
+
+@media (max-width: 640px) {
+  .page-container:has(.finance-review-detail-page) {
+    width: calc(100% - 32px);
+    padding-top: 16px;
+    padding-bottom: 20px;
+  }
+}
+
+/* ── Business Case Detail Page (consistent with Legal / Finance Review) ── */
+.page-container:has(.business-case-detail-page) {
+  --page-max-width: 1440px;
+  max-width: 1440px;
+  width: min(1440px, calc(100% - 48px));
+  margin-inline: auto;
+  padding-top: 20px;
+  padding-bottom: 32px;
+}
+
+@media (min-width: 1024px) {
+  .page-container:has(.business-case-detail-page) {
+    width: min(1440px, calc(100% - 64px));
+    padding-top: 24px;
+  }
+}
+
+@media (max-width: 640px) {
+  .page-container:has(.business-case-detail-page) {
+    width: calc(100% - 32px);
+    padding-top: 16px;
+    padding-bottom: 20px;
+  }
 }
 
 /* ── Finance Manager Dashboard (enterprise AP command center) ── */

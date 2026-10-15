@@ -1,2 +1,2 @@
-import RoleECRDashboard from "./RoleECRDashboard";
-export default function EngineerDashboard() { return <RoleECRDashboard role="engineer" />; }
+import EngineerECRWorkspace from "./EngineerECRWorkspace";
+export default function EngineerDashboard() { return <EngineerECRWorkspace dashboard />; }

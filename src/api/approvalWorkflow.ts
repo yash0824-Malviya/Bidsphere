@@ -1,16 +1,45 @@
 /**
- * Approval workflow — single source of truth for Legal → Finance → Completed.
+ * Approval workflow — single source of truth for Legal → E-Signature → Finance → Completed.
+ *
+ * RFQ workflow: Legal document verification → E-Signature → Finance Review → Procurement / PO
  *
  * Reads go through `/api/legal-review/list` (privileged gateway) — the same
  * backend path that Legal approve writes through. Never mock data. Never a
  * separate Finance DocType.
  *
- *   Legal Review  →  Finance Review  →  Procurement / Completed
- *                 ↘  Rejected
+ * Completed e-signature automatically transitions the LDR record:
+ *   review_status   = "Approved"
+ *   workflow_state  = "Finance Review"
+ *   finance_status  = "Pending"
+ *   current_owner   = "Finance Manager"
+ *
+ * Finance Review NEVER depends on a manual Legal Final Approval action —
+ * the signature completion IS the Legal handoff to Finance.
  */
 import type { QueryClient } from "@tanstack/react-query";
 
 import { getAllLegalDocs, type LegalDocumentSet } from "./legalDocs";
+import { isLegalReviewExecuted } from "../types/legalEsign";
+
+/** UI readiness only; the backend revalidates the current private PDF bytes.
+ * An RFQ is ready for Finance only after:
+ *   1. All required documents verified (viewed + approved + hash match)
+ *   2. E-signature completed on all required documents (isLegalReviewExecuted)
+ *   3. workflow_state transitioned to "Finance Review" by signature completion
+ *   4. finance_status = "Pending" (set automatically by signature completion)
+ *
+ * Finance Review is NOT triggered by a manual Legal Final Approval click.
+ * The e-signature completion IS the trigger that hands off to Finance.
+ */
+export function isRfqReadyForFinance(doc: LegalDocumentSet | null | undefined): boolean {
+  return !!doc && doc.review_status === "Approved" && doc.workflow_state === "Finance Review" &&
+    doc.finance_status === "Pending" && isLegalReviewExecuted(doc);
+}
+
+export function isRfqReadyForPurchaseOrder(doc: LegalDocumentSet | null | undefined): boolean {
+  return !!doc && doc.review_status === "Approved" && doc.finance_status === "Approved" &&
+    doc.workflow_state === "Completed" && isLegalReviewExecuted(doc);
+}
 
 /** Mirrors `FINANCE_DASHBOARD_METRICS_KEY` — kept local to avoid circular imports. */
 const FINANCE_DASHBOARD_METRICS_KEY = "finance-dashboard-metrics";
@@ -78,29 +107,49 @@ const OWNERS: Record<ApprovalWorkflowStage, string> = {
 
 /**
  * Derive the active stage from status fields.
- * Prefers persisted `workflow_state` when it is one of the known values,
- * otherwise reconstructs from legal/finance statuses so legacy rows still
- * land in the correct queue.
+ *
+ * PRIORITY ORDER:
+ * 1. Rejected (any party) — highest priority
+ * 2. Persisted workflow_state: "Finance Review" or "Completed" — trust the
+ *    server-written state directly. The backend writes these ONLY after full
+ *    validation (e-signature completion). This avoids requiring esign_envelope
+ *    to be populated in list responses, which can be absent even when the ERP
+ *    record is correct, causing Finance queue to show 0 items.
+ * 3. Legacy reconstruction: derive from review_status + finance_status fields.
  */
 export function deriveWorkflowStage(doc: LegalDocumentSet): ApprovalWorkflowStage {
   const legal = (doc.review_status ?? "").trim();
   const finance = String(doc.finance_status ?? "").trim();
   const persisted = (doc.workflow_state ?? "").trim();
 
+  // 1. Any rejection wins immediately.
   if (legal === "Rejected" || finance === "Rejected" || persisted === "Rejected") {
     return "Rejected";
   }
-  if (finance === "Approved" || persisted === "Completed") {
-    return persisted === "Procurement" ? "Procurement" : "Completed";
-  }
-  // Legal Approved (+ finance Pending/blank) → Finance Review — even when
-  // workflow_state was never stamped (legacy / partial handoff rows).
-  if (legal === "Approved" || persisted === "Finance Review") {
+
+  // 2. Trust server-persisted workflow_state for Finance and Completed stages.
+  //    The backend only writes these states after all validations pass (full
+  //    e-signature chain, legal approval). This fixes the Finance queue going
+  //    dark when esign_envelope is missing or null in the list API response.
+  if (persisted === "Finance Review") {
     return "Finance Review";
   }
-  if (persisted === "Pending Review" || legal === "Pending" || !legal) {
-    return "Legal Review";
+  if (persisted === "Completed") {
+    return "Completed";
   }
+
+  // 3. Legacy "Procurement" edge case — Pending Review with Procurement owner.
+  if (legal === "Pending" && persisted === "Pending Review" && doc.current_owner === "Procurement") {
+    return "Procurement";
+  }
+
+  // 4. Fallback reconstruction for rows without a persisted workflow_state.
+  //    isRfqReadyForPurchaseOrder / isRfqReadyForFinance parse esign_envelope
+  //    to verify signatures — only reliable when the envelope is present.
+  if (isRfqReadyForPurchaseOrder(doc)) return "Procurement";
+  if (isRfqReadyForFinance(doc)) return "Finance Review";
+
+  // 5. Default: Legal Review stage for anything else.
   return "Legal Review";
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import {
   AlertTriangle,
@@ -27,13 +27,15 @@ import {
 } from "lucide-react";
 
 import {
-  checkQuotationStatus,
   createSupplierQuotation,
+  getSupplierQuotation,
+  getSupplierQuotationsForRfqAndSupplier,
   saveDraftSupplierQuotation,
   updateSupplierQuotation,
   updateSupplierQuotationLegalDoc,
   submitSupplierQuotation,
 } from "../../api/sourcing";
+import { getSupplierRFQStatus } from "../../utils/supplierRfqStatus";
 import {
   attachCostBreakdownToQuotation,
   rfqRequiresCostBreakdown,
@@ -57,7 +59,7 @@ import { triggerQuotationDeclined } from "../../api/notifications";
 import NoQuoteDialog, {
   type NoQuotePayload,
 } from "../../components/supplier-portal/NoQuoteDialog";
-import { uploadFileToERPNext, getFullFileUrl } from "../../api/legalDocsStorage";
+import { uploadFileToERPNext, uploadFileToERPNextDetailed, getFullFileUrl } from "../../api/legalDocsStorage";
 import { AppLoading } from "../../components/enterprise";
 import SupplierItemAttachmentsPanel from "../../components/supplier-portal/SupplierItemAttachmentsPanel";
 import SupplierRfqDocumentsSection from "../../components/supplier-portal/SupplierRfqDocumentsSection";
@@ -230,6 +232,7 @@ interface QuoteLine {
   uom: string;
   unit_price: number;
   delivery_days: number;
+  expected_delivery_date: string;
   notes: string;
   /** Present only when RFQ allows Target Price visibility to suppliers. */
   target_price?: number | null;
@@ -283,6 +286,7 @@ function parseRfqMessage(
 
 export default function SupplierRFQPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { rfqName: rawRfq = "" } = useParams<{ rfqName: string }>();
   const rfqName = decodeURIComponent(rawRfq);
 
@@ -401,15 +405,20 @@ export default function SupplierRFQPage() {
       } | null = null;
 
       if (localRaw) {
-        try { localData = JSON.parse(localRaw); } catch { /* ignore */ }
+        try {
+          localData = JSON.parse(localRaw);
+        } catch {
+          /* ignore */
+        }
       }
 
-      // 1b. Check ERPNext for an explicit "No Quote" decline response. A
-      // declined supplier gets a read-only screen instead of the quote form.
+      // 1b. Check ERPNext for an explicit "No Quote" decline response.
+      let isDeclined = false;
       try {
         const response = await getSupplierResponse(rfqName, supplierName);
-        if (!cancelled && response) {
+        if (!cancelled && response && response.response_status === "No Quote") {
           setDeclined(response);
+          isDeclined = true;
           setCheckingStatus(false);
           return;
         }
@@ -417,56 +426,178 @@ export default function SupplierRFQPage() {
         /* fall through */
       }
 
-      // 2. Check ERPNext for a submitted Supplier Quotation
+      // 2. Fetch Supplier Quotations for this RFQ and supplier from ERPNext
+      let quoteDocs: Array<{
+        name: string;
+        supplier?: string;
+        status?: string;
+        docstatus?: number;
+        valid_till?: string;
+        grand_total?: number;
+        modified?: string;
+        creation?: string;
+      }> = [];
+
       try {
-        const erpStatus = await checkQuotationStatus(rfqName, supplierName);
-        if (!cancelled && erpStatus === "Submitted") {
-          setAlreadySubmitted({
-            quoteName: rfqName,
-            items: localData?.items ?? [],
-            payment_terms: localData?.payment_terms,
-            valid_till: localData?.valid_till,
-            notes: localData?.notes,
-            grand_total: localData?.grand_total,
-            submitted_at: localData?.submitted_at,
-          });
-          setCheckingStatus(false);
-          return;
-        }
+        quoteDocs = await getSupplierQuotationsForRfqAndSupplier(
+          rfqName,
+          supplierName
+        );
       } catch {
-        // ERPNext check failed — fall through to the quote_status check
-        // below rather than trusting sessionStorage alone.
+        /* non-fatal fallback */
       }
 
-      // 3. Check the RFQ supplier row's quote_status — the ERPNext-owned
-      // authoritative signal. sessionStorage data is used ONLY to enrich the
-      // read-only summary (line items/terms) once ERPNext confirms
-      // submission — it must NEVER be the sole trigger for "submitted",
-      // otherwise a failed ERPNext create (network error, validation error,
-      // etc.) leaves a local draft behind that permanently masks the
-      // failure: the supplier sees "Quotation Submitted" forever while
-      // procurement never receives a real Supplier Quotation.
-      const supplierRow = (rfq?.suppliers ?? []).find((s) => s.supplier === supplierName);
-      if (!cancelled && supplierRow?.quote_status === "No Quote") {
+      // 3. Resolve authoritative supplier RFQ status using centralized resolver
+      const hasLocalDraft = Boolean(
+        sessionStorage.getItem(`draft_quotation_${rfqName}_${supplierName}`)
+      );
+
+      const statusRes = getSupplierRFQStatus({
+        rfq: rfq as unknown as {
+          name: string;
+          status?: string | null;
+          docstatus?: number | null;
+          valid_till?: string | null;
+          award_supplier?: string | null;
+          suppliers?: Array<{
+            supplier?: string;
+            supplier_name?: string;
+            quote_status?: string;
+          }> | null;
+        },
+        quotations: quoteDocs,
+        supplierId: supplierName,
+        declined: isDeclined,
+        hasLocalDraft,
+      });
+
+      if (cancelled) return;
+
+      // 4. If quotation is submitted, under review, or awarded: enter read-only locked view
+      if (
+        statusRes.status === "Quotation Submitted" ||
+        statusRes.status === "Under Review" ||
+        statusRes.status === "Awarded"
+      ) {
+        let fullQuoteItems: QuoteLine[] = [];
+        let fullPaymentTerms = localData?.payment_terms;
+        let fullValidTill = localData?.valid_till;
+        let fullNotes = localData?.notes;
+        let fullGrandTotal = localData?.grand_total;
+        let fullSubmittedAt = localData?.submitted_at;
+
+        if (statusRes.effectiveQuotation?.name) {
+          try {
+            const fullDoc = await getSupplierQuotation(
+              statusRes.effectiveQuotation.name
+            );
+            if (fullDoc) {
+              if (fullDoc.items && fullDoc.items.length > 0) {
+                fullQuoteItems = fullDoc.items.map((it) => ({
+                  item_code: it.item_code,
+                  item_name: it.item_name || it.item_code,
+                  description: it.description || "",
+                  qty: it.qty,
+                  uom: it.uom || "Nos",
+                  unit_price: it.rate || 0,
+                  delivery_days:
+                    (it as { lead_time_days?: number }).lead_time_days || 0,
+                  expected_delivery_date:
+                    (it as { expected_delivery_date?: string }).expected_delivery_date ||
+                    (it as { delivery_date?: string }).delivery_date ||
+                    (it as { schedule_date?: string }).schedule_date ||
+                    ((it as { lead_time_days?: number }).lead_time_days ? isoDateOffset((it as { lead_time_days?: number }).lead_time_days!) : ""),
+                  notes: "",
+                }));
+              }
+              fullPaymentTerms =
+                (typeof fullDoc.payment_terms_template === "string"
+                  ? fullDoc.payment_terms_template
+                  : undefined) ||
+                (typeof fullDoc.payment_terms === "string"
+                  ? fullDoc.payment_terms
+                  : undefined) ||
+                fullPaymentTerms;
+              fullValidTill = fullDoc.valid_till || fullValidTill;
+              fullNotes =
+                (fullDoc as unknown as { remarks?: string })?.remarks ||
+                fullNotes;
+              fullGrandTotal = fullDoc.grand_total ?? fullGrandTotal;
+              fullSubmittedAt =
+                fullDoc.modified || fullDoc.creation || fullSubmittedAt;
+            }
+          } catch {
+            /* use localData fallback */
+          }
+        }
+
+        setAlreadySubmitted({
+          quoteName: statusRes.effectiveQuotation?.name || rfqName,
+          items:
+            fullQuoteItems.length > 0
+              ? fullQuoteItems
+              : localData?.items ?? [],
+          payment_terms: fullPaymentTerms || "Net 30 days",
+          valid_till: fullValidTill,
+          notes: fullNotes,
+          grand_total: fullGrandTotal,
+          submitted_at: fullSubmittedAt,
+        });
+        setCheckingStatus(false);
+        return;
+      }
+
+      // 5. If draft quotation exists in ERPNext: populate draftQuoteName and lines
+      if (
+        statusRes.status === "Draft Quotation" &&
+        statusRes.effectiveQuotation?.name
+      ) {
+        setDraftQuoteName(statusRes.effectiveQuotation.name);
+        try {
+          const draftDoc = await getSupplierQuotation(
+            statusRes.effectiveQuotation.name
+          );
+          if (draftDoc?.items && draftDoc.items.length > 0) {
+            setLines((prev) => {
+              if (prev.length === 0 || prev.every((l) => !(l.unit_price > 0))) {
+                return draftDoc.items!.map((it) => ({
+                  item_code: it.item_code,
+                  item_name: it.item_name || it.item_code,
+                  description: it.description || "",
+                  qty: it.qty,
+                  uom: it.uom || "Nos",
+                  unit_price: it.rate || 0,
+                  delivery_days:
+                    (it as { lead_time_days?: number }).lead_time_days || 0,
+                  expected_delivery_date:
+                    (it as { expected_delivery_date?: string }).expected_delivery_date ||
+                    (it as { delivery_date?: string }).delivery_date ||
+                    (it as { schedule_date?: string }).schedule_date ||
+                    ((it as { lead_time_days?: number }).lead_time_days ? isoDateOffset((it as { lead_time_days?: number }).lead_time_days!) : ""),
+                  notes: "",
+                }));
+              }
+              return prev;
+            });
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+
+      // 6. Check RFQ supplier row quote_status for No Quote
+      const supplierRow = (rfq?.suppliers ?? []).find(
+        (s) =>
+          s.supplier === supplierName ||
+          s.supplier_name === supplierName
+      );
+      if (supplierRow?.quote_status === "No Quote") {
         setDeclined({
           name: rfqName,
           rfq: rfqName,
           supplier: supplierName,
           response_status: "No Quote",
           decline_reason: "",
-        });
-        setCheckingStatus(false);
-        return;
-      }
-      if (!cancelled && supplierRow?.quote_status === "Received") {
-        setAlreadySubmitted({
-          quoteName: rfqName,
-          items: localData?.items ?? [],
-          payment_terms: localData?.payment_terms,
-          valid_till: localData?.valid_till,
-          notes: localData?.notes,
-          grand_total: localData?.grand_total,
-          submitted_at: localData?.submitted_at,
         });
       }
 
@@ -489,6 +620,8 @@ export default function SupplierRFQPage() {
   const [notes, setNotes] = useState("");
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const isSubmittingRef = useRef(false);
+  const autoSaveTimerRef = useRef<number | null>(null);
   const [costBreakdownReady, setCostBreakdownReady] = useState(false);
   const costBreakdownRef = useRef<CostBreakdownPanelHandle>(null);
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
@@ -505,15 +638,24 @@ export default function SupplierRFQPage() {
 
   /* ── Legal document uploads ── */
   const [legalDraft, setLegalDraft] = useState({
-    terms_file_url: "", terms_file_name: "", terms_note: "",
-    warranty_file_url: "", warranty_file_name: "", warranty_note: "",
-    insurance_file_url: "", insurance_file_name: "", insurance_note: "",
+    terms_file_url: "", terms_file_name: "", terms_file_id: "", terms_note: "",
+    warranty_file_url: "", warranty_file_name: "", warranty_file_id: "", warranty_note: "",
+    insurance_file_url: "", insurance_file_name: "", insurance_file_id: "", insurance_note: "",
   });
   const [draftQuoteName, setDraftQuoteName] = useState<string | null>(null);
   const [uploading, setUploading] = useState<string | null>(null);
 
   const saveDraftQuotation = async (showToast = false): Promise<string | null> => {
-    if (!rfq || !supplierName) return null;
+    if (
+      !rfq ||
+      !supplierName ||
+      isSubmittingRef.current ||
+      submitting ||
+      submittedQuote ||
+      alreadySubmitted
+    ) {
+      return null;
+    }
     const rfqSupplierRow = (rfq.suppliers ?? []).find((s) => {
       const suppKey = (s.supplier || "").trim().replace(/^["']+|["']+$/g, "").replace(/[.,]+$/g, "").toLowerCase();
       const inputKey = supplierName.trim().replace(/^["']+|["']+$/g, "").replace(/[.,]+$/g, "").toLowerCase();
@@ -592,21 +734,22 @@ export default function SupplierRFQPage() {
         throw new Error("Could not create Supplier Quotation draft on server.");
       }
 
-      const fileUrl = await uploadFileToERPNext(file, "Supplier Quotation", quoteName);
-      if (!fileUrl) {
+      const uploaded = await uploadFileToERPNextDetailed(file, "Supplier Quotation", quoteName);
+      if (!uploaded?.file_url) {
         throw new Error("Upload did not return a file URL.");
       }
 
       try {
-        await updateSupplierQuotationLegalDoc(quoteName, erpFieldName, fileUrl);
+        await updateSupplierQuotationLegalDoc(quoteName, erpFieldName, uploaded.file_url);
       } catch (linkErr) {
         console.warn("[SupplierRFQPage] Link legal doc to SQ warning:", linkErr);
       }
 
       setLegalDraft((prev) => ({
         ...prev,
-        [`${base}_file_url`]: fileUrl,
+        [`${base}_file_url`]: uploaded.file_url,
         [`${base}_file_name`]: file.name,
+        [`${base}_file_id`]: uploaded.file_id || "",
       }));
       setExpandedLegalDoc((prev) => ({ ...prev, [field]: false }));
       toast.success(`${file.name} uploaded to server`);
@@ -631,10 +774,12 @@ export default function SupplierRFQPage() {
     const base = field === "terms_pdf" ? "terms" : field === "warranty_pdf" ? "warranty" : "insurance";
     const urlField = `${base}_file_url` as keyof typeof legalDraft;
     const nameField = `${base}_file_name` as keyof typeof legalDraft;
+    const idField = `${base}_file_id` as keyof typeof legalDraft;
     setLegalDraft((prev) => ({
       ...prev,
       [urlField]: "",
       [nameField]: "",
+      [idField]: "",
     }));
     setExpandedLegalDoc((prev) => ({ ...prev, [field]: true }));
     toast.success("Document removed");
@@ -643,8 +788,9 @@ export default function SupplierRFQPage() {
   async function handleLegalPreview(field: "terms_pdf" | "warranty_pdf" | "insurance_pdf") {
     const base = field === "terms_pdf" ? "terms" : field === "warranty_pdf" ? "warranty" : "insurance";
     const url = legalDraft[`${base}_file_url` as keyof typeof legalDraft];
+    const fileId = legalDraft[`${base}_file_id` as keyof typeof legalDraft];
     if (!url) return;
-    window.open(getFullFileUrl(url), "_blank", "noopener,noreferrer");
+    window.open(getFullFileUrl(url, fileId), "_blank", "noopener,noreferrer");
   }
 
   function toggleLegalDoc(field: "terms_pdf" | "warranty_pdf" | "insurance_pdf") {
@@ -680,7 +826,8 @@ export default function SupplierRFQPage() {
         qty: it.qty,
         uom: it.uom ?? "Nos",
         unit_price: 0,
-        delivery_days: 7,
+        delivery_days: 0,
+        expected_delivery_date: "",
         notes: "",
         target_price: isItemTargetPriceVisibleToSupplier(it, rfq)
           ? getItemTargetPrice(it)
@@ -845,7 +992,16 @@ export default function SupplierRFQPage() {
   }, [rfq, supplierName]);
 
   function persistDraft(showToast = false) {
-    if (!rfq || !supplierName) return;
+    if (
+      !rfq ||
+      !supplierName ||
+      isSubmittingRef.current ||
+      submitting ||
+      submittedQuote ||
+      alreadySubmitted
+    ) {
+      return;
+    }
     const saved_at = new Date().toISOString();
     const draftKey = `draft_quotation_${rfq.name}_${supplierName}`;
     try {
@@ -878,11 +1034,35 @@ export default function SupplierRFQPage() {
   }
 
   useEffect(() => {
-    if (!rfq || !supplierName || alreadySubmitted) return;
-    const timer = window.setTimeout(() => persistDraft(false), 1500);
-    return () => window.clearTimeout(timer);
+    if (
+      !rfq ||
+      !supplierName ||
+      alreadySubmitted ||
+      submittedQuote ||
+      submitting ||
+      isSubmittingRef.current
+    ) {
+      return;
+    }
+    if (autoSaveTimerRef.current) {
+      window.clearTimeout(autoSaveTimerRef.current);
+    }
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      if (
+        !isSubmittingRef.current &&
+        !alreadySubmitted &&
+        !submittedQuote
+      ) {
+        persistDraft(false);
+      }
+    }, 1500);
+    return () => {
+      if (autoSaveTimerRef.current) {
+        window.clearTimeout(autoSaveTimerRef.current);
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lines, paymentTerms, validityDate, notes, legalDraft, rfq, supplierName, alreadySubmitted]);
+  }, [lines, paymentTerms, validityDate, notes, legalDraft, rfq, supplierName, alreadySubmitted, submittedQuote, submitting]);
 
   function handleSaveDraft() {
     persistDraft(true);
@@ -958,6 +1138,12 @@ export default function SupplierRFQPage() {
         `Enter unit price for ${unpriced.length} item${unpriced.length === 1 ? "" : "s"}`
       );
     }
+    const noDelivery = lines.filter((l) => !(l.delivery_days > 0) || !l.expected_delivery_date);
+    if (noDelivery.length > 0) {
+      issues.push(
+        `Provide expected delivery date for ${noDelivery.length} item${noDelivery.length === 1 ? "" : "s"}`
+      );
+    }
     if (requiresCostBreakdown && !costBreakdownReady) {
       issues.push("Complete and validate the Cost Breakdown");
     }
@@ -1022,6 +1208,23 @@ export default function SupplierRFQPage() {
     return next?.id ?? workflowSteps[workflowSteps.length - 1]?.id ?? "";
   }, [workflowSteps]);
 
+  const quotationStatus = useMemo(() => {
+    if (submittedQuote || alreadySubmitted) return "Submitted";
+    if (declined) return "Declined";
+    if (draftSavedAt || draftQuoteName || lines.some((l) => l.unit_price > 0)) return "Draft";
+    return "Not Started";
+  }, [submittedQuote, alreadySubmitted, declined, draftSavedAt, draftQuoteName, lines]);
+
+  const validTillDisplay =
+    parsedMessage.validTill || rfq?.valid_till || undefined;
+  const rfqStatusLabel = rfq?.status ?? "Open";
+
+  const submitDisabledTitle = !acceptedTerms
+    ? "Accept Terms & Conditions to enable submission."
+    : submitBlockers.length > 0
+      ? submitBlockers.join("; ")
+      : undefined;
+
   function scrollToSection(id: string) {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -1029,7 +1232,8 @@ export default function SupplierRFQPage() {
   /* ─────────────── Submit ─────────────── */
 
   async function handleSubmit() {
-    if (!rfq) return;
+    if (!rfq || !supplierName) return;
+    if (isSubmittingRef.current || submitting || submittedQuote || alreadySubmitted) return;
 
     if (lines.length === 0) {
       toast.error("This RFQ has no items.");
@@ -1045,10 +1249,19 @@ export default function SupplierRFQPage() {
     }
 
     // Per-item validation — points the supplier at the exact row that's
-    // missing a price.
+    // missing a price or delivery commitment.
     const unpriced = lines.find((l) => !(l.unit_price > 0));
     if (unpriced) {
       toast.error(`Enter price for: ${unpriced.item_name}`);
+      return;
+    }
+    const noDelivery = lines.find((l) => !(l.delivery_days > 0) || !l.expected_delivery_date);
+    if (noDelivery) {
+      toast.error(
+        lines.length === 1
+          ? "Please provide the expected delivery date before submitting your quotation."
+          : `Please provide the expected delivery date before submitting your quotation (missing for: ${noDelivery.item_name}).`
+      );
       return;
     }
     if (!validityDate) {
@@ -1074,8 +1287,17 @@ export default function SupplierRFQPage() {
       }
     }
 
+    // Cancel any pending debounced autosaves immediately
+    if (autoSaveTimerRef.current) {
+      window.clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+
+    isSubmittingRef.current = true;
+    setSubmitting(true);
+
     // eslint-disable-next-line no-console
-    console.log("[SupplierQuote] Legal documents being submitted:", {
+    console.log("[SupplierQuote] Submitting quotation for RFQ:", rfq.name, {
       terms_conditions_pdf: legalDraft.terms_file_url ?? "(not uploaded)",
       terms_conditions_note: legalDraft.terms_note || "(empty)",
       warranty_certificate_pdf: legalDraft.warranty_file_url ?? "(not uploaded)",
@@ -1084,58 +1306,55 @@ export default function SupplierRFQPage() {
       insurance_certificate_note: legalDraft.insurance_note || "(empty)",
     });
 
-    setSubmitting(true);
-
     // ── Persist to sessionStorage *first* ─────────────────────────────────
-    // This guarantees the supplier never loses their work even if the
-    // back-end is misconfigured — and it's what powers the "thank you"
-    // success screen regardless of ERPNext's state.
     const sessionKey = `quotation_${rfq.name}_${supplierName}`;
     const grandTotalSnapshot = lines.reduce(
       (sum, l) => sum + l.qty * (l.unit_price || 0),
       0
     );
+
+    // Look up the RFQ Supplier row name for this supplier so ERPNext can
+    // flip quote_status "Pending" → "Received" on submit.
+    const rfqSupplierRow = (rfq.suppliers ?? []).find((s) => {
+      const suppKey = (s.supplier || "").trim().replace(/^["']+|["']+$/g, "").replace(/[.,]+$/g, "").toLowerCase();
+      const inputKey = supplierName.trim().replace(/^["']+|["']+$/g, "").replace(/[.,]+$/g, "").toLowerCase();
+      const nameKey = (s.supplier_name || "").trim().replace(/^["']+|["']+$/g, "").replace(/[.,]+$/g, "").toLowerCase();
+      return suppKey === inputKey || nameKey === inputKey || s.supplier === supplierName;
+    });
+
+    const quoteSnapshot = {
+      rfq: rfq.name,
+      supplier: supplierName,
+      supplier_name: supplierName,
+      items: lines,
+      payment_terms: paymentTerms,
+      valid_till: validityDate,
+      notes,
+      grand_total: grandTotalSnapshot,
+      submitted_at: new Date().toISOString(),
+      legal_documents: {
+        terms_conditions_pdf: legalDraft.terms_file_url ?? null,
+        terms_conditions_note: legalDraft.terms_note,
+        warranty_certificate_pdf: legalDraft.warranty_file_url ?? null,
+        warranty_certificate_note: legalDraft.warranty_note,
+        insurance_certificate_pdf: legalDraft.insurance_file_url ?? null,
+        insurance_certificate_note: legalDraft.insurance_note,
+      },
+    };
+
     try {
-      sessionStorage.setItem(
-        sessionKey,
-        JSON.stringify({
-          rfq: rfq.name,
-          supplier: supplierName,
-          items: lines,
-          payment_terms: paymentTerms,
-          valid_till: validityDate,
-          notes,
-          grand_total: grandTotalSnapshot,
-          submitted_at: new Date().toISOString(),
-          legal_documents: {
-            terms_conditions_pdf: legalDraft.terms_file_url ?? null,
-            terms_conditions_note: legalDraft.terms_note,
-            warranty_certificate_pdf: legalDraft.warranty_file_url ?? null,
-            warranty_certificate_note: legalDraft.warranty_note,
-            insurance_certificate_pdf: legalDraft.insurance_file_url ?? null,
-            insurance_certificate_note: legalDraft.insurance_note,
-          },
-        })
-      );
+      sessionStorage.setItem(sessionKey, JSON.stringify(quoteSnapshot));
+      if (rfqSupplierRow?.supplier && rfqSupplierRow.supplier !== supplierName) {
+        sessionStorage.setItem(
+          `quotation_${rfq.name}_${rfqSupplierRow.supplier}`,
+          JSON.stringify(quoteSnapshot)
+        );
+      }
     } catch {
       // sessionStorage can throw in private-mode — non-fatal.
     }
 
-    // ── Try ERPNext in the background — silent on failure ────────────────
-    // Send only the minimal field set ERPNext's Supplier Quotation
-    // controller accepts. `delivery_days`, `description`, terms,
-    // payment_terms etc. are kept locally (sessionStorage above) but
-    // **not** forwarded — they're what was triggering the 400s.
     try {
-      // Look up the RFQ Supplier row name for this supplier so ERPNext can
-      // flip quote_status "Pending" → "Received" on submit.
-      const rfqSupplierRow = (rfq.suppliers ?? []).find((s) => {
-        const suppKey = (s.supplier || "").trim().replace(/^["']+|["']+$/g, "").replace(/[.,]+$/g, "").toLowerCase();
-        const inputKey = supplierName.trim().replace(/^["']+|["']+$/g, "").replace(/[.,]+$/g, "").toLowerCase();
-        const nameKey = (s.supplier_name || "").trim().replace(/^["']+|["']+$/g, "").replace(/[.,]+$/g, "").toLowerCase();
-        return suppKey === inputKey || nameKey === inputKey || s.supplier === supplierName;
-      });
-
       const payload = {
         supplier: rfqSupplierRow?.supplier || supplierName,
         rfq_no: rfq.name,
@@ -1153,8 +1372,23 @@ export default function SupplierRFQPage() {
             uom: l.uom || "Nos",
             rate: parseFloat(String(l.unit_price)) || 0,
             rfq_item_name: rfqItem?.name,
+            // Expected delivery date is mandatory; include it and lead time
+            // so ERPNext stores both and the AI evaluation can read them back.
+            delivery_days: l.delivery_days > 0 ? l.delivery_days : undefined,
+            expected_delivery_date: l.expected_delivery_date || undefined,
+            delivery_date: l.expected_delivery_date || undefined,
+            schedule_date: l.expected_delivery_date || undefined,
           };
         }),
+        expected_delivery_date:
+          lines.find((l) => l.expected_delivery_date)?.expected_delivery_date ||
+          undefined,
+        delivery_date:
+          lines.find((l) => l.expected_delivery_date)?.expected_delivery_date ||
+          undefined,
+        schedule_date:
+          lines.find((l) => l.expected_delivery_date)?.expected_delivery_date ||
+          undefined,
         legal_documents: {
           terms_conditions_pdf: legalDraft.terms_file_url || null,
           terms_conditions_note: legalDraft.terms_note,
@@ -1175,17 +1409,45 @@ export default function SupplierRFQPage() {
           quoteName = (submitResult as { name?: string }).name || draftQuoteName;
           quoteStatus = (submitResult as { status?: string }).status || "Submitted";
         } catch {
-          const result = await createSupplierQuotation(payload);
+          const result = await createSupplierQuotation(payload, { submitOnCreate: true });
           quoteName = (result as { name?: string }).name ?? "";
           quoteStatus = (result as { status?: string }).status ?? "Submitted";
         }
       } else {
-        const result = await createSupplierQuotation(payload);
+        const result = await createSupplierQuotation(payload, { submitOnCreate: true });
         quoteName = (result as { name?: string }).name ?? "";
         quoteStatus = (result as { status?: string }).status ?? "Submitted";
       }
 
       setSubmittedQuote({ name: quoteName, status: quoteStatus });
+      setAlreadySubmitted({
+        quoteName: quoteName || rfq.name,
+        items: lines,
+        payment_terms: paymentTerms,
+        valid_till: validityDate,
+        notes,
+        grand_total: grandTotalSnapshot,
+        submitted_at: new Date().toISOString(),
+      });
+
+      // Clear draft cache keys
+      try {
+        sessionStorage.removeItem(`draft_quotation_${rfq.name}_${supplierName}`);
+        if (rfqSupplierRow?.supplier) {
+          sessionStorage.removeItem(`draft_quotation_${rfq.name}_${rfqSupplierRow.supplier}`);
+        }
+      } catch {
+        /* non-fatal */
+      }
+
+      // Invalidate relevant React Query caches
+      void Promise.allSettled([
+        queryClient.invalidateQueries({ queryKey: ["rfq-quotes", rfq.name] }),
+        queryClient.invalidateQueries({ queryKey: ["rfq", rfq.name] }),
+        queryClient.invalidateQueries({ queryKey: ["rfq-quote-rounds", rfq.name] }),
+        queryClient.invalidateQueries({ queryKey: ["supplier-portal-rfq", rfq.name] }),
+        queryClient.invalidateQueries({ queryKey: ["supplier-quotations"] }),
+      ]);
 
       if (quoteName && requiresCostBreakdown) {
         try {
@@ -1196,7 +1458,7 @@ export default function SupplierRFQPage() {
           );
         } catch (linkErr) {
           // eslint-disable-next-line no-console
-          console.warn("[CostBreakdown] attach to SQ failed:", linkErr);
+          console.warn("[CostBreakdown] attach to SQ non-fatal warning:", linkErr);
         }
       }
 
@@ -1206,16 +1468,6 @@ export default function SupplierRFQPage() {
           : `Quotation ${quoteName} saved (Draft)`
       );
 
-      // ── Legal Document Review is NOT created here ─────────────────────────
-      // Reviewing legal documents only makes sense for the WINNING supplier,
-      // so the backend creates exactly one Legal Document Review per RFQ —
-      // gated on the Procurement Manager selecting a supplier (RFQ workflow
-      // → "Pending Legal Review") — never at quotation submission time.
-      // See ensureLegalDocumentReviewForSelection() in RFQDetailPage.tsx and
-      // api/legalReviewCore.ts (createLegalDocumentReview). The terms /
-      // warranty / insurance files captured above are stored on the
-      // Supplier Quotation's own custom fields and are read from there once
-      // this quotation is selected as the winner.
       if (quoteName) {
         // eslint-disable-next-line no-console
         console.log(
@@ -1225,21 +1477,15 @@ export default function SupplierRFQPage() {
     } catch (err) {
       const realError = err instanceof Error ? err.message : "Unknown error";
       // eslint-disable-next-line no-console
-      console.error("[SQ] Full error:", err);
-      // Do NOT navigate away and do NOT set `submittedQuote` on failure.
-      // The sessionStorage snapshot above is a local draft-recovery aid
-      // only — it is never treated as proof of submission (see the
-      // `detect()` effect above) — so staying on this page with the form
-      // still filled in and a clear error is the only way for the supplier
-      // to know the quotation was NOT actually received by procurement and
-      // that they need to retry, instead of silently believing they're done.
+      console.error("[SQ Submission Error]", err);
       toast.error(
         `Quotation was NOT submitted: ${realError}. Please try again.`,
         { duration: 10_000 }
       );
+    } finally {
+      isSubmittingRef.current = false;
+      setSubmitting(false);
     }
-
-    setSubmitting(false);
   }
 
   async function handleDecline(payload: NoQuotePayload) {
@@ -1636,8 +1882,12 @@ export default function SupplierRFQPage() {
                       <p className="font-semibold tabular-nums text-primary-700">{formatCurrency(line.unit_price * line.qty)}</p>
                     </div>
                     <div>
-                      <p className="text-[10px] font-medium uppercase text-neutral-500">Delivery</p>
-                      <p className="font-medium tabular-nums">{line.delivery_days} days</p>
+                      <p className="text-[10px] font-medium uppercase text-neutral-500">Expected Delivery</p>
+                      <p className="font-medium tabular-nums">
+                        {line.expected_delivery_date
+                          ? formatDate(line.expected_delivery_date)
+                          : `${line.delivery_days} days`}
+                      </p>
                     </div>
                   </div>
                   {line.notes && (
@@ -1672,7 +1922,7 @@ export default function SupplierRFQPage() {
                     ) : null}
                     <th className="px-4 py-2 text-right">Unit Price</th>
                     <th className="px-4 py-2 text-right">Total</th>
-                    <th className="px-4 py-2 text-right">Delivery (days)</th>
+                    <th className="px-4 py-2 text-right">Expected Delivery Date</th>
                     <th className="px-4 py-2">Notes</th>
                   </tr>
                 </thead>
@@ -1720,7 +1970,11 @@ export default function SupplierRFQPage() {
                       ) : null}
                       <td className="px-4 py-2 text-right tabular-nums font-medium text-neutral-900">{formatCurrency(line.unit_price)}</td>
                       <td className="px-4 py-2 text-right font-semibold tabular-nums text-neutral-900">{formatCurrency(line.unit_price * line.qty)}</td>
-                      <td className="px-4 py-2 text-right tabular-nums text-neutral-700">{line.delivery_days}</td>
+                      <td className="px-4 py-2 text-right tabular-nums text-neutral-700">
+                        {line.expected_delivery_date
+                          ? formatDate(line.expected_delivery_date)
+                          : `${line.delivery_days} days`}
+                      </td>
                       <td className="px-4 py-2 text-neutral-600">{line.notes || "—"}</td>
                     </tr>
                   );
@@ -1745,7 +1999,10 @@ export default function SupplierRFQPage() {
           </div>
           <div className="grid gap-4 p-5 sm:grid-cols-2">
             <ReadOnlyField label="Payment Terms" value={subData.payment_terms || "Net 30 days"} />
-            <ReadOnlyField label="Quote Valid Until" value={subData.valid_till ? formatDate(subData.valid_till) : "—"} />
+            <ReadOnlyField
+              label="Quote Valid Until"
+              value={subData.valid_till ? formatDate(subData.valid_till) : "Not specified"}
+            />
             {subData.notes && (
               <div className="sm:col-span-2">
                 <ReadOnlyField label="General Notes" value={subData.notes} />
@@ -1770,16 +2027,6 @@ export default function SupplierRFQPage() {
     );
   }
 
-  const validTillDisplay =
-    parsedMessage.validTill || rfq.valid_till || undefined;
-  const rfqStatusLabel = rfq.status ?? "Open";
-
-  const submitDisabledTitle = !acceptedTerms
-    ? "Accept Terms & Conditions to enable submission."
-    : submitBlockers.length > 0
-      ? submitBlockers.join("; ")
-      : undefined;
-
   return (
     <>
       <div className={`${QUOTE_PAGE_SHELL} flex flex-col gap-6 pb-[88px]`}>
@@ -1798,23 +2045,48 @@ export default function SupplierRFQPage() {
               <p className="mt-0.5 text-[15px] text-[#64748B]">{rfq.name}</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center rounded-full bg-amber-50 px-3 py-1 text-[13px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200">
-                Draft
-              </span>
+              {/* Supplier Quotation status badge */}
+              {quotationStatus === "Submitted" ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-3 py-1 text-[13px] font-semibold text-blue-800 ring-1 ring-inset ring-blue-200">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-blue-600" />
+                  Quotation Submitted
+                </span>
+              ) : quotationStatus === "Declined" ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-3 py-1 text-[13px] font-semibold text-neutral-800 ring-1 ring-inset ring-neutral-200">
+                  <Ban className="h-3.5 w-3.5 text-neutral-600" />
+                  Closed
+                </span>
+              ) : quotationStatus === "Draft" ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1 text-[13px] font-semibold text-slate-700 ring-1 ring-inset ring-slate-200">
+                  <Clock className="h-3.5 w-3.5 text-slate-500" />
+                  Draft Quotation
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-3 py-1 text-[13px] font-semibold text-amber-800 ring-1 ring-inset ring-amber-200">
+                  <Clock className="h-3.5 w-3.5 text-amber-600" />
+                  Awaiting Quotation
+                </span>
+              )}
+
+              {/* Due date */}
               {validTillDisplay && (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-[#F1F5F9] px-3 py-1 text-[13px] font-semibold text-[#475569] ring-1 ring-inset ring-[#E2E8F0]">
                   <Calendar className="h-3.5 w-3.5" />
                   Due {formatDate(validTillDisplay)}
                 </span>
               )}
-              {draftSavedAt && (
+
+              {/* Auto Saved helper badge */}
+              {draftSavedAt && quotationStatus !== "Submitted" && (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-[13px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200">
                   <CheckCircle2 className="h-3.5 w-3.5" />
                   Auto Saved
                 </span>
               )}
+
+              {/* RFQ status badge */}
               <span className="inline-flex items-center rounded-full bg-[#EEF3FA] px-3 py-1 text-[13px] font-semibold text-[#1F3A6D] ring-1 ring-inset ring-[#D6E2F5]">
-                {rfqStatusLabel}
+                RFQ: {rfqStatusLabel}
               </span>
             </div>
           </div>
@@ -2375,58 +2647,55 @@ function WorkflowProgress({
   );
 }
 
-function DeliveryDaysField({
-  value,
+function ExpectedDeliveryDateField({
+  dateValue,
+  daysValue,
   onChange,
 }: {
-  value: number;
-  onChange: (days: number) => void;
+  dateValue?: string;
+  daysValue?: number;
+  onChange: (date: string, days: number) => void;
 }) {
-  const isPresetValue = (DELIVERY_DAY_OPTIONS as readonly number[]).includes(value);
-  const [isCustom, setIsCustom] = useState(!isPresetValue);
+  const isUnset = !dateValue || !dateValue.trim();
 
-  const selectValue = isCustom ? "custom" : String(value);
-
-  const handleSelect = (next: string) => {
-    if (next === "custom") {
-      // Keep whatever integer is already stored as the custom starting point.
-      setIsCustom(true);
+  const handleDateChange = (nextDate: string) => {
+    if (!nextDate) {
+      onChange("", 0);
       return;
     }
-    setIsCustom(false);
-    onChange(Number(next));
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const target = new Date(nextDate);
+    target.setHours(0, 0, 0, 0);
+    const diffMs = target.getTime() - now.getTime();
+    const days = Math.max(1, Math.round(diffMs / (1000 * 60 * 60 * 24)));
+    onChange(nextDate, days);
   };
 
   return (
     <div>
-      <label className={ENT_LABEL}>Delivery Days</label>
-      <Select value={selectValue} onValueChange={handleSelect}>
-        <SelectTrigger className={`${ENT_INPUT} tabular-nums`}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {DELIVERY_DAY_OPTIONS.map((d) => (
-            <SelectItem key={d} value={String(d)}>
-              {d} {d === 1 ? "Day" : "Days"}
-            </SelectItem>
-          ))}
-          <SelectItem value="custom">Custom…</SelectItem>
-        </SelectContent>
-      </Select>
-      {isCustom && (
-        <div className="mt-2">
-          <label className={ENT_LABEL}>Custom Days</label>
-          <input
-            type="number"
-            min={0}
-            value={value || ""}
-            onChange={(e) => onChange(Number(e.target.value))}
-            placeholder="Enter days"
-            className={`${ENT_INPUT} tabular-nums`}
-            autoFocus
-          />
-        </div>
-      )}
+      <label className={ENT_LABEL}>
+        Expected Delivery Date
+        <span className="ml-0.5 text-red-500" aria-label="required">*</span>
+      </label>
+      <input
+        type="date"
+        min={todayIso()}
+        value={dateValue || ""}
+        onChange={(e) => handleDateChange(e.target.value)}
+        className={`${ENT_INPUT} tabular-nums ${
+          isUnset ? "border-red-300 bg-red-50/40 ring-1 ring-red-200" : ""
+        }`}
+      />
+      {isUnset ? (
+        <p className="mt-1 text-xs text-red-500">
+          Please provide the expected delivery date before submitting your quotation.
+        </p>
+      ) : daysValue !== undefined && daysValue > 0 ? (
+        <p className="mt-1 text-[11px] text-[#64748B]">
+          {daysValue} {daysValue === 1 ? "day" : "days"} lead time
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -2495,9 +2764,12 @@ function QuoteItemCard({
             className={`${ENT_INPUT} tabular-nums ${!priced ? "border-amber-200 bg-amber-50/40" : ""}`}
           />
         </div>
-        <DeliveryDaysField
-          value={line.delivery_days}
-          onChange={(days) => onPatch(index, { delivery_days: days })}
+        <ExpectedDeliveryDateField
+          dateValue={line.expected_delivery_date}
+          daysValue={line.delivery_days}
+          onChange={(date, days) =>
+            onPatch(index, { expected_delivery_date: date, delivery_days: days })
+          }
         />
         <div>
           <label className={ENT_LABEL}>Line Total</label>
@@ -2655,12 +2927,15 @@ function LegalDocUploadCard({
   legalDraft: {
     terms_file_url: string;
     terms_file_name: string;
+    terms_file_id?: string;
     terms_note: string;
     warranty_file_url: string;
     warranty_file_name: string;
+    warranty_file_id?: string;
     warranty_note: string;
     insurance_file_url: string;
     insurance_file_name: string;
+    insurance_file_id?: string;
     insurance_note: string;
   };
   uploading: boolean;

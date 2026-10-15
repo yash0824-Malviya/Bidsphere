@@ -1,0 +1,9 @@
+{
+  "created_at": "2026-09-23T06:58:25.711651+00:00",
+  "purpose": "Existing RFQ CLM app: persistent Contract handoff, request-only recovery, idempotency, sequential review",
+  "live_deployment_performed": false,
+  "files": 13,
+  "package": "C:\\Users\\VICTUS\\Desktop\\Netlink @7\\Bidsphere\\scratch\\bidsphere-rfq94-clm-schema-2026-09-23.zip",
+  "sha256": "f58afff33a0e9cbaf37b3476b4fe4811509bc8c11e5800add4953e0b7fe5598a",
+  "verified": true
+}

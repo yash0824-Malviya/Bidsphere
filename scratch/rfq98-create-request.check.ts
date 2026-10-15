@@ -1,0 +1,42 @@
+import { test, expect } from 'vitest';
+import { writeFileSync } from 'node:fs';
+import { createEcrSchemaErpClient } from '../scripts/ecr-schema-erp-client.mjs';
+import { createClmDependencies } from '../api/clmErp';
+import { ensureInitialRfqContractRequestErp } from '../api/rfqClmErp';
+import { resolveServerRole, type AccessPrincipal } from '../api/rbacAuth';
+import { canReadClm, parseClmData } from '../api/clmCore';
+import { rfqClmRequestWorkflowView } from '../src/utils/rfqClmWorkflow';
+const api = createEcrSchemaErpClient();
+test('retry RFQ98 using the authenticated ERP integration identity and verify its real Request', async () => {
+  const identity = await api('GET', 'method/frappe.auth.get_logged_user');
+  if (typeof identity !== 'string' || !identity || identity === 'Guest') throw new Error('No authenticated ERP integration identity.');
+  const deps = createClmDependencies(), user = await deps.load('User', identity);
+  const role = resolveServerRole({ name: String(user.name), email: String(user.email || ''), erpnext_roles: ((user.roles || []) as Array<{role:string}>).map(row => row.role) });
+  if (user.name !== identity || user.enabled === 0 || !role || !['admin','procurement','procurement_team'].includes(role)) throw new Error('Authenticated ERP identity is not authorized for RFQ Request routing.');
+  // Use the actual ERP integration identity; do not issue tokens or impersonate a browser user.
+  const principal = { typ: 'internal', sub: identity, email: String(user.email || ''), role } as AccessPrincipal;
+  const before = await deps.load('Request for Quotation', 'PUR-RFQ-2026-00098');
+  expect(before.contract_required).toBe('Yes');
+  const result = await ensureInitialRfqContractRequestErp(principal, String(before.name));
+  const repeated = await ensureInitialRfqContractRequestErp(principal, String(before.name));
+  const requests = await deps.list('Contract Request', [['custom_rfq','=',before.name]]);
+  const contracts = await deps.list('Contract', [['custom_rfq','=',before.name]]);
+  expect(requests).toHaveLength(1); expect(contracts).toHaveLength(0);
+  expect(repeated.request?.name).toBe(result.request?.name); expect(repeated.created).toBe(false);
+  const request = await deps.load('Contract Request', String(result.request?.name));
+  const rfq = await deps.load('Request for Quotation', String(before.name));
+  // Frappe updates child modified stamps when the parent request pointer is saved.
+  const businessItems = (rows: unknown) => (rows as Array<Record<string,unknown>>).map(({ modified: _modified, ...row }) => row);
+  expect(businessItems(rfq.items)).toEqual(businessItems(before.items)); expect(rfq.status).toBe(before.status); expect(rfq.docstatus).toBe(before.docstatus);
+  expect(request).toMatchObject({ custom_rfq: before.name, department: 'Production - NSGAI', request_status: 'Pending Review' });
+  const workflow = rfqClmRequestWorkflowView(request);
+  expect(workflow).toMatchObject({ status:'Pending',stage:'Procurement',assignedRole:'procurement_team' });
+  const team = { ...principal, role:'procurement_team' } as AccessPrincipal;
+  const manager = { ...principal, role:'procurement' } as AccessPrincipal;
+  expect(canReadClm(team, 'Contract Request', request)).toBe(true);
+  expect(canReadClm(manager, 'Contract Request', request)).toBe(false);
+  const data = parseClmData(request.custom_clm_data);
+  const evidence = { checked_at:new Date().toISOString(), mode:'real ERP integration identity invoking existing backend routing service; queue policy checked locally, browser acceptance separate', actor:identity, role, created:result.created, request_id:request.name, rfq_id:rfq.name, persisted_contract_required:rfq.contract_required, department:request.department, native_request_status:request.request_status, workflow, supplier:request.supplier || null, award:(data.rfq_source as Record<string,unknown>).available_award || null, request_count:requests.length, contract_count:contracts.length, duplicate_retry_same_id:true, team_policy_visible:true, manager_policy_visible:false, rfq_items_preserved:true, rfq_status_preserved:true };
+  writeFileSync('scratch/rfq98-live-created-request.json', JSON.stringify(evidence,null,2));
+  console.log(JSON.stringify(evidence,null,2));
+}, 90_000);

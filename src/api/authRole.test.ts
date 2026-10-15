@@ -30,6 +30,47 @@ describe("server-owned client role resolution", () => {
     vi.clearAllMocks();
   });
 
+  it("does not relabel a Finance session as Legal based on its mailbox", async () => {
+    mocks.post.mockResolvedValue(loginResponse({
+      message: "Logged In",
+      name: "legal@netlink.com",
+      email: "legal@netlink.com",
+      full_name: "Legal Manager",
+      role: "finance",
+      access_token: "signed-finance-fixture",
+      erpnext_roles: ["Accounts Manager", "Purchase Manager"],
+    }));
+
+    await expect(loginWithPassword("legal@netlink.com", "fixture-password"))
+      .resolves.toMatchObject({ role: "finance", full_name: "Finance Manager" });
+    expect(mocks.apiGet).not.toHaveBeenCalled();
+    expect(mocks.writeAccessToken).toHaveBeenCalledWith("signed-finance-fixture", false);
+  });
+
+  it("preserves the authenticated Finance role and label after refresh", () => {
+    expect(restoreAuthenticatedUserProfile({
+      name: "legal@netlink.com",
+      email: "legal@netlink.com",
+      full_name: "Legal Manager",
+      role: "finance",
+      erpnext_roles: ["Accounts Manager"],
+    })).toMatchObject({ role: "finance", full_name: "Finance Manager" });
+  });
+
+  it("accepts a server-authorized Legal Reviewer without a known mailbox", async () => {
+    mocks.post.mockResolvedValue(loginResponse({
+      message: "Logged In",
+      name: "reviewer@example.test",
+      email: "reviewer@example.test",
+      full_name: "Contract Reviewer",
+      role: "legal",
+      access_token: "signed-legal-fixture",
+      erpnext_roles: ["Legal Reviewer"],
+    }));
+    await expect(loginWithPassword("reviewer@example.test", "fixture-password"))
+      .resolves.toMatchObject({ role: "legal", full_name: "Contract Reviewer" });
+  });
+
   it.each([
     ["procurement.team@netlink.com", "procurement_team"],
     ["procurement.manager@netlink.com", "procurement"],

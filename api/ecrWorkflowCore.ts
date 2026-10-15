@@ -13,7 +13,9 @@ import {
   activeApprovalRoleForStatus,
   appRoleForApprovalRole,
   canonicalApprovalRole,
+  canonicalWorkflowStatus,
   getEcrWorkflowTransition,
+  isExtendedEcr,
   requiredReviewAssessmentFieldsForStatus,
   reviewAssessmentAllowedValuesForStatus,
   reviewAssessmentFieldsForStatus,
@@ -39,6 +41,10 @@ export interface EcrApprovalRequirement extends Record<string, unknown> {
 
 export interface EcrWorkflowDocument extends Record<string, unknown> {
   name: string;
+  ecr_workflow_version?: string;
+  ecr_business_case?: string;
+  rfq_required?: string;
+  rfq_decision_reason?: string;
   /** Frappe optimistic-lock timestamp; preserved in the workflow payload. */
   modified?: string;
   docstatus?: number;
@@ -93,7 +99,7 @@ function actorIdentity(principal: InternalEcrPrincipal): string {
   return clean(principal.sub) || clean(principal.email);
 }
 
-function isOwnedBy(
+export function isOwnedBy(
   document: EcrWorkflowDocument,
   principal: InternalEcrPrincipal,
 ): boolean {
@@ -133,6 +139,9 @@ export function buildSequentialApprovalRequirements(input: {
   owner?: string;
   comment?: string;
   timestamp: string;
+  auditStage?: string;
+  /** Legacy RFQ task history uses Completed; extended approvals record decisions only. */
+  preserveNonDecisionCompletion?: boolean;
 }): EcrApprovalRequirement[] {
   const rows = Array.isArray(input.rows) ? input.rows : [];
   const completed = rows
@@ -146,7 +155,7 @@ export function buildSequentialApprovalRequirements(input: {
   const nextRole = activeApprovalRoleForStatus(input.transition.nextStatus);
   const decision = decisionStatus(input.transition.decision);
   const completionStatus = decision ??
-    (currentRole && input.transition.action === "Create RFQ" ? "Completed" : null);
+    (currentRole && input.preserveNonDecisionCompletion !== false ? "Completed" : null);
 
   if (completionStatus && currentRole) {
     const existingCurrent = pending.find(
@@ -160,16 +169,16 @@ export function buildSequentialApprovalRequirements(input: {
       required: 1,
       status: completionStatus,
       approval_date: input.timestamp,
-      comments:
+      comments: (input.auditStage ? `[Stage: ${input.auditStage}]\n` : "") + (
         clean(input.comment) ||
         (input.transition.decision === "revision_completed"
           ? "Revision resubmitted."
-          : ""),
+          : "")),
     });
   }
 
   if (nextRole) {
-    const existingNext = pending.find(
+    const existingNext = nextRole === currentRole && completionStatus ? undefined : pending.find(
       (row) => canonicalApprovalRole(clean(row.approval_role)) === nextRole,
     );
     if (!existingNext) {
@@ -210,6 +219,39 @@ export class EcrWorkflowError extends Error {
     this.name = "EcrWorkflowError";
     this.status = status;
     this.code = code;
+  }
+}
+
+/** The linked Business Case and parent status share one Frappe transaction. */
+export function readEcrBusinessCase(document: Pick<EcrWorkflowDocument, "name" | "ecr_business_case">): Record<string, unknown> | null {
+  if (!clean(document.ecr_business_case)) return null;
+  try {
+    const value: unknown = JSON.parse(document.ecr_business_case!);
+    if (!value || typeof value !== "object" || Array.isArray(value) ||
+        (value as Record<string, unknown>).ecr_reference !== document.name) throw new Error();
+    return value as Record<string, unknown>;
+  } catch {
+    throw new EcrWorkflowError("The linked Business Case record is invalid. It must be repaired before continuing.", 409, "conflict");
+  }
+}
+
+export function assertApprovedEcrBusinessCase(document: EcrWorkflowDocument): void {
+  const businessCase = readEcrBusinessCase(document);
+  if (!businessCase || businessCase.status !== "Approved" || businessCase.procurement_status !== "Approved" ||
+      (Number(document.cost_impact) === 1 && businessCase.finance_status !== "Approved") ||
+      (Number(document.quality_impact) === 1 && businessCase.quality_status !== "Approved")) {
+    throw new EcrWorkflowError("All required linked Business Case approvals must be completed before continuing.", 409, "conflict");
+  }
+}
+
+export function assertExtendedEcrReadyForRfq(document: EcrWorkflowDocument): void {
+  if (!isExtendedEcr(document)) return;
+  assertApprovedEcrBusinessCase(document);
+  const hasFinalApproval = (document.approval_requirements ?? []).some((row) =>
+    canonicalApprovalRole(clean(row.approval_role)) === "Program Manager" && row.status === "Approved");
+  if (!["Procurement Decision", "RFQ"].includes(canonicalWorkflowStatus(clean(document.select_pxfp))) ||
+      document.rfq_required !== "Yes" || !clean(document.rfq_decision_reason) || !hasFinalApproval) {
+    throw new EcrWorkflowError("RFQ creation requires final ECR approval and a recorded RFQ Required = Yes decision.", 409, "conflict");
   }
 }
 
@@ -264,8 +306,11 @@ export function requireCurrentApprovalTask(input: {
 export interface ApplyEcrWorkflowInput {
   name: unknown;
   action: unknown;
+  /** Existing Review Comments input, separate from assessment/rationale values. */
   comment?: unknown;
+  /** Established API keys are assessment labels, including "Final Decision Rationale". */
   reviewFields?: Record<string, unknown>;
+  expected_modified?: unknown;
   principal: InternalEcrPrincipal;
 }
 
@@ -382,7 +427,7 @@ async function erpRequest<T>(
       : payload as T;
 }
 
-function createDefaultDependencies(): EcrWorkflowDependencies {
+export function createDefaultEcrWorkflowDependencies(): EcrWorkflowDependencies {
   const config = readConfig();
   const resource = (doctype: string, name?: string) =>
     `resource/${encodeURIComponent(doctype)}${name ? `/${encodeURIComponent(name)}` : ""}`;
@@ -464,7 +509,7 @@ function workflowDocstatus(
   ) {
     return 1;
   }
-  return status === "RFQ" ? 1 : 0;
+  return status === "RFQ" || status === "Closed" ? 1 : 0;
 }
 
 function approvalRowSignature(row: EcrApprovalRequirement): Record<string, unknown> {
@@ -479,13 +524,22 @@ function approvalRowSignature(row: EcrApprovalRequirement): Record<string, unkno
   };
 }
 
-function sameApprovalRows(
+export function sameApprovalRows(
   expected: EcrApprovalRequirement[],
   actual?: EcrApprovalRequirement[],
 ): boolean {
   if (!Array.isArray(actual) || expected.length !== actual.length) return false;
   return JSON.stringify(expected.map(approvalRowSignature)) ===
     JSON.stringify(actual.map(approvalRowSignature));
+}
+
+/** Frappe omits empty nullable fields on GET but returns null on document save. */
+export function firstEcrWorkflowPersistenceMismatch(
+  expected: Record<string, unknown>,
+  actual: Record<string, unknown>,
+): string | undefined {
+  return ["ecr_business_case", "rfq_required", "rfq_decision_reason", "ecr_workflow_version"]
+    .find((field) => (actual[field] ?? "") !== (expected[field] ?? ""));
 }
 
 function isInactiveProcurementEvidence(document: EcrProcurementDocument): boolean {
@@ -571,8 +625,8 @@ async function runApplyEcrWorkflowAction(
 
   // The current state and owner always come from ERPNext, never the browser.
   const document = await dependencies.loadEcr(name);
-  const currentStatus = clean(document.select_pxfp) || "Draft";
-  const transition = getEcrWorkflowTransition(currentStatus, action);
+  const currentStatus = canonicalWorkflowStatus(clean(document.select_pxfp)) || "Draft";
+  let transition = getEcrWorkflowTransition(currentStatus, action, document.ecr_workflow_version);
   if (!transition) {
     throw new EcrWorkflowError(
       `Action "${action}" is not valid while the ECR is in ${currentStatus}.`,
@@ -581,7 +635,27 @@ async function runApplyEcrWorkflowAction(
     );
   }
 
-  assertEcrWorkflowPermission(input.principal, action, currentStatus);
+  assertEcrWorkflowPermission(input.principal, action, currentStatus, document.ecr_workflow_version);
+  if ((isExtendedEcr(document) || input.expected_modified !== undefined) && input.expected_modified !== document.modified) {
+    throw new EcrWorkflowError("This ECR has changed. Refresh before retrying.", 409, "conflict");
+  }
+  let procurementDecision: { rfq_required: string; rfq_decision_reason: string } | undefined;
+  if (isExtendedEcr(document)) {
+    if (["Business Case Approved", "Final ECR Approval", "ECR Approved", "Procurement Decision"].includes(currentStatus)) {
+      assertApprovedEcrBusinessCase(document);
+    }
+    if (action === "Create RFQ") assertExtendedEcrReadyForRfq(document);
+    if (action === "Record Procurement Decision") {
+      const required = requestText(input.reviewFields?.["RFQ Required"], "RFQ Required", { required: true, maxLength: 3 });
+      const reason = requestText(input.reviewFields?.["Decision Reason"], "Decision Reason", { required: true, maxLength: 2000 });
+      if (!["Yes", "No"].includes(required)) throw new EcrWorkflowError("RFQ Required must be Yes or No.", 422);
+      if (required === "Yes" && (clean(document.supplier_response_required) !== "Yes" || !clean(document.suggested_supplier))) {
+        throw new EcrWorkflowError("An RFQ requires Supplier Required = Yes and a Suggested Supplier on the approved ECR.", 422);
+      }
+      procurementDecision = { rfq_required: required, rfq_decision_reason: reason };
+      transition = { ...transition, nextStatus: required === "Yes" ? "Procurement Decision" : "Closed" };
+    }
+  }
   try {
     // Re-check the live Supplier -> RFQ/PO -> Item relationship at every
     // transition. This closes the stale-Draft window if a source document is
@@ -650,16 +724,18 @@ async function runApplyEcrWorkflowAction(
       requestText(input.reviewFields?.[field], field, { maxLength: 2000 }),
     ]),
   );
-  if (transition.decision === "approved") {
+  const isFinalDecision = isExtendedEcr(document) && currentStatus === "Final ECR Approval";
+  if (transition.decision === "approved" || (isFinalDecision && transition.decision === "rejected")) {
     const missing = requiredAssessmentFields.filter((field) => !reviewValues[field]);
     if (missing.length > 0) {
+      const decisionLabel = transition.decision === "rejected" ? "rejection" : "approval";
       const error = new EcrWorkflowError(
-        `${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} required before approval.`,
+        `${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} required before ${decisionLabel}.`,
         422,
         "validation",
       );
       error.fieldErrors = Object.fromEntries(
-        missing.map((field) => [field, `${field} is required before approval.`]),
+        missing.map((field) => [field, `${field} is required before ${decisionLabel}.`]),
       );
       throw error;
     }
@@ -684,7 +760,9 @@ async function runApplyEcrWorkflowAction(
     }
   }
 
-  const decisionComment = transition.decision === "approved"
+  const decisionComment = procurementDecision
+    ? `RFQ Required: ${procurementDecision.rfq_required}\nDecision Reason: ${procurementDecision.rfq_decision_reason}${comment ? `\n${comment}` : ""}`
+    : transition.decision === "approved" || isFinalDecision
     ? [
         ...assessmentFields
           .filter((field) => reviewValues[field])
@@ -704,6 +782,8 @@ async function runApplyEcrWorkflowAction(
     owner: clean(document.ecr_owner) || clean(document.owner),
     comment: decisionComment,
     timestamp,
+    auditStage: isExtendedEcr(document) ? currentStatus : undefined,
+    preserveNonDecisionCompletion: !isExtendedEcr(document),
   });
   const hasPersistedStatusField = Object.prototype.hasOwnProperty.call(
     document,
@@ -715,7 +795,20 @@ async function runApplyEcrWorkflowAction(
     ...(hasPersistedStatusField ? { status: transition.nextStatus } : {}),
     docstatus: workflowDocstatus(transition.nextStatus, document.docstatus),
     approval_requirements: preparedRows,
+    ...procurementDecision,
   };
+  if (isExtendedEcr(document) && transition.decision === "sent_back" && ["Final ECR Approval", "ECR Approved"].includes(currentStatus)) {
+    const businessCase = readEcrBusinessCase(document)!;
+    businessCase.status = "Sent Back";
+    businessCase.modified = timestamp;
+    businessCase.history = [...(Array.isArray(businessCase.history) ? businessCase.history : []), {
+      action: "send_back", role: input.principal.role, actor: actorIdentity(input.principal),
+      timestamp, comment, from_status: "Approved", to_status: "Sent Back",
+    }];
+    preparedDocument.ecr_business_case = JSON.stringify(businessCase);
+    preparedDocument.rfq_required = "";
+    preparedDocument.rfq_decision_reason = "";
+  }
 
   if (!clean(document.modified)) {
     throw new EcrWorkflowError(
@@ -765,6 +858,16 @@ async function runApplyEcrWorkflowAction(
       "conflict",
     );
   }
+  const persistenceMismatch = firstEcrWorkflowPersistenceMismatch(preparedDocument, updated);
+  if (persistenceMismatch) {
+    const error = new EcrWorkflowError(
+      `ERPNext did not persist the extended ECR workflow field '${persistenceMismatch}'. Verify the schema migration.`,
+      409,
+      "conflict",
+    );
+    error.fieldErrors = { [persistenceMismatch]: "ERPNext returned a different value after saving this field." };
+    throw error;
+  }
 
   const auditContent = decisionComment
     ? `${action}\n${decisionComment}`
@@ -808,7 +911,7 @@ export async function applyEcrWorkflowActionCore(
   }
   const operation = runApplyEcrWorkflowAction(
     input,
-    dependencies ?? createDefaultDependencies(),
+    dependencies ?? createDefaultEcrWorkflowDependencies(),
   );
   inFlight.set(key, operation);
   try {

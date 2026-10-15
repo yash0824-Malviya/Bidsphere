@@ -80,6 +80,18 @@ export default function RFQTemplateFormDialog({
   const [category, setCategory] = useState(
     prefill ? template!.category : RFQ_TEMPLATE_CATEGORIES[0]
   );
+  const [procurementType, setProcurementType] = useState<"Direct" | "Indirect">(
+    prefill ? template!.procurement_type ?? "Direct" : "Direct"
+  );
+  const [costBreakdownRequired, setCostBreakdownRequired] = useState<boolean>(
+    prefill ? !!template!.cost_breakdown_required : false
+  );
+  const [contractRequired, setContractRequired] = useState<boolean>(
+    prefill ? !!template!.contract_required : false
+  );
+  const [supplierTerms, setSupplierTerms] = useState<string>(
+    prefill ? template!.supplier_terms ?? "" : ""
+  );
   const [rfqType, setRfqType] = useState(
     prefill ? template!.rfq_type ?? "Standard RFQ" : "Standard RFQ"
   );
@@ -169,10 +181,6 @@ export default function RFQTemplateFormDialog({
       return;
     }
     const validItems = items.filter((i) => i.item_code.trim());
-    if (!validItems.length) {
-      toast.error("Add at least one item with an item code");
-      return;
-    }
     if (!suppliers.length) {
       toast.error("Select at least one preferred supplier");
       return;
@@ -181,9 +189,13 @@ export default function RFQTemplateFormDialog({
     onSave({
       template_name: templateName.trim(),
       category,
+      procurement_type: procurementType,
       rfq_type: rfqType,
       description,
       estimated_value: estimatedValue,
+      cost_breakdown_required: costBreakdownRequired,
+      contract_required: contractRequired,
+      supplier_terms: supplierTerms,
       status: "Active",
       items: validItems.map((i) => ({
         item_code: i.item_code.trim(),
@@ -227,6 +239,12 @@ export default function RFQTemplateFormDialog({
                     ))}
                   </select>
                 </Field>
+                <Field label="Procurement Type" required>
+                  <select className="select-field" value={procurementType} onChange={(e) => setProcurementType(e.target.value as "Direct" | "Indirect")}>
+                    <option value="Direct">Direct Procurement</option>
+                    <option value="Indirect">Indirect Procurement</option>
+                  </select>
+                </Field>
                 <Field label="RFQ Type" required>
                   <select className="select-field" value={rfqType} onChange={(e) => setRfqType(e.target.value as typeof rfqType)}>
                     {RFQ_TEMPLATE_RFQ_TYPES.map((t) => (
@@ -237,9 +255,34 @@ export default function RFQTemplateFormDialog({
                 <Field label="Estimated Value">
                   <input type="number" min={0} step={0.01} className="input-field" value={estimatedValue || ""} onChange={(e) => setEstimatedValue(parseFloat(e.target.value) || 0)} />
                 </Field>
+                <div className="flex flex-col justify-center gap-2 pt-2">
+                  <label className="flex items-center gap-2 text-xs font-medium text-neutral-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={costBreakdownRequired}
+                      onChange={(e) => setCostBreakdownRequired(e.target.checked)}
+                      className="rounded border-neutral-300 text-primary-600 focus:ring-primary-500"
+                    />
+                    Require Cost Breakdown from Suppliers
+                  </label>
+                  <label className="flex items-center gap-2 text-xs font-medium text-neutral-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={contractRequired}
+                      onChange={(e) => setContractRequired(e.target.checked)}
+                      className="rounded border-neutral-300 text-primary-600 focus:ring-primary-500"
+                    />
+                    Contract Agreement Required (CLM)
+                  </label>
+                </div>
                 <div className="sm:col-span-2">
-                  <Field label="Description">
-                    <textarea className="input-field min-h-[72px]" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Purpose, scope, and procurement notes…" />
+                  <Field label="Description & Scope">
+                    <textarea className="input-field min-h-[60px]" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Purpose, scope, and procurement notes…" />
+                  </Field>
+                </div>
+                <div className="sm:col-span-2">
+                  <Field label="Supplier Terms & Conditions">
+                    <textarea className="input-field min-h-[60px]" rows={3} value={supplierTerms} onChange={(e) => setSupplierTerms(e.target.value)} placeholder="Standard terms, delivery expectations, warranties, and payment requirements…" />
                   </Field>
                 </div>
               </div>

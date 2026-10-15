@@ -317,7 +317,7 @@ describe("Business Intake Workflow - Integration Tests", () => {
         doctype: "Business Case",
         name: "BC-001",
         fieldname: expect.objectContaining({
-          workflow_state: "Pending Legal Review",
+          workflow_state: "Pending Legal",
           status: "Pending Approval",
           finance_status: "Approved",
         }),

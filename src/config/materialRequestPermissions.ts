@@ -148,14 +148,20 @@ export function canAccessMaterialRequestPath(
     return path === "/material-requests";
   }
 
-  if (role === "procurement") {
-    if (path === "/material-requests/procurement") return true;
+  if (role === "procurement" || role === "procurement_team") {
+    if (
+      path === "/material-requests" ||
+      path === "/material-requests/procurement" ||
+      path === "/material-requests/list" ||
+      path === "/material-requests/history"
+    ) {
+      return true;
+    }
     if (/^\/material-requests\/[^/]+$/.test(path)) {
       return (
         !path.endsWith("/new") &&
         !path.includes("/warehouse") &&
-        !path.includes("/issued") &&
-        !path.includes("/list")
+        !path.includes("/issued")
       );
     }
     return false;

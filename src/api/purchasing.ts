@@ -23,6 +23,7 @@ import {
   buildResourceUrl,
   erpnext,
   withSilent,
+  withoutNetworkRetry,
 } from "./erpnext";
 import type { Filter, ListParams, SilentRequestConfig } from "./erpnext";
 import type {
@@ -44,10 +45,12 @@ import {
   todayERPNextDate,
 } from "../utils/erpNextDate";
 import type { IncomingPORow } from "../utils/upcomingDeliveries";
-import { canCreateGRN } from "../config/roles";
-import { assertSuppliersActive, resolveSupplierERPNextId } from "./supplier";
+import { canCreateGRN, canManagePurchaseOrders, canSubmitPurchaseOrder } from "../config/roles";
+import { assertSuppliersActive } from "./supplier";
+import { assertPurchaseOrderSuppliersAwardEligible, assertQuotationsAwardEligible, assertQuotationForAward } from "./supplierAwardEligibility";
 import { useAuthStore } from "../store/authStore";
 import { getLegalDocsByFinanceStatus, getLegalDocsByRfq } from "./legalDocs";
+import { isRfqReadyForPurchaseOrder } from "./approvalWorkflow";
 import { getSupplierQuotations, lookupDefaultWarehouse } from "./sourcing";
 import { COMPANY } from "./erpnext";
 import { queryClient } from "../queryClient";
@@ -334,21 +337,21 @@ export async function updateMaterialRequest(
 export async function submitMaterialRequest(
   name: string
 ): Promise<MaterialRequest> {
-  const endpoint = buildResourceUrl(MR_DOCTYPE, name);
-  const fresh = await apiGet<MaterialRequest>(endpoint);
-  const modified =
-    (fresh as { modified?: string }).modified ??
-    (fresh as { data?: { modified?: string } }).data?.modified;
+  return submitMaterialRequestDocument(await getMaterialRequest(name));
+}
 
-  const payload: Record<string, unknown> = { docstatus: 1 };
-  if (modified) payload.modified = modified;
-
-  if (import.meta.env.DEV) {
-    // eslint-disable-next-line no-console
-    console.log("[Material Request] submit:", { name, modified, payload });
+/** Frappe's submit(doc) expects the complete document, including item rows. */
+export async function submitMaterialRequestDocument(
+  doc: MaterialRequest,
+): Promise<MaterialRequest> {
+  if (!doc.name || Number(doc.docstatus) !== 0) {
+    throw new Error("Only an existing ERPNext draft can be submitted.");
   }
-
-  return apiPut<MaterialRequest>(endpoint, payload);
+  return apiPost<MaterialRequest>(
+    "/api/method/frappe.client.submit",
+    { doc: { ...doc, doctype: MR_DOCTYPE } },
+    withoutNetworkRetry(withSilent()),
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -570,93 +573,11 @@ export async function getIncomingPurchaseOrders(): Promise<IncomingPORow[]> {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  Server Script pre-flight: disable active scripts for Purchase Order       */
-/*                                                                            */
-/*  ERPNext may have Server Script records configured for the Purchase Order  */
-/*  DocType. If `server_script_enabled` is False in site_config, ANY PO       */
-/*  creation (resource POST, frappe.client.save, frappe.client.insert) will   */
-/*  fail with "ServerScriptNotEnabled" because Frappe checks for script       */
-/*  records during document lifecycle events.                                 */
-/*                                                                            */
-/*  This utility lists active Server Scripts for a given DocType and          */
-/*  disables them via the API. It runs once per browser session.              */
-/* -------------------------------------------------------------------------- */
-
-let _serverScriptCheckDone = false;
-
-async function disableServerScriptsFor(doctype: string): Promise<void> {
-  if (_serverScriptCheckDone) return;
-
-  // eslint-disable-next-line no-console
-  console.log(`[ServerScript Guard] Checking for active Server Scripts on "${doctype}"...`);
-
-  try {
-    const scripts = await apiGet<
-      Array<{ name: string; script_type?: string; reference_doctype?: string; doctype_event?: string }>
-    >(
-      buildResourceUrl("Server Script"),
-      buildListConfig({
-        fields: ["name", "script_type", "reference_doctype", "doctype_event"],
-        filters: [
-          ["reference_doctype", "=", doctype],
-          ["disabled", "=", 0],
-        ],
-        limit_page_length: 100,
-      })
-    );
-
-    if (!scripts || scripts.length === 0) {
-      // eslint-disable-next-line no-console
-      console.log(`[ServerScript Guard] No active Server Scripts found for "${doctype}".`);
-      _serverScriptCheckDone = true;
-      return;
-    }
-
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[ServerScript Guard] Found ${scripts.length} active Server Script(s) for "${doctype}". Disabling them...`,
-      scripts
-    );
-
-    for (const script of scripts) {
-      try {
-        await apiPut(buildResourceUrl("Server Script", script.name), {
-          disabled: 1,
-        });
-        // eslint-disable-next-line no-console
-        console.log(
-          `[ServerScript Guard] Disabled: "${script.name}" (event: ${script.doctype_event ?? "N/A"})`
-        );
-      } catch (disableErr) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[ServerScript Guard] Could not disable "${script.name}":`,
-          disableErr instanceof Error ? disableErr.message : disableErr
-        );
-      }
-    }
-
-    _serverScriptCheckDone = true;
-  } catch (listErr: unknown) {
-    const msg = listErr instanceof Error ? listErr.message : String(listErr);
-    // If the Server Script DocType itself doesn't exist or we lack
-    // permission to read it, just continue — the PO creation will either
-    // work (no scripts) or fail with a clear message.
-    // eslint-disable-next-line no-console
-    console.warn("[ServerScript Guard] Could not list Server Scripts:", msg);
-    _serverScriptCheckDone = true;
-  }
-}
-
-/* -------------------------------------------------------------------------- */
 /*  Create Purchase Order                                                      */
 /* -------------------------------------------------------------------------- */
 
 /**
  * Create a Purchase Order via `frappe.client.save`.
- *
- * Pre-flight: disables any active Server Scripts on the Purchase Order
- * DocType so the creation doesn't fail with `ServerScriptNotEnabled`.
  *
  * Uses `/api/method/frappe.client.save` (whitelisted method) which lets
  * Frappe fill server-side defaults. No Server Script dependency.
@@ -664,9 +585,13 @@ async function disableServerScriptsFor(doctype: string): Promise<void> {
 export async function createPurchaseOrder(
   data: Partial<PurchaseOrder>
 ): Promise<PurchaseOrder> {
-  // Pre-flight: ensure no Server Scripts block creation
-  await disableServerScriptsFor(PO_DOCTYPE);
-
+  const currentUserRole = useAuthStore.getState().user?.role;
+  if (currentUserRole && !canManagePurchaseOrders(currentUserRole)) {
+    throw new Error(
+      "Purchase Order creation is restricted to authorized roles. Procurement Manager has read-only access."
+    );
+  }
+  await assertPurchaseOrderSuppliersAwardEligible(data.supplier, data.items);
   if (data.supplier) {
     await assertSuppliersActive([data.supplier]);
   }
@@ -746,14 +671,12 @@ export async function createPurchaseOrder(
     if (/server.?script/i.test(errMsg) || /safe_exec/i.test(errMsg)) {
       // eslint-disable-next-line no-console
       console.error(
-        "[PO Create] Server Script error detected after pre-flight guard. " +
-        "There may be scripts the API user cannot see/disable. " +
+        "[PO Create] ERPNext Server Script configuration blocked creation. " +
         "Check ERPNext → Setup → Server Script for Purchase Order records."
       );
       throw new Error(
         "Purchase Order creation blocked by a Server Script in ERPNext. " +
-        "An administrator must disable or delete Server Scripts configured " +
-        "for the Purchase Order DocType in ERPNext Setup."
+        "An administrator must review the Purchase Order Server Script configuration in ERPNext."
       );
     }
 
@@ -775,7 +698,7 @@ export interface CreatePOFromRFQResult {
 /**
  * `create_purchase_order_from_rfq(rfq_id)` — all-in-one endpoint.
  *
- * 1. Disables any active Server Scripts on Purchase Order (pre-flight).
+ * 1. Preserves ERPNext's existing document lifecycle validation.
  * 2. Loads the approved RFQ from ERPNext.
  * 3. Reads the selected supplier from the Legal Document Review record
  *    (ERPNext — the single source of truth for Legal + Finance approval).
@@ -788,6 +711,12 @@ export interface CreatePOFromRFQResult {
 export async function createPurchaseOrderFromRFQ(
   rfqId: string
 ): Promise<CreatePOFromRFQResult> {
+  const currentUserRole = useAuthStore.getState().user?.role;
+  if (currentUserRole && !canManagePurchaseOrders(currentUserRole)) {
+    throw new Error(
+      "Purchase Order creation is restricted to authorized roles. Procurement Manager has read-only access."
+    );
+  }
   // eslint-disable-next-line no-console
   console.log("[createPOFromRFQ] ===== Starting PO creation from RFQ =====");
   // eslint-disable-next-line no-console
@@ -795,11 +724,10 @@ export async function createPurchaseOrderFromRFQ(
 
   // 1. Load the Legal Document Review (ERPNext) and validate both approvals
   const legalDoc = await getLegalDocsByRfq(rfqId);
-  const isReadyForPO =
-    legalDoc?.review_status === "Approved" && legalDoc?.finance_status === "Approved";
+  const isReadyForPO = isRfqReadyForPurchaseOrder(legalDoc);
   if (!isReadyForPO) {
     throw new Error(
-      "This RFQ has not completed both Legal and Finance approvals. " +
+      "This RFQ requires completed Legal e-signatures, verified integrity, and Finance approval. " +
       `Legal: ${legalDoc?.review_status ?? "N/A"}, ` +
       `Finance: ${legalDoc?.finance_status ?? "N/A"}`
     );
@@ -832,30 +760,19 @@ export async function createPurchaseOrderFromRFQ(
   // eslint-disable-next-line no-console
   console.log("[createPOFromRFQ] Fetching supplier quotations...");
   const allQuotations = await getSupplierQuotations(rfqId);
-  const winningSq = allQuotations.find(
-    (sq) => sq.supplier === selectedSupplier || sq.supplier_name === selectedSupplier
-  );
+  const winningSq = legalDoc!.sq_name
+    ? allQuotations.find(sq => sq.name === legalDoc!.sq_name && sq.supplier === selectedSupplier)
+    : allQuotations.filter(sq => sq.supplier === selectedSupplier && sq.docstatus === 1 && sq.status !== "Cancelled")
+      .sort((a, b) => b.name.localeCompare(a.name))[0];
   // eslint-disable-next-line no-console
   console.log("[createPOFromRFQ] Winning SQ:", winningSq?.name ?? "(no match)", "| total SQs:", allQuotations.length);
 
-  // Resolve the actual ERPNext supplier ID from the quotation record.
-  // `selected_supplier` may be a display name (from AI recommendation) which
-  // differs from the ERPNext Supplier document `name` (link ID). The quotation
-  // record's `supplier` field is always the authoritative ERPNext link ID.
-  let resolvedSupplierId = winningSq?.supplier ?? selectedSupplier;
-
-  // If no winning quotation was found, try resolving the supplier via ERPNext
-  // lookup by both document name and display name (supplier_name).
   if (!winningSq) {
-    // eslint-disable-next-line no-console
-    console.log("[createPOFromRFQ] No winning SQ found — resolving supplier from ERPNext...");
-    const erpNextId = await resolveSupplierERPNextId(selectedSupplier);
-    if (erpNextId) {
-      resolvedSupplierId = erpNextId;
-      // eslint-disable-next-line no-console
-      console.log("[createPOFromRFQ] Resolved via ERPNext lookup:", erpNextId);
-    }
+    throw new Error("A submitted Supplier Quotation matching the approved supplier and RFQ is required before creating a Purchase Order.");
   }
+  assertQuotationForAward(rfqId, selectedSupplier, winningSq);
+  await assertQuotationsAwardEligible(rfqId, [winningSq]);
+  const resolvedSupplierId = winningSq.supplier;
 
   // eslint-disable-next-line no-console
   console.log("[createPOFromRFQ] Selected supplier (approval state):", selectedSupplier);
@@ -965,7 +882,7 @@ export async function createPurchaseOrderFromRFQ(
   // eslint-disable-next-line no-console
   console.log("[createPOFromRFQ] Payload ready — calling createPurchaseOrder...");
 
-  // 7. Create PO via frappe.client.save (with Server Script pre-flight)
+  // 7. Create PO via frappe.client.save; the gateway revalidates signature and Finance approval.
   const po = await createPurchaseOrder({
     supplier: resolvedSupplierId,
     company: COMPANY,
@@ -1268,7 +1185,7 @@ export interface ApprovedRFQRow {
 export async function getApprovedRFQsAwaitingPO(): Promise<ApprovedRFQRow[]> {
   const financeApproved = await getLegalDocsByFinanceStatus({ status: "Approved" });
   const readyRows = financeApproved.filter(
-    (doc) => doc.review_status === "Approved" && doc.rfq_name
+    (doc) => isRfqReadyForPurchaseOrder(doc) && doc.rfq_name
   );
 
   const withPoCheck = await Promise.all(
@@ -1326,9 +1243,12 @@ export async function updatePurchaseOrder(
 export async function submitPurchaseOrder(
   name: string
 ): Promise<PurchaseOrder> {
-  // Submission also triggers document lifecycle events that run Server Scripts
-  await disableServerScriptsFor(PO_DOCTYPE);
-
+  const currentUserRole = useAuthStore.getState().user?.role;
+  if (currentUserRole && !canSubmitPurchaseOrder(currentUserRole)) {
+    throw new Error(
+      "Purchase Order submission is restricted to authorized roles. Procurement Manager has read-only access."
+    );
+  }
   const endpoint = buildResourceUrl(PO_DOCTYPE, name);
 
   // eslint-disable-next-line no-console

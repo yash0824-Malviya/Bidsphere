@@ -1,0 +1,337 @@
+{
+  "checked_at": "2026-09-23T06:09:30.267Z",
+  "read_only": true,
+  "document": {
+    "name": "SCORE-PUR-RFQ-2026-00094-00120",
+    "owner": "Administrator",
+    "creation": "2026-09-23 11:35:15.678017",
+    "modified": "2026-09-23 11:35:15.678017",
+    "modified_by": "Administrator",
+    "docstatus": 0,
+    "idx": 0,
+    "rfq": "PUR-RFQ-2026-00094",
+    "scored_at": "2026-09-23 11:35:12",
+    "price_weight": 40,
+    "delivery_weight": 25,
+    "quality_weight": 20,
+    "reliability_weight": 15,
+    "recommended_supplier": "\"Atlantic Precision Manufacturing.\"",
+    "analysis_snapshot": "{\"rfq_name\":\"PUR-RFQ-2026-00094\",\"analysed_at\":\"2026-09-23T06:05:12.928Z\",\"evaluation_run_id\":\"2bb6e50d-78b2-4967-9cdd-1e9d0652fbe7\",\"recommended_supplier\":\"Atlantic Precision Manufacturing.\",\"confidence_score\":94,\"analysis\":{\"rfq_id\":\"PUR-RFQ-2026-00094\",\"evaluation_run_id\":\"2bb6e50d-78b2-4967-9cdd-1e9d0652fbe7\",\"evaluation_weights\":{\"price_weight\":40,\"delivery_weight\":25,\"quality_weight\":20,\"reliability_weight\":15},\"recommended_quotation_id\":\"PUR-SQTN-2026-00265\",\"recommended_supplier_id\":\"\\\"Atlantic Precision Manufacturing.\\\"\",\"recommended_supplier\":\"Atlantic Precision Manufacturing.\",\"confidence_score\":94,\"recommendation_summary\":\"Atlantic Precision Manufacturing. ranks first among 3 current supplier quotations with a weighted score of 91/100. The configured weights are price 40%, delivery 25%, quality 20%, and reliability 15%.\",\"supplier_analysis\":[{\"name\":\"Atlantic Precision Manufacturing.\",\"rank\":1,\"verdict\":\"AVOID\",\"risk\":\"High\",\"grand_total\":2500,\"quote_price_status\":\"submitted\",\"strengths\":[\"Atlantic Precision Manufacturing matches the lowest price at $25.00 ($2,500 total) but presents significant quality and fulfillment risk. Quality score of 59 reflects a critical qty_accuracy_pct of only 58.7%: of 242 units ordered across 4 POs, only 142 were received (100 units short, 41% shortfall). This represents a severe discrepancy between ordered and received quantities with zero rejections recorded, suggesting incomplete or partial shipments. Delivery score of 100 is based on 3 of 3 on-time deliveries from the 3 completed GRNs, but this metric is misleading given the quantity accuracy failure. Reliability score of 95 reflects 3 of 3 invoices on time. Quoted delivery days are unavailable. The combination of poor quantity accuracy (58.7%), incomplete order fulfillment (142 of 242 units), and limited order history (4 POs, only 3 completed) makes this supplier unsuitable for a 100-unit order requiring full delivery. Risk of partial shipment or short delivery is unacceptable.\"],\"weaknesses\":[],\"score\":{\"cost\":100,\"delivery\":100,\"quality\":59,\"reliability\":95,\"overall\":91},\"why_best_or_worst\":\"Atlantic Precision Manufacturing matches the lowest price at $25.00 ($2,500 total) but presents significant quality and fulfillment risk. Quality score of 59 reflects a critical qty_accuracy_pct of only 58.7%: of 242 units ordered across 4 POs, only 142 were received (100 units short, 41% shortfall). This represents a severe discrepancy between ordered and received quantities with zero rejections recorded, suggesting incomplete or partial shipments. Delivery score of 100 is based on 3 of 3 on-time deliveries from the 3 completed GRNs, but this metric is misleading given the quantity accuracy failure. Reliability score of 95 reflects 3 of 3 invoices on time. Quoted delivery days are unavailable. The combination of poor quantity accuracy (58.7%), incomplete order fulfillment (142 of 242 units), and limited order history (4 POs, only 3 completed) makes this supplier unsuitable for a 100-unit order requiring full delivery. Risk of partial shipment or short delivery is unacceptable.\",\"quotation_id\":\"PUR-SQTN-2026-00265\",\"supplier_quotation_id\":\"PUR-SQTN-2026-00265\",\"supplier_id\":\"\\\"Atlantic Precision Manufacturing.\\\"\",\"evaluation_run_id\":\"2bb6e50d-78b2-4967-9cdd-1e9d0652fbe7\",\"evaluation_status\":\"complete\",\"raw_ai_score\":73,\"rfq_id\":\"PUR-RFQ-2026-00094\",\"has_sufficient_data\":true,\"confidence_level\":\"high\",\"score_sources\":[{\"dimension\":\"Price\",\"value\":100,\"source\":\"This supplier's submitted quotation\",\"has_data\":true},{\"dimension\":\"Delivery\",\"value\":100,\"source\":\"This supplier's receipts matched to their purchase orders; quoted delivery is separately reported\",\"has_data\":true},{\"dimension\":\"Quality\",\"value\":59,\"source\":\"Actual quantities and rejections in this supplier's purchase receipts\",\"has_data\":true},{\"dimension\":\"Reliability\",\"value\":95,\"source\":\"This supplier's order and invoice history\",\"has_data\":true}]},{\"name\":\"FEMSA\",\"rank\":2,\"verdict\":\"GOOD OPTION\",\"risk\":\"Low\",\"grand_total\":2600,\"quote_price_status\":\"submitted\",\"strengths\":[\"FEMSA delivers superior overall value despite a $100 premium ($2,600 vs $2,500). Historical performance is exceptional: perfect 100/100 delivery score with 3 of 3 on-time deliveries and zero late deliveries (avg_delay_days=0), 100/100 quality score with 100% quantity accuracy and zero rejections, and 100/100 reliability score with 3 of 3 invoices paid on time. All compliance certificates (warranty, terms, insurance) are attached. While quoted delivery days are unavailable for all suppliers, FEMSA's proven track record of zero delays and perfect execution across all 3 completed POs and 3 GRNs significantly outweighs the modest price difference. The supplier demonstrates consistent, predictable performance on smaller order volumes (565 units ordered, 565 received).\"],\"weaknesses\":[],\"score\":{\"cost\":67,\"delivery\":100,\"quality\":100,\"reliability\":100,\"overall\":87},\"why_best_or_worst\":\"FEMSA delivers superior overall value despite a $100 premium ($2,600 vs $2,500). Historical performance is exceptional: perfect 100/100 delivery score with 3 of 3 on-time deliveries and zero late deliveries (avg_delay_days=0), 100/100 quality score with 100% quantity accuracy and zero rejections, and 100/100 reliability score with 3 of 3 invoices paid on time. All compliance certificates (warranty, terms, insurance) are attached. While quoted delivery days are unavailable for all suppliers, FEMSA's proven track record of zero delays and perfect execution across all 3 completed POs and 3 GRNs significantly outweighs the modest price difference. The supplier demonstrates consistent, predictable performance on smaller order volumes (565 units ordered, 565 received).\",\"quotation_id\":\"PUR-SQTN-2026-00267\",\"supplier_quotation_id\":\"PUR-SQTN-2026-00267\",\"supplier_id\":\"FEMSA\",\"evaluation_run_id\":\"2bb6e50d-78b2-4967-9cdd-1e9d0652fbe7\",\"evaluation_status\":\"complete\",\"raw_ai_score\":95,\"rfq_id\":\"PUR-RFQ-2026-00094\",\"has_sufficient_data\":true,\"confidence_level\":\"high\",\"score_sources\":[{\"dimension\":\"Price\",\"value\":67,\"source\":\"This supplier's submitted quotation\",\"has_data\":true},{\"dimension\":\"Delivery\",\"value\":100,\"source\":\"This supplier's receipts matched to their purchase orders; quoted delivery is separately reported\",\"has_data\":true},{\"dimension\":\"Quality\",\"value\":100,\"source\":\"Actual quantities and rejections in this supplier's purchase receipts\",\"has_data\":true},{\"dimension\":\"Reliability\",\"value\":100,\"source\":\"This supplier's order and invoice history\",\"has_data\":true}]},{\"name\":\"Blue Ridge Manufacturing Inc\",\"rank\":3,\"verdict\":\"GOOD OPTION\",\"risk\":\"Medium\",\"grand_total\":2500,\"quote_price_status\":\"submitted\",\"strengths\":[\"Blue Ridge Manufacturing Inc offers the lowest unit price at $25.00 ($2,500 total), matching Atlantic Precision Manufacturing. However, historical delivery performance is concerning: delivery_score of 41 reflects 5 of 7 on-time deliveries with 2 late deliveries averaging 11.5 days delay. Quality and reliability metrics are strong (100/100 quality with zero rejections across 1,188 units, 100/100 reliability with 3 of 3 invoices on time). Quoted delivery days are unavailable. The supplier has more extensive history (7 completed POs vs competitors' 3-4), but the 29% late delivery rate introduces schedule risk. All compliance certificates are attached. Suitable as secondary option if cost is prioritized over delivery certainty.\"],\"weaknesses\":[],\"score\":{\"cost\":100,\"delivery\":41,\"quality\":100,\"reliability\":100,\"overall\":85},\"why_best_or_worst\":\"Blue Ridge Manufacturing Inc offers the lowest unit price at $25.00 ($2,500 total), matching Atlantic Precision Manufacturing. However, historical delivery performance is concerning: delivery_score of 41 reflects 5 of 7 on-time deliveries with 2 late deliveries averaging 11.5 days delay. Quality and reliability metrics are strong (100/100 quality with zero rejections across 1,188 units, 100/100 reliability with 3 of 3 invoices on time). Quoted delivery days are unavailable. The supplier has more extensive history (7 completed POs vs competitors' 3-4), but the 29% late delivery rate introduces schedule risk. All compliance certificates are attached. Suitable as secondary option if cost is prioritized over delivery certainty.\",\"quotation_id\":\"PUR-SQTN-2026-00269\",\"supplier_quotation_id\":\"PUR-SQTN-2026-00269\",\"supplier_id\":\"\\\"Blue Ridge Manufacturing Inc\\\"\",\"evaluation_run_id\":\"2bb6e50d-78b2-4967-9cdd-1e9d0652fbe7\",\"evaluation_status\":\"complete\",\"raw_ai_score\":82,\"rfq_id\":\"PUR-RFQ-2026-00094\",\"has_sufficient_data\":true,\"confidence_level\":\"high\",\"score_sources\":[{\"dimension\":\"Price\",\"value\":100,\"source\":\"This supplier's submitted quotation\",\"has_data\":true},{\"dimension\":\"Delivery\",\"value\":41,\"source\":\"This supplier's receipts matched to their purchase orders; quoted delivery is separately reported\",\"has_data\":true},{\"dimension\":\"Quality\",\"value\":100,\"source\":\"Actual quantities and rejections in this supplier's purchase receipts\",\"has_data\":true},{\"dimension\":\"Reliability\",\"value\":100,\"source\":\"This supplier's order and invoice history\",\"has_data\":true}]}],\"cost_analysis\":{\"savings_vs_expensive\":\"$100.00 saved vs most expensive\",\"savings_percentage\":4,\"price_range\":\"$2,500.00 to $2,600.00\"},\"per_item_analysis\":[],\"risk_flags\":[{\"type\":\"cost\",\"severity\":\"high\",\"message\":\"Atlantic Precision Manufacturing. (High risk): Atlantic Precision Manufacturing matches the lowest price at $25.00 ($2,500 total) but presents significant quality and fulfillment risk. Quality score of 59 reflects a critical qty_accuracy_pct of only 58.7%: of 242 units ordered across 4 POs, only 142 were received (100 units short, 41% shortfall). This represents a severe discrepancy between ordered and received quantities with zero rejections recorded, suggesting incomplete or partial shipments. Delivery score of 100 is based on 3 of 3 on-time deliveries from the 3 completed GRNs, but this metric is misleading given the quantity accuracy failure. Reliability score of 95 reflects 3 of 3 invoices on time. Quoted delivery days are unavailable. The combination of poor quantity accuracy (58.7%), incomplete order fulfillment (142 of 242 units), and limited order history (4 POs, only 3 completed) makes this supplier unsuitable for a 100-unit order requiring full delivery. Risk of partial shipment or short delivery is unacceptable.\"},{\"type\":\"cost\",\"severity\":\"low\",\"message\":\"FEMSA (Low risk): FEMSA delivers superior overall value despite a $100 premium ($2,600 vs $2,500). Historical performance is exceptional: perfect 100/100 delivery score with 3 of 3 on-time deliveries and zero late deliveries (avg_delay_days=0), 100/100 quality score with 100% quantity accuracy and zero rejections, and 100/100 reliability score with 3 of 3 invoices paid on time. All compliance certificates (warranty, terms, insurance) are attached. While quoted delivery days are unavailable for all suppliers, FEMSA's proven track record of zero delays and perfect execution across all 3 completed POs and 3 GRNs significantly outweighs the modest price difference. The supplier demonstrates consistent, predictable performance on smaller order volumes (565 units ordered, 565 received).\"},{\"type\":\"cost\",\"severity\":\"medium\",\"message\":\"Blue Ridge Manufacturing Inc (Medium risk): Blue Ridge Manufacturing Inc offers the lowest unit price at $25.00 ($2,500 total), matching Atlantic Precision Manufacturing. However, historical delivery performance is concerning: delivery_score of 41 reflects 5 of 7 on-time deliveries with 2 late deliveries averaging 11.5 days delay. Quality and reliability metrics are strong (100/100 quality with zero rejections across 1,188 units, 100/100 reliability with 3 of 3 invoices on time). Quoted delivery days are unavailable. The supplier has more extensive history (7 completed POs vs competitors' 3-4), but the 29% late delivery rate introduces schedule risk. All compliance certificates are attached. Suitable as secondary option if cost is prioritized over delivery certainty.\"}],\"negotiation_tips\":[],\"split_order_option\":{\"recommended\":false,\"reason\":\"\",\"suggestion\":\"\"},\"final_verdict\":\"Atlantic Precision Manufacturing. ranks first among 3 current supplier quotations with a weighted score of 91/100. The configured weights are price 40%, delivery 25%, quality 20%, and reliability 15%.\",\"reason\":\"Atlantic Precision Manufacturing. ranks first among 3 current supplier quotations with a weighted score of 91/100. The configured weights are price 40%, delivery 25%, quality 20%, and reliability 15%.\",\"cost_savings\":\"$100.00 saved vs most expensive\",\"risk_factors\":[\"Atlantic Precision Manufacturing. (High risk): Atlantic Precision Manufacturing matches the lowest price at $25.00 ($2,500 total) but presents significant quality and fulfillment risk. Quality score of 59 reflects a critical qty_accuracy_pct of only 58.7%: of 242 units ordered across 4 POs, only 142 were received (100 units short, 41% shortfall). This represents a severe discrepancy between ordered and received quantities with zero rejections recorded, suggesting incomplete or partial shipments. Delivery score of 100 is based on 3 of 3 on-time deliveries from the 3 completed GRNs, but this metric is misleading given the quantity accuracy failure. Reliability score of 95 reflects 3 of 3 invoices on time. Quoted delivery days are unavailable. The combination of poor quantity accuracy (58.7%), incomplete order fulfillment (142 of 242 units), and limited order history (4 POs, only 3 completed) makes this supplier unsuitable for a 100-unit order requiring full delivery. Risk of partial shipment or short delivery is unacceptable.\",\"FEMSA (Low risk): FEMSA delivers superior overall value despite a $100 premium ($2,600 vs $2,500). Historical performance is exceptional: perfect 100/100 delivery score with 3 of 3 on-time deliveries and zero late deliveries (avg_delay_days=0), 100/100 quality score with 100% quantity accuracy and zero rejections, and 100/100 reliability score with 3 of 3 invoices paid on time. All compliance certificates (warranty, terms, insurance) are attached. While quoted delivery days are unavailable for all suppliers, FEMSA's proven track record of zero delays and perfect execution across all 3 completed POs and 3 GRNs significantly outweighs the modest price difference. The supplier demonstrates consistent, predictable performance on smaller order volumes (565 units ordered, 565 received).\",\"Blue Ridge Manufacturing Inc (Medium risk): Blue Ridge Manufacturing Inc offers the lowest unit price at $25.00 ($2,500 total), matching Atlantic Precision Manufacturing. However, historical delivery performance is concerning: delivery_score of 41 reflects 5 of 7 on-time deliveries with 2 late deliveries averaging 11.5 days delay. Quality and reliability metrics are strong (100/100 quality with zero rejections across 1,188 units, 100/100 reliability with 3 of 3 invoices on time). Quoted delivery days are unavailable. The supplier has more extensive history (7 completed POs vs competitors' 3-4), but the 29% late delivery rate introduces schedule risk. All compliance certificates are attached. Suitable as secondary option if cost is prioritized over delivery certainty.\"],\"per_item_recommendation\":[]},\"quotations_snapshot\":[{\"supplier\":\"Blue Ridge Manufacturing Inc\",\"supplier_id\":\"\\\"Blue Ridge Manufacturing Inc\\\"\",\"quotation_id\":\"PUR-SQTN-2026-00269\",\"grand_total\":2500},{\"supplier\":\"FEMSA\",\"supplier_id\":\"FEMSA\",\"quotation_id\":\"PUR-SQTN-2026-00267\",\"grand_total\":2600},{\"supplier\":\"Atlantic Precision Manufacturing.\",\"supplier_id\":\"\\\"Atlantic Precision Manufacturing.\\\"\",\"quotation_id\":\"PUR-SQTN-2026-00265\",\"grand_total\":2500}]}",
+    "doctype": "Supplier Scoring Result",
+    "supplier_scores": [
+      {
+        "name": "e8kgc9ubsm",
+        "owner": "Administrator",
+        "creation": "2026-09-23 11:35:15.678017",
+        "modified": "2026-09-23 11:35:15.678017",
+        "modified_by": "Administrator",
+        "docstatus": 0,
+        "idx": 1,
+        "supplier": "\"Atlantic Precision Manufacturing.\"",
+        "supplier_name": "Atlantic Precision Manufacturing.",
+        "price_score": 100,
+        "delivery_score": 100,
+        "quality_score": 59,
+        "reliability_score": 95,
+        "final_score": 91,
+        "ranking": 1,
+        "recommendation_reason": "Atlantic Precision Manufacturing matches the lowest price at $25.00 ($2,500 total) but presents significant quality and fulfillment risk. Quality score of 59 reflects a critical qty_accuracy_pct of only 58.7%: of 242 units ordered across 4 POs, only 142 were received (100 units short, 41% shortfall). This represents a severe discrepancy between ordered and received quantities with zero rejections recorded, suggesting incomplete or partial shipments. Delivery score of 100 is based on 3 of 3 on-time deliveries from the 3 completed GRNs, but this metric is misleading given the quantity accuracy failure. Reliability score of 95 reflects 3 of 3 invoices on time. Quoted delivery days are unavailable. The combination of poor quantity accuracy (58.7%), incomplete order fulfillment (142 of 242 units), and limited order history (4 POs, only 3 completed) makes this supplier unsuitable for a 100-unit order requiring full delivery. Risk of partial shipment or short delivery is unacceptable.",
+        "parent": "SCORE-PUR-RFQ-2026-00094-00120",
+        "parentfield": "supplier_scores",
+        "parenttype": "Supplier Scoring Result",
+        "doctype": "Supplier Score Row"
+      },
+      {
+        "name": "e8kj7s08ui",
+        "owner": "Administrator",
+        "creation": "2026-09-23 11:35:15.678017",
+        "modified": "2026-09-23 11:35:15.678017",
+        "modified_by": "Administrator",
+        "docstatus": 0,
+        "idx": 2,
+        "supplier": "FEMSA",
+        "supplier_name": "FEMSA",
+        "price_score": 67,
+        "delivery_score": 100,
+        "quality_score": 100,
+        "reliability_score": 100,
+        "final_score": 87,
+        "ranking": 2,
+        "recommendation_reason": "FEMSA delivers superior overall value despite a $100 premium ($2,600 vs $2,500). Historical performance is exceptional: perfect 100/100 delivery score with 3 of 3 on-time deliveries and zero late deliveries (avg_delay_days=0), 100/100 quality score with 100% quantity accuracy and zero rejections, and 100/100 reliability score with 3 of 3 invoices paid on time. All compliance certificates (warranty, terms, insurance) are attached. While quoted delivery days are unavailable for all suppliers, FEMSA's proven track record of zero delays and perfect execution across all 3 completed POs and 3 GRNs significantly outweighs the modest price difference. The supplier demonstrates consistent, predictable performance on smaller order volumes (565 units ordered, 565 received).",
+        "parent": "SCORE-PUR-RFQ-2026-00094-00120",
+        "parentfield": "supplier_scores",
+        "parenttype": "Supplier Scoring Result",
+        "doctype": "Supplier Score Row"
+      },
+      {
+        "name": "e8kd5cafhl",
+        "owner": "Administrator",
+        "creation": "2026-09-23 11:35:15.678017",
+        "modified": "2026-09-23 11:35:15.678017",
+        "modified_by": "Administrator",
+        "docstatus": 0,
+        "idx": 3,
+        "supplier": "\"Blue Ridge Manufacturing Inc\"",
+        "supplier_name": "Blue Ridge Manufacturing Inc",
+        "price_score": 100,
+        "delivery_score": 41,
+        "quality_score": 100,
+        "reliability_score": 100,
+        "final_score": 85,
+        "ranking": 3,
+        "recommendation_reason": "Blue Ridge Manufacturing Inc offers the lowest unit price at $25.00 ($2,500 total), matching Atlantic Precision Manufacturing. However, historical delivery performance is concerning: delivery_score of 41 reflects 5 of 7 on-time deliveries with 2 late deliveries averaging 11.5 days delay. Quality and reliability metrics are strong (100/100 quality with zero rejections across 1,188 units, 100/100 reliability with 3 of 3 invoices on time). Quoted delivery days are unavailable. The supplier has more extensive history (7 completed POs vs competitors' 3-4), but the 29% late delivery rate introduces schedule risk. All compliance certificates are attached. Suitable as secondary option if cost is prioritized over delivery certainty.",
+        "parent": "SCORE-PUR-RFQ-2026-00094-00120",
+        "parentfield": "supplier_scores",
+        "parenttype": "Supplier Scoring Result",
+        "doctype": "Supplier Score Row"
+      }
+    ]
+  },
+  "snapshot": {
+    "rfq_name": "PUR-RFQ-2026-00094",
+    "analysed_at": "2026-09-23T06:05:12.928Z",
+    "evaluation_run_id": "2bb6e50d-78b2-4967-9cdd-1e9d0652fbe7",
+    "recommended_supplier": "Atlantic Precision Manufacturing.",
+    "confidence_score": 94,
+    "analysis": {
+      "rfq_id": "PUR-RFQ-2026-00094",
+      "evaluation_run_id": "2bb6e50d-78b2-4967-9cdd-1e9d0652fbe7",
+      "evaluation_weights": {
+        "price_weight": 40,
+        "delivery_weight": 25,
+        "quality_weight": 20,
+        "reliability_weight": 15
+      },
+      "recommended_quotation_id": "PUR-SQTN-2026-00265",
+      "recommended_supplier_id": "\"Atlantic Precision Manufacturing.\"",
+      "recommended_supplier": "Atlantic Precision Manufacturing.",
+      "confidence_score": 94,
+      "recommendation_summary": "Atlantic Precision Manufacturing. ranks first among 3 current supplier quotations with a weighted score of 91/100. The configured weights are price 40%, delivery 25%, quality 20%, and reliability 15%.",
+      "supplier_analysis": [
+        {
+          "name": "Atlantic Precision Manufacturing.",
+          "rank": 1,
+          "verdict": "AVOID",
+          "risk": "High",
+          "grand_total": 2500,
+          "quote_price_status": "submitted",
+          "strengths": [
+            "Atlantic Precision Manufacturing matches the lowest price at $25.00 ($2,500 total) but presents significant quality and fulfillment risk. Quality score of 59 reflects a critical qty_accuracy_pct of only 58.7%: of 242 units ordered across 4 POs, only 142 were received (100 units short, 41% shortfall). This represents a severe discrepancy between ordered and received quantities with zero rejections recorded, suggesting incomplete or partial shipments. Delivery score of 100 is based on 3 of 3 on-time deliveries from the 3 completed GRNs, but this metric is misleading given the quantity accuracy failure. Reliability score of 95 reflects 3 of 3 invoices on time. Quoted delivery days are unavailable. The combination of poor quantity accuracy (58.7%), incomplete order fulfillment (142 of 242 units), and limited order history (4 POs, only 3 completed) makes this supplier unsuitable for a 100-unit order requiring full delivery. Risk of partial shipment or short delivery is unacceptable."
+          ],
+          "weaknesses": [],
+          "score": {
+            "cost": 100,
+            "delivery": 100,
+            "quality": 59,
+            "reliability": 95,
+            "overall": 91
+          },
+          "why_best_or_worst": "Atlantic Precision Manufacturing matches the lowest price at $25.00 ($2,500 total) but presents significant quality and fulfillment risk. Quality score of 59 reflects a critical qty_accuracy_pct of only 58.7%: of 242 units ordered across 4 POs, only 142 were received (100 units short, 41% shortfall). This represents a severe discrepancy between ordered and received quantities with zero rejections recorded, suggesting incomplete or partial shipments. Delivery score of 100 is based on 3 of 3 on-time deliveries from the 3 completed GRNs, but this metric is misleading given the quantity accuracy failure. Reliability score of 95 reflects 3 of 3 invoices on time. Quoted delivery days are unavailable. The combination of poor quantity accuracy (58.7%), incomplete order fulfillment (142 of 242 units), and limited order history (4 POs, only 3 completed) makes this supplier unsuitable for a 100-unit order requiring full delivery. Risk of partial shipment or short delivery is unacceptable.",
+          "quotation_id": "PUR-SQTN-2026-00265",
+          "supplier_quotation_id": "PUR-SQTN-2026-00265",
+          "supplier_id": "\"Atlantic Precision Manufacturing.\"",
+          "evaluation_run_id": "2bb6e50d-78b2-4967-9cdd-1e9d0652fbe7",
+          "evaluation_status": "complete",
+          "raw_ai_score": 73,
+          "rfq_id": "PUR-RFQ-2026-00094",
+          "has_sufficient_data": true,
+          "confidence_level": "high",
+          "score_sources": [
+            {
+              "dimension": "Price",
+              "value": 100,
+              "source": "This supplier's submitted quotation",
+              "has_data": true
+            },
+            {
+              "dimension": "Delivery",
+              "value": 100,
+              "source": "This supplier's receipts matched to their purchase orders; quoted delivery is separately reported",
+              "has_data": true
+            },
+            {
+              "dimension": "Quality",
+              "value": 59,
+              "source": "Actual quantities and rejections in this supplier's purchase receipts",
+              "has_data": true
+            },
+            {
+              "dimension": "Reliability",
+              "value": 95,
+              "source": "This supplier's order and invoice history",
+              "has_data": true
+            }
+          ]
+        },
+        {
+          "name": "FEMSA",
+          "rank": 2,
+          "verdict": "GOOD OPTION",
+          "risk": "Low",
+          "grand_total": 2600,
+          "quote_price_status": "submitted",
+          "strengths": [
+            "FEMSA delivers superior overall value despite a $100 premium ($2,600 vs $2,500). Historical performance is exceptional: perfect 100/100 delivery score with 3 of 3 on-time deliveries and zero late deliveries (avg_delay_days=0), 100/100 quality score with 100% quantity accuracy and zero rejections, and 100/100 reliability score with 3 of 3 invoices paid on time. All compliance certificates (warranty, terms, insurance) are attached. While quoted delivery days are unavailable for all suppliers, FEMSA's proven track record of zero delays and perfect execution across all 3 completed POs and 3 GRNs significantly outweighs the modest price difference. The supplier demonstrates consistent, predictable performance on smaller order volumes (565 units ordered, 565 received)."
+          ],
+          "weaknesses": [],
+          "score": {
+            "cost": 67,
+            "delivery": 100,
+            "quality": 100,
+            "reliability": 100,
+            "overall": 87
+          },
+          "why_best_or_worst": "FEMSA delivers superior overall value despite a $100 premium ($2,600 vs $2,500). Historical performance is exceptional: perfect 100/100 delivery score with 3 of 3 on-time deliveries and zero late deliveries (avg_delay_days=0), 100/100 quality score with 100% quantity accuracy and zero rejections, and 100/100 reliability score with 3 of 3 invoices paid on time. All compliance certificates (warranty, terms, insurance) are attached. While quoted delivery days are unavailable for all suppliers, FEMSA's proven track record of zero delays and perfect execution across all 3 completed POs and 3 GRNs significantly outweighs the modest price difference. The supplier demonstrates consistent, predictable performance on smaller order volumes (565 units ordered, 565 received).",
+          "quotation_id": "PUR-SQTN-2026-00267",
+          "supplier_quotation_id": "PUR-SQTN-2026-00267",
+          "supplier_id": "FEMSA",
+          "evaluation_run_id": "2bb6e50d-78b2-4967-9cdd-1e9d0652fbe7",
+          "evaluation_status": "complete",
+          "raw_ai_score": 95,
+          "rfq_id": "PUR-RFQ-2026-00094",
+          "has_sufficient_data": true,
+          "confidence_level": "high",
+          "score_sources": [
+            {
+              "dimension": "Price",
+              "value": 67,
+              "source": "This supplier's submitted quotation",
+              "has_data": true
+            },
+            {
+              "dimension": "Delivery",
+              "value": 100,
+              "source": "This supplier's receipts matched to their purchase orders; quoted delivery is separately reported",
+              "has_data": true
+            },
+            {
+              "dimension": "Quality",
+              "value": 100,
+              "source": "Actual quantities and rejections in this supplier's purchase receipts",
+              "has_data": true
+            },
+            {
+              "dimension": "Reliability",
+              "value": 100,
+              "source": "This supplier's order and invoice history",
+              "has_data": true
+            }
+          ]
+        },
+        {
+          "name": "Blue Ridge Manufacturing Inc",
+          "rank": 3,
+          "verdict": "GOOD OPTION",
+          "risk": "Medium",
+          "grand_total": 2500,
+          "quote_price_status": "submitted",
+          "strengths": [
+            "Blue Ridge Manufacturing Inc offers the lowest unit price at $25.00 ($2,500 total), matching Atlantic Precision Manufacturing. However, historical delivery performance is concerning: delivery_score of 41 reflects 5 of 7 on-time deliveries with 2 late deliveries averaging 11.5 days delay. Quality and reliability metrics are strong (100/100 quality with zero rejections across 1,188 units, 100/100 reliability with 3 of 3 invoices on time). Quoted delivery days are unavailable. The supplier has more extensive history (7 completed POs vs competitors' 3-4), but the 29% late delivery rate introduces schedule risk. All compliance certificates are attached. Suitable as secondary option if cost is prioritized over delivery certainty."
+          ],
+          "weaknesses": [],
+          "score": {
+            "cost": 100,
+            "delivery": 41,
+            "quality": 100,
+            "reliability": 100,
+            "overall": 85
+          },
+          "why_best_or_worst": "Blue Ridge Manufacturing Inc offers the lowest unit price at $25.00 ($2,500 total), matching Atlantic Precision Manufacturing. However, historical delivery performance is concerning: delivery_score of 41 reflects 5 of 7 on-time deliveries with 2 late deliveries averaging 11.5 days delay. Quality and reliability metrics are strong (100/100 quality with zero rejections across 1,188 units, 100/100 reliability with 3 of 3 invoices on time). Quoted delivery days are unavailable. The supplier has more extensive history (7 completed POs vs competitors' 3-4), but the 29% late delivery rate introduces schedule risk. All compliance certificates are attached. Suitable as secondary option if cost is prioritized over delivery certainty.",
+          "quotation_id": "PUR-SQTN-2026-00269",
+          "supplier_quotation_id": "PUR-SQTN-2026-00269",
+          "supplier_id": "\"Blue Ridge Manufacturing Inc\"",
+          "evaluation_run_id": "2bb6e50d-78b2-4967-9cdd-1e9d0652fbe7",
+          "evaluation_status": "complete",
+          "raw_ai_score": 82,
+          "rfq_id": "PUR-RFQ-2026-00094",
+          "has_sufficient_data": true,
+          "confidence_level": "high",
+          "score_sources": [
+            {
+              "dimension": "Price",
+              "value": 100,
+              "source": "This supplier's submitted quotation",
+              "has_data": true
+            },
+            {
+              "dimension": "Delivery",
+              "value": 41,
+              "source": "This supplier's receipts matched to their purchase orders; quoted delivery is separately reported",
+              "has_data": true
+            },
+            {
+              "dimension": "Quality",
+              "value": 100,
+              "source": "Actual quantities and rejections in this supplier's purchase receipts",
+              "has_data": true
+            },
+            {
+              "dimension": "Reliability",
+              "value": 100,
+              "source": "This supplier's order and invoice history",
+              "has_data": true
+            }
+          ]
+        }
+      ],
+      "cost_analysis": {
+        "savings_vs_expensive": "$100.00 saved vs most expensive",
+        "savings_percentage": 4,
+        "price_range": "$2,500.00 to $2,600.00"
+      },
+      "per_item_analysis": [],
+      "risk_flags": [
+        {
+          "type": "cost",
+          "severity": "high",
+          "message": "Atlantic Precision Manufacturing. (High risk): Atlantic Precision Manufacturing matches the lowest price at $25.00 ($2,500 total) but presents significant quality and fulfillment risk. Quality score of 59 reflects a critical qty_accuracy_pct of only 58.7%: of 242 units ordered across 4 POs, only 142 were received (100 units short, 41% shortfall). This represents a severe discrepancy between ordered and received quantities with zero rejections recorded, suggesting incomplete or partial shipments. Delivery score of 100 is based on 3 of 3 on-time deliveries from the 3 completed GRNs, but this metric is misleading given the quantity accuracy failure. Reliability score of 95 reflects 3 of 3 invoices on time. Quoted delivery days are unavailable. The combination of poor quantity accuracy (58.7%), incomplete order fulfillment (142 of 242 units), and limited order history (4 POs, only 3 completed) makes this supplier unsuitable for a 100-unit order requiring full delivery. Risk of partial shipment or short delivery is unacceptable."
+        },
+        {
+          "type": "cost",
+          "severity": "low",
+          "message": "FEMSA (Low risk): FEMSA delivers superior overall value despite a $100 premium ($2,600 vs $2,500). Historical performance is exceptional: perfect 100/100 delivery score with 3 of 3 on-time deliveries and zero late deliveries (avg_delay_days=0), 100/100 quality score with 100% quantity accuracy and zero rejections, and 100/100 reliability score with 3 of 3 invoices paid on time. All compliance certificates (warranty, terms, insurance) are attached. While quoted delivery days are unavailable for all suppliers, FEMSA's proven track record of zero delays and perfect execution across all 3 completed POs and 3 GRNs significantly outweighs the modest price difference. The supplier demonstrates consistent, predictable performance on smaller order volumes (565 units ordered, 565 received)."
+        },
+        {
+          "type": "cost",
+          "severity": "medium",
+          "message": "Blue Ridge Manufacturing Inc (Medium risk): Blue Ridge Manufacturing Inc offers the lowest unit price at $25.00 ($2,500 total), matching Atlantic Precision Manufacturing. However, historical delivery performance is concerning: delivery_score of 41 reflects 5 of 7 on-time deliveries with 2 late deliveries averaging 11.5 days delay. Quality and reliability metrics are strong (100/100 quality with zero rejections across 1,188 units, 100/100 reliability with 3 of 3 invoices on time). Quoted delivery days are unavailable. The supplier has more extensive history (7 completed POs vs competitors' 3-4), but the 29% late delivery rate introduces schedule risk. All compliance certificates are attached. Suitable as secondary option if cost is prioritized over delivery certainty."
+        }
+      ],
+      "negotiation_tips": [],
+      "split_order_option": {
+        "recommended": false,
+        "reason": "",
+        "suggestion": ""
+      },
+      "final_verdict": "Atlantic Precision Manufacturing. ranks first among 3 current supplier quotations with a weighted score of 91/100. The configured weights are price 40%, delivery 25%, quality 20%, and reliability 15%.",
+      "reason": "Atlantic Precision Manufacturing. ranks first among 3 current supplier quotations with a weighted score of 91/100. The configured weights are price 40%, delivery 25%, quality 20%, and reliability 15%.",
+      "cost_savings": "$100.00 saved vs most expensive",
+      "risk_factors": [
+        "Atlantic Precision Manufacturing. (High risk): Atlantic Precision Manufacturing matches the lowest price at $25.00 ($2,500 total) but presents significant quality and fulfillment risk. Quality score of 59 reflects a critical qty_accuracy_pct of only 58.7%: of 242 units ordered across 4 POs, only 142 were received (100 units short, 41% shortfall). This represents a severe discrepancy between ordered and received quantities with zero rejections recorded, suggesting incomplete or partial shipments. Delivery score of 100 is based on 3 of 3 on-time deliveries from the 3 completed GRNs, but this metric is misleading given the quantity accuracy failure. Reliability score of 95 reflects 3 of 3 invoices on time. Quoted delivery days are unavailable. The combination of poor quantity accuracy (58.7%), incomplete order fulfillment (142 of 242 units), and limited order history (4 POs, only 3 completed) makes this supplier unsuitable for a 100-unit order requiring full delivery. Risk of partial shipment or short delivery is unacceptable.",
+        "FEMSA (Low risk): FEMSA delivers superior overall value despite a $100 premium ($2,600 vs $2,500). Historical performance is exceptional: perfect 100/100 delivery score with 3 of 3 on-time deliveries and zero late deliveries (avg_delay_days=0), 100/100 quality score with 100% quantity accuracy and zero rejections, and 100/100 reliability score with 3 of 3 invoices paid on time. All compliance certificates (warranty, terms, insurance) are attached. While quoted delivery days are unavailable for all suppliers, FEMSA's proven track record of zero delays and perfect execution across all 3 completed POs and 3 GRNs significantly outweighs the modest price difference. The supplier demonstrates consistent, predictable performance on smaller order volumes (565 units ordered, 565 received).",
+        "Blue Ridge Manufacturing Inc (Medium risk): Blue Ridge Manufacturing Inc offers the lowest unit price at $25.00 ($2,500 total), matching Atlantic Precision Manufacturing. However, historical delivery performance is concerning: delivery_score of 41 reflects 5 of 7 on-time deliveries with 2 late deliveries averaging 11.5 days delay. Quality and reliability metrics are strong (100/100 quality with zero rejections across 1,188 units, 100/100 reliability with 3 of 3 invoices on time). Quoted delivery days are unavailable. The supplier has more extensive history (7 completed POs vs competitors' 3-4), but the 29% late delivery rate introduces schedule risk. All compliance certificates are attached. Suitable as secondary option if cost is prioritized over delivery certainty."
+      ],
+      "per_item_recommendation": []
+    },
+    "quotations_snapshot": [
+      {
+        "supplier": "Blue Ridge Manufacturing Inc",
+        "supplier_id": "\"Blue Ridge Manufacturing Inc\"",
+        "quotation_id": "PUR-SQTN-2026-00269",
+        "grand_total": 2500
+      },
+      {
+        "supplier": "FEMSA",
+        "supplier_id": "FEMSA",
+        "quotation_id": "PUR-SQTN-2026-00267",
+        "grand_total": 2600
+      },
+      {
+        "supplier": "Atlantic Precision Manufacturing.",
+        "supplier_id": "\"Atlantic Precision Manufacturing.\"",
+        "quotation_id": "PUR-SQTN-2026-00265",
+        "grand_total": 2500
+      }
+    ]
+  }
+}

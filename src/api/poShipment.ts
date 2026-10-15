@@ -4,6 +4,7 @@
  */
 import type { PODeliveryState, PODeliveryStatus } from "./poDeliveryWorkflow";
 import { sanitizePoShipmentDates } from "../utils/erpNextDate";
+import { readErpProxyAccessToken, readSupplierAccessToken } from "../utils/accessToken";
 
 export interface PoShipmentRecord {
   name?: string;
@@ -34,9 +35,15 @@ async function callPoShipmentApi<T>(
     "Content-Type": "application/json",
   };
   try {
-    const token =
-      sessionStorage.getItem("bidsphere-access-token") ||
-      localStorage.getItem("bidsphere-access-token-remember");
+    const supplierPortal = typeof window !== "undefined" && window.location.pathname.startsWith("/supplier/");
+    let token = supplierPortal ? readSupplierAccessToken() : readErpProxyAccessToken();
+    if (supplierPortal && token) {
+      // Never borrow a staff session for supplier acceptance when portals share storage.
+      try {
+        const parts = token.split(".");
+        if (parts.length !== 2 || JSON.parse(atob(parts[0].replaceAll("-", "+").replaceAll("_", "/"))).typ !== "supplier") token = null;
+      } catch { token = null; }
+    }
     if (token) headers["X-Bidsphere-Access-Token"] = token;
   } catch {
     /* ignore */

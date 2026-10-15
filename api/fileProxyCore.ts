@@ -452,18 +452,23 @@ export async function resolveExactErpFileRecord(
   filePath: string,
   headers: Record<string, string>,
   fileId?: string,
+  authorizeCandidate?: (file: FileProxyFileRecord) => Promise<void>,
 ): Promise<FileProxyFileRecord> {
   try {
     // If explicit persistent fileId is provided, resolve directly by primary key
-    if (
+    const cleanFileId =
       fileId &&
       typeof fileId === "string" &&
       fileId.trim() &&
       !fileId.startsWith("/") &&
+      !fileId.startsWith("doc_") &&
       !fileId.startsWith("att-") &&
       !fileId.startsWith("direct-")
-    ) {
-      const idUrl = `${base}/api/resource/File/${encodeURIComponent(fileId.trim())}`;
+        ? fileId.trim()
+        : undefined;
+
+    if (cleanFileId) {
+      const idUrl = `${base}/api/resource/File/${encodeURIComponent(cleanFileId)}`;
       const idRes = await fetch(idUrl, {
         headers: { ...headers, Accept: "application/json" },
         signal: AbortSignal.timeout(10_000),
@@ -471,13 +476,22 @@ export async function resolveExactErpFileRecord(
       if (idRes.ok) {
         const json = (await idRes.json()) as { data?: FileProxyFileRecord };
         if (json.data?.name && json.data?.file_url) {
+          if (canonicalErpFilePath(json.data.file_url) !== filePath || json.data.is_folder) {
+            throw new FileProxyLookupError("The File ID does not match the requested file path.", 403);
+          }
           return json.data;
         }
       }
+      throw new FileProxyLookupError("Unable to verify the requested File ID.", idRes.status === 404 ? 404 : 403);
     }
 
+    const encodedPath = encodeFilePathForHttp(filePath);
+    const pathFilters =
+      filePath === encodedPath
+        ? [["file_url", "=", filePath]]
+        : [["file_url", "in", [filePath, encodedPath]]];
     const filters = encodeURIComponent(
-      JSON.stringify([["file_url", "=", filePath]]),
+      JSON.stringify(pathFilters),
     );
     const fields = encodeURIComponent(
       JSON.stringify([
@@ -493,7 +507,7 @@ export async function resolveExactErpFileRecord(
     );
     const url =
       `${base}/api/resource/File?filters=${filters}&fields=${fields}` +
-      `&limit_page_length=2`;
+      `&limit_page_length=20`;
     const res = await fetch(url, {
       headers: { ...headers, Accept: "application/json" },
       signal: AbortSignal.timeout(10_000),
@@ -508,15 +522,52 @@ export async function resolveExactErpFileRecord(
       data?: FileProxyFileRecord[];
     };
     const rows = (Array.isArray(json.data) ? json.data : []).filter((row) =>
-      canonicalErpFilePath(String(row.file_url || "")) === filePath
+      canonicalErpFilePath(String(row.file_url || "")) === filePath && !row.is_folder
     );
     if (rows.length === 0) {
       throw new FileProxyLookupError("File is no longer available.", 404);
     }
-    if (rows.length !== 1 || !rows[0]?.name) {
+    if (rows.length === 1 && rows[0]?.name) {
+      return rows[0];
+    }
+
+    // Multiple rows found with the same file_url:
+    // If all rows share the same attached_to_doctype and attached_to_name, they are duplicate attachments on the same record -> ambiguous.
+    const uniqueParents = new Set(
+      rows.map((r) => `${r.attached_to_doctype || ""}::${r.attached_to_name || ""}`)
+    );
+    if (uniqueParents.size <= 1) {
       throw new FileProxyLookupError("The requested file path is ambiguous.", 403);
     }
-    return rows[0];
+
+    if (authorizeCandidate) {
+      const authorizedRows: FileProxyFileRecord[] = [];
+      let lastErrorStatus = 403;
+      for (const row of rows) {
+        if (!row?.name) continue;
+        try {
+          await authorizeCandidate(row);
+          authorizedRows.push(row);
+        } catch (authErr) {
+          if (authErr && typeof authErr === "object" && "status" in authErr) {
+            const st = Number((authErr as { status?: number }).status);
+            if (st >= 400 && st < 600) lastErrorStatus = st;
+          }
+        }
+      }
+      if (authorizedRows.length === 1) {
+        return authorizedRows[0];
+      }
+      if (authorizedRows.length === 0) {
+        throw new FileProxyLookupError(
+          "You do not have permission to view this document.",
+          lastErrorStatus,
+        );
+      }
+      throw new FileProxyLookupError("The requested file path is ambiguous.", 403);
+    }
+
+    throw new FileProxyLookupError("The requested file path is ambiguous.", 403);
   } catch (err) {
     if (err instanceof FileProxyLookupError) throw err;
     console.warn("[file-proxy] File DocType lookup failed:", err);
@@ -573,7 +624,7 @@ export async function fetchErpFile(opts: {
 
   let file: FileProxyFileRecord;
   try {
-    file = await resolveExactErpFileRecord(base, rawPath, headers, opts.fileId);
+    file = await resolveExactErpFileRecord(base, rawPath, headers, opts.fileId, opts.authorizeFile);
     await opts.authorizeFile(file);
   } catch (err) {
     const status = err && typeof err === "object" && "status" in err

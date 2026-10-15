@@ -26,18 +26,22 @@ export default function UserProfileMenu() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  const displayName = user
-    ? displayNameForAuthenticatedUser(user)
-    : t("sidebar.signedOut", "Signed out");
+  const displayName = user ? displayNameForAuthenticatedUser(user) : "Procurement Manager";
 
-  const initials = displayName
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((p) => p[0]?.toUpperCase() ?? "")
-    .join("") || "?";
+  const isProcurementManager =
+    user?.role === "procurement" ||
+    user?.email?.toLowerCase().includes("procurement");
 
-  const roleLabel = user?.role ? ROLE_LABELS[user.role] : "—";
+  const avatarText = isProcurementManager
+    ? "PM"
+    : displayName
+        .split(" ")
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((p: string) => p[0]?.toUpperCase() ?? "")
+        .join("") || "PM";
+
+  const roleLabel = user?.role ? ROLE_LABELS[user.role] : "Procurement Manager";
 
   const handleLogout = useCallback(() => {
     setOpen(false);
@@ -63,33 +67,35 @@ export default function UserProfileMenu() {
   }, [open]);
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} className="relative flex items-center gap-2">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={t("sidebar.accountMenu", "Account menu")}
-        className="flex h-10 w-10 items-center justify-center rounded-full border border-[#E8EDF5] bg-white p-0 transition hover:border-primary-200 hover:ring-2 hover:ring-primary-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-300"
+        className="flex h-9 w-9 items-center justify-center rounded-full border border-[#E2E8F0] bg-white p-0 transition hover:border-[#1554D1] hover:ring-2 hover:ring-primary-100 focus:outline-none"
       >
-        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-[13px] font-semibold text-white">
-          {initials}
+        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#1554D1] text-[12px] font-bold text-white tracking-wide">
+          {avatarText}
         </span>
       </button>
 
       {open ? (
         <div
           role="menu"
-          className="absolute right-0 z-50 mt-2 w-56 overflow-hidden rounded-xl border border-[#E8EDF5] bg-white py-1 shadow-[0_8px_24px_rgba(15,23,42,0.08)]"
+          className="absolute right-0 top-full z-50 mt-2 w-56 overflow-hidden rounded-xl border border-[#E2E8F0] bg-white py-1 shadow-[0_8px_24px_rgba(15,23,42,0.08)]"
         >
-          <div className="border-b border-[#E8EDF5] px-3.5 py-3">
-            <p className="truncate text-[14px] font-semibold text-neutral-900">
+          <div className="border-b border-[#E2E8F0] px-3.5 py-2.5 bg-[#F8FAFC]">
+            <p className="truncate text-[13.5px] font-bold text-[#12213F]">
               {displayName}
             </p>
-            <p className="mt-0.5 truncate text-[12px] font-medium text-primary-700">
-              {roleLabel}
-            </p>
-            <p className="mt-0.5 truncate text-[12px] text-neutral-500">
+            <div className="mt-1 flex items-center gap-1.5">
+              <span className="inline-flex items-center rounded-md bg-[#EEF4FF] px-1.5 py-0.5 text-[11px] font-semibold text-[#1554D1]">
+                {roleLabel}
+              </span>
+            </div>
+            <p className="mt-1 truncate text-[11.5px] text-[#64748B]">
               {user?.email ?? "—"}
             </p>
           </div>
@@ -98,29 +104,29 @@ export default function UserProfileMenu() {
             <MenuLink
               to="/account/profile"
               icon={UserRound}
-              label="My Profile"
+              label="Profile"
               onNavigate={() => setOpen(false)}
             />
             <MenuLink
               to="/account/change-password"
               icon={KeyRound}
-              label="Change Password"
+              label="Account Settings"
               onNavigate={() => setOpen(false)}
             />
             <MenuLink
-              to="/support/help-desk"
+              to="/account/profile?tab=preferences"
               icon={CircleHelp}
-              label="Help"
+              label="Preferences"
               onNavigate={() => setOpen(false)}
             />
           </div>
 
-          <div className="border-t border-[#E8EDF5] py-1">
+          <div className="border-t border-[#E2E8F0] py-1">
             <button
               type="button"
               role="menuitem"
               onClick={handleLogout}
-              className="flex w-full cursor-pointer items-center gap-2.5 border-none bg-transparent px-3.5 py-2 text-left text-[13px] font-medium text-rose-600 transition hover:bg-rose-50"
+              className="flex w-full cursor-pointer items-center gap-2.5 border-none bg-transparent px-3.5 py-2 text-left text-[13px] font-semibold text-[#DC2626] transition hover:bg-[#FEF2F2]"
             >
               <LogOut className="h-3.5 w-3.5" />
               {t("sidebar.logout", "Logout")}

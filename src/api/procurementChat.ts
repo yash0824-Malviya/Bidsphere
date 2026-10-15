@@ -1,15 +1,9 @@
 import { COMPANY, erpnextClient } from "./erpnext";
 import { AI_ASSISTANT_NAME, APP_NAME } from "../config/branding";
+import { ANTHROPIC_MODEL } from "../config/aiConfig";
 
 const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
-
-// Model is configured via env (VITE_ANTHROPIC_MODEL). The default is only a
-// safety net so the app still works if the variable is not set.
-const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929";
-const ANTHROPIC_MODEL =
-  (import.meta.env.VITE_ANTHROPIC_MODEL as string | undefined)?.trim() ||
-  DEFAULT_ANTHROPIC_MODEL;
 const REQUEST_TIMEOUT_MS = 45_000;
 const AUTO_RETRY_DELAY_MS = 2_000;
 const MAX_ATTEMPTS = 2;
@@ -94,7 +88,7 @@ export function getUserFacingAIError(err: unknown): {
   }
 
   if (err instanceof Error) {
-    if (err.message.includes("VITE_ANTHROPIC_API_KEY")) {
+    if (err.message.includes("ANTHROPIC_API_KEY")) {
       return {
         message:
           `${AI_ASSISTANT_NAME} is not available right now. Please contact your administrator.`,
@@ -389,14 +383,6 @@ export async function callClaudeWithData(
   erpData: Record<string, unknown>,
   history: ChatHistoryMessage[]
 ): Promise<{ text: string; data: Record<string, unknown> }> {
-  const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY as string | undefined;
-  if (!apiKey) {
-    throw new ProcurementAIError("Missing VITE_ANTHROPIC_API_KEY", {
-      retryable: false,
-      userMessage:
-        `${AI_ASSISTANT_NAME} is not available right now. Please contact your administrator.`,
-    });
-  }
 
   const systemPrompt = buildChatSystemPrompt(erpData);
 
@@ -404,22 +390,25 @@ export async function callClaudeWithData(
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const response = await fetch(ANTHROPIC_ENDPOINT, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": ANTHROPIC_VERSION,
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
-        max_tokens: 1000,
-        system: systemPrompt,
-        messages: [...history, { role: "user", content: question }],
-      }),
-    });
+    let response: Response;
+    try {
+      response = await fetch("/api/ai/claude", {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: ANTHROPIC_MODEL,
+          max_tokens: 1000,
+          system: systemPrompt,
+          messages: [...history, { role: "user", content: question }],
+          request_type: "chat",
+        }),
+      });
+    } catch (networkErr) {
+      throw networkErr;
+    }
 
     const body: unknown = await response.json().catch(() => null);
 
@@ -432,11 +421,12 @@ export async function callClaudeWithData(
     }
 
     const data = body as {
+      text?: string;
       content?: Array<{ type: string; text?: string }>;
     };
 
     return {
-      text: data.content?.[0]?.text ?? "No response from AI.",
+      text: data.text ?? data.content?.[0]?.text ?? "No response from AI.",
       data: erpData,
     };
   } catch (err) {

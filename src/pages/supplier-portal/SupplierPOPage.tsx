@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 
 import { getInvoicesForPO } from "../../api/accounts";
+import { clmViewerKey, getPurchaseOrderContract, verifyPurchaseOrderContractAcceptance } from "../../api/clm";
 import { getSupplierPaymentSummaries } from "../../api/supplierPortal";
 import {
   getGRNsForPO,
@@ -62,11 +63,12 @@ import {
   shipmentRecordToDeliveryState,
 } from "../../api/poShipment";
 import ProcurementTimeline from "../../components/supplier-portal/ProcurementTimeline";
+import PurchaseOrderContractInformation from "../../components/p2p/PurchaseOrderContractInformation";
 import EmptyState from "../../components/EmptyState";
 import { AppLoading, EnterpriseError } from "../../components/enterprise";
 import StatusBadge from "../../components/StatusBadge";
 import CalendarDatePicker from "../../components/ui/CalendarDatePicker";
-import { formatUkDisplayDate } from "../../utils/erpNextDate";
+import { formatUkDisplayDate, toCalendarYmd } from "../../utils/erpNextDate";
 import {
   formatCurrency,
   formatDate,
@@ -155,6 +157,19 @@ export default function SupplierPOPage() {
     enabled: !!name && sessionReady && isAuthenticated,
   });
 
+  const contractQuery = useQuery({
+    queryKey: ["purchase-order-contract", clmViewerKey(), name],
+    queryFn: () => getPurchaseOrderContract(name),
+    enabled: !!name && !!po && sessionReady && isAuthenticated,
+    staleTime: 0,
+  });
+  const supplierContractWorkflow = contractQuery.data?.contract?.supplier_workflow;
+  const canAcceptPurchaseOrder = !contractQuery.isError && (contractQuery.data?.contract === null || supplierContractWorkflow?.can_accept_po === true);
+  const reconfirmContractAcceptance = supplierContractWorkflow?.can_accept_po === true && supplierContractWorkflow.po_acceptance_status !== "Accepted" && deliveryState?.status === "Accepted";
+  const contractAcceptanceReason = contractQuery.isError ? "The linked Contract must be verified before accepting this Purchase Order. Refresh Contract information below."
+    : !contractQuery.data ? "Checking Contract acceptance requirements…"
+    : supplierContractWorkflow?.blocked_reason || "Accept and sign the linked Contract before accepting this Purchase Order.";
+
   // ERP PO Shipment is the SSoT — hydrate local cache so Accept buttons match backend.
   const shipmentQuery = useQuery({
     queryKey: ["po-shipment", name],
@@ -185,17 +200,18 @@ export default function SupplierPOPage() {
     if (
       acceptModalOpen &&
       deliveryState &&
-      !isPoPendingSupplierAcceptance(deliveryState.status)
+      !isPoPendingSupplierAcceptance(deliveryState.status) && !reconfirmContractAcceptance
     ) {
       setAcceptModalOpen(false);
       setAcceptModalStep(1);
     }
-  }, [acceptModalOpen, deliveryState]);
+  }, [acceptModalOpen, deliveryState, reconfirmContractAcceptance]);
 
   const rfqRef =
     po?.rfq_name ||
     po?.rfq ||
     (po as { custom_rfq_reference?: string } | undefined)?.custom_rfq_reference ||
+    (po as { custom_clm_rfq?: string } | undefined)?.custom_clm_rfq ||
     "";
 
   const sqListQuery = useQuery({
@@ -222,7 +238,125 @@ export default function SupplierPOPage() {
     },
     enabled: (sqListQuery.data ?? []).some((s) => s.status === "Submitted"),
   });
-  void sqDetailsQuery;
+
+  const linkedQuotationName = useMemo(() => {
+    const fromItems = po?.items?.map((it) => it.supplier_quotation).find((q) => Boolean(q && String(q).trim()));
+    if (fromItems) return String(fromItems).trim();
+
+    const poHeader = po as { custom_supplier_quotation?: string; supplier_quotation?: string } | undefined;
+    if (poHeader?.custom_supplier_quotation?.trim()) return poHeader.custom_supplier_quotation.trim();
+    if (poHeader?.supplier_quotation?.trim()) return poHeader.supplier_quotation.trim();
+
+    const contract = contractQuery.data?.contract;
+    if (contract?.custom_supplier_quotation?.trim()) return contract.custom_supplier_quotation.trim();
+    if (contract?.supplier_quotation?.trim()) return contract.supplier_quotation.trim();
+    if (contract?.custom_clm_data) {
+      try {
+        const parsed = JSON.parse(String(contract.custom_clm_data));
+        const q = parsed?.rfq_source?.quotation || parsed?.procurement_completion?.quotation;
+        if (q && String(q).trim()) return String(q).trim();
+      } catch {
+        // ignore
+      }
+    }
+    return "";
+  }, [po, contractQuery.data?.contract]);
+
+  const directSqQuery = useQuery({
+    queryKey: ["supplier-portal-direct-sq", linkedQuotationName],
+    queryFn: () => getSupplierQuotation(linkedQuotationName),
+    enabled: !!linkedQuotationName && sessionReady && isAuthenticated,
+    staleTime: 60_000,
+  });
+
+  const resolvedQuotation = useMemo(() => {
+    const awardedSupplier = po?.supplier || erpSupplierName;
+
+    if (directSqQuery.data && typeof directSqQuery.data === "object") {
+      const q = directSqQuery.data;
+      if (!awardedSupplier || q.supplier === awardedSupplier || q.supplier_name === awardedSupplier) {
+        return q;
+      }
+    }
+
+    if (linkedQuotationName && sqDetailsQuery.data) {
+      const match = sqDetailsQuery.data.find((sq) => sq.name === linkedQuotationName);
+      if (match) {
+        if (!awardedSupplier || match.supplier === awardedSupplier || match.supplier_name === awardedSupplier) {
+          return match;
+        }
+      }
+    }
+
+    if (rfqRef && sqDetailsQuery.data) {
+      const match = sqDetailsQuery.data.find(
+        (sq) =>
+          ((sq.rfq_no && sq.rfq_no === rfqRef) ||
+            sq.items?.some((it) => it.request_for_quotation === rfqRef)) &&
+          (!awardedSupplier || sq.supplier === awardedSupplier || sq.supplier_name === awardedSupplier)
+      );
+      if (match) return match;
+    }
+
+    return null;
+  }, [
+    directSqQuery.data,
+    linkedQuotationName,
+    sqDetailsQuery.data,
+    po?.supplier,
+    erpSupplierName,
+    rfqRef,
+  ]);
+
+  const quotationDeliveryDate = useMemo(() => {
+    if (!resolvedQuotation) return null;
+
+    const headerDate =
+      (resolvedQuotation as { expected_delivery_date?: string }).expected_delivery_date ||
+      (resolvedQuotation as { delivery_date?: string }).delivery_date ||
+      (resolvedQuotation as { schedule_date?: string }).schedule_date;
+    const headerYmd = toCalendarYmd(headerDate);
+    if (headerYmd) return headerYmd;
+
+    if (Array.isArray(resolvedQuotation.items)) {
+      const poItemCodes = new Set((po?.items ?? []).map((i) => i.item_code).filter(Boolean));
+      const matchingItem = resolvedQuotation.items.find(
+        (it) =>
+          poItemCodes.has(it.item_code) &&
+          ((it as { expected_delivery_date?: string }).expected_delivery_date ||
+            (it as { delivery_date?: string }).delivery_date ||
+            (it as { schedule_date?: string }).schedule_date)
+      );
+      if (matchingItem) {
+        const itemDate =
+          (matchingItem as { expected_delivery_date?: string }).expected_delivery_date ||
+          (matchingItem as { delivery_date?: string }).delivery_date ||
+          (matchingItem as { schedule_date?: string }).schedule_date;
+        const itemYmd = toCalendarYmd(itemDate);
+        if (itemYmd) return itemYmd;
+      }
+
+      for (const it of resolvedQuotation.items) {
+        const itemDate =
+          (it as { expected_delivery_date?: string }).expected_delivery_date ||
+          (it as { delivery_date?: string }).delivery_date ||
+          (it as { schedule_date?: string }).schedule_date;
+        const itemYmd = toCalendarYmd(itemDate);
+        if (itemYmd) return itemYmd;
+      }
+    }
+
+    return null;
+  }, [resolvedQuotation, po?.items]);
+
+  useEffect(() => {
+    if (acceptModalOpen && quotationDeliveryDate && !acceptForm.expected_delivery_date) {
+      setAcceptForm((prev) => ({
+        ...prev,
+        expected_delivery_date: quotationDeliveryDate,
+      }));
+    }
+  }, [acceptModalOpen, quotationDeliveryDate, acceptForm.expected_delivery_date]);
 
   const grnsQuery = useQuery({
     queryKey: ["supplier-portal-po-grns", name],
@@ -280,12 +414,17 @@ export default function SupplierPOPage() {
   /* ── Workflow handlers ────────────────────────────────────────────────── */
 
   function openAcceptModal() {
+    if (!canAcceptPurchaseOrder) { toast.error(contractAcceptanceReason); return; }
     const status = deliveryState?.status ?? "Pending Acceptance";
-    if (!isPoPendingSupplierAcceptance(status)) {
+    if (!isPoPendingSupplierAcceptance(status) && !reconfirmContractAcceptance) {
       toast("This Purchase Order has already been accepted.", { icon: "ℹ️" });
       void queryClient.invalidateQueries({ queryKey: ["po-shipment", name] });
       return;
     }
+    setAcceptForm((prev) => ({
+      ...prev,
+      expected_delivery_date: quotationDeliveryDate || prev.expected_delivery_date || "",
+    }));
     setAcceptModalStep(1);
     setAcceptModalOpen(true);
   }
@@ -311,6 +450,7 @@ export default function SupplierPOPage() {
       queryClient.invalidateQueries({ queryKey: ["purchase-orders"] }),
       queryClient.invalidateQueries({ queryKey: ["rfq-linked-pos"] }),
       queryClient.invalidateQueries({ queryKey: ["po-shipments"] }),
+      queryClient.invalidateQueries({ queryKey: ["purchase-order-contract"] }),
       queryClient.invalidateQueries({ queryKey: ["supplier-portal-delivery"] }),
     ]);
     await Promise.all([
@@ -325,7 +465,7 @@ export default function SupplierPOPage() {
       toast.error("Expected Delivery Date is required.");
       return;
     }
-    if (!isPoPendingSupplierAcceptance(deliveryState?.status)) {
+    if (!isPoPendingSupplierAcceptance(deliveryState?.status) && !reconfirmContractAcceptance) {
       toast("This Purchase Order has already been accepted.", { icon: "ℹ️" });
       setAcceptModalOpen(false);
       void queryClient.invalidateQueries({ queryKey: ["po-shipment", name] });
@@ -333,8 +473,13 @@ export default function SupplierPOPage() {
     }
     setAcceptSubmitting(true);
     try {
+      // The summary can change in another tab. Re-read saved Contract evidence
+      // before invoking the existing, separately authorized PO acceptance.
+      const verified = await verifyPurchaseOrderContractAcceptance(name);
+      queryClient.setQueryData(["purchase-order-contract", clmViewerKey(), name], verified);
       const actor = erpSupplierName || supplierName || undefined;
-      const updated = await acceptPO(name, acceptForm, actor);
+      const reconfirm = deliveryState?.status === "Accepted" && verified.contract?.supplier_workflow?.can_accept_po === true && verified.contract.supplier_workflow.po_acceptance_status !== "Accepted";
+      const updated = reconfirm ? await acceptPO(name, acceptForm, actor, { reconfirmContractAcceptance: true }) : await acceptPO(name, acceptForm, actor);
       toast.success("Purchase Order accepted successfully.");
       setAcceptModalOpen(false);
       setAcceptModalStep(1);
@@ -512,10 +657,11 @@ export default function SupplierPOPage() {
   const wf = workflowContext!;
   const receivedPct = wf.displayReceivedPct;
   const billedPct = wf.displayBilledPct;
-  const isPendingAcceptance = wf.isPendingAcceptance;
-  const isAccepted = wf.isAccepted;
+  const clmHandoffPending = Boolean(supplierContractWorkflow && supplierContractWorkflow.po_acceptance_status !== "Accepted");
+  const isPendingAcceptance = wf.isPendingAcceptance || reconfirmContractAcceptance;
+  const isAccepted = wf.isAccepted && !clmHandoffPending;
   const isRejected = wf.isRejected;
-  const supplierAccepted = wf.supplierAccepted;
+  const supplierAccepted = wf.supplierAccepted && !clmHandoffPending;
   const showDeliveryInfo = wf.showDeliveryInfo;
   const displayStatus = wf.displayStatus;
   const poWorkflowSteps = wf.steps;
@@ -643,6 +789,8 @@ export default function SupplierPOPage() {
         </div>
       </header>
 
+      <PurchaseOrderContractInformation key={po.name} purchaseOrder={po.name ?? name} supplier />
+
       {/* Action Required banner */}
       {isPendingAcceptance && (
         <div className="mt-4 rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 via-amber-50/80 to-white p-4 shadow-sm sm:p-5">
@@ -652,8 +800,7 @@ export default function SupplierPOPage() {
                 Action Required
               </p>
               <p className="mt-1 text-sm font-semibold text-amber-950 sm:text-base">
-                Review this purchase order and accept or reject it to continue the
-                procurement workflow.
+                {canAcceptPurchaseOrder ? "Review this purchase order and accept or reject it to continue the procurement workflow." : contractAcceptanceReason}
               </p>
               <dl className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
                 <div className="rounded-lg border border-amber-100 bg-white/80 px-3 py-2">
@@ -686,13 +833,13 @@ export default function SupplierPOPage() {
               <button
                 type="button"
                 onClick={openAcceptModal}
-                disabled={acceptSubmitting}
+                disabled={acceptSubmitting || !canAcceptPurchaseOrder}
                 className="inline-flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-xl bg-accent-600 px-6 py-3 text-sm font-bold text-white shadow-md transition hover:bg-accent-700 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60 sm:text-base lg:min-w-[220px]"
               >
                 <CheckCircle2 className="h-5 w-5" />
                 Accept Purchase Order
               </button>
-              <button
+              {wf.isPendingAcceptance && <button
                 type="button"
                 onClick={openRejectModal}
                 disabled={rejectSubmitting}
@@ -700,7 +847,7 @@ export default function SupplierPOPage() {
               >
                 <XCircle className="h-5 w-5" />
                 Reject Purchase Order
-              </button>
+              </button>}
             </div>
           </div>
         </div>
@@ -965,7 +1112,7 @@ export default function SupplierPOPage() {
       </div>
 
       {/* Mobile summary */}
-      <div className="sticky bottom-0 z-10 mt-4 border-t border-neutral-200 bg-white/95 p-3 backdrop-blur lg:hidden">
+      <div className="mt-4 border-t border-neutral-200 bg-white/95 p-3 backdrop-blur lg:hidden">
         <POSummaryPanel
           poName={po.name}
           supplier={po.supplier_name ?? po.supplier ?? "—"}
@@ -1044,7 +1191,20 @@ export default function SupplierPOPage() {
                     required
                     placeholder="DD/MM/YYYY"
                   />
-                  <p className="mt-2 text-xs text-neutral-500">
+                  {quotationDeliveryDate ? (
+                    <p className="mt-2 text-xs text-neutral-500">
+                      Prefilled from your committed delivery date in Supplier Quotation{" "}
+                      <span className="font-semibold text-neutral-700">
+                        {resolvedQuotation?.name || linkedQuotationName}
+                      </span>
+                      . You can adjust it if needed.
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-xs text-amber-600">
+                      The supplier&apos;s committed delivery date is unavailable from the quotation. Please select your expected delivery date.
+                    </p>
+                  )}
+                  <p className="mt-1 text-xs text-neutral-400">
                     Select the date you expect to deliver goods to the buyer.
                   </p>
                 </div>
@@ -1151,7 +1311,7 @@ export default function SupplierPOPage() {
                 <button
                   type="button"
                   onClick={() => void handleAcceptPO()}
-                  disabled={acceptSubmitting || !isPendingAcceptance}
+                  disabled={acceptSubmitting || !isPendingAcceptance || !canAcceptPurchaseOrder}
                   className="inline-flex items-center gap-2 rounded-lg bg-accent-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-accent-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {acceptSubmitting ? (

@@ -124,7 +124,7 @@ function finalizeAuthenticatedUser(
   const proof = createSessionProof(user.name, rememberMe);
   writeSessionProof(proof);
   // Persist access token for the session (and remember-me if requested)
-  const token = readAccessToken();
+  const token = user.access_token || readAccessToken();
   if (token) writeAccessToken(token, rememberMe);
   hydrateAccessTokenFromRemember();
   authLog("login complete", { user: user.name, rememberMe });
@@ -398,6 +398,9 @@ export const useAuthStore = create<AuthState>()(
           if (result === "valid") {
             authLog("redirect decision", "valid-session → dashboard");
             const restoredUser = restoreAuthenticatedUserProfile(user);
+            if (restoredUser.access_token && !readAccessToken()) {
+              writeAccessToken(restoredUser.access_token, rememberMe);
+            }
             set({
               isAuthenticated: true,
               sessionProof: rememberMe ? proof : null,
@@ -454,7 +457,7 @@ export const useAuthStore = create<AuthState>()(
       name: AUTH_STORAGE_KEY,
       storage: createJSONStorage(() => authStorage),
       partialize: (state) => ({
-        user: state.rememberMe ? state.user : null,
+        user: state.user,
         rememberMe: state.rememberMe,
         sessionProof: state.rememberMe ? state.sessionProof : null,
       }),

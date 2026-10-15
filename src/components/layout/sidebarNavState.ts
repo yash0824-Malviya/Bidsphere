@@ -1,11 +1,23 @@
+import { getEngineerEcrNavLabel } from "../../pages/ecr/engineerEcrNavigation";
+import { getEngineeringManagerEcrNavLabel } from "../../pages/ecr/engineeringManagerEcrNavigation";
+
 export function isChildNavActive(
   pathname: string,
   search: string,
   to: string,
   label?: string,
+  engineerNavigation = false,
+  engineeringManagerNavigation = false,
 ): boolean {
   const [toPath, toQuery = ""] = to.split("?");
   const current = new URLSearchParams(search);
+
+  if (engineerNavigation && (toPath === "/ecr" || toPath === "/ecr/new")) {
+    return getEngineerEcrNavLabel(pathname, search) === label;
+  }
+  if (engineeringManagerNavigation && (toPath === "/ecr" || toPath === "/ecr/new")) {
+    return getEngineeringManagerEcrNavLabel(pathname, search) === label;
+  }
 
   // The ECR list normalizes several user-facing queue aliases. Keep the
   // corresponding role-specific sidebar child active for those equivalent
@@ -22,6 +34,18 @@ export function isChildNavActive(
       "RFQ Pending": ["rfq-pending", "create-rfq", "rfq-required"],
     };
     if (label && queueAliases[label]?.includes(currentFilter)) return true;
+  }
+
+  // Business Intake: Business Cases is active on repository list, detail/edit/new page, or legacy needs paths
+  if (toPath === "/intake/business-cases") {
+    if (
+      pathname === "/intake/business-cases" ||
+      pathname.startsWith("/intake/business-cases/") ||
+      pathname === "/intake/business-needs" ||
+      pathname.startsWith("/intake/business-needs/")
+    ) {
+      return true;
+    }
   }
 
   if (pathname !== toPath) return false;

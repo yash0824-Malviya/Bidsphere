@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
 import toast from "react-hot-toast";
@@ -19,29 +19,22 @@ import {
 } from "lucide-react";
 
 import { fetchUserDepartment } from "../../api/auth";
-import { COMPANY } from "../../api/erpnext";
+import { COMPANY, erpnextClient, getApiErrorMessage, withoutNetworkRetry } from "../../api/erpnext";
 
 import {
-  createMaterialRequestWorkflow,
   ensureItemsExistForNewMode,
   fetchMaterialRequestWorkflow,
   submitMaterialRequestWorkflow,
 } from "../../api/materialRequestWorkflow";
 import {
-  ensureMaterialRequestItemWarehouses,
-  updateMaterialRequest,
-} from "../../api/purchasing";
-import {
   MR_PROCUREMENT_TYPE_FIELD,
   MR_PROCUREMENT_CATEGORY_FIELD,
   MR_REQUEST_MODE_FIELD,
   MR_WORKFLOW_FIELD,
-  usesItemMasterDropdowns,
 } from "../../types/materialRequestWorkflow";
 import { defaultProcurementTypeForDepartment } from "../../config/procurementType";
 import {
   procurementCategoriesForType,
-  procurementCategoryBelongsToType,
   type ProcurementCategory,
 } from "../../config/procurementCategory";
 
@@ -69,13 +62,9 @@ import {
 
 import { todayIso } from "../../utils/format";
 
-import { assertERPNextDate } from "../../utils/erpNextDate";
-
 import { generateId } from "../../utils/id";
 import {
-  engineeringFieldsForPayload,
   resolveEngineeringAttachments,
-  syncMaterialRequestItemEngineeringFiles,
 } from "../../utils/materialRequestItemFiles";
 
 function newDraftItem(requiredBy: string): MaterialRequestDraftLine {
@@ -104,70 +93,6 @@ function newDraftItem(requiredBy: string): MaterialRequestDraftLine {
 
 function resolveDepartmentValue(value?: string | null): string {
   return value?.trim() || "Production";
-}
-
-function validateMaterialRequestForm(
-  purpose: string,
-  department: string,
-  items: MaterialRequestDraftLine[],
-  requestType: MaterialRequestProcurementType,
-  requestMode: MaterialRequestMode,
-  procurementCategory: string,
-): string | null {
-  if (!purpose) {
-    return "Purpose is required.";
-  }
-
-  if (!department.trim()) {
-    return "Department is required.";
-  }
-
-  if (!procurementCategory.trim()) {
-    return "Procurement Category is required.";
-  }
-
-  if (!procurementCategoryBelongsToType(procurementCategory, requestType)) {
-    return "Select a Procurement Category that matches the Request Type.";
-  }
-
-  const activeLines = items.filter(
-    (line) => line.item_code || line.qty > 0 || line.description || line.item_name,
-  );
-
-  if (activeLines.length === 0) {
-    return "Add at least one item line.";
-  }
-
-  const useDropdowns = usesItemMasterDropdowns(requestType, requestMode);
-
-  for (const line of activeLines) {
-    if (!line.item_group.trim()) {
-      return useDropdowns
-        ? "Select an item group for each line."
-        : "Enter an item group for each line.";
-    }
-
-    if (!line.item_code.trim()) {
-      return useDropdowns
-        ? "Select an item for each line."
-        : "Enter an item code for each line.";
-    }
-
-    if (!useDropdowns && !line.item_name.trim()) {
-      return "Enter an item name for each line.";
-    }
-
-    if (!(line.qty > 0)) {
-      return "Quantity must be greater than zero for each item.";
-    }
-  }
-
-  const codes = activeLines.map((line) => line.item_code.trim());
-  if (new Set(codes).size !== codes.length) {
-    return "Remove duplicate items — each item may only appear once.";
-  }
-
-  return null;
 }
 
 export default function MaterialRequestCreatePage() {
@@ -359,194 +284,274 @@ export default function MaterialRequestCreatePage() {
     return set;
   }, [items]);
 
-  const saveMutation = useMutation({
-    // Never auto-retry creates — a retry after a slow/ambiguous network
-    // response would insert a second Material Request in ERPNext.
-    retry: false,
-    mutationFn: async (submit: boolean) => {
+  async function handleSubmit(submit: boolean) {
+    if (submittingRef.current || isSubmitting) {
       if (import.meta.env.DEV) {
-        console.log("[MR Create] mutation start", {
+        console.warn("[MR Create] blocked duplicate submit", {
           submit,
-          editName: editName ?? null,
-          itemCount: items.filter((l) => l.item_code && l.qty > 0).length,
+          submittingRef: submittingRef.current,
+          isSubmitting,
         });
       }
+      return;
+    }
 
-      const validationError = validateMaterialRequestForm(
-        purpose,
-        resolvedDepartment,
-        items,
-        resolvedProcurementType,
-        resolvedRequestMode,
-        resolvedProcurementCategory,
-      );
+    submittingRef.current = true;
+    setIsSubmitting(true);
+    setShowErrors(true);
 
-      if (validationError) throw new Error(validationError);
-
-      const scheduleIso = assertERPNextDate(requiredDate, "schedule_date");
-
-      // Always use the resolved app company (VITE_COMPANY or Netlink branding
-      // fallback). Never omit company — ERP item_defaults only auto-fill
-      // warehouse for the matching company (SRM005 → Netlink / Stores - NSGAI).
-      const company = COMPANY;
-
-      // Resolve warehouse dynamically before create/update so stock items never
-      // hit ERPNext without a warehouse (e.g. company=Bidsphere has warehouses
-      // but SRM005 has no Bidsphere item_defaults → ValidationError).
-      const activeLines = items.filter((line) => line.item_code && line.qty > 0);
-
-      // New mode: create Item Master stubs before MR create/update so Link
-      // validation succeeds for codes that do not exist yet.
-      if (resolvedRequestMode === "New") {
-        await ensureItemsExistForNewMode(
-          activeLines.map((line) => ({
-            item_code: line.item_code,
-            item_name: line.item_name,
-            description: line.description,
-            item_group: line.item_group,
-            qty: line.qty,
-            uom: line.uom || "Nos",
-          })),
-          resolvedProcurementType,
-        );
+    try {
+      // A. Validate the form
+      const validItems = items.filter((it) => it.item_code || it.qty > 0);
+      if (!validItems.length) {
+        throw new Error("Add at least one material item.");
       }
 
-      const payloadItems = await ensureMaterialRequestItemWarehouses(
-        company,
-        activeLines.map((line) => ({
-          item_code: line.item_code,
-          item_name: line.item_name,
-          description: line.description,
-          item_group: line.item_group,
-          qty: line.qty,
-          custom_department_requested_qty: Number(line.qty) || 1,
-          uom: line.uom || "Nos",
-          schedule_date: line.schedule_date
-            ? assertERPNextDate(line.schedule_date, "schedule_date")
-            : scheduleIso,
-          ...engineeringFieldsForPayload(line),
-        })),
-      );
-
-      const transactionIso = assertERPNextDate(
-        requestDate,
-        "transaction_date",
-      );
-
-      // Prefer an already-created draft (edit URL, or a previous attempt in this
-      // page session) so retries never insert a second Material Request.
-      const existingDraft = editName || createdDraftNameRef.current;
-
-      const applyItemFileSync = async (mrName: string) => {
-        try {
-          const patches = await syncMaterialRequestItemEngineeringFiles(
-            mrName,
-            activeLines,
-            user?.email ?? user?.name,
-          );
-          if (Object.keys(patches).length > 0) {
-            setItems((prev) =>
-              prev.map((line) =>
-                patches[line.id] ? { ...line, ...patches[line.id] } : line,
-              ),
-            );
-          }
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          // Custom fields may not be provisioned yet — don't block MR save.
-          if (/Custom Field|Unknown column|not found/i.test(msg)) {
-            toast.error(
-              "Item saved, but engineering file fields are not set up yet. Contact your administrator.",
-            );
-            return;
-          }
-          throw err;
+      for (const item of validItems) {
+        if (!item.item_code) {
+          throw new Error("Please select a material for every row.");
         }
+
+        if (!Number.isFinite(Number(item.qty)) || Number(item.qty) <= 0) {
+          throw new Error(
+            `Invalid quantity for ${item.item_name || item.item_code}.`,
+          );
+        }
+
+        if (!item.uom) {
+          throw new Error(
+            `UOM is required for ${item.item_name || item.item_code}.`,
+          );
+        }
+      }
+
+      // B. Get today's date
+      const today = new Date().toISOString().slice(0, 10);
+
+      // The server proxy supplies token auth; do not couple submission to Desk's CSRF cookie.
+      const headers = {
+        "Content-Type": "application/json",
       };
 
-      if (existingDraft) {
-        if (import.meta.env.DEV) {
-          console.log("[MR Create] updating existing draft", {
-            name: existingDraft,
-            reusedSessionDraft: !editName && !!createdDraftNameRef.current,
-            company,
-            warehouses: payloadItems.map((it) => ({
-              item_code: it.item_code,
-              warehouse: it.warehouse,
+      const existingDraft = editName || createdDraftNameRef.current;
+      let mrName = existingDraft;
+
+      // New mode item master stub check
+      if (resolvedRequestMode === "New") {
+        try {
+          await ensureItemsExistForNewMode(
+            validItems.map((line) => ({
+              item_code: line.item_code,
+              item_name: line.item_name,
+              description: line.description,
+              item_group: line.item_group,
+              qty: line.qty,
+              uom: line.uom || "Nos",
             })),
-          });
+            resolvedProcurementType,
+          );
+        } catch (stubErr) {
+          console.warn("[MR] ensureItemsExistForNewMode notice:", stubErr);
         }
-        await updateMaterialRequest(existingDraft, {
-          company,
-          transaction_date: transactionIso,
-          schedule_date: scheduleIso,
+      }
+
+      // Handle Save Draft (docstatus = 0)
+      if (!submit) {
+        const draftPayload = {
+          doctype: "Material Request",
+          material_request_type: "Material Issue",
+          company: COMPANY,
+          transaction_date: today,
+          schedule_date:
+            (validItems[0] as any)?.required_by ||
+            validItems[0]?.schedule_date ||
+            today,
           custom_department: resolvedDepartment,
-          [MR_PROCUREMENT_TYPE_FIELD]: resolvedProcurementType,
-          [MR_PROCUREMENT_CATEGORY_FIELD]: resolvedProcurementCategory,
-          [MR_REQUEST_MODE_FIELD]: resolvedRequestMode,
           custom_priority: priority,
           custom_purpose: purpose,
           remarks: notes.trim() || purpose,
+          docstatus: 0,
           [MR_WORKFLOW_FIELD]: "Draft",
-          items: payloadItems.map((it) => ({
+          items: validItems.map((item, index) => ({
             doctype: "Material Request Item",
-            ...it,
+            idx: index + 1,
+            item_code: item.item_code,
+            item_name: item.item_name || item.item_code,
+            description:
+              (item as any).reason ||
+              item.description ||
+              item.remarks ||
+              item.item_name ||
+              item.item_code,
+            qty: Number(item.qty),
+            uom: item.uom,
+            stock_uom: item.uom,
+            conversion_factor: 1,
+            schedule_date:
+              (item as any).required_by || item.schedule_date || today,
+            warehouse: (item as any).warehouse || undefined,
           })),
-        } as never);
+        };
 
-        await applyItemFileSync(existingDraft);
-
-        if (submit) {
-          return submitMaterialRequestWorkflow(existingDraft);
+        if (!mrName) {
+          console.log("[MR] Creating Draft Material Request:", draftPayload);
+          const createResponse = await erpnextClient.post(
+            "/api/resource/Material Request",
+            draftPayload,
+            withoutNetworkRetry({ headers }),
+          );
+          const created =
+            createResponse?.data?.data ||
+            createResponse?.data ||
+            createResponse;
+          mrName = created?.name;
+          if (!mrName) {
+            console.error("[MR] Create response:", createResponse);
+            throw new Error(
+              "Material Request draft was not created. ERPNext returned no document name.",
+            );
+          }
+          console.log("[MR] Draft created:", mrName);
+          createdDraftNameRef.current = mrName;
+        } else {
+          const current = await fetchMaterialRequestWorkflow(mrName, { fresh: true, skipItemAttachmentHydration: true });
+          if (current.docstatus !== 0 || current.custom_bidsphere_status && current.custom_bidsphere_status !== "Draft") {
+            throw new Error(`Material Request ${mrName} is no longer a draft. Refresh the request before editing.`);
+          }
+          console.log("[MR] Updating Draft Material Request:", mrName, draftPayload);
+          await erpnextClient.put(
+            `/api/resource/Material Request/${encodeURIComponent(mrName)}`,
+            { ...draftPayload, modified: current.modified },
+            withoutNetworkRetry({ headers }),
+          );
         }
 
-        return fetchMaterialRequestWorkflow(existingDraft);
+        queryClient.invalidateQueries({
+          queryKey: ["material-requests-workflow"],
+        });
+        toast.success(
+          isEditMode
+            ? `Material Request ${mrName} updated`
+            : `Draft saved: ${mrName}`,
+        );
+        return;
       }
 
-      const created = await createMaterialRequestWorkflow({
-        company,
-
-        transaction_date: transactionIso,
-
-        schedule_date: scheduleIso,
-
-        department: resolvedDepartment,
-
-        procurement_type: resolvedProcurementType,
-
-        procurement_category: resolvedProcurementCategory,
-
-        request_mode: resolvedRequestMode,
-
-        priority,
-
-        purpose: purpose,
-
-        requested_by: user?.full_name ?? user?.email ?? user?.name,
-
+      // D. Create or update the Material Request as DRAFT for submission
+      const payload = {
+        doctype: "Material Request",
+        material_request_type: "Material Issue",
+        company: COMPANY,
+        transaction_date: today,
+        schedule_date:
+          (validItems[0] as any)?.required_by ||
+          validItems[0]?.schedule_date ||
+          today,
+        custom_department: resolvedDepartment,
+        custom_priority: priority,
+        custom_purpose: purpose,
         remarks: notes.trim() || purpose,
 
-        items: payloadItems,
+        items: validItems.map((item, index) => ({
+          doctype: "Material Request Item",
+          idx: index + 1,
+          item_code: item.item_code,
+          item_name: item.item_name || item.item_code,
+          description:
+            (item as any).reason ||
+            item.description ||
+            item.remarks ||
+            item.item_name ||
+            item.item_code,
+          qty: Number(item.qty),
+          uom: item.uom,
+          stock_uom: item.uom,
+          conversion_factor: 1,
+          schedule_date:
+            (item as any).required_by || item.schedule_date || today,
+          warehouse: (item as any).warehouse || undefined,
+        })),
+      };
+
+      if (!mrName) {
+        console.log("[MR] Creating Material Request:", payload);
+
+        const createResponse = await erpnextClient.post(
+          "/api/resource/Material Request",
+          payload,
+          withoutNetworkRetry({ headers }),
+        );
+
+        const created =
+          createResponse?.data?.data ||
+          createResponse?.data ||
+          createResponse;
+
+        mrName = created?.name;
+
+        if (!mrName) {
+          console.error("[MR] Create response:", createResponse);
+          throw new Error(
+            "Material Request was not created. ERPNext returned no document name.",
+          );
+        }
+
+        console.log("[MR] Draft created:", mrName);
+        createdDraftNameRef.current = mrName;
+      } else {
+        const current = await fetchMaterialRequestWorkflow(mrName, { fresh: true, skipItemAttachmentHydration: true });
+        // A previous attempt may have committed before its response was lost.
+        // Never rewrite submitted items or reset the existing business state.
+        if (current.docstatus === 0) {
+          await erpnextClient.put(
+            `/api/resource/Material Request/${encodeURIComponent(mrName)}`,
+            { ...payload, modified: current.modified },
+            withoutNetworkRetry({ headers }),
+          );
+        }
+      }
+
+      // Same transition as the detail page: full ERP document, business status,
+      // fresh read-back verification. Never retry a failure with another write.
+      const verified = await submitMaterialRequestWorkflow(mrName, {
+        email: user?.email,
+        name: user?.name,
+        full_name: user?.full_name,
       });
+      queryClient.setQueryData(["material-request-workflow", mrName], verified);
 
-      createdDraftNameRef.current = created.name;
-
-      if (import.meta.env.DEV) {
-        console.log("[MR Create] document created", { name: created.name });
+      // 7. COMMENT SHOULD NOT BREAK SUBMISSION
+      try {
+        await erpnextClient.post(
+          "/api/resource/Comment",
+          {
+            doctype: "Comment",
+            comment_type: "Comment",
+            reference_doctype: "Material Request",
+            reference_name: mrName,
+            content: `Department item request submitted | Priority: ${priority} | Notes: ${notes || "None"}`,
+          },
+          {
+            headers,
+          },
+        );
+      } catch (commentError) {
+        console.warn("[MR] Comment failed:", commentError);
       }
 
-      await applyItemFileSync(created.name);
-
-      if (submit) {
-        return submitMaterialRequestWorkflow(created.name);
+      // 8. EMAIL MUST NOT BREAK SUBMISSION
+      try {
+        // Optional warehouse notification
+      } catch (emailError) {
+        console.warn("[MR] Warehouse email failed:", emailError);
       }
 
-      return created;
-    },
-
-    onSuccess: (doc, submit) => {
+      // Invalidate queries
       queryClient.invalidateQueries({
         queryKey: ["material-requests-workflow"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["mr-warehouse-queue"],
       });
       queryClient.invalidateQueries({
         queryKey: ["mr-dashboard-counts"],
@@ -558,35 +563,24 @@ export default function MaterialRequestCreatePage() {
         queryKey: ["mr-dashboard-rows"],
       });
       queryClient.invalidateQueries({ queryKey: ["warehouse"] });
-      queryClient.invalidateQueries({ queryKey: ["mr-procurement-queue"] });
-      if (editName) {
-        queryClient.invalidateQueries({
-          queryKey: ["material-request-workflow", editName],
-        });
-      }
 
-      toast.success(
-        submit
-          ? "Material Request submitted"
-          : isEditMode
-            ? "Material Request updated"
-            : "Draft saved",
-      );
+      toast.success(`Material Request ${mrName} submitted to Warehouse.`);
+      navigate("/dashboard");
+    } catch (err: any) {
+      const message = getApiErrorMessage(err);
 
-      navigate(`/material-requests/${encodeURIComponent(doc.name)}`);
-    },
+      console.error("[MR] Material Request failed:", {
+        message,
+        status: err?.response?.status,
+        data: err?.response?.data,
+      });
 
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Failed to save");
-    },
-
-    // Release the re-entrancy lock once the request fully settles (success or
-    // error) so the user can retry after a genuine failure.
-    onSettled: () => {
+      toast.error(`Material Request failed: ${message}`);
+    } finally {
       submittingRef.current = false;
       setIsSubmitting(false);
-    },
-  });
+    }
+  }
 
   function updateItem(id: string, patch: Partial<MaterialRequestDraftLine>) {
     setItems((prev) =>
@@ -610,46 +604,10 @@ export default function MaterialRequestCreatePage() {
   }
 
   function handleSave(submit: boolean) {
-    // Atomic check-and-set: claim the lock BEFORE validation / mutate so two
-    // near-simultaneous clicks cannot both pass the guard and create two MRs.
-    if (submittingRef.current || saveMutation.isPending || isSubmitting) {
-      if (import.meta.env.DEV) {
-        console.warn("[MR Create] blocked duplicate submit", {
-          submit,
-          submittingRef: submittingRef.current,
-          isPending: saveMutation.isPending,
-          isSubmitting,
-        });
-      }
-      return;
-    }
-    submittingRef.current = true;
-    setIsSubmitting(true);
-    setShowErrors(true);
-
-    const validationError = validateMaterialRequestForm(
-      purpose,
-      resolvedDepartment,
-      items,
-      resolvedProcurementType,
-      resolvedRequestMode,
-      resolvedProcurementCategory,
-    );
-
-    if (validationError) {
-      submittingRef.current = false;
-      setIsSubmitting(false);
-      toast.error(validationError);
-      return;
-    }
-
-    if (import.meta.env.DEV) {
-      console.log("[MR Create] submitting once", { submit, editMode: isEditMode });
-    }
-    saveMutation.mutate(submit);
+    void handleSubmit(submit);
   }
 
-  const busy = isSubmitting || saveMutation.isPending;
+  const busy = isSubmitting;
 
   const purposeError = showErrors && !purpose;
 

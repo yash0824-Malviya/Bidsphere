@@ -1,16 +1,17 @@
 import { Navigate } from "react-router-dom";
 
 import { useAuthStore } from "../../store/authStore";
-import type { AppRole } from "../../config/roles";
+import { normalizeAppRole } from "../../config/roles";
 
 /** Legacy /material-requests index — route users to the correct home. */
 export default function MaterialRequestDashboardPage() {
-  const role = useAuthStore((s) => s.user?.role) as AppRole | undefined;
+  const userRole = useAuthStore((s) => s.user?.role);
+  const role = normalizeAppRole(userRole);
 
   if (role === "warehouse") {
     return <Navigate to="/dashboard" replace />;
   }
-  if (role === "procurement") {
+  if (role === "procurement" || role === "procurement_team") {
     return <Navigate to="/material-requests/procurement" replace />;
   }
   if (role === "department") {

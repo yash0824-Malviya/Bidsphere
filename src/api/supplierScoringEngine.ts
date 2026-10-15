@@ -38,6 +38,9 @@ export interface ScoreSource {
 }
 
 export interface ScoredSupplier {
+  quotation_id?: string;
+  supplier_id?: string;
+  evaluation_run_id?: string;
   supplier: string;
   supplier_name: string;
   dimensions: SupplierDimensionScores;
@@ -53,6 +56,7 @@ export interface ScoredSupplier {
 }
 
 export interface ScoringEngineResult {
+  evaluation_run_id?: string;
   weights: ScoringWeights;
   scored_at: string;
   suppliers: ScoredSupplier[];
@@ -92,13 +96,51 @@ function directLinearScale(values: number[]): number[] {
 /*  Dimension extractors — quotation-based                                    */
 /* -------------------------------------------------------------------------- */
 
-function extractTotals(quotations: AIQuotation[]): number[] {
-  return quotations.map((q) => q.total_value || 0);
+function extractTotals(quotations: AIQuotation[]): Array<number | null> {
+  return quotations.map((q) => {
+    if (typeof q.total_value === "number" && Number.isFinite(q.total_value)) {
+      return q.total_value;
+    }
+    if (Array.isArray(q.items) && q.items.length > 0) {
+      let sum = 0;
+      let hasItemPrice = false;
+      for (const item of q.items) {
+        if (typeof item.total === "number" && Number.isFinite(item.total) && item.total > 0) {
+          sum += item.total;
+          hasItemPrice = true;
+        } else if (typeof item.unit_price === "number" && Number.isFinite(item.unit_price)) {
+          const qty = typeof item.requested_qty === "number" && item.requested_qty > 0 ? item.requested_qty : 1;
+          sum += item.unit_price * qty;
+          hasItemPrice = true;
+        }
+      }
+      if (hasItemPrice) return sum;
+    }
+    return null;
+  });
 }
 
 function extractAvgDeliveryDays(quotations: AIQuotation[]): number[] {
   return quotations.map((q) => {
-    const days = q.items.map((i) => i.delivery_days ?? 7);
+    const days = q.items.map((i) => {
+      if (typeof i.delivery_days === "number" && i.delivery_days > 0) {
+        return i.delivery_days;
+      }
+      const itemWithDate = i as unknown as {
+        expected_delivery_date?: string;
+        delivery_date?: string;
+      };
+      const d = itemWithDate.expected_delivery_date || itemWithDate.delivery_date;
+      if (typeof d === "string" && d.trim()) {
+        const now = new Date();
+        now.setHours(0, 0, 0, 0);
+        const target = new Date(d);
+        target.setHours(0, 0, 0, 0);
+        const diff = Math.round((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        if (diff > 0) return diff;
+      }
+      return 7;
+    });
     return days.length > 0
       ? days.reduce((a, b) => a + b, 0) / days.length
       : 7;
@@ -111,7 +153,9 @@ function extractItemCoverage(
 ): number[] {
   if (requestedItemCount <= 0) return quotations.map(() => 100);
   return quotations.map((q) => {
-    const quotedItems = q.items.filter((i) => i.unit_price > 0).length;
+    const quotedItems = q.items.filter(
+      (i) => typeof i.unit_price === "number" && Number.isFinite(i.unit_price),
+    ).length;
     return (quotedItems / requestedItemCount) * 100;
   });
 }
@@ -136,9 +180,11 @@ export function scoreSuppliers(
   historicalData?: HistoricalPerformanceMap,
   /** Optional RFQ Target Prices by item_code for variance / savings scoring. */
   targetPrices?: Map<string, number>,
+  evaluationRunId?: string,
 ): ScoringEngineResult {
   if (quotations.length === 0) {
     return {
+      evaluation_run_id: evaluationRunId,
       weights,
       scored_at: nowERPDateTime(),
       suppliers: [],
@@ -149,8 +195,14 @@ export function scoreSuppliers(
   const deliveryDays = extractAvgDeliveryDays(quotations);
   const coverage = extractItemCoverage(quotations, requestedItemCount);
 
-  // Price: lower is better → inverse scale (always from quotation data)
-  let priceScores = inverseLinearScale(totals);
+  // Price: lower is better. Missing totals retain the engine's existing -1
+  // insufficient-data sentinel and never participate in the price scale.
+  const submittedTotals = totals.filter((total): total is number => total !== null);
+  const scaledSubmittedTotals = inverseLinearScale(submittedTotals);
+  let submittedIdx = 0;
+  let priceScores = totals.map((total) =>
+    total === null ? -1 : scaledSubmittedTotals[submittedIdx++],
+  );
 
   // Blend competitive ranking with distance-to-target when targets exist.
   if (targetPrices && targetPrices.size > 0) {
@@ -159,10 +211,15 @@ export function scoreSuppliers(
       let quotedValue = 0;
       for (const line of q.items) {
         const t = targetPrices.get(line.item);
-        if (t == null || !(t > 0) || !(line.unit_price > 0)) continue;
+        if (
+          t == null ||
+          !(t > 0) ||
+          line.unit_price === null ||
+          !(line.unit_price > 0)
+        ) continue;
         const qty = line.requested_qty && line.requested_qty > 0
           ? line.requested_qty
-          : line.total > 0 && line.unit_price > 0
+          : line.total !== null && line.total > 0 && line.unit_price > 0
             ? line.total / line.unit_price
             : 1;
         targetValue += t * qty;
@@ -174,7 +231,9 @@ export function scoreSuppliers(
       return clamp(Math.round(100 * (1.2 - ratio)));
     });
     priceScores = priceScores.map((competitive, i) =>
-      clamp(Math.round(competitive * 0.7 + vsTarget[i] * 0.3)),
+      competitive < 0
+        ? -1
+        : clamp(Math.round(competitive * 0.7 + vsTarget[i] * 0.3)),
     );
   }
 
@@ -186,33 +245,44 @@ export function scoreSuppliers(
 
   const scored: Array<{
     idx: number;
+    quotation_id?: string;
+    supplier_id?: string;
     supplier: string;
     supplier_name: string;
     dimensions: SupplierDimensionScores;
     final_score: number;
-    total: number;
+    total: number | null;
     scoreSources: ScoreSource[];
     hasSufficientData: boolean;
     confidenceLevel: "high" | "medium" | "low";
   }> = quotations.map((q, i) => {
-    const hist = historicalData?.[q.supplier_name];
+    const hist = historicalData?.[q.supplier_id ?? q.supplier_name] ?? historicalData?.[q.supplier_name];
     const hasPerfData = hist?.has_sufficient_data === true;
 
     const scoreSources: ScoreSource[] = [];
 
     // ── Price Score (quotation ranking + optional Target Price variance) ─
     const priceScore = priceScores[i];
-    let priceSource = `Current quotation: ${q.total_value > 0 ? `$${q.total_value.toLocaleString()}` : "N/A"}`;
-    if (targetPrices && targetPrices.size > 0) {
+    const hasPrice = totals[i] !== null;
+    let priceSource = hasPrice
+      ? `Current quotation: $${totals[i]!.toLocaleString()}`
+      : "Quotation pricing was not provided";
+    if (hasPrice && targetPrices && targetPrices.size > 0) {
       let savings = 0;
       for (const line of q.items) {
         const t = targetPrices.get(line.item);
-        if (t == null || !(t > 0) || !(line.unit_price > 0) || line.unit_price >= t)
+        if (
+          t == null ||
+          !(t > 0) ||
+          line.unit_price === null ||
+          !(line.unit_price > 0) ||
+          line.unit_price >= t
+        )
           continue;
         const qty =
           line.requested_qty && line.requested_qty > 0
             ? line.requested_qty
-            : line.total > 0
+            : line.total !== null && line.total > 0
               ? line.total / line.unit_price
               : 1;
         savings += (t - line.unit_price) * qty;
@@ -226,7 +296,7 @@ export function scoreSuppliers(
       dimension: "Price",
       value: priceScore,
       source: priceSource,
-      has_data: true,
+      has_data: hasPrice,
     });
 
     // ── Delivery Score ──────────────────────────────────────────────
@@ -314,23 +384,49 @@ export function scoreSuppliers(
       reliability_score: reliabilityScore,
     };
 
-    const final = clamp(
-      (dims.price_score * weights.price_weight +
-        dims.delivery_score * weights.delivery_weight +
-        dims.quality_score * weights.quality_weight +
-        dims.reliability_score * weights.reliability_weight) /
-        100
-    );
+    let final: number;
+    if (priceScore < 0) {
+      // Missing price: score based only on non-price dimensions, never give price advantage
+      const nonPriceWeight =
+        weights.delivery_weight +
+        weights.quality_weight +
+        weights.reliability_weight;
+      if (nonPriceWeight > 0) {
+        final = clamp(
+          (dims.delivery_score * weights.delivery_weight +
+            dims.quality_score * weights.quality_weight +
+            dims.reliability_score * weights.reliability_weight) /
+            nonPriceWeight
+        );
+      } else {
+        final = 0;
+      }
+    } else {
+      final = clamp(
+        (dims.price_score * weights.price_weight +
+          dims.delivery_score * weights.delivery_weight +
+          dims.quality_score * weights.quality_weight +
+          dims.reliability_score * weights.reliability_weight) /
+          100
+      );
+    }
 
     const dimensionsWithData = scoreSources.filter((s) => s.has_data).length;
-    const hasSufficientData = dimensionsWithData >= 3;
+    const hasSufficientData = dimensionsWithData >= 3 && totals[i] !== null;
     const confidenceLevel: "high" | "medium" | "low" =
-      dimensionsWithData === 4 ? "high" :
-      dimensionsWithData >= 2 ? "medium" : "low";
+      totals[i] === null
+        ? "low"
+        : dimensionsWithData === 4
+        ? "high"
+        : dimensionsWithData >= 2
+        ? "medium"
+        : "low";
 
     return {
       idx: i,
-      supplier: q.supplier_name,
+      quotation_id: q.quotation_id,
+      supplier_id: q.supplier_id,
+      supplier: q.supplier_id ?? q.supplier_name,
       supplier_name: q.supplier_name,
       dimensions: dims,
       final_score: final,
@@ -341,13 +437,22 @@ export function scoreSuppliers(
     };
   });
 
-  // Rank: highest final_score first; tiebreak by lowest total
+  // Rank: suppliers with submitted pricing rank ahead of suppliers with missing pricing.
+  // Within each group, rank by final_score descending (tiebreak by lowest total).
   scored.sort((a, b) => {
+    const aHasPrice = a.total !== null;
+    const bHasPrice = b.total !== null;
+    if (aHasPrice && !bHasPrice) return -1;
+    if (!aHasPrice && bHasPrice) return 1;
     if (b.final_score !== a.final_score) return b.final_score - a.final_score;
-    return a.total - b.total;
+    return (a.total ?? Number.POSITIVE_INFINITY) -
+      (b.total ?? Number.POSITIVE_INFINITY);
   });
 
   const suppliers: ScoredSupplier[] = scored.map((s, rank) => ({
+    quotation_id: s.quotation_id,
+    supplier_id: s.supplier_id,
+    evaluation_run_id: evaluationRunId,
     supplier: s.supplier,
     supplier_name: s.supplier_name,
     dimensions: s.dimensions,
@@ -360,6 +465,7 @@ export function scoreSuppliers(
   }));
 
   return {
+    evaluation_run_id: evaluationRunId,
     weights,
     scored_at: nowERPDateTime(),
     suppliers,
@@ -375,19 +481,20 @@ function buildReason(
     supplier: string;
     dimensions: SupplierDimensionScores;
     final_score: number;
-    total: number;
+    total: number | null;
     scoreSources: ScoreSource[];
     hasSufficientData: boolean;
   },
   rank: number,
   total: number
 ): string {
-  const best = rank === 1;
+  const best = rank === 1 && s.total !== null;
   const dims = s.dimensions;
   const strengths: string[] = [];
   const weaknesses: string[] = [];
 
-  if (dims.price_score >= 80) strengths.push("competitive pricing");
+  if (dims.price_score < 0) weaknesses.push("quotation pricing not provided");
+  else if (dims.price_score >= 80) strengths.push("competitive pricing");
   else if (dims.price_score < 40) weaknesses.push("higher cost");
 
   if (dims.delivery_score >= 80) strengths.push("strong delivery performance");
@@ -400,7 +507,9 @@ function buildReason(
   else if (dims.reliability_score < 40) weaknesses.push("reliability concerns");
 
   const dataNote = !s.hasSufficientData
-    ? " (Note: Limited historical data — confidence reduced.)"
+    ? s.total === null
+      ? " (Note: Incomplete quotation — pricing not provided.)"
+      : " (Note: Limited historical data — confidence reduced.)"
     : "";
 
   if (best) {
@@ -408,6 +517,10 @@ function buildReason(
       ? strengths.join(", ")
       : "balanced performance across all dimensions";
     return `Rank #1 with a weighted score of ${s.final_score}/100. Strengths: ${sText}.${dataNote}`;
+  }
+
+  if (s.total === null) {
+    return `Quotation pricing was not provided for this supplier. Evaluated on operational factors only (${s.final_score}/100).${dataNote}`;
   }
 
   const parts: string[] = [`Rank #${rank} of ${total} with a score of ${s.final_score}/100.`];

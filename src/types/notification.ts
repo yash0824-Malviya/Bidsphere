@@ -2,6 +2,7 @@ import type { AppRole } from "../config/roles";
 
 /** Enterprise notification modules aligned to role workspaces. */
 export type NotificationModule =
+  | "Engineering Change"
   | "System"
   | "Audit"
   | "Users"
@@ -78,8 +79,9 @@ export const ROLE_ALLOWED_MODULES: Record<
   // SLA is temporarily Admin-only. SLA notifications stay in the admin allow-list
   // and are removed from every non-admin role below (UI/role-based hide only —
   // no notification data is deleted).
-  admin: new Set(["System", "Audit", "Users", "Workflow", "SLA"]),
+  admin: new Set(["System", "Audit", "Users", "Workflow", "SLA", "Engineering Change"]),
   procurement: new Set([
+    "Engineering Change",
     "RFQ",
     "RFI",
     "RFP",
@@ -94,9 +96,10 @@ export const ROLE_ALLOWED_MODULES: Record<
    * Procurement Team — PO operations + GRN monitoring only.
    * No Invoice / Voucher / RFQ / Budget / Legal / AI modules.
    */
-  procurement_team: new Set(["Purchase Order", "PO Ready for GRN", "GRN"]),
+  procurement_team: new Set(["Purchase Order", "PO Ready for GRN", "GRN", "Engineering Change"]),
   legal: new Set(["Legal Review", "Supplier Documents", "Compliance"]),
   finance: new Set([
+    "Engineering Change",
     "Voucher",
     "Invoice",
     "Payment",
@@ -113,11 +116,11 @@ export const ROLE_ALLOWED_MODULES: Record<
   department: new Set(["Purchase Order", "Material Issue Receipt"]),
   executive: new Set(["System", "Audit", "Workflow", "Budget"]),
   manufacturing: new Set(["Inventory"]),
-  engineer: new Set(["Workflow", "System"]),
-  engineering: new Set(["Workflow", "System"]),
+  engineer: new Set(["Workflow", "System", "Engineering Change"]),
+  engineering: new Set(["Workflow", "System", "Engineering Change"]),
   operations: new Set(["Workflow", "System"]),
-  quality: new Set(["Workflow", "System"]),
-  program_manager: new Set(["Workflow", "System"]),
+  quality: new Set(["Workflow", "System", "Engineering Change"]),
+  program_manager: new Set(["Workflow", "System", "Engineering Change"]),
 };
 
 export const SUPPLIER_ALLOWED_MODULES = new Set<NotificationModule>([

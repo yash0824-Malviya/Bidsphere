@@ -1,4 +1,4 @@
-import type { FormEvent, KeyboardEvent } from "react";
+import type { ClipboardEvent, FormEvent, KeyboardEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -73,6 +73,8 @@ function postAccountLoginPath(session: {
   return "/supplier/profile";
 }
 
+const PIN_LENGTH = 4;
+
 interface PinInputProps {
   value: string;
   onChange: (pin: string) => void;
@@ -80,7 +82,7 @@ interface PinInputProps {
 }
 
 function PinInput({ value, onChange, disabled }: PinInputProps) {
-  const digits = Array.from({ length: 5 }, (_, i) => value[i] || "");
+  const digits = Array.from({ length: PIN_LENGTH }, (_, i) => value[i] || "");
   const inputsRef = useRef<(HTMLInputElement | null)[]>([]);
 
   const handleChange = (index: number, val: string) => {
@@ -93,27 +95,49 @@ function PinInput({ value, onChange, disabled }: PinInputProps) {
     }
 
     if (numericVal.length > 1) {
-      const pasted = numericVal.slice(0, 5);
+      const pasted = numericVal.slice(0, PIN_LENGTH);
       onChange(pasted);
-      const nextFocus = Math.min(pasted.length, 4);
+      const nextFocus = Math.min(pasted.length, PIN_LENGTH - 1);
       inputsRef.current[nextFocus]?.focus();
       return;
     }
 
     const nextDigits = [...digits];
     nextDigits[index] = numericVal;
-    const newPin = nextDigits.join("");
+    const newPin = nextDigits.join("").slice(0, PIN_LENGTH);
     onChange(newPin);
 
-    if (index < 4) {
+    if (index < PIN_LENGTH - 1) {
       inputsRef.current[index + 1]?.focus();
     }
   };
 
   const handleKeyDown = (index: number, e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Backspace" && !digits[index] && index > 0) {
+    if (e.key === "Backspace") {
+      if (!digits[index] && index > 0) {
+        e.preventDefault();
+        const nextDigits = [...digits];
+        nextDigits[index - 1] = "";
+        onChange(nextDigits.join(""));
+        inputsRef.current[index - 1]?.focus();
+      }
+    } else if (e.key === "ArrowLeft" && index > 0) {
+      e.preventDefault();
       inputsRef.current[index - 1]?.focus();
+    } else if (e.key === "ArrowRight" && index < PIN_LENGTH - 1) {
+      e.preventDefault();
+      inputsRef.current[index + 1]?.focus();
     }
+  };
+
+  const handlePaste = (e: ClipboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    const pastedText = e.clipboardData.getData("text");
+    const numericPasted = pastedText.replace(/\D/g, "").slice(0, PIN_LENGTH);
+    if (!numericPasted) return;
+    onChange(numericPasted);
+    const nextFocus = Math.min(numericPasted.length, PIN_LENGTH - 1);
+    inputsRef.current[nextFocus]?.focus();
   };
 
   return (
@@ -121,8 +145,8 @@ function PinInput({ value, onChange, disabled }: PinInputProps) {
       <div className="flex h-[48px] w-[44px] shrink-0 items-center justify-center rounded-[10px] border border-[#D0D5DD] bg-[#F9FAFB] text-[#667085] supplier-login-field-icon">
         <KeyRound className="h-4 w-4" />
       </div>
-      <div className="flex flex-1 items-center justify-between gap-1 sm:gap-1.5">
-        {Array.from({ length: 5 }).map((_, i) => (
+      <div className="grid grid-cols-4 gap-2 flex-1">
+        {Array.from({ length: PIN_LENGTH }).map((_, i) => (
           <input
             key={i}
             ref={(el) => {
@@ -135,7 +159,9 @@ function PinInput({ value, onChange, disabled }: PinInputProps) {
             disabled={disabled}
             onChange={(e) => handleChange(i, e.target.value)}
             onKeyDown={(e) => handleKeyDown(i, e)}
-            className="h-[48px] w-[48px] rounded-[10px] border border-[#D0D5DD] bg-white text-center font-bold text-lg text-[#101828] focus:border-[#146CE8] focus:ring-2 focus:ring-[#146CE8]/20 disabled:bg-[#F2F4F7] outline-none transition-all placeholder:text-[#98A2B3] supplier-login-pin-box"
+            onPaste={handlePaste}
+            onFocus={(e) => e.target.select()}
+            className="h-[48px] w-full rounded-[10px] border border-[#D0D5DD] bg-white text-center font-bold text-lg text-[#101828] focus:border-[#146CE8] focus:ring-2 focus:ring-[#146CE8]/20 disabled:bg-[#F2F4F7] outline-none transition-all placeholder:text-[#98A2B3] supplier-login-pin-box"
             placeholder="•"
           />
         ))}
@@ -345,8 +371,8 @@ export default function SupplierLoginPage() {
       toast.error("Please select your company or enter a valid supplier code.");
       return;
     }
-    if (!pin || pin.length < 4) {
-      toast.error("Portal PIN must be 4 or 5 digits.");
+    if (!pin || pin.length !== 4 || !/^\d{4}$/.test(pin)) {
+      toast.error("Portal PIN must be 4 digits.");
       return;
     }
 

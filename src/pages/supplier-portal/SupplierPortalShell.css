@@ -1,0 +1,159 @@
+/* One shared Supplier Portal shell across all authenticated supplier routes. */
+.supplier-portal-layout {
+  background: #f5f7fb;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.supplier-portal-layout .app-shell-scroll { scrollbar-gutter: stable; }
+
+.supplier-portal-layout .supplier-portal-sidebar {
+  width: 240px;
+  min-width: 240px;
+  max-width: min(240px, 100vw);
+  height: 100dvh;
+  min-height: 0;
+  border-right: 1px solid #152449;
+  background: #0f1b36;
+  color: #94a3b8;
+}
+
+.supplier-portal-layout .supplier-sidebar-brand {
+  height: 64px;
+  gap: 6px;
+  padding: 0 14px;
+  border-bottom-color: #ffffff14;
+}
+
+.supplier-portal-layout .supplier-sidebar-brand > a { flex: 1; gap: 10px; }
+.supplier-portal-layout .supplier-sidebar-brand img { width: 28px; height: 28px; border-radius: 4px; }
+.supplier-portal-layout .supplier-sidebar-brand p { font-size: 13px; font-weight: 700; letter-spacing: 0.025em; }
+
+.supplier-portal-layout .supplier-sidebar-close {
+  display: inline-flex;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: #94a3b8;
+}
+
+.supplier-portal-layout .supplier-sidebar-close:hover { background: #152449; color: #fff; }
+
+.supplier-portal-layout .supplier-sidebar-company {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 4px;
+  margin: 14px 18px 4px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #ffffff14;
+}
+
+.supplier-portal-layout .supplier-sidebar-company-label { color: #94a3b8; font-size: 10px; font-weight: 500; }
+.supplier-portal-layout .supplier-sidebar-company-name {
+  overflow: hidden;
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supplier-portal-layout .supplier-portal-sidebar .app-sidebar-nav {
+  padding: 8px;
+  scrollbar-color: #314463 transparent;
+  scrollbar-width: thin;
+}
+
+.supplier-portal-layout .supplier-sidebar-section-label {
+  margin: 12px 10px 6px;
+  color: #7f90aa;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.supplier-portal-layout .app-sidebar-nav > .supplier-sidebar-section-label:first-child { margin-top: 4px; }
+
+.supplier-portal-layout .supplier-sidebar-nav-item {
+  height: 36px;
+  gap: 10px;
+  padding-right: 10px;
+  padding-left: 10px;
+  border-radius: 8px;
+  color: #94a3b8;
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: none;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.supplier-portal-layout .supplier-sidebar-nav-item:hover { background: #152449; color: #fff; }
+.supplier-portal-layout .supplier-sidebar-nav-item.is-active {
+  background: #146ce8;
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 1px 2px #0000000d;
+}
+
+.supplier-portal-layout .supplier-sidebar-nav-item.is-active::before { content: none; }
+.supplier-portal-layout .supplier-sidebar-nav-item > svg:first-child { width: 17px; height: 17px; stroke-width: 2; }
+
+.supplier-portal-layout .supplier-sidebar-nav-row { display: flex; align-items: center; border-radius: 8px; }
+.supplier-portal-layout .supplier-sidebar-nav-row > a { min-width: 0; flex: 1; }
+.supplier-portal-layout .supplier-sidebar-nav-row.is-active { background: #146ce8; }
+.supplier-portal-layout .supplier-sidebar-toggle { display: flex; align-items: center; justify-content: center; flex: 0 0 30px; height: 32px; margin-right: 3px; border-radius: 6px; color: #94a3b8; }
+.supplier-portal-layout .supplier-sidebar-nav-row.is-active .supplier-sidebar-toggle { color: #fff; }
+.supplier-portal-layout .supplier-sidebar-toggle:hover { background: #ffffff14; color: #fff; }
+.supplier-portal-layout .supplier-sidebar-version { font-size: 9px; }
+
+/* Nested supplier routes use the same compact branch treatment as staff nav. */
+.supplier-portal-layout .supplier-sidebar-children {
+  margin: 2px 4px 0 16px;
+  padding-left: 8px;
+  border-color: #ffffff1f;
+}
+
+.supplier-portal-layout .supplier-sidebar-children > div { padding: 2px 0; }
+.supplier-portal-layout .supplier-sidebar-children a {
+  height: 30px;
+  margin: 2px 0 0;
+  border-radius: 6px;
+  color: #94a3b8;
+  font-size: 12px;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.supplier-portal-layout .supplier-sidebar-children a:hover { background: #152449; color: #fff; }
+.supplier-portal-layout .supplier-sidebar-children a[aria-current="page"] { background: #146ce8; color: #fff; font-weight: 600; }
+
+.supplier-portal-layout .supplier-portal-sidebar .app-sidebar-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-color: #ffffff14;
+  color: #94a3b8;
+  font-size: 10.5px;
+}
+
+.supplier-portal-layout .supplier-portal-menu-toggle {
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
+  border: 1px solid #e3e8f0;
+  border-radius: 8px;
+  color: #0f1b36;
+  box-shadow: none;
+}
+
+.supplier-portal-layout a:focus-visible,
+.supplier-portal-layout button:focus-visible { outline: 2px solid #146ce8; outline-offset: 3px; }
+.supplier-portal-layout .supplier-portal-sidebar a:focus-visible,
+.supplier-portal-layout .supplier-portal-sidebar button:focus-visible { outline-color: #8cb8ff; }
+

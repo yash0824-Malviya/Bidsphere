@@ -21,6 +21,8 @@ import {
 
 import { getLegalReviews, batchRFQToPOMap } from "../../api/legalReviews";
 import type { LegalReviewItem, LegalReviewStatus } from "../../types/erpnext";
+import { useAuthStore } from "../../store/authStore";
+import { canManagePurchaseOrders } from "../../config/roles";
 
 import EmptyState from "../../components/EmptyState";
 import PageHeader from "../../components/PageHeader";
@@ -605,6 +607,15 @@ function POChip({
   if (!financeApproved) {
     return (
       <span className="shrink-0 text-[11px] text-amber-600">Awaiting Finance</span>
+    );
+  }
+
+  const userRole = useAuthStore((s) => s.user?.role);
+  const canManagePo = canManagePurchaseOrders(userRole);
+
+  if (!canManagePo) {
+    return (
+      <span className="shrink-0 text-[11px] font-medium text-success-700">Ready for PO</span>
     );
   }
 

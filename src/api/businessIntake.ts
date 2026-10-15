@@ -48,8 +48,31 @@ import {
   markProcurementReadyInErp,
   resubmitBusinessCaseRevisionInErp,
   linkRfqToBusinessCaseInErp,
+  getNextBusinessCaseId,
+  createBusinessCaseStandaloneInErp,
+  mapToErpTechnicalRequirements,
+  completeEngineerTechnicalReviewInErp,
+  approveEngineeringStageInErp,
+  approveFinanceStageInErp,
+  approveFinanceExecutiveStageInErp,
+  approveProcurementStageInErp,
+  approveLegalStageInErp,
+  approveProgramManagerStageInErp,
+  sendBackBusinessCaseInErp,
+  rejectBusinessCaseInErp,
+  resubmitBusinessCaseInErp,
+  updateBusinessCaseSectionInErp,
   ErpIntakeError,
   validateIntakeDocTypeFields,
+  normalizeRoleString,
+  isFinanceManagerRole,
+  isEngineerRole,
+  isEngineeringManagerRole,
+  isLegalManagerRole,
+  isProcurementManagerRole,
+  fetchRoleBusinessCasesFromErp,
+  isDepartmentUserRole,
+  isWarehouseManagerRole,
 } from "./businessIntakeErp";
 
 import { createNotification } from "./notifications";
@@ -70,6 +93,15 @@ export {
   validateFinanceGateInErp as validateFinanceGate,
   markProcurementReadyInErp,
   resubmitBusinessCaseRevisionInErp,
+  completeEngineerTechnicalReviewInErp,
+  normalizeRoleString,
+  isFinanceManagerRole,
+  isEngineerRole,
+  isEngineeringManagerRole,
+  isLegalManagerRole,
+  isProcurementManagerRole,
+  isDepartmentUserRole,
+  isWarehouseManagerRole,
 };
 
 // ── Error types (kept for compatibility) ─────────────────────────────────────
@@ -95,10 +127,32 @@ function checkPermission(
   allowedRoles: Array<AppRole | string>,
   action: string,
 ): void {
-  const normRole = (userRole || "").toLowerCase().trim();
-  const normalizedAllowed = allowedRoles.map((r) => r.toLowerCase().trim());
-  if (normRole === "admin") return;
-  if (!normalizedAllowed.includes(normRole)) {
+  const normRole = normalizeRoleString(userRole);
+  if (normRole === "admin" || normRole === "administrator") return;
+  const match = allowedRoles.some((r) => {
+    const normAllowed = normalizeRoleString(r);
+    if (normAllowed === normRole) return true;
+    if (normAllowed === "finance" || normAllowed === "financemanager") {
+      return isFinanceManagerRole(userRole);
+    }
+    if (normAllowed === "engineer") {
+      return isEngineerRole(userRole);
+    }
+    if (normAllowed === "engineeringmanager" || normAllowed === "engineering") {
+      return isEngineeringManagerRole(userRole);
+    }
+    if (normAllowed === "legal" || normAllowed === "legalmanager") {
+      return isLegalManagerRole(userRole);
+    }
+    if (normAllowed === "procurement" || normAllowed === "procurementmanager" || normAllowed === "procurementteam") {
+      return isProcurementManagerRole(userRole);
+    }
+    if (normAllowed === "department" || normAllowed === "departmentuser") {
+      return isDepartmentUserRole(userRole);
+    }
+    return false;
+  });
+  if (!match) {
     throw new UnauthorizedError(action, userRole);
   }
 }
@@ -707,6 +761,17 @@ export async function fetchBusinessCases(filters?: {
   return list;
 }
 
+export async function fetchRoleBusinessCases(
+  role: string,
+  userEmail?: string,
+  options?: {
+    tab?: string;
+    queueType?: "actionable" | "all" | "completed" | "ready_for_rfq";
+  },
+): Promise<BusinessCase[]> {
+  return fetchRoleBusinessCasesFromErp(role, userEmail, options);
+}
+
 export async function fetchBusinessCaseById(
   id: string,
 ): Promise<BusinessCase | null> {
@@ -872,11 +937,13 @@ export async function markProcurementReady(
   return result;
 }
 
-export async function getPendingBusinessCasesForProcurement(): Promise<
-  BusinessCase[]
-> {
-  return fetchPendingBusinessCasesFromErp();
+export async function getPendingBusinessCasesForProcurement(
+  userRole?: string,
+): Promise<BusinessCase[]> {
+  return fetchPendingBusinessCasesFromErp(userRole);
 }
+
+export const fetchPendingBusinessCases = getPendingBusinessCasesForProcurement;
 
 export async function linkRfqToBusinessCase(
   caseId: string,
@@ -892,6 +959,372 @@ export async function linkRfqToBusinessCase(
   );
 }
 
+// ── STANDALONE BUSINESS CASE WORKFLOW METHODS ───────────────────────────────
+
+export { getNextBusinessCaseId, mapToErpTechnicalRequirements };
+
+export async function createBusinessCaseStandalone(
+  input: CreateBusinessCaseInput,
+  userEmail: string,
+  userRole: AppRole | string,
+  submitImmediately = true,
+): Promise<BusinessCase> {
+  checkPermission(
+    userRole,
+    ["department", "department_user", "admin"],
+    "Create Business Case",
+  );
+
+  const result = await createBusinessCaseStandaloneInErp(
+    input,
+    userEmail,
+    typeof userRole === "string" ? userRole : "department",
+    submitImmediately,
+  );
+
+  if (submitImmediately) {
+    const nextRole = result.workflow_status === "Pending Engineering" ? ["engineering", "engineering_manager", "admin"] : ["finance", "finance_executive", "admin"];
+    void createEnterpriseNotification({
+      title: `${result.workflow_status === "Pending Engineering" ? "Engineering" : "Finance"} Review Required: ${result.business_case_id}`,
+      message: `Business Case ${result.business_case_id} (${result.title}) was submitted and requires review.`,
+      module: "intake",
+      target_roles: nextRole,
+      target_route: `/intake/business-cases/${result.business_case_id}`,
+      document_id: result.business_case_id,
+    });
+  }
+
+  return result;
+}
+
+export async function completeEngineerTechnicalReview(
+  caseId: string,
+  comments: string,
+  reviewerEmail: string,
+  userRole: AppRole | string,
+): Promise<BusinessCase> {
+  checkPermission(
+    userRole,
+    ["engineer", "engineering"],
+    "Complete Engineer Technical Review",
+  );
+
+  const result = await completeEngineerTechnicalReviewInErp(
+    caseId,
+    comments,
+    reviewerEmail,
+    typeof userRole === "string" ? userRole : "engineer",
+  );
+
+  void createEnterpriseNotification({
+    title: `Engineering Manager Approval Required: ${caseId}`,
+    message: `Business Case ${caseId} completed Technical Review and requires Engineering Manager approval.`,
+    module: "intake",
+    target_roles: ["engineering_manager", "admin"],
+    target_route: `/intake/business-cases/${caseId}`,
+    document_id: caseId,
+  });
+
+  return result;
+}
+
+export async function approveEngineeringStage(
+  caseId: string,
+  comments: string,
+  reviewerEmail: string,
+  userRole: AppRole | string,
+): Promise<BusinessCase> {
+  checkPermission(
+    userRole,
+    ["engineering_manager", "engineering"],
+    "Approve Engineering Stage",
+  );
+
+  const result = await approveEngineeringStageInErp(
+    caseId,
+    comments,
+    reviewerEmail,
+    typeof userRole === "string" ? userRole : "engineering_manager",
+  );
+
+  void createEnterpriseNotification({
+    title: `Finance Review Required: ${caseId}`,
+    message: `Business Case ${caseId} passed Engineering approval and is waiting for Finance approval.`,
+    module: "intake",
+    target_roles: ["finance", "finance_manager", "admin"],
+    target_route: `/intake/business-cases/${caseId}`,
+    document_id: caseId,
+  });
+
+  return result;
+}
+
+export async function approveFinanceStage(
+  caseId: string,
+  comments: string,
+  reviewerEmail: string,
+  userRole: AppRole | string,
+  checklist?: Partial<FinanceChecklistState>,
+): Promise<BusinessCase> {
+  checkPermission(
+    userRole,
+    ["finance", "finance_manager"],
+    "Approve Finance Stage",
+  );
+
+  const result = await approveFinanceStageInErp(
+    caseId,
+    comments,
+    reviewerEmail,
+    typeof userRole === "string" ? userRole : "finance",
+    checklist,
+  );
+
+  void createEnterpriseNotification({
+    title: `Legal Review Required: ${caseId}`,
+    message: `Business Case ${caseId} passed Finance approval and requires Legal Review.`,
+    module: "intake",
+    target_roles: ["legal", "legal_manager", "admin"],
+    target_route: `/intake/business-cases/${caseId}`,
+    document_id: caseId,
+  });
+
+  return result;
+}
+
+export async function approveFinanceExecutiveStage(
+  caseId: string,
+  comments: string,
+  reviewerEmail: string,
+  userRole: AppRole | string,
+): Promise<BusinessCase> {
+  checkPermission(
+    userRole,
+    ["finance_executive", "finance", "admin"],
+    "Approve Finance Executive Stage",
+  );
+
+  const result = await approveFinanceExecutiveStageInErp(
+    caseId,
+    comments,
+    reviewerEmail,
+    typeof userRole === "string" ? userRole : "finance_executive",
+  );
+
+  void createEnterpriseNotification({
+    title: `Legal Review Required: ${caseId}`,
+    message: `Business Case ${caseId} passed Executive Finance approval and requires Legal review.`,
+    module: "intake",
+    target_roles: ["legal", "legal_manager", "admin"],
+    target_route: `/intake/business-cases/${caseId}`,
+    document_id: caseId,
+  });
+
+  return result;
+}
+
+export async function approveLegalStage(
+  caseId: string,
+  comments: string,
+  reviewerEmail: string,
+  userRole: AppRole | string,
+  esignData?: {
+    signatureName?: string;
+    signedAt?: string;
+    fontId?: string;
+    checklist?: Record<string, boolean>;
+    documentReviews?: Array<{ name: string; status: string; comments?: string }> | Record<string, { status: string; comment?: string }>;
+    auditMetadata?: Record<string, unknown>;
+  },
+): Promise<BusinessCase> {
+  checkPermission(
+    userRole,
+    ["legal", "legal_manager"],
+    "Approve Legal Stage",
+  );
+
+  const result = await approveLegalStageInErp(
+    caseId,
+    comments,
+    reviewerEmail,
+    typeof userRole === "string" ? userRole : "legal",
+    esignData,
+  );
+
+  void createEnterpriseNotification({
+    title: `Procurement Review Required: ${caseId}`,
+    message: `Business Case ${caseId} passed Legal review and is waiting for Procurement review.`,
+    module: "intake",
+    target_roles: ["procurement", "procurement_manager", "admin"],
+    target_route: `/intake/business-cases/${caseId}`,
+    document_id: caseId,
+  });
+
+  return result;
+}
+
+export async function approveProcurementStage(
+  caseId: string,
+  comments: string,
+  reviewerEmail: string,
+  userRole: AppRole | string,
+): Promise<BusinessCase> {
+  checkPermission(
+    userRole,
+    ["procurement", "procurement_manager"],
+    "Approve Procurement Stage",
+  );
+
+  const result = await approveProcurementStageInErp(
+    caseId,
+    comments,
+    reviewerEmail,
+    typeof userRole === "string" ? userRole : "procurement",
+  );
+
+  void createEnterpriseNotification({
+    title: `Business Case Approved — Ready for RFQ: ${caseId}`,
+    message: `Business Case ${caseId} passed Procurement approval and is ready for RFQ creation.`,
+    module: "intake",
+    target_roles: ["procurement", "procurement_manager", "admin"],
+    target_route: `/intake/business-cases/${caseId}`,
+    document_id: caseId,
+  });
+
+  return result;
+}
+
+export async function approveProgramManagerStage(
+  caseId: string,
+  comments: string,
+  reviewerEmail: string,
+  userRole: AppRole | string,
+): Promise<BusinessCase> {
+  checkPermission(
+    userRole,
+    ["program_manager", "admin"],
+    "Approve Program Manager Stage",
+  );
+
+  const result = await approveProgramManagerStageInErp(
+    caseId,
+    comments,
+    reviewerEmail,
+    typeof userRole === "string" ? userRole : "program_manager",
+  );
+
+  void createEnterpriseNotification({
+    title: `Business Case Approved — Ready for RFQ: ${caseId}`,
+    message: `Business Case ${caseId} received final approval and is now unlocked for RFQ creation.`,
+    module: "intake",
+    target_roles: ["procurement", "procurement_team", "department", "department_user", "admin"],
+    target_route: `/intake/business-cases/${caseId}`,
+    document_id: caseId,
+  });
+
+  return result;
+}
+
+export async function sendBackBusinessCase(
+  caseId: string,
+  reason: string,
+  reviewerEmail: string,
+  userRole: AppRole | string,
+  targetStage = "Draft",
+): Promise<BusinessCase> {
+  const result = await sendBackBusinessCaseInErp(
+    caseId,
+    reason,
+    reviewerEmail,
+    typeof userRole === "string" ? userRole : "reviewer",
+    targetStage,
+  );
+
+  void createEnterpriseNotification({
+    title: `Business Case Returned: ${caseId}`,
+    message: `Business Case ${caseId} was returned by ${reviewerEmail}. Reason: ${reason}`,
+    module: "intake",
+    target_roles: ["department", "department_user", "admin"],
+    target_route: `/intake/business-cases/${caseId}`,
+    document_id: caseId,
+  });
+
+  return result;
+}
+
+export async function rejectBusinessCase(
+  caseId: string,
+  reason: string,
+  reviewerEmail: string,
+  userRole: AppRole | string,
+): Promise<BusinessCase> {
+  const result = await rejectBusinessCaseInErp(
+    caseId,
+    reason,
+    reviewerEmail,
+    typeof userRole === "string" ? userRole : "reviewer",
+  );
+
+  void createEnterpriseNotification({
+    title: `Business Case Rejected: ${caseId}`,
+    message: `Business Case ${caseId} was rejected. Reason: ${reason}`,
+    module: "intake",
+    target_roles: ["department", "department_user", "admin"],
+    target_route: `/intake/business-cases/${caseId}`,
+    document_id: caseId,
+  });
+
+  return result;
+}
+
+export async function resubmitBusinessCase(
+  caseId: string,
+  updatedData: Partial<CreateBusinessCaseInput>,
+  userEmail: string,
+  userRole: AppRole | string,
+): Promise<BusinessCase> {
+  checkPermission(
+    userRole,
+    ["department", "department_user", "admin"],
+    "Resubmit Business Case",
+  );
+
+  const result = await resubmitBusinessCaseInErp(
+    caseId,
+    updatedData,
+    userEmail,
+    typeof userRole === "string" ? userRole : "department",
+  );
+
+  void createEnterpriseNotification({
+    title: `Business Case Resubmitted: ${caseId}`,
+    message: `Business Case ${caseId} was resubmitted and entered ${result.workflow_status}.`,
+    module: "intake",
+    target_roles: result.workflow_status === "Pending Engineering" ? ["engineering", "engineering_manager", "admin"] : ["finance", "finance_executive", "admin"],
+    target_route: `/intake/business-cases/${caseId}`,
+    document_id: caseId,
+  });
+
+  return result;
+}
+
+export async function updateBusinessCaseSection(
+  caseId: string,
+  section: "business_info" | "justification" | "financial" | "technical" | "strategy" | "risk" | "compliance" | "general",
+  data: Record<string, unknown>,
+  userEmail: string,
+  userRole: AppRole | string,
+): Promise<BusinessCase> {
+  return updateBusinessCaseSectionInErp(
+    caseId,
+    section,
+    data,
+    userEmail,
+    typeof userRole === "string" ? userRole : "department",
+  );
+}
+
 // ── LEGACY STATUS EXPORT (kept for any remaining call-sites) ─────────────────
 
 export type { NeedStatus };
+

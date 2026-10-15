@@ -1,0 +1,2216 @@
+{
+  "checked_at": "2026-09-23T11:19:28.150Z",
+  "read_only": true,
+  "mutation_performed": false,
+  "target_origin": "http://80.225.204.210:8090",
+  "schema": [
+    {
+      "name": "Contract Request",
+      "custom": 1,
+      "module": "Procurement",
+      "autoname": "CTRQ-.YYYY.-.####",
+      "naming_rule": "Expression",
+      "allow_rename": 0,
+      "is_submittable": 1,
+      "track_changes": 0,
+      "title_field": null,
+      "fields": [
+        {
+          "fieldname": "requester",
+          "fieldtype": "Link",
+          "options": "User",
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "request_date",
+          "fieldtype": "Date",
+          "options": null,
+          "reqd": 1,
+          "unique": 0,
+          "default": "Today",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "department",
+          "fieldtype": "Link",
+          "options": "Department",
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "company",
+          "fieldtype": "Link",
+          "options": "Company",
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "required_by_date",
+          "fieldtype": "Date",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "contract_type",
+          "fieldtype": "Select",
+          "options": "Supplier Agreement\nPurchase Agreement\nService Agreement\nNDA\nMaster Service Agreement\nTooling Agreement\nQuality Agreement\nConsulting Agreement\nLease Agreement\nOther\nSCA\nLTA\nBAI\nFeasibility\nPackaging\nSupply / Procurement Contract",
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "contract_purpose",
+          "fieldtype": "Small Text",
+          "options": null,
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "description",
+          "fieldtype": "Text Editor",
+          "options": null,
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "supplier",
+          "fieldtype": "Link",
+          "options": "Supplier",
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "supplier_contact",
+          "fieldtype": "Link",
+          "options": "Contact",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "contact_email",
+          "fieldtype": "Data",
+          "options": "Email",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 1,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "contact_phone",
+          "fieldtype": "Data",
+          "options": "Phone",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 1,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "supplier_address",
+          "fieldtype": "Link",
+          "options": "Address",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "contract_start_date",
+          "fieldtype": "Date",
+          "options": null,
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "contract_end_date",
+          "fieldtype": "Date",
+          "options": null,
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "contract_value",
+          "fieldtype": "Currency",
+          "options": null,
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "currency",
+          "fieldtype": "Select",
+          "options": "USD\nEUR\nGBP\nINR\nAED\nSGD\nAUD\nCAD",
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "payment_terms",
+          "fieldtype": "Small Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "renewal_type",
+          "fieldtype": "Select",
+          "options": "Fixed Term\nAuto Renewal\nEvergreen",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "notice_period_days",
+          "fieldtype": "Int",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "auto_renewal",
+          "fieldtype": "Check",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": "0",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "legal_review_required",
+          "fieldtype": "Check",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": "0",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "legal_reviewer",
+          "fieldtype": "Link",
+          "options": "User",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "compliance_review_required",
+          "fieldtype": "Check",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": "0",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "compliance_notes",
+          "fieldtype": "Small Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "confidentiality_required",
+          "fieldtype": "Check",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": "0",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "nda_required",
+          "fieldtype": "Check",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": "0",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "estimated_contract_value",
+          "fieldtype": "Currency",
+          "options": null,
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "budget_available",
+          "fieldtype": "Check",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": "0",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "budget_reference",
+          "fieldtype": "Data",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "cost_center",
+          "fieldtype": "Link",
+          "options": "Cost Center",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "termination_notice_days",
+          "fieldtype": "Int",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "approval_required",
+          "fieldtype": "Check",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": "0",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "approver",
+          "fieldtype": "Link",
+          "options": "User",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "approval_comments",
+          "fieldtype": "Small Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "approval_status",
+          "fieldtype": "Select",
+          "options": "Pending\nApproved\nRejected\nCancelled",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "supporting_document",
+          "fieldtype": "Attach",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "additional_documents",
+          "fieldtype": "Attach",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "document_notes",
+          "fieldtype": "Small Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "request_status",
+          "fieldtype": "Select",
+          "options": "Draft\nPending Review\nUnder Legal Review\nPending Approval\nApproved\nRejected\nCompleted\nCancelled",
+          "reqd": 0,
+          "unique": 0,
+          "default": "Draft",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "submitted_by",
+          "fieldtype": "Link",
+          "options": "User",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 1,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "submission_date",
+          "fieldtype": "Datetime",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 1,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "approved_by",
+          "fieldtype": "Link",
+          "options": "User",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 1,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "approval_date",
+          "fieldtype": "Datetime",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 1,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "rejection_reason",
+          "fieldtype": "Small Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "internal_notes",
+          "fieldtype": "Text Editor",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "amended_from",
+          "fieldtype": "Link",
+          "options": "Contract Request",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 1,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        }
+      ],
+      "custom_fields": [
+        {
+          "fieldname": "custom_business_unit",
+          "fieldtype": "Data",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": "",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_clm_data",
+          "fieldtype": "Long Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": "",
+          "read_only": 1,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_project",
+          "fieldtype": "Link",
+          "options": "Project",
+          "reqd": 0,
+          "unique": 0,
+          "default": "",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_purchase_order",
+          "fieldtype": "Link",
+          "options": "Purchase Order",
+          "reqd": 0,
+          "unique": 0,
+          "default": "",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_rfq",
+          "fieldtype": "Link",
+          "options": "Request for Quotation",
+          "reqd": 0,
+          "unique": 1,
+          "default": "",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_supplier_quotation",
+          "fieldtype": "Link",
+          "options": "Supplier Quotation",
+          "reqd": 0,
+          "unique": 0,
+          "default": "",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        }
+      ],
+      "overrides": [],
+      "permissions": [
+        {
+          "role": "System Manager",
+          "read": 1,
+          "write": 1,
+          "create": 1,
+          "submit": 1,
+          "cancel": 0,
+          "delete": 1,
+          "if_owner": 0,
+          "permlevel": 0
+        },
+        {
+          "role": "Procurement Team",
+          "read": 1,
+          "write": 1,
+          "create": 1,
+          "submit": 1,
+          "cancel": 0,
+          "delete": 0,
+          "if_owner": 0,
+          "permlevel": 0
+        },
+        {
+          "role": "Procurement Manager",
+          "read": 1,
+          "write": 1,
+          "create": 0,
+          "submit": 1,
+          "cancel": 1,
+          "delete": 0,
+          "if_owner": 0,
+          "permlevel": 0
+        }
+      ]
+    },
+    {
+      "name": "Contract",
+      "custom": 0,
+      "module": "CRM",
+      "autoname": "CON-.YYYY.-.#####",
+      "naming_rule": "Expression",
+      "allow_rename": 1,
+      "is_submittable": 1,
+      "track_changes": 1,
+      "title_field": "party_name",
+      "fields": [
+        {
+          "fieldname": "party_type",
+          "fieldtype": "Select",
+          "options": "Customer\nSupplier\nEmployee",
+          "reqd": 1,
+          "unique": 0,
+          "default": "Customer",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "is_signed",
+          "fieldtype": "Check",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": "0",
+          "read_only": 0,
+          "allow_on_submit": 1,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "party_name",
+          "fieldtype": "Dynamic Link",
+          "options": "party_type",
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "party_user",
+          "fieldtype": "Link",
+          "options": "User",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "status",
+          "fieldtype": "Select",
+          "options": "Unsigned\nActive\nInactive\nCancelled",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 1,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "fulfilment_status",
+          "fieldtype": "Select",
+          "options": "N/A\nUnfulfilled\nPartially Fulfilled\nFulfilled\nLapsed",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 1,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "party_full_name",
+          "fieldtype": "Data",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 1,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "start_date",
+          "fieldtype": "Date",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "end_date",
+          "fieldtype": "Date",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "signee",
+          "fieldtype": "Data",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 1,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "signed_on",
+          "fieldtype": "Datetime",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 1,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "ip_address",
+          "fieldtype": "Data",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 1,
+          "allow_on_submit": 1,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "contract_template",
+          "fieldtype": "Link",
+          "options": "Contract Template",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "contract_terms",
+          "fieldtype": "Text Editor",
+          "options": null,
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "requires_fulfilment",
+          "fieldtype": "Check",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": "0",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "fulfilment_deadline",
+          "fieldtype": "Date",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "fulfilment_terms",
+          "fieldtype": "Table",
+          "options": "Contract Fulfilment Checklist",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 1,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "signee_company",
+          "fieldtype": "Signature",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "signed_by_company",
+          "fieldtype": "Link",
+          "options": "User",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 1,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "document_type",
+          "fieldtype": "Select",
+          "options": "\nQuotation\nProject\nSales Order\nPurchase Order\nSales Invoice\nPurchase Invoice",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "document_name",
+          "fieldtype": "Dynamic Link",
+          "options": "document_type",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "amended_from",
+          "fieldtype": "Link",
+          "options": "Contract",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 1,
+          "allow_on_submit": 0,
+          "set_only_once": 0,
+          "permlevel": 0
+        }
+      ],
+      "custom_fields": [
+        {
+          "fieldname": "custom_ai_summary",
+          "fieldtype": "Text Editor",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 1,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_approval",
+          "fieldtype": "Section Break",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_approval_comments",
+          "fieldtype": "Small Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_approval_status",
+          "fieldtype": "Select",
+          "options": "Pending\nApproved\nRejected\nSent Back",
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_approved_on",
+          "fieldtype": "Datetime",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_auto_renewal",
+          "fieldtype": "Check",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_basic_contract_information",
+          "fieldtype": "Section Break",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_business_unit",
+          "fieldtype": "Data",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_clm_data",
+          "fieldtype": "Long Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": "",
+          "read_only": 1,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_commercial_details",
+          "fieldtype": "Section Break",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_compliance_required",
+          "fieldtype": "Check",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": "0",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_contract_document",
+          "fieldtype": "Attach",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_contract_request",
+          "fieldtype": "Link",
+          "options": "Contract Request",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_contract_status",
+          "fieldtype": "Select",
+          "options": "Draft\nUnder Review\nNegotiation\nPending Approval\nApproved\nPending Signature\nExecuted\nActive\nExpired\nTerminated\nClosed",
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_contract_title",
+          "fieldtype": "Data",
+          "options": null,
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_contract_type",
+          "fieldtype": "Select",
+          "options": "NDA\nSCA\nLTA\nBAI\nService Agreement\nFeasibility\nPackaging\nOther\nSupplier Agreement\nPurchase Agreement\nMaster Service Agreement\nTooling Agreement\nQuality Agreement\nConsulting Agreement\nLease Agreement\nSupply / Procurement Contract",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_contract_value",
+          "fieldtype": "Currency",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_currency",
+          "fieldtype": "Link",
+          "options": "Currency",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_current_approver",
+          "fieldtype": "Link",
+          "options": "User",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_current_version",
+          "fieldtype": "Data",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": "1.0",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_delivery_terms",
+          "fieldtype": "Small Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_document__version_control",
+          "fieldtype": "Section Break",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_engineering_review_required",
+          "fieldtype": "Check",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_esign_status",
+          "fieldtype": "Select",
+          "options": "Not Started\nPending Inteva\nPending Supplier\nCompleted",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_executed_contract",
+          "fieldtype": "Attach",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_executed_date",
+          "fieldtype": "Date",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_final_version_locked",
+          "fieldtype": "Check",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": "0",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_incentives",
+          "fieldtype": "Small Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_inteva_contract_details",
+          "fieldtype": "Section Break",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_inteva_signatory",
+          "fieldtype": "Link",
+          "options": "User",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_inteva_signed_date",
+          "fieldtype": "Date",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_key_terms",
+          "fieldtype": "Section Break",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_legal_review_required",
+          "fieldtype": "Check",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": "0",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_part_numbers",
+          "fieldtype": "Small Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_payment_terms",
+          "fieldtype": "Data",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_payment_terms_description",
+          "fieldtype": "Small Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_penalties",
+          "fieldtype": "Small Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_penalties__incentives",
+          "fieldtype": "Section Break",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_pricing_terms",
+          "fieldtype": "Small Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_procurement_integration",
+          "fieldtype": "Section Break",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_program_name",
+          "fieldtype": "Data",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_project",
+          "fieldtype": "Link",
+          "options": "Project",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_purchase_order",
+          "fieldtype": "Link",
+          "options": "Purchase Order",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_quality_requirements",
+          "fieldtype": "Small Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_quality_review_required",
+          "fieldtype": "Check",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_renewal__termination",
+          "fieldtype": "Section Break",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_renewal_notice_days",
+          "fieldtype": "Int",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_renewal_terms",
+          "fieldtype": "Small Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_rfp",
+          "fieldtype": "Link",
+          "options": "RFP",
+          "reqd": 0,
+          "unique": 0,
+          "default": "",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_rfp_response",
+          "fieldtype": "Link",
+          "options": "RFP Response",
+          "reqd": 0,
+          "unique": 0,
+          "default": "",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_rfq",
+          "fieldtype": "Link",
+          "options": "Request for Quotation",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_risk__compliance",
+          "fieldtype": "Section Break",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_risk_level",
+          "fieldtype": "Select",
+          "options": "Low\nMedium\nHigh\nCritical",
+          "reqd": 1,
+          "unique": 0,
+          "default": "",
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_section_break_ow0wi",
+          "fieldtype": "Section Break",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_signatures",
+          "fieldtype": "Section Break",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_sla__kpi_commitments",
+          "fieldtype": "Small Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_supplier",
+          "fieldtype": "Link",
+          "options": "Supplier",
+          "reqd": 1,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_supplier_quotation",
+          "fieldtype": "Link",
+          "options": "Supplier Quotation",
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_supplier_signatory_name",
+          "fieldtype": "Data",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_supplier_signed_date",
+          "fieldtype": "Date",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        },
+        {
+          "fieldname": "custom_termination_clauses",
+          "fieldtype": "Small Text",
+          "options": null,
+          "reqd": 0,
+          "unique": 0,
+          "default": null,
+          "read_only": 0,
+          "allow_on_submit": 0,
+          "set_only_once": null,
+          "permlevel": 0
+        }
+      ],
+      "overrides": [
+        {
+          "name": "Contract-main-field_order",
+          "field_name": null,
+          "property": "field_order",
+          "value": "[\"custom_basic_contract_information\", \"custom_contract_title\", \"custom_contract_request\", \"custom_contract_status\", \"custom_procurement_integration\", \"custom_rfq\", \"custom_supplier_quotation\", \"custom_supplier\", \"custom_purchase_order\", \"custom_project\", \"custom_business_unit\", \"custom_commercial_details\", \"custom_contract_value\", \"custom_currency\", \"custom_payment_terms\", \"custom_risk__compliance\", \"custom_risk_level\", \"custom_legal_review_required\", \"custom_quality_review_required\", \"custom_engineering_review_required\", \"custom_compliance_required\", \"custom_approval\", \"custom_approval_status\", \"custom_current_approver\", \"custom_approval_comments\", \"custom_approved_on\", \"custom_section_break_ow0wi\", \"party_type\", \"is_signed\", \"cb_party\", \"party_name\", \"party_user\", \"status\", \"fulfilment_status\", \"party_full_name\", \"sb_terms\", \"start_date\", \"cb_date\", \"end_date\", \"sb_signee\", \"signee\", \"signed_on\", \"cb_user\", \"ip_address\", \"sb_contract\", \"contract_template\", \"contract_terms\", \"custom_inteva_contract_details\", \"custom_contract_type\", \"custom_part_numbers\", \"custom_renewal_notice_days\", \"custom_auto_renewal\", \"custom_program_name\", \"custom_key_terms\", \"custom_pricing_terms\", \"custom_delivery_terms\", \"custom_quality_requirements\", \"custom_payment_terms_description\", \"custom_sla__kpi_commitments\", \"custom_ai_summary\", \"custom_penalties__incentives\", \"custom_penalties\", \"custom_incentives\", \"custom_renewal__termination\", \"custom_renewal_terms\", \"custom_termination_clauses\", \"custom_signatures\", \"custom_inteva_signatory\", \"custom_inteva_signed_date\", \"custom_supplier_signatory_name\", \"custom_supplier_signed_date\", \"custom_esign_status\", \"custom_executed_date\", \"custom_executed_contract\", \"custom_document__version_control\", \"custom_contract_document\", \"custom_current_version\", \"custom_final_version_locked\", \"sb_fulfilment\", \"requires_fulfilment\", \"fulfilment_deadline\", \"fulfilment_terms\", \"authorised_by_section\", \"signee_company\", \"signed_by_company\", \"sb_references\", \"document_type\", \"cb_links\", \"document_name\", \"amended_from\"]",
+          "property_type": "Data"
+        }
+      ],
+      "permissions": [
+        {
+          "role": "Sales Manager",
+          "read": 1,
+          "write": 1,
+          "create": 1,
+          "submit": 1,
+          "cancel": 1,
+          "delete": 1,
+          "if_owner": 0,
+          "permlevel": 0
+        },
+        {
+          "role": "Purchase Manager",
+          "read": 1,
+          "write": 1,
+          "create": 1,
+          "submit": 1,
+          "cancel": 1,
+          "delete": 1,
+          "if_owner": 0,
+          "permlevel": 0
+        },
+        {
+          "role": "HR Manager",
+          "read": 1,
+          "write": 1,
+          "create": 1,
+          "submit": 1,
+          "cancel": 1,
+          "delete": 1,
+          "if_owner": 0,
+          "permlevel": 0
+        },
+        {
+          "role": "System Manager",
+          "read": 1,
+          "write": 1,
+          "create": 1,
+          "submit": 1,
+          "cancel": 1,
+          "delete": 1,
+          "if_owner": 0,
+          "permlevel": 0
+        }
+      ]
+    }
+  ],
+  "workflows": {
+    "ok": true,
+    "data": [
+      {
+        "name": "BidSphere Contract Lifecycle",
+        "document_type": "Contract",
+        "workflow_state_field": "custom_contract_status",
+        "is_active": 1,
+        "states": [
+          {
+            "state": "Draft",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Under Review",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Negotiation",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Pending Approval",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Approved",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Pending Signature",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Executed",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Active",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Expired",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Terminated",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Closed",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          }
+        ],
+        "transitions": [
+          {
+            "state": "Draft",
+            "action": "Submit",
+            "next_state": "Under Review",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Draft",
+            "action": "Negotiate",
+            "next_state": "Negotiation",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Review",
+            "action": "Route Approval",
+            "next_state": "Pending Approval",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Review",
+            "action": "Approve",
+            "next_state": "Approved",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Review",
+            "action": "Negotiate",
+            "next_state": "Negotiation",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Review",
+            "action": "Send Back",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Review",
+            "action": "Reject",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Review",
+            "action": "Approve Termination",
+            "next_state": "Terminated",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Review",
+            "action": "Return Termination",
+            "next_state": "Active",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Approve",
+            "next_state": "Approved",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Send Back",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Reject",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Negotiate",
+            "next_state": "Negotiation",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Approve Termination",
+            "next_state": "Terminated",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Return Termination",
+            "next_state": "Active",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Negotiation",
+            "action": "Submit Revision",
+            "next_state": "Under Review",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Negotiation",
+            "action": "Revise Draft",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Approved",
+            "action": "Request Signature",
+            "next_state": "Pending Signature",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Approved",
+            "action": "Revise Draft",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Approved",
+            "action": "Reopen",
+            "next_state": "Negotiation",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Signature",
+            "action": "Redline",
+            "next_state": "Negotiation",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Signature",
+            "action": "Revise Draft",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Signature",
+            "action": "Execute",
+            "next_state": "Executed",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Executed",
+            "action": "Activate",
+            "next_state": "Active",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Active",
+            "action": "Expire",
+            "next_state": "Expired",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Active",
+            "action": "Request Termination",
+            "next_state": "Under Review",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Expired",
+            "action": "Close",
+            "next_state": "Closed",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Terminated",
+            "action": "Close",
+            "next_state": "Closed",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          }
+        ]
+      },
+      {
+        "name": "BidSphere Contract Request",
+        "document_type": "Contract Request",
+        "workflow_state_field": "request_status",
+        "is_active": 1,
+        "states": [
+          {
+            "state": "Draft",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Pending Review",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Under Legal Review",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Pending Approval",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Approved",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Rejected",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Completed",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          },
+          {
+            "state": "Cancelled",
+            "doc_status": "0",
+            "allow_edit": "System Manager"
+          }
+        ],
+        "transitions": [
+          {
+            "state": "Draft",
+            "action": "Submit",
+            "next_state": "Pending Review",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Review",
+            "action": "Approve",
+            "next_state": "Approved",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Review",
+            "action": "Send Back",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Review",
+            "action": "Reject",
+            "next_state": "Rejected",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Approved",
+            "action": "Create Contract",
+            "next_state": "Completed",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Legal Review",
+            "action": "Send Back",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Legal Review",
+            "action": "Approve",
+            "next_state": "Approved",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Under Legal Review",
+            "action": "Reject",
+            "next_state": "Rejected",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Send Back",
+            "next_state": "Draft",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Approve",
+            "next_state": "Approved",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          },
+          {
+            "state": "Pending Approval",
+            "action": "Reject",
+            "next_state": "Rejected",
+            "allowed": "System Manager",
+            "condition": "doc.custom_clm_data"
+          }
+        ]
+      }
+    ]
+  },
+  "methodProbes": [
+    {
+      "method": "frappe.client.insert",
+      "ok": false,
+      "status": 403,
+      "error": "ERP GET method/frappe.client.insert returned 403: frappe.exceptions.PermissionError: Not permitted."
+    },
+    {
+      "method": "frappe.client.save",
+      "ok": false,
+      "status": 403,
+      "error": "ERP GET method/frappe.client.save returned 403: frappe.exceptions.PermissionError: Not permitted."
+    },
+    {
+      "method": "frappe.client.get",
+      "ok": false,
+      "status": 500,
+      "error": "ERP GET method/frappe.client.get returned 500: TypeError: get() missing 1 required positional argument: 'doctype'."
+    },
+    {
+      "method": "frappe.utils.change_log.get_versions",
+      "ok": true,
+      "data": {
+        "frappe": {
+          "title": "Frappe Framework",
+          "description": "Full stack web framework with Python, Javascript, MariaDB, Redis, Node",
+          "branch": "",
+          "version": "16.20.0"
+        },
+        "erpnext": {
+          "title": "ERPNext",
+          "description": "ERP made simple",
+          "branch": "",
+          "version": "16.22.0"
+        }
+      }
+    }
+  ],
+  "rfq": {
+    "name": "PUR-RFQ-2026-00095",
+    "modified": "2026-09-23 14:22:43.964913",
+    "docstatus": 1,
+    "status": "Submitted",
+    "contract_required": "Yes",
+    "company": "Netlink",
+    "contract_decision": null
+  },
+  "awards": [
+    {
+      "name": "LDC2026-00026",
+      "rfq_name": "PUR-RFQ-2026-00095",
+      "sq_name": "PUR-SQTN-2026-00270",
+      "supplier": "\"Blue Ridge Manufacturing Inc\"",
+      "grand_total": 30,
+      "workflow_state": "Pending Review",
+      "current_owner": "Legal Reviewer",
+      "next_approver": "Legal Reviewer",
+      "custom_clm_state": null
+    }
+  ],
+  "requests": [],
+  "contracts": []
+}

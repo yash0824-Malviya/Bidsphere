@@ -29,15 +29,24 @@ import type {
   RfqWorkflowStep,
 } from "../../../api/rfqProcurementWorkflow";
 import type { LegalDocumentSet } from "../../../api/legalDocs";
-import type { RFQ, RFQSupplier, SupplierAnalysisRow } from "../../../types/erpnext";
+import type {
+  QuotePriceStatus,
+  RFQ,
+  RFQSupplier,
+  SupplierAnalysisRow,
+} from "../../../types/erpnext";
 import type { SupplierRfqResponse } from "../../../api/supplierRfqResponse";
-import type { AIQuotation } from "../../../api/ai";
-import { scoreSuppliers } from "../../../api/supplierScoringEngine";
 import { useOptionalLayout } from "../../../contexts/LayoutContext";
 import StatusBadge from "../../../components/StatusBadge";
 import EmptyState from "../../../components/EmptyState";
 import ScoreRing from "../../../components/sourcing/ScoreRing";
 import { formatCurrency, formatDate } from "../../../utils/format";
+import { getEvaluationRisk, projectSupplierDecision } from "../../../utils/aiEvaluationDecision";
+import { getSupplierAwardEligibility } from "../../../utils/supplierAwardEligibility";
+import {
+  formatQuoteTotal,
+  isSubmittedQuoteAmount,
+} from "../../../utils/quotePrice";
 
 /* ── Design-system class tokens (main content only) ─────────────────────── */
 
@@ -55,12 +64,13 @@ export interface SupplierQuoteView {
   sqName: string;
   supplier: string;
   supplier_name: string;
-  total: number;
+  total: number | null;
+  priceStatus: QuotePriceStatus;
   notes: string;
   payment_terms?: string;
   byItem: Map<
     string,
-    { unit_price: number; total: number; delivery_days: number }
+    { unit_price: number | null; total: number | null; delivery_days: number }
   >;
 }
 
@@ -107,7 +117,7 @@ export interface RFQDetailEnterpriseLayoutProps {
 
   copilotHasAnalysis: boolean;
   aiConfidence?: number | null;
-  copilotRiskLevel: "Low" | "Medium" | "High" | null;
+  copilotRiskLevel: ReturnType<typeof getEvaluationRisk> | null;
   copilotSavings: { pct: number; amount: number } | null;
   recommendedSupplierLabel: string;
   aiReady: boolean;
@@ -174,7 +184,7 @@ export interface RFQDetailEnterpriseLayoutProps {
   modals: ReactNode;
 }
 
-type DisplayScore = { score: number; rank: number };
+type DisplayScore = { score: number; rank: number; evaluation: SupplierAnalysisRow };
 
 function normKey(value?: string | null): string {
   return (value ?? "").trim().toLowerCase();
@@ -192,117 +202,74 @@ function uniqueKeys(...values: Array<string | undefined | null>): string[] {
 /**
  * Resolve AI score + rank for every Submitted supplier (has a quote).
  * Pending suppliers are omitted (UI shows "—").
- * Analysis rows are matched by supplier id OR display name; gaps are filled
- * with the same local scoring engine used for the winning supplier, then
- * ranks are reassigned 1…n by score across all scored suppliers.
+ * Display the saved evaluation's score and rank for its exact quotation.
+ * Missing evaluations remain unavailable; this display does not score suppliers.
  */
-function buildSubmittedSupplierScores(opts: {
+export function buildSubmittedSupplierScores(opts: {
   suppliers: RFQSupplier[];
   localQuotes: Map<string, SupplierQuoteView>;
   analysisRows: SupplierAnalysisRow[];
   quoteForSupplier: RFQDetailEnterpriseLayoutProps["quoteForSupplier"];
   itemCount: number;
   targetPrices?: Map<string, number>;
+  rfqId?: string;
 }): Map<string, DisplayScore> {
   const {
     suppliers,
     localQuotes,
     analysisRows,
     quoteForSupplier,
-    itemCount,
-    targetPrices,
+    rfqId,
   } = opts;
   const result = new Map<string, DisplayScore>();
 
-  type PartialHit = { keys: string[]; score: number };
-  const hits: PartialHit[] = [];
+  const runs = new Set(analysisRows.map((row) => row.evaluation_run_id).filter(Boolean));
+  // Without an envelope run ID, mixed runs cannot identify a current result.
+  if (runs.size > 1) return result;
+  const currentRun = [...runs][0];
+  const eligibleRows = analysisRows.filter((row) =>
+    (!rfqId || !row.rfq_id || row.rfq_id === rfqId) &&
+    (!currentRun || row.evaluation_run_id === currentRun));
+  const submitted = suppliers.map((supplier) => {
+    const quote = quoteForSupplier(localQuotes, supplier.supplier);
+    return { supplier, quote: quote?.supplier === supplier.supplier ? quote : undefined };
+  }).filter((entry): entry is { supplier: RFQSupplier; quote: SupplierQuoteView } => !!entry.quote);
+  const nameOwners = new Map<string, Set<string>>();
+  for (const { supplier, quote } of submitted) {
+    for (const name of uniqueKeys(supplier.supplier_name, quote.supplier_name)) {
+      const owners = nameOwners.get(name) ?? new Set<string>();
+      owners.add(quote.sqName || quote.supplier);
+      nameOwners.set(name, owners);
+    }
+  }
 
-  const findAnalysis = (keys: string[]) =>
-    analysisRows.find((row) => keys.includes(normKey(row.name)));
-
-  for (const s of suppliers) {
-    const quote = quoteForSupplier(localQuotes, s.supplier);
-    if (!quote) continue;
-
-    const keys = uniqueKeys(
-      s.supplier,
-      s.supplier_name,
-      quote.supplier,
-      quote.supplier_name,
-    );
-    const row = findAnalysis(keys);
+  for (const { supplier, quote } of submitted) {
+    const names = uniqueKeys(supplier.supplier_name, quote.supplier_name, supplier.supplier);
+    const matches = eligibleRows.filter((row) => {
+      const quotationId = row.quotation_id || row.supplier_quotation_id;
+      if (row.quotation_id && row.supplier_quotation_id && row.quotation_id !== row.supplier_quotation_id) return false;
+      if (quotationId) {
+        return quotationId === quote.sqName && (!row.supplier_id || row.supplier_id === quote.supplier);
+      }
+      if (row.supplier_id) return row.supplier_id === quote.supplier;
+      const name = normKey(row.name);
+      return names.includes(name) && nameOwners.get(name)?.size === 1;
+    });
+    if (matches.length !== 1) continue;
+    const row = matches[0];
     const overall = row?.score?.overall;
-    if (overall != null && Number.isFinite(Number(overall))) {
-      hits.push({ keys, score: Math.round(Number(overall)) });
+    if (typeof overall !== "number" || !Number.isFinite(overall) || overall < 0 || overall > 100 ||
+        !Number.isInteger(row.rank) || row.rank < 1) continue;
+    const entry = { score: overall, rank: row.rank, evaluation: row };
+    // Prefix exact document identities so case/punctuation/name aliases cannot
+    // collide with a Supplier or Supplier Quotation ID.
+    if (quote.sqName) result.set(`quotation:${quote.sqName}`, entry);
+    if (quote.supplier) result.set(`supplier:${quote.supplier}`, entry);
+    if (supplier.supplier === quote.supplier) result.set(`supplier:${supplier.supplier}`, entry);
+    for (const name of names) {
+      if (nameOwners.get(name)?.size === 1) result.set(`name:${name}`, entry);
     }
   }
-
-  const submittedCount = suppliers.filter((s) =>
-    Boolean(quoteForSupplier(localQuotes, s.supplier)),
-  ).length;
-
-  if (hits.length < submittedCount && submittedCount > 0) {
-    const quotations: AIQuotation[] = [];
-    const keyByQuoteName = new Map<string, string[]>();
-
-    for (const s of suppliers) {
-      const quote = quoteForSupplier(localQuotes, s.supplier);
-      if (!quote) continue;
-      const keys = uniqueKeys(
-        s.supplier,
-        s.supplier_name,
-        quote.supplier,
-        quote.supplier_name,
-      );
-      const already = hits.some((h) => h.keys.some((k) => keys.includes(k)));
-      const displayName = quote.supplier_name || s.supplier_name || s.supplier;
-      quotations.push({
-        supplier_name: displayName,
-        total_value: quote.total,
-        payment_terms: quote.payment_terms,
-        notes: quote.notes,
-        items: [...quote.byItem.entries()].map(([item, cell]) => ({
-          item,
-          unit_price: cell.unit_price,
-          total: cell.total,
-          delivery_days: cell.delivery_days,
-        })),
-      });
-      keyByQuoteName.set(normKey(displayName), keys);
-      if (!already) {
-        // placeholder — filled from engine below
-      }
-    }
-
-    if (quotations.length > 0) {
-      const engine = scoreSuppliers(
-        quotations,
-        Math.max(1, itemCount),
-        undefined,
-        undefined,
-        targetPrices && targetPrices.size > 0 ? targetPrices : undefined,
-      );
-      for (const scored of engine.suppliers) {
-        const keys =
-          keyByQuoteName.get(normKey(scored.supplier_name)) ??
-          keyByQuoteName.get(normKey(scored.supplier)) ??
-          uniqueKeys(scored.supplier_name, scored.supplier);
-        const covered = hits.some((h) => h.keys.some((k) => keys.includes(k)));
-        if (!covered) {
-          hits.push({
-            keys,
-            score: Math.round(Number(scored.final_score) || 0),
-          });
-        }
-      }
-    }
-  }
-
-  hits.sort((a, b) => b.score - a.score);
-  hits.forEach((hit, idx) => {
-    const entry = { score: hit.score, rank: idx + 1 };
-    for (const k of hit.keys) result.set(k, entry);
-  });
 
   return result;
 }
@@ -408,6 +375,7 @@ function Btn({
   type = "button",
   className = "",
   href,
+  title,
 }: {
   children: ReactNode;
   onClick?: () => void;
@@ -416,6 +384,7 @@ function Btn({
   type?: "button" | "submit";
   className?: string;
   href?: string;
+  title?: string;
 }) {
   const styles = {
     primary:
@@ -434,7 +403,7 @@ function Btn({
     );
   }
   return (
-    <button type={type} onClick={onClick} disabled={disabled} className={cls}>
+    <button type={type} onClick={onClick} disabled={disabled} className={cls} title={title}>
       {children}
     </button>
   );
@@ -486,7 +455,7 @@ function decisionBullets(opts: {
   selected: boolean;
   selectedTotal: number;
   lowest: number;
-  risk: "Low" | "Medium" | "High" | null;
+  risk: ReturnType<typeof getEvaluationRisk> | null;
   legalOk: boolean;
   financeOk: boolean;
   rank?: number;
@@ -505,7 +474,6 @@ function decisionBullets(opts: {
   if (opts.legalOk) out.push("Legal approved");
   if (opts.financeOk) out.push("Finance approved");
   if (opts.risk === "Low") out.push("Low supplier risk");
-  if (out.length < 4) out.push("Delivery meets requirement");
   if (out.length < 5 && opts.strengths?.[0]) {
     out.push(opts.strengths[0].trim());
   }
@@ -522,11 +490,12 @@ const WorkflowBar = memo(function WorkflowBar({
 }: {
   steps: RfqWorkflowStep[];
 }) {
+  const visibleSteps = steps.filter((step) => step.id !== "clm");
   return (
     <div className={`${card} p-4`}>
       <h2 className={`${sectionTitle} mb-4`}>Procurement Status</h2>
       <ol className="hidden w-full md:flex md:items-start">
-        {steps.map((step, i) => (
+        {visibleSteps.map((step, i) => (
           <li key={step.id} className="flex min-w-0 flex-1 items-start">
             <div
               className="flex w-full flex-col items-center px-0.5 text-center"
@@ -563,7 +532,7 @@ const WorkflowBar = memo(function WorkflowBar({
                 {step.label}
               </span>
             </div>
-            {i < steps.length - 1 && (
+            {i < visibleSteps.length - 1 && (
               <span
                 aria-hidden
                 className={`mt-3.5 h-0.5 min-w-[8px] flex-1 ${
@@ -577,7 +546,7 @@ const WorkflowBar = memo(function WorkflowBar({
         ))}
       </ol>
       <ol className="space-y-2 md:hidden">
-        {steps.map((step) => (
+        {visibleSteps.map((step) => (
           <li key={step.id} className="flex items-start gap-2">
             <span
               className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
@@ -725,16 +694,12 @@ export default function RFQDetailEnterpriseLayout(
     hasSelectedSupplier,
     resolvedSelectedSupplier,
     selectedSupplierTotal,
-    selectionReason,
     legalDoc,
     poExists,
     poName,
     canCreatePO,
     procurementFinalized,
     copilotHasAnalysis,
-    aiConfidence,
-    copilotRiskLevel,
-    copilotSavings,
     recommendedSupplierLabel,
     aiReady,
     aiLoading,
@@ -779,6 +744,10 @@ export default function RFQDetailEnterpriseLayout(
     modals,
   } = props;
 
+  const hasSubmittedPrices = Array.from(localQuotes.values()).some((quote) =>
+    isSubmittedQuoteAmount(quote.total),
+  );
+
   const layout = useOptionalLayout();
   useLayoutEffect(() => {
     const register = layout?.registerPageHeader;
@@ -788,20 +757,13 @@ export default function RFQDetailEnterpriseLayout(
     return () => unregister();
   }, [layout?.registerPageHeader, layout?.unregisterPageHeader]);
 
-  const analysisBySupplier = useMemo(() => {
-    const map = new Map<string, SupplierAnalysisRow>();
-    for (const row of supplierAnalysisRows) {
-      map.set(normKey(row.name), row);
-    }
-    return map;
-  }, [supplierAnalysisRows]);
-
   const displayScores = useMemo(
     () =>
       buildSubmittedSupplierScores({
         suppliers: rfq.suppliers ?? [],
         localQuotes,
         analysisRows: supplierAnalysisRows,
+        rfqId: rfq.name,
         quoteForSupplier,
         itemCount: rfq.items?.length ?? 0,
         targetPrices: (() => {
@@ -815,6 +777,7 @@ export default function RFQDetailEnterpriseLayout(
       }),
     [
       rfq.suppliers,
+      rfq.name,
       rfq.items,
       localQuotes,
       supplierAnalysisRows,
@@ -822,25 +785,21 @@ export default function RFQDetailEnterpriseLayout(
     ],
   );
 
-  const focusKey = normKey(
-    hasSelectedSupplier ? resolvedSelectedSupplier : recommendedSupplierLabel,
-  );
-  const focusAnalysis =
-    analysisBySupplier.get(focusKey) ??
-    [...analysisBySupplier.values()].find(
-      (row) => normKey(row.name) === focusKey,
-    );
+  const focusKey = hasSelectedSupplier ? resolvedSelectedSupplier : recommendedSupplierLabel;
   const focusScore =
-    displayScores.get(focusKey) ??
-    (focusAnalysis?.score?.overall != null
-      ? {
-          score: Math.round(Number(focusAnalysis.score.overall)),
-          rank: focusAnalysis.rank,
-        }
-      : undefined);
+    displayScores.get(`supplier:${focusKey}`) ?? displayScores.get(`name:${normKey(focusKey)}`);
+  const focusAnalysis = focusScore?.evaluation;
+  const focusEligibility = focusAnalysis ? getSupplierAwardEligibility(focusAnalysis) : null;
+  const focusRisk = focusAnalysis ? getEvaluationRisk(focusAnalysis) : null;
+  const focusDecision = focusAnalysis ? projectSupplierDecision(focusAnalysis, focusAnalysis.rank === 1) : null;
+  const focusReason = focusAnalysis?.why_best_or_worst;
+  const quoteTotals = Array.from(localQuotes.values()).map((quote) => quote.total).filter(isSubmittedQuoteAmount);
+  const highestSubmittedQuote = quoteTotals.length ? Math.max(...quoteTotals) : 0;
+  const focusSavings = isSubmittedQuoteAmount(focusAnalysis?.grand_total)
+    ? Math.max(0, highestSubmittedQuote - focusAnalysis.grand_total) : 0;
 
   const confidence =
-    aiConfidence != null ? Math.round(Number(aiConfidence)) : 0;
+    focusScore ? Math.round(focusScore.score) : 0;
 
   const bullets = useMemo(
     () =>
@@ -849,42 +808,43 @@ export default function RFQDetailEnterpriseLayout(
         selected: hasSelectedSupplier,
         selectedTotal: selectedSupplierTotal,
         lowest: lowestQuote,
-        risk: copilotRiskLevel,
+        risk: focusRisk,
         legalOk: workflow.legalApproved,
         financeOk: workflow.financeApproved,
         rank: focusScore?.rank ?? focusAnalysis?.rank,
-        strengths: focusAnalysis?.strengths,
-        reason: selectionReason,
+        strengths: focusDecision?.strengths,
+        reason: focusReason,
       }),
     [
       copilotHasAnalysis,
       hasSelectedSupplier,
       selectedSupplierTotal,
       lowestQuote,
-      copilotRiskLevel,
+      focusRisk,
       workflow.legalApproved,
       workflow.financeApproved,
       focusScore,
       focusAnalysis,
-      selectionReason,
+      focusDecision,
+      focusReason,
     ],
   );
 
   const recommendationFooter = useMemo(() => {
-    if (selectionReason?.trim()) return selectionReason.trim();
+    if (focusDecision) return `${focusDecision.recommendation_reason} ${focusReason || ""}`.trim();
     const who = hasSelectedSupplier
       ? resolvedSelectedSupplier
       : recommendedSupplierLabel;
     if (who && who !== "—" && (copilotHasAnalysis || hasSelectedSupplier)) {
-      const rankBit = focusScore?.rank ? ` (rank #${focusScore.rank})` : "";
-      return `Recommend proceeding with ${who}${rankBit} based on price, delivery, and risk balance.`;
+      return `Evaluation unavailable for ${who}. Review the quotation before making a selection.`;
     }
     if (!hasQuotations) {
-      return "Awaiting supplier quotations before an AI recommendation can be formed.";
+      return "Awaiting supplier quotations before AI evaluation.";
     }
-    return "Run AI analysis to generate a plain-language award recommendation.";
+    return "Run AI analysis to compare scores, risk and verdicts.";
   }, [
-    selectionReason,
+    focusDecision,
+    focusReason,
     hasSelectedSupplier,
     resolvedSelectedSupplier,
     recommendedSupplierLabel,
@@ -1050,7 +1010,7 @@ export default function RFQDetailEnterpriseLayout(
         {/* ── AI recommendation ── */}
         <section className={`${card} overflow-hidden`}>
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--rfq-border)] px-4 py-3 md:px-5">
-            <h2 className={sectionTitle}>AI recommendation</h2>
+            <h2 className={sectionTitle}>AI evaluation</h2>
             <div className="flex flex-wrap gap-2">
               {aiButtonMode === "finalized" || procurementFinalized
                 ? poExists &&
@@ -1091,8 +1051,9 @@ export default function RFQDetailEnterpriseLayout(
                   )}
               {!isReadOnly && hasSelectedSupplier && !poExists && (
                 <Btn
-                  onClick={onCreatePO}
-                  disabled={creatingPO || !canCreatePO}
+                  onClick={() => { if (focusEligibility?.awardEligible !== false) onCreatePO(); }}
+                  disabled={creatingPO || !canCreatePO || focusEligibility?.awardEligible === false}
+                  title={focusEligibility?.awardIneligibilityReason}
                 >
                   {creatingPO ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1109,15 +1070,15 @@ export default function RFQDetailEnterpriseLayout(
             {/* (a) gauges */}
             <div className="space-y-4">
               <p className="text-[13px] font-semibold text-[var(--rfq-text)]">
-                {hasSelectedSupplier ? "Selected" : "Recommended"}
+                {hasSelectedSupplier ? "Selected" : focusEligibility?.awardEligible === false ? "Top score" : "AI top-ranked"}
               </p>
               <p className="truncate text-[15px] font-semibold text-[var(--rfq-text)]">
                 {displaySupplier || "—"}
               </p>
               <GaugeBar
-                label="Confidence"
-                valueLabel={copilotHasAnalysis ? `${confidence}%` : "—"}
-                pct={copilotHasAnalysis ? confidence : 0}
+                label="AI score"
+                valueLabel={focusScore ? `${confidence}/100` : "—"}
+                pct={focusScore ? confidence : 0}
               />
               <GaugeBar
                 label="Coverage"
@@ -1133,22 +1094,23 @@ export default function RFQDetailEnterpriseLayout(
             <div className="rounded-[var(--rfq-radius-card)] border border-[var(--rfq-border)]">
               {(
                 [
-                  ["Risk", copilotRiskLevel ?? "—", false],
+                  ["Risk", focusRisk ?? "Unavailable", false],
+                  ["Verdict", focusAnalysis?.verdict ?? "Unavailable", false],
                   [
                     "Savings",
-                    copilotSavings && copilotSavings.amount > 0
-                      ? formatCurrency(copilotSavings.amount)
+                    focusSavings > 0
+                      ? formatCurrency(focusSavings)
                       : "—",
                     true,
                   ],
                   [
                     "Lowest quote",
-                    lowestQuote > 0 ? formatCurrency(lowestQuote) : "—",
+                    hasSubmittedPrices ? formatCurrency(lowestQuote) : "—",
                     true,
                   ],
                   [
                     "Average quote",
-                    avgQuote > 0 ? formatCurrency(avgQuote) : "—",
+                    hasSubmittedPrices ? formatCurrency(avgQuote) : "—",
                     true,
                   ],
                   ["Response rate", `${responseRate}%`, true],
@@ -1331,12 +1293,8 @@ export default function RFQDetailEnterpriseLayout(
                   normKey(s.supplier_name) ===
                     normKey(resolvedSelectedSupplier));
               const scoreEntry =
-                displayScores.get(normKey(s.supplier)) ||
-                displayScores.get(normKey(s.supplier_name)) ||
-                (quote
-                  ? displayScores.get(normKey(quote.supplier)) ||
-                    displayScores.get(normKey(quote.supplier_name))
-                  : undefined);
+                (quote?.supplier === s.supplier ? displayScores.get(`quotation:${quote.sqName}`) : undefined) ??
+                displayScores.get(`supplier:${s.supplier}`);
               const hasSubmittedQuote = Boolean(quote);
               const score = hasSubmittedQuote ? scoreEntry?.score ?? null : null;
               const rank = hasSubmittedQuote ? scoreEntry?.rank ?? null : null;
@@ -1374,7 +1332,7 @@ export default function RFQDetailEnterpriseLayout(
                     {isWinner ? (
                       <Badge tone="teal">Selected</Badge>
                     ) : quote ? (
-                      <Badge tone="green">Submitted</Badge>
+                      <Badge tone="green">Submitted ✓</Badge>
                     ) : decline ? (
                       <Badge tone="amber">No quote</Badge>
                     ) : status === "Pending Invitation" ? (
@@ -1391,7 +1349,12 @@ export default function RFQDetailEnterpriseLayout(
                     <ScoreRing score={score} rank={rank} />
                     <div className="grid min-w-0 flex-1 grid-cols-2 gap-x-3 gap-y-2">
                       <Field label="Quote" monoValue>
-                        {showAmounts ? formatCurrency(quote!.total) : "—"}
+                        {showAmounts
+                          ? formatQuoteTotal(
+                              quote!.total,
+                              quote!.priceStatus,
+                            )
+                          : "—"}
                       </Field>
                       <Field label="Delivery" monoValue>
                         {showAmounts && deliveryDays
@@ -1449,8 +1412,8 @@ export default function RFQDetailEnterpriseLayout(
                   : "—"}
               </Field>
               <Field label="Savings" monoValue>
-                {copilotSavings && copilotSavings.amount > 0
-                  ? formatCurrency(copilotSavings.amount)
+                {focusSavings > 0
+                  ? formatCurrency(focusSavings)
                   : "—"}
               </Field>
               <Field label="Legal">

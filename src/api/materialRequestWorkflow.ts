@@ -19,6 +19,8 @@ import {
   COMPANY,
   getCount,
   withSilent,
+  withoutNetworkRetry,
+  getApiErrorMessage,
 } from "./erpnext";
 import type { Filter } from "./erpnext";
 import {
@@ -30,6 +32,7 @@ import {
   createMaterialRequest,
   getMaterialRequest,
   submitMaterialRequest,
+  submitMaterialRequestDocument,
   updateMaterialRequest,
   type MaterialRequestPayload,
 } from "./purchasing";
@@ -434,7 +437,7 @@ export function extractSourceDepartmentMrName(mr: {
   return undefined;
 }
 
-function workflowStatus(
+export function getMaterialRequestBusinessStatus(
   doc: MaterialRequestWorkflowRecord,
 ): MaterialRequestWorkflowStatus {
   // ERPNext (`custom_bidsphere_status`) is the single source of truth; normalize
@@ -574,7 +577,7 @@ function matchesWorkflowStatusFilter(
 export function getMaterialRequestWorkflowStatus(
   doc: MaterialRequestWorkflowRecord,
 ): MaterialRequestWorkflowStatus {
-  const base = workflowStatus(doc);
+  const base = getMaterialRequestBusinessStatus(doc);
   // ERP stores "Material Issued" (or still "Forwarded to Procurement") while
   // Warehouse↔Department acceptance is open — restore UI status from MIR tags
   // on remarks + local receipts.
@@ -652,37 +655,82 @@ export async function ensureItemsExistForNewMode(
   }
 }
 
+export interface FetchMaterialRequestWorkflowOptions {
+  /** When true, avoids making child HTTP requests for attachments (for fast list/queue views). */
+  skipItemAttachmentHydration?: boolean;
+  /** Verification must not join an older, pre-mutation request. */
+  fresh?: boolean;
+}
+
+// React Query owns freshness. A second TTL cache here used to return Draft to
+// post-submit verification even after ERPNext had persisted warehouse review.
+const mrWorkflowDocInflight = new Map<
+  string,
+  Promise<MaterialRequestWorkflowRecord>
+>();
+
+export function logMaterialRequestDocument(doc: MaterialRequest): void {
+  if (!import.meta.env.DEV) return;
+  const fields = new Set([
+    "name", "owner", "company", "material_request_type", "transaction_date",
+    "schedule_date", "status", "workflow_state", "docstatus", "modified",
+  ]);
+  console.debug("[MR DEBUG] ERPNext document", Object.fromEntries(
+    Object.entries(doc).filter(([key]) => fields.has(key) || key.startsWith("custom_")),
+  ));
+}
+
 export async function fetchMaterialRequestWorkflow(
   name: string,
+  opts?: FetchMaterialRequestWorkflowOptions,
 ): Promise<MaterialRequestWorkflowRecord> {
-  const doc = await getMaterialRequest(name);
-  const hydratedItems = await hydrateMaterialRequestItemsWithAttachments(
-    doc.name,
-    doc.items ?? [],
-  );
-  const record = {
-    ...doc,
-    items: hydratedItems,
-  } as MaterialRequestWorkflowRecord;
+  const skipHydrate = Boolean(opts?.skipItemAttachmentHydration);
+  const cacheKey = `${name}:${skipHydrate ? "fast" : "full"}`;
+  const inflight = mrWorkflowDocInflight.get(cacheKey);
+  if (inflight && !opts?.fresh) return inflight;
 
-  if (import.meta.env.DEV) {
-    // eslint-disable-next-line no-console
-    console.log("[MR attachments] fetchMaterialRequestWorkflow", {
-      mr: record.name,
-      itemCount: hydratedItems.length,
-      items: hydratedItems.map((row) => ({
-        item_code: row.item_code,
-        child_name: row.name,
-        attachment_count: row.attachment_count ?? 0,
-        file_name: row.attachment_file_name ?? null,
-        file_url: row.attachment_file_url ?? null,
-        has_json: Boolean(String(row.custom_engineering_attachments ?? "").trim()),
-        has_legacy_2d: Boolean(String(row.custom_2d_drawing ?? "").trim()),
-      })),
-    });
-  }
+  const promise = (async () => {
+    const doc = await getMaterialRequest(name);
+    logMaterialRequestDocument(doc);
+    const hydratedItems = skipHydrate
+      ? (doc.items ?? [])
+      : await hydrateMaterialRequestItemsWithAttachments(
+          doc.name,
+          doc.items ?? [],
+        );
+    const record = {
+      ...doc,
+      items: hydratedItems,
+    } as MaterialRequestWorkflowRecord;
 
-  return record;
+    if (import.meta.env.DEV && !skipHydrate) {
+      // eslint-disable-next-line no-console
+      console.log("[MR attachments] fetchMaterialRequestWorkflow", {
+        mr: record.name,
+        itemCount: hydratedItems.length,
+        items: hydratedItems.map((row) => ({
+          item_code: row.item_code,
+          child_name: row.name,
+          attachment_count: row.attachment_count ?? 0,
+          file_name: row.attachment_file_name ?? null,
+          file_url: row.attachment_file_url ?? null,
+          has_json: Boolean(
+            String(row.custom_engineering_attachments ?? "").trim(),
+          ),
+          has_legacy_2d: Boolean(String(row.custom_2d_drawing ?? "").trim()),
+        })),
+      });
+    }
+
+    return record;
+  })().finally(() => {
+    if (mrWorkflowDocInflight.get(cacheKey) === promise) {
+      mrWorkflowDocInflight.delete(cacheKey);
+    }
+  });
+
+  mrWorkflowDocInflight.set(cacheKey, promise);
+  return promise;
 }
 
 /**
@@ -821,6 +869,7 @@ export async function listWarehouseMaterialRequestQueue(
   const fetchLimit = Math.min(Math.max(limit * 4, limit), 200);
   const rows = await listMaterialRequestsWorkflow({
     docstatus: 1,
+    materialRequestType: "Material Issue",
     limit: fetchLimit,
   });
 
@@ -839,7 +888,14 @@ export async function listWarehouseMaterialRequestQueue(
 
   const rejected: Array<{ name: string; reason: string }> = [];
   const pending = rows.filter((mr) => {
-    const status = getMaterialRequestWorkflowStatus(mr);
+    if (mr.material_request_type && mr.material_request_type !== "Material Issue") {
+      rejected.push({
+        name: mr.name,
+        reason: `material_request_type=${mr.material_request_type} not Material Issue`,
+      });
+      return false;
+    }
+    const status = getMaterialRequestBusinessStatus(mr);
     if (!WAREHOUSE_PENDING_STATUSES.includes(status)) {
       rejected.push({
         name: mr.name,
@@ -1070,31 +1126,64 @@ export async function createMaterialRequestWorkflow(
  * BidSphere Status = Draft (e.g. Warehouse-created Purchase MRs) by writing the
  * correct workflow status without re-submitting.
  */
-export async function submitMaterialRequestWorkflow(
+const mrSubmissions = new Map<string, Promise<MaterialRequestWorkflowRecord>>();
+
+/** Coalesce double clicks without creating documents or replaying failed writes. */
+export function submitMaterialRequestWorkflow(
+  name: string,
+  actor?: { email?: string; name?: string; full_name?: string },
+): Promise<MaterialRequestWorkflowRecord> {
+  const inflight = mrSubmissions.get(name);
+  if (inflight) return inflight;
+  const submission = performMaterialRequestSubmission(name, actor)
+    .catch((error: unknown) => {
+      const response = (error as { response?: { status?: number; data?: unknown } })?.response;
+      console.error("[MR SUBMIT ERROR]", {
+        name, status: response?.status, data: response?.data,
+        message: getApiErrorMessage(error),
+      });
+      throw new Error(getApiErrorMessage(error), { cause: error });
+    })
+    .finally(() => mrSubmissions.delete(name));
+  mrSubmissions.set(name, submission);
+  return submission;
+}
+
+async function performMaterialRequestSubmission(
   name: string,
   actor?: { email?: string; name?: string; full_name?: string },
 ): Promise<MaterialRequestWorkflowRecord> {
   const endpoint = buildResourceUrl(MR_DOCTYPE, name);
   const fresh = await apiGet<MaterialRequestWorkflowRecord>(endpoint);
-  const modified =
-    (fresh as { modified?: string }).modified ??
-    (fresh as { data?: { modified?: string } }).data?.modified;
-
-  const currentStatus = getMaterialRequestWorkflowStatus(fresh);
+  logMaterialRequestDocument(fresh);
+  const currentStatus = getMaterialRequestBusinessStatus(fresh);
   const docstatus = fresh.docstatus ?? 0;
   if (docstatus === 2 || currentStatus === "Cancelled") {
     throw new Error("Cancelled Material Requests cannot be submitted.");
   }
-  // Already routed past Draft/Submitted — idempotent success.
-  if (
-    docstatus === 1 &&
-    currentStatus !== "Draft" &&
-    currentStatus !== "Submitted"
-  ) {
-    return fresh;
+  if (docstatus !== 0 && docstatus !== 1) {
+    throw new Error(`Material Request ${name} has an invalid ERPNext docstatus: ${docstatus}.`);
   }
-
   const targetStatus: MaterialRequestWorkflowStatus = "Under Warehouse Review";
+  // A retry after an uncertain response is read-only if ERP already committed.
+  if (docstatus === 1 && fresh[MR_WORKFLOW_FIELD] === targetStatus) {
+    const verified = await assertMaterialRequestBidsphereStatus(name, targetStatus);
+    if (verified.docstatus !== 1) {
+      throw new Error(`Material Request ${name} changed during submission verification. Refresh and try again.`);
+    }
+    submittedMrsCache = null;
+    return verified;
+  }
+  if (currentStatus !== "Draft" && currentStatus !== "Submitted") {
+    throw new Error(`Material Request ${name} cannot be submitted from "${currentStatus}".`);
+  }
+  if (!(MR_WORKFLOW_FIELD in fresh)) {
+    throw new Error(`ERPNext did not return ${MR_WORKFLOW_FIELD}. Check the Material Request field configuration and permissions.`);
+  }
+  if (fresh.name !== name || !fresh.company || !fresh.items?.length ||
+      fresh.items.some((item) => !item.item_code || !Number.isFinite(Number(item.qty)) || Number(item.qty) <= 0)) {
+    throw new Error(`Material Request ${name} requires a company and valid item quantities before submission.`);
+  }
 
   const submittedBy =
     actor?.full_name || actor?.email || actor?.name || fresh.owner || "Unknown";
@@ -1109,30 +1198,28 @@ export async function submitMaterialRequestWorkflow(
   });
 
   if (docstatus === 0) {
-    // True ERP draft → submit + set BidSphere status in one write when possible.
-    const payload: Record<string, unknown> = {
-      docstatus: 1,
+    // This site's Frappe Workflow is inactive. BidSphere's warehouse queue and
+    // stock issue require native submission; submit the full ERP document and
+    // business field in ONE Frappe transaction, preserving all existing items.
+    await submitMaterialRequestDocument({
+      ...fresh,
       [MR_WORKFLOW_FIELD]: toErpBidsphereStatus(targetStatus),
-    };
-    if (modified) payload.modified = modified;
-    try {
-      await apiPut<MaterialRequest>(endpoint, payload);
-    } catch (err) {
-      if (!isFieldPermissionError(err)) {
-        // Retry: submit first, then set status (some sites reject combined PUT).
-        await submitMaterialRequest(name);
-        await updateMaterialRequestWorkflowStatus(name, targetStatus);
-      } else {
-        await submitMaterialRequest(name);
-        await updateMaterialRequestWorkflowStatus(name, targetStatus);
-      }
-    }
+    });
   } else {
-    // Already submitted in ERPNext — only advance BidSphere workflow.
-    await updateMaterialRequestWorkflowStatus(name, targetStatus);
+    // Recover an already-submitted native document without resubmitting it.
+    // The live field is allow_on_submit=1; preserve optimistic concurrency.
+    await apiPut(endpoint, {
+      [MR_WORKFLOW_FIELD]: toErpBidsphereStatus(targetStatus),
+      modified: fresh.modified,
+    }, withoutNetworkRetry(withSilent()));
   }
 
   const result = await assertMaterialRequestBidsphereStatus(name, targetStatus);
+  if (result.docstatus !== 1) {
+    throw new Error(`ERPNext did not submit Material Request ${name}: docstatus is ${result.docstatus}.`);
+  }
+  submittedMrsCache = null;
+  submittedMrsInflight = null;
 
   // Activity Log — Created is recorded at insert; this is the Submit audit.
   try {
@@ -1331,24 +1418,16 @@ export async function updateMaterialRequestWorkflowStatus(
   }
 
   try {
-    await updateMaterialRequest(name, {
-      [MR_WORKFLOW_FIELD]: erpStatus,
+    await apiPut(buildResourceUrl(MR_DOCTYPE, name), {
       ...erpExtra,
-    });
+      [MR_WORKFLOW_FIELD]: erpStatus,
+    }, withoutNetworkRetry(withSilent()));
   } catch (err) {
-    if (!isFieldPermissionError(err)) {
-      // Log the full backend exception (server/console) but surface a clean,
-      // user-safe message — never a raw Frappe traceback in the UI toast.
-      throw sanitizeFrappeError(
-        err,
-        "Unable to update the Material Request. Please try again.",
-        `updateMaterialRequestWorkflowStatus(${name} → ${erpStatus})`,
-      );
-    }
-    // Standard fields (material_request_type, status, remarks) are not updated
-    // on submitted documents (docstatus = 1) to avoid UpdateAfterSubmitError.
+    console.error("[MR STATUS ERROR]", { name, expected: erpStatus, message: getApiErrorMessage(err) });
+    throw err;
   }
-  return fetchMaterialRequestWorkflow(name);
+  submittedMrsCache = null;
+  return assertMaterialRequestBidsphereStatus(name, status);
 }
 
 /**
@@ -1909,33 +1988,23 @@ export interface PromotePurchaseMrInput {
 }
 
 /**
- * Re-fetch an MR and prove BidSphere Status persisted. Logs `MR after update`
+ * Re-fetch an MR and prove BidSphere Status persisted. Logs `[MR DEBUG] ERPNext document`
  * for diagnostics. Throws when ERPNext did not store the expected status.
  */
 export async function assertMaterialRequestBidsphereStatus(
   name: string,
   expected: MaterialRequestWorkflowStatus,
 ): Promise<MaterialRequestWorkflowRecord> {
-  const doc = await fetchMaterialRequestWorkflow(name);
-  // eslint-disable-next-line no-console
-  console.log("MR after update", {
-    name: doc.name,
-    custom_bidsphere_status: doc[MR_WORKFLOW_FIELD] ?? null,
-    resolvedStatus: getMaterialRequestWorkflowStatus(doc),
-    material_request_type: doc.material_request_type,
-    docstatus: doc.docstatus,
-    custom_forwarded_to_procurement: doc.custom_forwarded_to_procurement ?? null,
-    custom_forwarded_by: doc.custom_forwarded_by ?? null,
-    custom_forwarded_on: doc.custom_forwarded_on ?? null,
-    data: doc,
-  });
+  const doc = await fetchMaterialRequestWorkflow(name, { fresh: true, skipItemAttachmentHydration: true });
 
   const raw = String(doc[MR_WORKFLOW_FIELD] ?? "").trim();
-  const resolved = getMaterialRequestWorkflowStatus(doc);
+  const resolved = getMaterialRequestBusinessStatus(doc);
   const expectedErp = toErpBidsphereStatus(expected);
-  if (resolved !== expected && raw !== expectedErp && raw !== expected) {
+  // Never accept a docstatus fallback or a local receipt/comment overlay as
+  // proof that the exact field we wrote was saved by ERPNext.
+  if (doc.name !== name || raw !== expectedErp) {
     throw new Error(
-      `Material Request ${name} BidSphere Status is "${raw || resolved}", expected "${expected}". ERPNext did not save the forward.`,
+      `ERPNext did not persist MR ${name}. Expected ${MR_WORKFLOW_FIELD}="${expectedErp}", got "${raw || "(missing)"}" (business status: ${resolved}).`,
     );
   }
   return doc;
@@ -2734,6 +2803,8 @@ function isProcurementQueueEligible(
 export async function fetchProcurementQueue(opts?: {
   /** Cap get_doc hydration for dashboard table (full queue pages omit this). */
   hydrateLimit?: number;
+  /** When true, return all forwarded MRs including those with an active RFQ (stamped on custom_linked_rfq). */
+  includeWithRfq?: boolean;
   /** React Query may pass QueryFunctionContext — ignore non-option shapes. */
   queryKey?: unknown;
 }): Promise<MaterialRequestWorkflowRecord[]> {
@@ -2741,6 +2812,9 @@ export async function fetchProcurementQueue(opts?: {
     opts && typeof opts === "object" && typeof opts.hydrateLimit === "number"
       ? opts.hydrateLimit
       : undefined;
+  const includeWithRfq = Boolean(
+    opts && typeof opts === "object" && "includeWithRfq" in opts && opts.includeWithRfq
+  );
   const appliedFilters = {
     custom_bidsphere_status: [
       "Forwarded to Procurement",
@@ -2758,6 +2832,7 @@ export async function fetchProcurementQueue(opts?: {
   console.log("[Procurement] Loading Forwarded Material Requests...", {
     filters: appliedFilters,
     hydrateLimit: hydrateLimit ?? "all",
+    includeWithRfq,
   });
 
   const forwardedStatusValues = [
@@ -2854,7 +2929,9 @@ export async function fetchProcurementQueue(opts?: {
     ...(await Promise.all(
       toHydrate.map(async (doc) => {
         try {
-          return await fetchMaterialRequestWorkflow(doc.name);
+          return await fetchMaterialRequestWorkflow(doc.name, {
+            skipItemAttachmentHydration: true,
+          });
         } catch {
           return doc;
         }
@@ -2883,14 +2960,15 @@ export async function fetchProcurementQueue(opts?: {
     if (activeRfq) {
       // Stamp for UI ActionCell / canCreate guards without a second round-trip.
       mr.custom_linked_rfq = activeRfq;
-      rejected.push({
-        name: mr.name,
-        reason: `rfq_exists=${activeRfq}`,
-      });
-      return false;
-    }
-    // Stale link / remarks pointing at a Cancelled RFQ must not hide Create.
-    if (!activeRfqByMr.has(mr.name) && linkedRfqFromDoc(mr)) {
+      if (!includeWithRfq) {
+        rejected.push({
+          name: mr.name,
+          reason: `rfq_exists=${activeRfq}`,
+        });
+        return false;
+      }
+    } else if (!activeRfqByMr.has(mr.name) && linkedRfqFromDoc(mr)) {
+      // Stale link / remarks pointing at a Cancelled RFQ must not hide Create.
       mr.custom_linked_rfq = "";
     }
     if (!isProcurementQueueEligible(mr)) {

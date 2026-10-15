@@ -14,6 +14,7 @@
  */
 
 export type DocStatus = 0 | 1 | 2;
+export type { ECRBusinessCase, ECRBusinessCaseStatus } from "./ecrBusinessCase";
 
 /** Common envelope returned by every Frappe document. */
 export interface ErpDoc {
@@ -273,6 +274,8 @@ export interface RFQItem extends ErpDoc {
 /** ERPNext "Request for Quotation" doctype. */
 export interface RequestForQuotation extends ErpDoc {
   transaction_date: string;
+  /** RFQ metadata only; legacy missing values are treated as No. */
+  contract_required?: "Yes" | "No" | null;
   /** Link back to the originating ECR when this is a direct ECR RFQ. */
   custom_ecr_reference?: string;
   /** Hidden unique key owned by the trusted direct ECR → RFQ endpoint. */
@@ -337,6 +340,11 @@ export interface RfqQuoteRoundDoc extends ErpDoc {
 /* -------------------------------------------------------------------------- */
 
 export type RFQTemplateCategory =
+  | "Raw Materials Procurement"
+  | "Spare Parts & Maintenance"
+  | "Office Supplies"
+  | "Electrical & Industrial Components"
+  | "General Procurement"
   | "Raw Materials"
   | "Manufacturing Components"
   | "Electrical Components"
@@ -344,7 +352,8 @@ export type RFQTemplateCategory =
   | "MRO Supplies"
   | "Warehouse Consumables"
   | "IT Equipment"
-  | "Logistics & Transportation";
+  | "Logistics & Transportation"
+  | (string & {});
 
 export type RFQTemplateRfqType =
   | "Standard RFQ"
@@ -353,7 +362,7 @@ export type RFQTemplateRfqType =
   | "Framework Agreement"
   | "Services";
 
-export type RFQTemplateStatus = "Active" | "Archived";
+export type RFQTemplateStatus = "Active" | "Inactive" | "Archived";
 
 /** Required supplier documents for RFQs created from this template. */
 export interface RFQTemplateRequiredDocuments {
@@ -400,7 +409,8 @@ export interface RFQTemplateSupplierRow extends ErpDoc {
 export interface RFQTemplateItemRow extends ErpDoc {
   item_code: string;
   item_name?: string;
-  qty: number;
+  description?: string;
+  qty?: number;
   uom?: string;
   target_price?: number;
   specification?: string;
@@ -410,6 +420,7 @@ export interface RFQTemplateItemRow extends ErpDoc {
 export interface RFQTemplate extends ErpDoc {
   template_name: string;
   category: RFQTemplateCategory;
+  procurement_type?: "Direct" | "Indirect";
   rfq_type?: RFQTemplateRfqType;
   description?: string;
   status: RFQTemplateStatus;
@@ -420,6 +431,9 @@ export interface RFQTemplate extends ErpDoc {
   suppliers: RFQTemplateSupplierRow[];
   required_documents?: RFQTemplateRequiredDocuments;
   workflow_rules?: RFQTemplateWorkflowRules;
+  cost_breakdown_required?: boolean;
+  contract_required?: boolean;
+  supplier_terms?: string;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -490,11 +504,21 @@ export type SupplierVerdict =
   | "BEST VALUE"
   | "GOOD OPTION"
   | "EXPENSIVE"
-  | "AVOID";
+  | "AVOID"
+  | "QUOTE INCOMPLETE"
+  | "NOT EVALUATED"
+  | "HIGH RISK / REVIEW";
+
+export type QuotePriceStatus =
+  | "submitted"
+  | "not_submitted"
+  | "price_not_provided";
 
 export interface SupplierAnalysisScore {
   cost: number;
   delivery: number;
+  /** Optional only for saved evaluations created before quality was returned. */
+  quality?: number;
   reliability: number;
   overall: number;
 }
@@ -503,11 +527,41 @@ export interface SupplierAnalysisRow {
   name: string;
   rank: number;
   verdict: SupplierVerdict;
-  grand_total: number;
+  grand_total: number | null;
+  quote_price_status?: QuotePriceStatus;
+  quotation_status?: "COMPLETE" | "INCOMPLETE";
+  is_complete?: boolean;
+  missing_fields?: string[];
   strengths: string[];
   weaknesses: string[];
   score: SupplierAnalysisScore;
   why_best_or_worst: string;
+  /** Risk level assessment for this supplier ("Low" | "Medium" | "High"). */
+  risk?: "Low" | "Medium" | "High";
+  /** Stable quotation identifier (Supplier Quotation document name e.g. PUR-SQTN-2026-00251). */
+  quotation_id?: string;
+  /** Alias for quotation_id for backward/payload compatibility. */
+  supplier_quotation_id?: string;
+  /** Supplier DocType ID (e.g. "Apex Fasteners Ltd" or escaped variant). */
+  supplier_id?: string;
+  /** RFQ DocType ID this evaluation belongs to. */
+  rfq_id?: string;
+  /** Unique ID of the evaluation run that produced this row. */
+  evaluation_run_id?: string;
+  evaluation_status?: "complete" | "incomplete";
+  /** Original model overall before the configured weighted formula is applied. */
+  raw_ai_score?: number;
+  /** Numerical ranking is separate from supplier risk and award eligibility. */
+  is_top_ranked?: boolean;
+  recommendation_status?: "TOP_RANKED" | "RANKED_ALTERNATIVE" | "REQUIRES_REVIEW" | "NOT_EVALUATED";
+  recommendation_basis?: "weighted_score";
+  recommendation_reason?: string;
+  /** Derived award policy; server actions re-evaluate the persisted assessment. */
+  awardEligible?: boolean;
+  awardIneligibilityReason?: string;
+  score_sources?: Array<{ dimension: string; value: number; source: string; has_data: boolean }>;
+  has_sufficient_data?: boolean;
+  confidence_level?: "high" | "medium" | "low";
 }
 
 export interface AICostAnalysis {
@@ -540,9 +594,23 @@ export interface AISplitOrderOption {
 
 /** Full output schema returned by the Anthropic procurement-analysis prompt. */
 export interface AIRecommendation {
+  rfq_id?: string;
+  evaluation_run_id?: string;
+  recommended_quotation_id?: string;
+  recommended_supplier_id?: string;
+  evaluation_weights?: {
+    price_weight: number;
+    delivery_weight: number;
+    quality_weight: number;
+    reliability_weight: number;
+  };
   recommended_supplier: string;
   confidence_score: number;
   recommendation_summary: string;
+  /** Original provider narrative, retained for traceability rather than selection guidance. */
+  provider_summary?: string;
+  /** Saved narrative whose provider provenance is unknown (for example an older backend summary). */
+  preserved_evaluation_summary?: string;
   supplier_analysis: SupplierAnalysisRow[];
   cost_analysis: AICostAnalysis;
   per_item_analysis: AIPerItemAnalysis[];
@@ -995,6 +1063,7 @@ export type FinanceReviewStatus =
 
 export type RFQApprovalStep =
   | "Supplier Selected"
+  | "Pending Procurement Team"
   | "Pending Legal Review"
   | "Legal Approved"
   | "Legal Rejected"
@@ -1121,6 +1190,14 @@ export interface FinanceReviewItem {
 export type ECRStatus =
   | "Draft"
   | "Engineering Review"
+  | "Technical Approved"
+  | "Business Case Preparation"
+  | "Business Case Submitted"
+  | "Finance Review"
+  | "Procurement BC Review"
+  | "Business Case Approved"
+  | "Final ECR Approval"
+  | "Procurement Decision"
   | "Operations Review"
   | "Quality Review"
   | "Program Review"
@@ -1207,11 +1284,14 @@ export interface ECRAffectedPart extends ErpDoc {
   change_required?: string;
   technical_notes?: string;
   /** RFQ or PO selected as the authoritative source for this line. */
-  source_reference_type?: Exclude<ECRProcurementReferenceType, "None">;
+  source_reference_type?: Exclude<ECRProcurementReferenceType, "None"> | "";
   /** Actual ERPNext RFQ / PO document name returned by the backend. */
   source_document_reference?: string;
   /** Actual ERPNext RFQ Item / Purchase Order Item child-row name. */
   source_item_reference?: string;
+  /** Legacy source links retained when editing existing affected-part rows. */
+  source_rfq?: string;
+  source_purchase_order?: string;
 }
 
 /** Row in the `supplier_response_requirements` child table on ECR. */
@@ -1247,6 +1327,12 @@ export interface ECRApprovalRequirement extends ErpDoc {
  *   - Plant fields on child tables link to `Plant Floor` DocType (not Warehouse)
  */
 export interface EngineeringChangeRequest extends ErpDoc {
+  /** Absent on legacy requests; assigned by the trusted create endpoint. */
+  ecr_workflow_version?: "extended_v1" | string;
+  /** Linked Business Case persisted atomically with workflow assignments. */
+  ecr_business_case?: string;
+  rfq_required?: "Yes" | "No";
+  rfq_decision_reason?: string;
   /** Auto-generated ECR number (e.g. ECR-2026-0001) */
   ecr_number?: string;
   ecr_title: string;

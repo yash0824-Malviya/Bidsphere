@@ -1,0 +1,65 @@
+{
+  "created_at": "2026-09-23T11:01:07.028221+00:00",
+  "app": "bidsphere_workflows",
+  "version": "0.1.0",
+  "release_kind": "source",
+  "live_deployment_performed": false,
+  "file_count": 13,
+  "files": [
+    {
+      "path": "scripts/ecr-schema-erp-client.mjs",
+      "sha256": "efe7937a127503c5f513a0a791f169e09d3e39ab912eff548514455ebac79220"
+    },
+    {
+      "path": "scripts/clm-schema.mjs",
+      "sha256": "6e39f78fd82ba91ff78d5aee1c889371732a0a0351daf9ffd8ff68f37e771a46"
+    },
+    {
+      "path": "scripts/rfq-contract-schema.mjs",
+      "sha256": "b5004e2a767a182f823299baa9da2969322c24d9b4606b2698f5ba8a94a7ac69"
+    },
+    {
+      "path": "scripts/rfq-award-contract-schema.mjs",
+      "sha256": "de0bb18b19f365dc1e671f41b311965ce3947e41b4268888c1ce2fe1fa4b5c09"
+    },
+    {
+      "path": "scripts/rfq-clm-lifecycle-schema.mjs",
+      "sha256": "2bd286c4243e4cd995a23d84179beb1f42f34dc8e198eaa6be1879e9cb6a6e87"
+    },
+    {
+      "path": "scripts/rfq-clm-sequential-schema.mjs",
+      "sha256": "5a648457c624a0ce70cb2ec61e1d0c1907709604adcf693d26b1da4bd138d86e"
+    },
+    {
+      "path": "scripts/rfq-clm-workflow-schema.mjs",
+      "sha256": "9b53134782345bc9e9ea825c9270aec7ebd0433a849cb1492b91e99d1d57da95"
+    },
+    {
+      "path": "scripts/setup-rfq-clm-branch.mjs",
+      "sha256": "b91e88d8a046dabb861f9cb5747be58d5c3991162a91725db596d26f6d1063e4"
+    },
+    {
+      "path": "scripts/setup-rfq-award-contract.mjs",
+      "sha256": "b4020433039ad4ef1281e68960f715a491612d307ce401c7a5e80706393868d9"
+    },
+    {
+      "path": "scripts/setup-rfq-clm-lifecycle.mjs",
+      "sha256": "7cbbd7ae6d2688cbccaa339073b0c0a8ffc060b74041c4de9180d66ea4e36436"
+    },
+    {
+      "path": "scripts/setup-rfq-clm-sequential.mjs",
+      "sha256": "4e4c7eab82fee563eea42bc4fd614d9df158caa5ce5c10c51dbcec22f8b254ed"
+    },
+    {
+      "path": "scripts/setup-rfq-clm-workflow.mjs",
+      "sha256": "9647dd9bda2b121d7d751363b417fe79f3267acf7b88919c5fb9e3163e21d08d"
+    },
+    {
+      "path": "DEPLOYMENT_README.md",
+      "sha256": "00cdd135ca19d4583fa7681fab05c90db5c31e23ed6a3de551032c75ac45a2a7"
+    }
+  ],
+  "package": "C:\\Users\\VICTUS\\Desktop\\Netlink @7\\Bidsphere\\scratch\\bidsphere-rfq-clm-schema-rfq95-2026-09-23.zip",
+  "sha256": "c59a125cabc857d4de3d8f02450b39b9f4fc4f9b6a8e58813bc06b24440965b3",
+  "verified": true
+}

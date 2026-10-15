@@ -1,4 +1,5 @@
 import { defineConfig, loadEnv, type Plugin } from "vite";
+import { assertNoGenericClmAccess, authorizeClmUpload } from "./api/clmGatewayGuard";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type multiparty from "multiparty";
 import react from "@vitejs/plugin-react";
@@ -20,7 +21,7 @@ import {
   requestDoctypesFromBodyOrQuery,
 } from "./api/ecrDirectWorkflowGuard.ts";
 import { multipartProxyPolicy } from "./api/multipartProxyGuard.ts";
-import { assertErpProxySecurityBoundary } from "./api/erpProxySecurityGuard.ts";
+import { assertErpProxySecurityBoundary, assertNoGenericPoShipmentMutation, assertNoGenericSupplierShipmentRead } from "./api/erpProxySecurityGuard.ts";
 import {
   assertSecureEcrUpload,
   isTemporaryQuotationDocname,
@@ -38,6 +39,11 @@ import {
   assertSafeProxyQuery,
 } from "./api/proxyRequestGuard.ts";
 import { buildEngineerEcrReadScope } from "./api/ecrReadScope.ts";
+import { assertRfqPurchaseOrderRequest, listPurchaseOrderLegalReviews } from "./api/rfqPurchaseOrderGuard.ts";
+import { assertSupplierAwardEligible, assertSupplierSelectionRequest } from "./api/supplierAwardEligibilityGuard.ts";
+import { isRfqDocumentMutation, normalizeRfqContractRequirementRequest } from "./api/rfqContractRequirementGuard.ts";
+import { assertRfqClmBranchRequest } from "./api/rfqClmBranchGuard.ts";
+import { handleBusinessCaseAttachment } from "./api/business-cases-attachment.ts";
 
 /**
  * Server-side login/logout that never forwards ERPNext `Set-Cookie` to the
@@ -165,97 +171,20 @@ function legalReviewDevMiddleware(): Plugin {
           const raw = Buffer.concat(chunks).toString("utf8");
           const body = raw ? JSON.parse(raw) : {};
 
-          // `server.ssrLoadModule` (not a plain `import()`) so edits to
-          // legalReviewCore.ts are picked up on the next request instead of
-          // being stuck in Node's ESM module cache for the life of the
-          // dev-server process.
-          const core = await server.ssrLoadModule("/api/legalReviewCore.ts");
-          let payload: unknown;
-          switch (action) {
-            case "list":
-              payload = {
-                success: true,
-                records: await core.listWorkflowRecords({
-                  limit: typeof body.limit === "number" ? body.limit : undefined,
-                }),
-              };
-              break;
-            case "create":
-              payload = { success: true, ...(await core.createLegalDocumentReview(body)) };
-              break;
-            case "approve":
-              payload = {
-                success: true,
-                record: await core.decideLegalDocumentReview({
-                  name: body.name,
-                  status: "Approved",
-                  reviewedBy: body.reviewedBy,
-                  comments: body.comments,
-                }),
-              };
-              break;
-            case "reject":
-              payload = {
-                success: true,
-                record: await core.decideLegalDocumentReview({
-                  name: body.name,
-                  status: "Rejected",
-                  reviewedBy: body.reviewedBy,
-                  comments: body.comments,
-                  rejectionReason: body.rejectionReason,
-                }),
-              };
-              break;
-            case "update-flags":
-              payload = {
-                success: true,
-                record: await core.updateLegalDocumentFlags(body.name, body.updates ?? {}),
-              };
-              break;
-            case "resubmit":
-              payload = {
-                success: true,
-                record: await core.resubmitLegalReview(body.name, body.resubmittedBy, body.note),
-              };
-              break;
-            case "finance-approve":
-              payload = {
-                success: true,
-                record: await core.decideFinanceReview({
-                  name: body.name,
-                  status: "Approved",
-                  reviewedBy: body.reviewedBy,
-                  comments: body.comments,
-                }),
-              };
-              break;
-            case "finance-reject":
-              payload = {
-                success: true,
-                record: await core.decideFinanceReview({
-                  name: body.name,
-                  status: "Rejected",
-                  reviewedBy: body.reviewedBy,
-                  comments: body.comments,
-                  rejectionReason: body.rejectionReason,
-                }),
-              };
-              break;
-            case "finance-resubmit":
-              payload = {
-                success: true,
-                record: await core.resubmitFinanceReview(body.name, body.resubmittedBy, body.note),
-              };
-              break;
-            default:
-              res.statusCode = 404;
+          // Use the production handler, including authentication, role checks,
+          // principal attribution, and workflow validation.
+          const { default: handler } = await server.ssrLoadModule("/api/legal-review.ts");
+          const response = {
+            status(code: number) { res.statusCode = code; return response; },
+            json(payload: unknown) {
               res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify({ error: `Unknown legal-review action: ${action}` }));
-              return;
-          }
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify(payload));
+              res.setHeader("Cache-Control", "private, no-store");
+              res.end(JSON.stringify(payload));
+              return response;
+            },
+            end() { res.end(); return response; },
+          };
+          await handler({ method: req.method, headers: req.headers, query: { action }, body }, response);
         } catch (err) {
           const status =
             (err as { status?: number })?.status && Number.isInteger((err as { status?: number }).status)
@@ -1266,58 +1195,20 @@ function reverseBiddingSubmitDevMiddleware(): Plugin {
           const raw = Buffer.concat(chunks).toString("utf8");
           const body = raw ? JSON.parse(raw) : {};
 
-          const rbac = (await server.ssrLoadModule("/api/rbacAuth.ts")) as {
-            requireSupplierAuth: (
-              headers: Record<string, unknown>,
-            ) => { sub: string; supplier: string };
-            RbacError: new (message: string, status?: number) => Error & {
-              status: number;
-            };
+          // Use the production endpoint so validation and structured conflict
+          // responses stay identical in local development and deployment.
+          const { default: handler } = await server.ssrLoadModule("/api/reverse-bidding-submit-item-bids.ts");
+          const response = {
+            status(code: number) { res.statusCode = code; return response; },
+            json(payload: unknown) {
+              res.setHeader("Content-Type", "application/json");
+              res.setHeader("Cache-Control", "private, no-store");
+              res.end(JSON.stringify(payload));
+              return response;
+            },
+            end() { res.end(); return response; },
           };
-          const core = (await server.ssrLoadModule(
-            "/api/reverseBiddingSubmitCore.ts",
-          )) as {
-            submitItemBidsCore: (input: {
-              auctionName: string;
-              supplier: string;
-              items: Array<{ item_code: string; rate: number }>;
-            }) => Promise<unknown>;
-            ReverseBiddingSubmitError: new (
-              message: string,
-              status?: number,
-            ) => Error & { status: number };
-          };
-
-          const headers: Record<string, unknown> = {};
-          for (const [k, v] of Object.entries(req.headers)) {
-            headers[k] = v;
-          }
-          const principal = rbac.requireSupplierAuth(headers);
-          const auctionName = String(
-            body.auction_name ?? body.auctionName ?? "",
-          ).trim();
-          const itemsRaw = Array.isArray(body.items) ? body.items : [];
-          const items = itemsRaw
-            .map((row: Record<string, unknown>) => ({
-              item_code: String(row?.item_code ?? "").trim(),
-              rate: Number(row?.rate),
-            }))
-            .filter((i: { item_code: string; rate: number }) =>
-              i.item_code && Number.isFinite(i.rate),
-            );
-          const supplier = String(
-            principal.supplier || principal.sub,
-          ).trim();
-
-          const auction = await core.submitItemBidsCore({
-            auctionName,
-            supplier,
-            items,
-          });
-
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ success: true, auction }));
+          await handler({ method: req.method, headers: req.headers, body }, response);
         } catch (err) {
           const status =
             err &&
@@ -1357,50 +1248,19 @@ function poShipmentDevMiddleware(): Plugin {
           const raw = Buffer.concat(chunks).toString("utf8");
           const body = raw ? JSON.parse(raw) : {};
 
-          const core = await server.ssrLoadModule("/api/poShipmentCore.ts");
-          let payload: unknown;
-          switch (action) {
-            case "get":
-              payload = {
-                success: true,
-                record: await core.getPoShipment(String(body.po_name ?? "")),
-              };
-              break;
-            case "list":
-              payload = {
-                success: true,
-                records: await core.listPoShipments({
-                  poNames: Array.isArray(body.po_names) ? body.po_names : undefined,
-                  statuses: Array.isArray(body.statuses) ? body.statuses : undefined,
-                  readyForGrn: body.ready_for_grn === true,
-                  warehouseVisible: body.warehouse_visible === true,
-                  limit: typeof body.limit === "number" ? body.limit : undefined,
-                }),
-              };
-              break;
-            case "list-ready":
-              payload = {
-                success: true,
-                records: await core.listReadyForGrnShipments(
-                  typeof body.limit === "number" ? body.limit : 200,
-                ),
-              };
-              break;
-            case "upsert":
-              payload = {
-                success: true,
-                record: await core.upsertPoShipment(body),
-              };
-              break;
-            default:
-              res.statusCode = 404;
+          // Reuse production authentication, ownership and CLM signature gates.
+          const { default: handler } = await server.ssrLoadModule("/api/po-shipment.ts");
+          const response = {
+            status(code: number) { res.statusCode = code; return response; },
+            json(payload: unknown) {
               res.setHeader("Content-Type", "application/json");
-              res.end(JSON.stringify({ error: `Unknown po-shipment action: ${action}` }));
-              return;
-          }
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify(payload));
+              res.setHeader("Cache-Control", "private, no-store");
+              res.end(JSON.stringify(payload));
+              return response;
+            },
+            end() { res.end(); return response; },
+          };
+          await handler({ method: req.method, headers: req.headers, query: { action }, body }, response);
         } catch (err) {
           const status =
             (err as { status?: number })?.status &&
@@ -2044,6 +1904,7 @@ function fileProxyDevMiddleware(
           });
           let principal: AccessPrincipal;
           let supplierRfqAuthorized = false;
+          let fileId: string | undefined;
           try {
             principal = rbac.requireAnyAuth(
               req.headers as Record<string, unknown>,
@@ -2073,6 +1934,9 @@ function fileProxyDevMiddleware(
               }));
               return;
             }
+            const rawFileId = query.get("file_id") || query.get("fileId");
+            fileId = typeof rawFileId === "string" && rawFileId.trim() ? rawFileId.trim() : undefined;
+
             if (principal.typ === "supplier") {
               const rfqName = query.get("rfq")?.trim() || "";
               if (rfqName && filePath) {
@@ -2084,7 +1948,8 @@ function fileProxyDevMiddleware(
                     supplierId: string;
                     supplierCandidates?: string[];
                     filePath: string;
-                  }) => Promise<void>;
+                    fileId?: string;
+                  }) => Promise<{ id?: string }>;
                   buildSupplierAccessCandidates: (input: {
                     explicitSupplierId?: string | null;
                     jwtSupplier?: string | null;
@@ -2097,13 +1962,17 @@ function fileProxyDevMiddleware(
                   jwtSub: principal.sub,
                 });
                 try {
-                  await docsCore.assertSupplierMayDownloadRfqFile({
+                  const resolvedDoc = await docsCore.assertSupplierMayDownloadRfqFile({
                     rfqName,
                     supplierId: supplierCandidates[0] || "",
                     supplierCandidates,
                     filePath,
+                    fileId,
                   });
                   supplierRfqAuthorized = true;
+                  if (!fileId && resolvedDoc?.id && !resolvedDoc.id.startsWith("doc_") && !resolvedDoc.id.startsWith("direct-")) {
+                    fileId = resolvedDoc.id;
+                  }
                 } catch (aclErr) {
                   const status =
                     aclErr &&
@@ -2148,10 +2017,30 @@ function fileProxyDevMiddleware(
             return;
           }
 
+          const rfpAccess = await server.ssrLoadModule("/api/rfpResponseAttachmentAccess.ts") as typeof import("./api/rfpResponseAttachmentAccess");
+          let rfpContext: ReturnType<typeof rfpAccess.parseRfpResponseAttachmentContext>;
+          try {
+            const attachmentQuery: Record<string, unknown> = {};
+            query.forEach((_value, key) => {
+              const values = query.getAll(key);
+              attachmentQuery[key] = values.length === 1 ? values[0] : values;
+            });
+            rfpContext = rfpAccess.parseRfpResponseAttachmentContext(attachmentQuery);
+            if (query.getAll("file_id").length + query.getAll("fileId").length > 1) {
+              throw new Error("Duplicate File ID parameters are not allowed.");
+            }
+          } catch {
+            res.statusCode = 400;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ success: false, status: 400, message: "Invalid document attachment context." }));
+            return;
+          }
+
           const core = (await server.ssrLoadModule(
             "/api/fileProxyCore.ts",
           )) as {
             isValidErpFilePath: (p: string) => boolean;
+            resolveExactErpFileRecord: typeof import("./api/fileProxyCore").resolveExactErpFileRecord;
             fetchErpFile: (opts: {
               baseUrl: string;
               filePath: string;
@@ -2226,7 +2115,7 @@ function fileProxyDevMiddleware(
             );
             if (!response.ok) {
               const error = new Error(`${doctype} not found.`) as Error & { status?: number };
-              error.status = 403;
+              error.status = response.status === 404 ? 404 : response.status >= 500 ? 502 : 403;
               throw error;
             }
             const payload = await response.json() as { data?: Record<string, unknown> };
@@ -2237,8 +2126,42 @@ function fileProxyDevMiddleware(
             }
             return payload.data;
           };
-          const rawFileId = query.get("file_id") || query.get("fileId");
-          const fileId = typeof rawFileId === "string" ? rawFileId : undefined;
+          if (rfpContext) {
+            try {
+              const file = await rfpAccess.resolveRfpResponseFile({
+                principal, ...rfpContext, requestedPath: filePath, requestedFileId: fileId, loadDocument,
+                resolveFileByPath: (path) => core.resolveExactErpFileRecord(base, path, { Authorization: `token ${apiKey}:${apiSecret}` }),
+              });
+              fileId = file.name;
+            } catch (error) {
+              const reportedStatus = Number((error as { status?: number })?.status) || 500;
+              const status = [401, 403, 404].includes(reportedStatus) ? reportedStatus : 500;
+              res.statusCode = status;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ success: false, status, message: status === 401 ? "Your session has expired. Please sign in again." : status === 403 ? "You do not have permission to view this document." : status === 404 ? "Document not found." : "Unable to load the document. Please try again." }));
+              return;
+            }
+          }
+          if (query.has("legal_review") || query.has("document_key")) {
+            if (query.getAll("legal_review").length !== 1 || !query.get("legal_review")?.trim() || query.getAll("document_key").length !== 1) {
+              res.statusCode = 400;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ success: false, status: 400, message: "A single legal_review and document_key are required." }));
+              return;
+            }
+            try {
+              const legalAccess = await server.ssrLoadModule("/api/legalAttachmentAccess.ts") as typeof import("./api/legalAttachmentAccess");
+              const file = await legalAccess.resolveLegalReviewFile({ principal, reviewName: query.get("legal_review")!, documentKey: query.get("document_key")!, requestedPath: filePath, loadDocument });
+              fileId = file.name;
+            } catch (error) {
+              const status = Number((error as { status?: number })?.status) || 500;
+              console.error("[LEGAL PDF ACCESS ERROR]", { fileName: filePath, parentDoctype: "Legal Document Review", parentName: query.get("legal_review"), status, response: error instanceof Error ? error.message : "Attachment authorization failed" });
+              res.statusCode = status;
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify({ success: false, status, message: status === 403 ? "You do not have permission to view this document." : status === 404 ? "Document not found." : "Unable to retrieve the legal attachment." }));
+              return;
+            }
+          }
 
           const result = await core.fetchErpFile({
             baseUrl: proxyTarget,
@@ -2253,6 +2176,7 @@ function fileProxyDevMiddleware(
               file,
               loadDocument,
               supplierContextAuthorized: supplierRfqAuthorized,
+              rfqContextName: principal.typ === "supplier" ? query.get("rfq")?.trim() || undefined : undefined,
             }),
           });
 
@@ -2269,7 +2193,9 @@ function fileProxyDevMiddleware(
             result.contentType || "application/octet-stream",
           );
           res.setHeader("Content-Disposition", "inline");
-          res.setHeader("Cache-Control", "private, max-age=60");
+          res.setHeader("Cache-Control", "private, no-store");
+          res.setHeader("Vary", "X-Bidsphere-Access-Token, Authorization");
+          res.setHeader("X-Content-Type-Options", "nosniff");
           if (req.method === "HEAD") {
             res.end();
             return;
@@ -2287,6 +2213,28 @@ function fileProxyDevMiddleware(
               detail: err instanceof Error ? err.message : String(err),
             }),
           );
+        }
+      });
+    },
+  };
+}
+
+/** Dedicated Dev Middleware for Business Case Attachment View & Download */
+function businessCaseAttachmentDevMiddleware(): Plugin {
+  return {
+    name: "business-case-attachment-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+        const url = req.url ?? "";
+        if (!url.startsWith("/api/business-cases/")) {
+          next();
+          return;
+        }
+        try {
+          const handled = await handleBusinessCaseAttachment(req, res, url);
+          if (!handled) next();
+        } catch (e) {
+          next(e);
         }
       });
     },
@@ -2334,8 +2282,10 @@ function payablesRbacDevMiddleware(): Plugin {
         }
         try {
           assertSafeProxyQuery({ apiPath, method, query: guardedQuery });
+          assertNoGenericClmAccess(apiPath, requestDoctypesFromBodyOrQuery({}, guardedQuery));
+          assertNoGenericPoShipmentMutation(apiPath, req.method || "GET", requestDoctypesFromBodyOrQuery({}, guardedQuery));
         } catch (error) {
-          res.statusCode = 400;
+          res.statusCode = error && typeof error === "object" && "status" in error ? Number(error.status) : 400;
           res.setHeader("Content-Type", "application/json");
           res.end(JSON.stringify({
             error: error instanceof Error ? error.message : "Invalid ERP query parameters.",
@@ -2364,6 +2314,8 @@ function payablesRbacDevMiddleware(): Plugin {
         const maybeFileResource =
           apiPath === "resource/File" || apiPath.startsWith("resource/File/");
         const maybePurchaseRequisition = apiPath.startsWith("resource/Purchase Requisition");
+        const maybePoShipment = apiPath === "resource/PO Shipment" || apiPath.startsWith("resource/PO Shipment/") ||
+          requestDoctypesFromBodyOrQuery({}, guardedQuery).includes("PO Shipment");
         const maybeGenericDocumentMethod =
           apiPath.startsWith("method/") &&
           ![
@@ -2386,6 +2338,7 @@ function payablesRbacDevMiddleware(): Plugin {
               "Purchase Order",
               "Purchase Requisition",
             ].includes(queryDoctype) ||
+            requestDoctypesFromBodyOrQuery({}, guardedQuery).includes("Purchase Order") ||
             isProtectedChildDoctype(queryDoctype)
           );
         let commentReadDoctype = "";
@@ -2411,7 +2364,9 @@ function payablesRbacDevMiddleware(): Plugin {
         const ecrCommentRead = commentReadDoctype === "Engineering Change Request";
         const prCommentRead = commentReadDoctype === "Purchase Requisition";
         const isTargetProtectedEndpoint =
+          maybePoShipment ||
           maybePayables ||
+          maybeRfqResource ||
           maybeEcrResource ||
           maybeProtectedChildResource ||
           maybeEcrWorkflow ||
@@ -2420,7 +2375,8 @@ function payablesRbacDevMiddleware(): Plugin {
           maybeFileUpload ||
           maybeFileResource ||
           maybePurchaseRequisition ||
-          shouldInspectGenericDocumentMethod;
+          shouldInspectGenericDocumentMethod ||
+          isRfqDocumentMutation({ apiPath, method, query: guardedQuery });
 
         if (!isTargetProtectedEndpoint) {
           next();
@@ -2429,11 +2385,13 @@ function payablesRbacDevMiddleware(): Plugin {
 
         if (
           ["GET", "HEAD"].includes(method) &&
+          !maybePoShipment &&
           !maybeEcrResource &&
           !maybeProtectedChildResource &&
           !maybeEcrComment &&
           !maybeFileResource &&
-          !maybePurchaseRequisition
+          !maybePurchaseRequisition &&
+          !isRfqDocumentMutation({ apiPath, method, query: Object.fromEntries(parsedUrl.searchParams.entries()) })
         ) {
           next();
           return;
@@ -2574,7 +2532,16 @@ function payablesRbacDevMiddleware(): Plugin {
               return payload.data;
             };
 
-            if (upload.doctype === "Engineering Change Request") {
+            const clmUploadAuthorized = await authorizeClmUpload(uploadPrincipal, upload, async (doctype, name) => {
+              const response = await fetch(`${base}/api/resource/${encodeURIComponent(doctype)}/${encodeURIComponent(name)}`, { headers: { Authorization: `token ${key}:${secret}`, Accept: "application/json" } });
+              if (!response.ok) throw new rbac.RbacError("Contract attachment parent not found.", 403);
+              const payload = await response.json() as { data?: Record<string, unknown> };
+              if (!payload.data) throw new rbac.RbacError("Contract attachment parent not found.", 403);
+              return payload.data;
+            });
+            if (clmUploadAuthorized) {
+              // The scoped CLM policy already authorized this private upload.
+            } else if (upload.doctype === "Engineering Change Request") {
               if (uploadPrincipal.typ !== "internal") {
                 throw new rbac.RbacError(
                   "Forbidden. Internal authentication required for ECR uploads.",
@@ -2719,6 +2686,9 @@ function payablesRbacDevMiddleware(): Plugin {
             Object.fromEntries(parsedUrl.searchParams.entries()),
           ) || String(transitionDoc.doctype || "");
           assertNoGenericFileAccess(apiPath, [genericDoctype, ...genericDoctypes]);
+          assertNoGenericClmAccess(apiPath, [genericDoctype, ...genericDoctypes]);
+          assertNoGenericPoShipmentMutation(apiPath, method, [genericDoctype, ...genericDoctypes]);
+          assertNoGenericSupplierShipmentRead(apiPath, [genericDoctype, ...genericDoctypes], principal.typ);
           if (
             !maybeFileResource &&
             !["GET", "HEAD", "OPTIONS"].includes(method)
@@ -2807,6 +2777,23 @@ function payablesRbacDevMiddleware(): Plugin {
               loadDocument: loadErpDocument,
             });
           }
+
+          await assertRfqPurchaseOrderRequest({ apiPath, method, principal, body, query: guardedQuery }, {
+            loadDocument: loadErpDocument,
+            listReviews: listPurchaseOrderLegalReviews,
+            assertAwardEligible: assertSupplierAwardEligible,
+            assertClmReady: async (name, options) => {
+              const core = await server.ssrLoadModule("/api/rfqClmCore.ts");
+              const erp = await server.ssrLoadModule("/api/clmErp.ts");
+              await core.assertRfqClmReadyForProcurement(name, erp.createClmDependencies(), options);
+            },
+            assertReady: async (name, actor) => {
+              const core = await server.ssrLoadModule("/api/legalReviewCore.ts") as {
+                assertLegalReviewReadyForPurchaseOrder: (name: string, actor: AccessPrincipal) => Promise<unknown>;
+              };
+              return core.assertLegalReviewReadyForPurchaseOrder(name, actor);
+            },
+          });
 
           if (
             maybePurchaseRequisition ||
@@ -2978,7 +2965,28 @@ function payablesRbacDevMiddleware(): Plugin {
                 403,
               );
             }
+            const normalized = normalizeRfqContractRequirementRequest({ apiPath, method, body, query: Object.fromEntries(parsedUrl.searchParams.entries()) });
+            await assertRfqClmBranchRequest({ apiPath, method, principal, body: normalized.body, query: normalized.query }, {
+              loadDocument: loadErpDocument,
+              assertClmReady: async (name, options) => {
+                const core = await server.ssrLoadModule("/api/rfqClmCore.ts");
+                const erp = await server.ssrLoadModule("/api/clmErp.ts");
+                await core.assertRfqClmReadyForProcurement(name, erp.createClmDependencies(), options);
+              },
+            });
+            if (normalized.body !== body) {
+              body = normalized.body as Record<string, unknown>;
+              rawBody = JSON.stringify(body);
+              (req as IncomingMessage & { __bidsphereRawBody?: string }).__bidsphereRawBody = rawBody;
+            }
+            if (normalized.query) {
+              for (const [key, value] of Object.entries(normalized.query)) {
+                if (typeof value === "string") parsedUrl.searchParams.set(key, value);
+              }
+              req.url = `${parsedUrl.pathname}${parsedUrl.search}`;
+            }
           }
+          await assertSupplierSelectionRequest({ apiPath, method, principal, body, query: Object.fromEntries(parsedUrl.searchParams.entries()) });
           if (
             (maybePurchaseOrderResource && !["GET", "HEAD"].includes(method)) ||
             (isPurchaseOrderGenericRequest && !isReadOnlyGenericDocumentRequest)
@@ -3005,7 +3013,7 @@ function payablesRbacDevMiddleware(): Plugin {
           const touchesEcr = maybeEcrResource || Boolean(ecrName) || ecrCommentRead || isEcrGenericRequest;
           if (touchesEcr) {
             const internal = rbac.requireInternalAuth(req.headers as Record<string, unknown>, body);
-            rbac.requireRoles(internal, ["engineer", "engineering", "operations", "quality", "program_manager", "procurement_team", "procurement"]);
+            rbac.requireRoles(internal, ["engineer", "engineering", "finance", "operations", "quality", "program_manager", "procurement_team", "procurement"]);
             if (isEcrGenericRequest) {
               throw new rbac.RbacError(
                 "Generic ERP document methods are disabled for Engineering Change Requests. Use the secured ECR resource endpoint.",
@@ -3013,6 +3021,7 @@ function payablesRbacDevMiddleware(): Plugin {
               );
             }
             type DevEcrSnapshot = {
+              ecr_workflow_version?: string;
               select_pxfp?: string;
               ecr_owner?: string;
               amended_from?: string;
@@ -3542,6 +3551,74 @@ function createRfqFromPrDevMiddleware(): Plugin {
   };
 }
 
+/** Run the production Contract handlers in development as well. */
+function clmDevMiddleware(): Plugin {
+  return {
+    name: "clm-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        const url = new URL(req.url ?? "/", "http://localhost");
+        if (!["/api/clm", "/api/clm-monitor"].includes(url.pathname)) return next();
+        try {
+          const query: Record<string, string | string[]> = {};
+          for (const key of new Set(url.searchParams.keys())) {
+            const values = url.searchParams.getAll(key);
+            query[key] = values.length === 1 ? values[0] : values;
+          }
+          const request = Object.assign(req, { query });
+          const response = Object.assign(res, {
+            status(code: number) { res.statusCode = code; return response; },
+            json(body: unknown) { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(body)); return response; },
+            send(body: unknown) { res.end(body); return response; },
+          });
+          const endpoint = await server.ssrLoadModule(url.pathname === "/api/clm-monitor" ? "/api/clm-monitor.ts" : "/api/clm.ts") as { default: (request: unknown, response: unknown) => Promise<void> };
+          await endpoint.default(request, response);
+        } catch {
+          if (res.writableEnded) return;
+          res.statusCode = 500; res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ success: false, message: "Unable to process the Contract request. Please try again." }));
+        }
+      });
+    },
+  };
+}
+
+function ecrBusinessCaseDevMiddleware(): Plugin {
+  return {
+    name: "ecr-business-case-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        const url = new URL(req.url ?? "/", "http://localhost");
+        if (url.pathname !== "/api/ecr-business-case") return next();
+        try {
+          const query: Record<string, string | string[]> = {};
+          for (const key of new Set(url.searchParams.keys())) {
+            const values = url.searchParams.getAll(key);
+            query[key] = values.length === 1 ? values[0] : values;
+          }
+          const request = Object.assign(req, { query });
+          const response = Object.assign(res, {
+            status(code: number) { res.statusCode = code; return response; },
+            json(body: unknown) {
+              res.setHeader("Content-Type", "application/json");
+              res.end(JSON.stringify(body));
+              return response;
+            },
+          });
+          const endpoint = await server.ssrLoadModule("/api/ecr-business-case.ts") as {
+            default: (request: unknown, response: unknown) => Promise<void>;
+          };
+          await endpoint.default(request, response);
+        } catch (error) {
+          if (res.writableEnded) return;
+          res.statusCode = 500;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ success: false, message: error instanceof Error ? error.message : "Business Case request failed." }));
+        }
+      });
+    },
+  };
+}
+
 /** Dev parity for the trusted ECR workflow + approval-task endpoint. */
 function ecrWorkflowActionDevMiddleware(): Plugin {
   return {
@@ -3584,6 +3661,7 @@ function ecrWorkflowActionDevMiddleware(): Plugin {
             applyEcrWorkflowActionCore: (input: {
               name: unknown;
               action: unknown;
+              expected_modified?: unknown;
               comment?: unknown;
               reviewFields?: Record<string, unknown>;
               principal: {
@@ -3602,6 +3680,7 @@ function ecrWorkflowActionDevMiddleware(): Plugin {
           const result = await core.applyEcrWorkflowActionCore({
             name: ecrIdentifier,
             action: body.action,
+            expected_modified: body.expected_modified,
             comment: body.comment,
             reviewFields:
               body.reviewFields && typeof body.reviewFields === "object" && !Array.isArray(body.reviewFields)
@@ -3622,6 +3701,59 @@ function ecrWorkflowActionDevMiddleware(): Plugin {
           res.statusCode = status >= 400 && status < 600 ? status : 500;
           res.setHeader("Content-Type", "application/json");
           res.end(JSON.stringify({ success: false, message }));
+        }
+      });
+    },
+  };
+}
+
+function aiClaudeDevMiddleware(): Plugin {
+  return {
+    name: "ai-claude-dev-middleware",
+    configureServer(server) {
+      server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next) => {
+        const url = req.url ?? "";
+        const pathOnly = url.split("?")[0];
+        if (pathOnly !== "/api/ai/claude" && pathOnly !== "/api/ai-claude") {
+          next();
+          return;
+        }
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+        if (req.method !== "POST") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ success: false, message: "Method Not Allowed" }));
+          return;
+        }
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) chunks.push(chunk as Buffer);
+          const raw = Buffer.concat(chunks).toString("utf8");
+          const body = raw ? JSON.parse(raw) : {};
+
+          const { handleClaudeRequest } = (await server.ssrLoadModule("/api/ai-claude.ts")) as {
+            handleClaudeRequest: (body: unknown) => Promise<{ text: string; tokensUsed: number; model: string }>;
+          };
+          const result = await handleClaudeRequest(body);
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ success: true, ...result }));
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Claude request failed.";
+          const statusCode = err && typeof err === "object" && "statusCode" in err && typeof err.statusCode === "number"
+            ? err.statusCode
+            : 500;
+          res.statusCode = statusCode;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({
+            success: false,
+            message,
+            ...(err && typeof err === "object" && "errorType" in err ? { errorType: err.errorType } : {}),
+          }));
         }
       });
     },
@@ -3658,6 +3790,18 @@ export default defineConfig(({ mode }) => {
     env.BIDSPHERE_SESSION_SECRET ||
     erpApiSecret ||
     "bidsphere-dev-session-secret";
+  process.env.ANTHROPIC_API_KEY =
+    process.env.ANTHROPIC_API_KEY ||
+    env.ANTHROPIC_API_KEY ||
+    "";
+  process.env.ANTHROPIC_MODEL =
+    process.env.ANTHROPIC_MODEL ||
+    env.ANTHROPIC_MODEL ||
+    "claude-3-5-sonnet-20241022";
+  process.env.ANTHROPIC_WORKSPACE_ID =
+    process.env.ANTHROPIC_WORKSPACE_ID ||
+    env.ANTHROPIC_WORKSPACE_ID ||
+    "";
 
   const demoMfaEnabled =
     env.APP_ENV === "demo" ||
@@ -3679,11 +3823,18 @@ export default defineConfig(({ mode }) => {
   );
 
   return {
+    // Config-free Vite/SSR diagnostic servers use the default .vite/deps cache.
+    // Keep the app's optimized modules separate so those servers cannot remove
+    // dependencies still referenced by open browser tabs (504 Outdated Optimize Dep).
+    cacheDir: "node_modules/.vite/bidsphere",
     plugins: [
       react(),
       authSessionDevMiddleware(),
+      aiClaudeDevMiddleware(),
       fileLinkCopyDevMiddleware(),
       ecrCreateDevMiddleware(),
+      ecrBusinessCaseDevMiddleware(),
+      clmDevMiddleware(),
       ecrWorkflowActionDevMiddleware(),
       createPrFromEcrDevMiddleware(),
       createRfqFromEcrDevMiddleware(),
@@ -3701,12 +3852,16 @@ export default defineConfig(({ mode }) => {
       supplierVoucherDevMiddleware(),
       supplierRfqDocumentsDevMiddleware(),
       supplierOnboardingDevMiddleware(),
-      // The generic ERP gateway consumes and re-streams mutation bodies, so it
-      // must run after every purpose-built local API endpoint.
-      payablesRbacDevMiddleware(),
+      businessCaseAttachmentDevMiddleware(),
       fileProxyDevMiddleware(proxyTarget, erpApiKey, erpApiSecret),
+      payablesRbacDevMiddleware(),
     ],
     define: {
+      // Legacy deployment variables may still exist server-side. Never expose
+      // them through either static imports or the full import.meta.env object.
+      "import.meta.env.VITE_API_KEY": "undefined",
+      "import.meta.env.VITE_API_SECRET": "undefined",
+      "import.meta.env.VITE_ANTHROPIC_API_KEY": "undefined",
       __DEMO_MFA_ENABLED__: JSON.stringify(demoMfaEnabled),
       __DEMO_MFA_OTP__: JSON.stringify(demoMfaEnabled ? "121212" : ""),
     },
@@ -3757,12 +3912,29 @@ export default defineConfig(({ mode }) => {
       strictPort: true,
       allowedHosts: [".ngrok-free.dev", ".ngrok.app", "localhost"],
       proxy: {
+        "/files": {
+          target: proxyTarget,
+          changeOrigin: true,
+          secure: false,
+          timeout: 30_000,
+          proxyTimeout: 30_000,
+        },
         "/api": {
           target: proxyTarget,
           changeOrigin: true,
           secure: false,
           timeout: 30_000,
           proxyTimeout: 30_000,
+          bypass: (req) => {
+            const path = (req.url ?? "").split("?")[0];
+            if (
+              path === "/api/ai/claude" ||
+              path === "/api/ai-claude" ||
+              path.startsWith("/api/ai/claude/")
+            ) {
+              return req.url;
+            }
+          },
           configure: (proxy) => {
             proxy.on("proxyReq", (proxyReq, req) => {
               // Token auth only. Never forward the browser's Cookie jar —

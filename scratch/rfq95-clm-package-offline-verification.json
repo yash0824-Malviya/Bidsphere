@@ -1,0 +1,23 @@
+{
+  "checked_at": "2026-09-23T11:01:57.704999+00:00",
+  "production_mutation": false,
+  "archives": [
+    {
+      "archive": "bidsphere_workflows-rfq95-2026-09-23.zip",
+      "sha256": "55258964e5a8b44dc06f1d524c01bedee2e8ce0f5c6b35e5230224be95a0b6b8",
+      "source_file_count": 14,
+      "verified": true
+    },
+    {
+      "archive": "bidsphere-rfq-clm-schema-rfq95-2026-09-23.zip",
+      "sha256": "c59a125cabc857d4de3d8f02450b39b9f4fc4f9b6a8e58813bc06b24440965b3",
+      "source_file_count": 13,
+      "verified": true
+    }
+  ],
+  "bench_install_layout_valid": true,
+  "python_package_import_passed": true,
+  "packaged_python_test_result": "----------------------------------------------------------------------\nRan 89 tests in 0.376s\n\nOK",
+  "wheel_build_performed": false,
+  "wheel_build_limitation": "Local flit_core/build dependencies unavailable; no network or dependency installation attempted."
+}

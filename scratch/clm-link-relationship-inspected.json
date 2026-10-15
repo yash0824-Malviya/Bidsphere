@@ -1,0 +1,147 @@
+{
+  "rfq": {
+    "name": "PUR-RFQ-2026-00104",
+    "company": "Netlink",
+    "contract_required": "Yes"
+  },
+  "award": {
+    "name": "LDC2026-00027",
+    "rfq_name": "PUR-RFQ-2026-00104",
+    "sq_name": "PUR-SQTN-2026-00273",
+    "supplier": "\"Atlantic Precision Manufacturing.\""
+  },
+  "contract": {
+    "name": "CON-2026-00001",
+    "custom_rfq": "PUR-RFQ-2026-00104",
+    "custom_supplier_quotation": "PUR-SQTN-2026-00273",
+    "custom_supplier": "\"Atlantic Precision Manufacturing.\"",
+    "party_name": "\"Atlantic Precision Manufacturing.\"",
+    "custom_purchase_order": null,
+    "custom_contract_status": "Active",
+    "custom_current_version": "1.0"
+  },
+  "context": {
+    "rfq_id": "PUR-RFQ-2026-00104",
+    "award_id": "LDC2026-00027",
+    "supplier_id": "\"Atlantic Precision Manufacturing.\"",
+    "quotation_id": "PUR-SQTN-2026-00273",
+    "contract_type": "Supply / Procurement Contract",
+    "contract_status": "Active",
+    "contract_required": "Yes"
+  },
+  "completion": {
+    "purchase_order": "PUR-ORD-2026-00028",
+    "by": "procurement.team@netlink.com",
+    "role": "procurement_team",
+    "at": "2026-09-29 12:09:50",
+    "comment": "Purchase Order PUR-ORD-2026-00028 created and submitted from this Contract.",
+    "rfq": "PUR-RFQ-2026-00104",
+    "award": "LDC2026-00027",
+    "quotation": "PUR-SQTN-2026-00273",
+    "supplier": "\"Atlantic Precision Manufacturing.\"",
+    "supplier_name": "Atlantic Precision Manufacturing.",
+    "currency": "USD",
+    "grand_total": 4500,
+    "created_at": "2026-09-29 12:09:49.234083",
+    "submitted": true
+  },
+  "po": {
+    "name": "PUR-ORD-2026-00028",
+    "supplier": "\"Atlantic Precision Manufacturing.\"",
+    "custom_clm_contract": "CON-2026-00001",
+    "custom_clm_rfq": "PUR-RFQ-2026-00104",
+    "custom_clm_award": "LDC2026-00027",
+    "custom_clm_creation_key": "bfb296a11d7fbf9c54266e8f40a1792a7b81e2170e60106ada96c52751749194"
+  },
+  "contract_acceptance": {
+    "id": "70220317-3744-4ea4-a72c-d0cb4a6d01c4",
+    "status": "Accepted",
+    "contract": "CON-2026-00001",
+    "purchase_order": "PUR-ORD-2026-00028",
+    "supplier": "\"Atlantic Precision Manufacturing.\"",
+    "by": "Atlantic Precision Manufacturing.",
+    "at": "2026-09-29 13:15:24",
+    "version": "1.0",
+    "file_id": "c53c993072",
+    "file_url": "/private/files/CON-2026-00001-inteva-signed-92ed2d5e91f98168.pdf",
+    "hash": "92ed2d5e91f9816866d60dd32635d7733c5043cc93d6ed46eebb7be709f61097",
+    "consent": true,
+    "request_id": "883df700-0b3d-415a-b9a8-f77566dc4f9b"
+  },
+  "signatures": [
+    {
+      "file_id": "c53c993072",
+      "file_url": "/private/files/CON-2026-00001-inteva-signed-92ed2d5e91f98168.pdf",
+      "hash": "92ed2d5e91f9816866d60dd32635d7733c5043cc93d6ed46eebb7be709f61097",
+      "party": "inteva",
+      "by": "legal@netlink.com",
+      "at": "2026-09-28 17:10:07",
+      "version": "1.0",
+      "typed_name": "YashMalviya",
+      "full_legal_name": "YashMalviya",
+      "signature_method": "typed",
+      "signature_adopted": true,
+      "request_id": "35c6fa7e-b153-48b5-a1cf-b5d72d3d0be1",
+      "role": "legal",
+      "signature_comment": "Approved"
+    },
+    {
+      "file_id": "b4d5a45c42",
+      "file_url": "/private/files/CON-2026-00001-supplier-signed-fa2b6ce033485346.pdf",
+      "hash": "fa2b6ce033485346930e3396b5ad9baae2157e087f1320b738d9fdc8fbffdb6e",
+      "party": "supplier",
+      "by": "Atlantic Precision Manufacturing.",
+      "at": "2026-09-29 13:16:06",
+      "version": "1.0",
+      "typed_name": "Adityasingh",
+      "full_legal_name": "Adityasingh",
+      "signature_method": "typed",
+      "signature_adopted": true,
+      "request_id": "2ee368a5-2259-45dc-8f98-896643028fed",
+      "signature_comment": "",
+      "signer_email": "aditya@netlink.com",
+      "signer_email_source": "supplier_declared",
+      "signatory_role": "Manager",
+      "role": "supplier",
+      "acceptance_id": "70220317-3744-4ea4-a72c-d0cb4a6d01c4",
+      "source_file_id": "c53c993072",
+      "source_hash": "92ed2d5e91f9816866d60dd32635d7733c5043cc93d6ed46eebb7be709f61097"
+    }
+  ],
+  "shipments": [
+    {
+      "name": "gaqipgvp1u",
+      "owner": "Administrator",
+      "creation": "2026-09-29 13:16:55.485151",
+      "modified": "2026-09-29 13:16:55.485151",
+      "modified_by": "Administrator",
+      "docstatus": 0,
+      "idx": 0,
+      "po_name": "PUR-ORD-2026-00028",
+      "supplier": null,
+      "shipment_status": "Accepted",
+      "supplier_accepted": 1,
+      "supplier_acceptance_date": "2026-09-29 13:16:52",
+      "rejection_reason": null,
+      "rejected_date": null,
+      "expected_delivery_date": "2026-09-30",
+      "vehicle_number": "YYX 8548",
+      "tracking_number": "TRN 4757896",
+      "shipping_notes": "",
+      "dispatch_date": null,
+      "updated_by": "Atlantic Precision Manufacturing.",
+      "supplier_status": "Accepted",
+      "ready_for_grn": 0,
+      "warehouse_visible": 1
+    }
+  ],
+  "contract_ids": [
+    "CON-2026-00001"
+  ],
+  "po_ids": [
+    "PUR-ORD-2026-00028"
+  ],
+  "result": {
+    "error": "The supplier acceptance record does not belong to this Contract Purchase Order."
+  }
+}

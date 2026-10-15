@@ -1,0 +1,268 @@
+[
+  {
+    "page": "Dashboard",
+    "active": [
+      "Dashboard"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "Supplier Dashboard",
+      "Supplier Overview",
+      "Requires Your Attention",
+      "Quick Actions",
+      "Recent Activity"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": false,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "Contracts",
+    "active": [
+      "Contracts"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "Contracts"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1200,
+    "mainWidth": 1200,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "Contracts",
+    "active": [
+      "Contracts"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "Contracts"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "RFQs",
+    "active": [
+      "RFQs"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "My RFQs"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "RFIs",
+    "active": [
+      "RFIs"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "My RFIs1 total"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "RFPs",
+    "active": [
+      "RFPs"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "My RFPs0",
+      "No RFPs assigned"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "Live Auctions",
+    "active": [
+      "Live Auctions"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "Live Auctions"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "Orders",
+    "active": [
+      "Orders"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "All Purchase Orders"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "Finance",
+    "active": [
+      "Finance"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "All Vouchers"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "Dashboard return",
+    "active": [
+      "Dashboard"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "Supplier Dashboard",
+      "Supplier Overview",
+      "Requires Your Attention",
+      "Quick Actions",
+      "Recent Activity"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "RFQ detail",
+    "active": [
+      "RFQs"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "Quotation Submitted",
+      "Quotation Details — PUR-RFQ-2026-00104",
+      "Procurement RFQ – Production",
+      "RFQ Documents",
+      "Submission Details"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  },
+  {
+    "page": "PO detail",
+    "active": [
+      "Orders"
+    ],
+    "background": "rgb(245, 247, 251)",
+    "headerHeight": 65,
+    "headers": [
+      "PUR-ORD-2026-00028",
+      "Contract Information"
+    ],
+    "inset": 32,
+    "mainScrollWidth": 1185,
+    "mainWidth": 1185,
+    "rfqExpanded": true,
+    "sections": [
+      "Workspace",
+      "Sourcing",
+      "Operations"
+    ],
+    "sidebarWidth": 240
+  }
+]

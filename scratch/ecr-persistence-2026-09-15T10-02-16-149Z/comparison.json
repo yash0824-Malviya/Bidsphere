@@ -1,0 +1,73 @@
+{
+  "ecr": "ECR-2026-100010",
+  "stageBefore": "Engineering Review",
+  "stageAfter": "Engineering Review",
+  "comparison": [
+    {
+      "field": "ecr_business_case",
+      "submitted": {
+        "type": "undefined"
+      },
+      "response": {
+        "type": "null",
+        "value": null
+      },
+      "persisted": {
+        "type": "undefined"
+      },
+      "strictResponseMatches": false,
+      "meaningfulValueMatches": true
+    },
+    {
+      "field": "rfq_required",
+      "submitted": {
+        "type": "string",
+        "value": ""
+      },
+      "response": {
+        "type": "string",
+        "value": ""
+      },
+      "persisted": {
+        "type": "string",
+        "value": ""
+      },
+      "strictResponseMatches": true,
+      "meaningfulValueMatches": true
+    },
+    {
+      "field": "rfq_decision_reason",
+      "submitted": {
+        "type": "undefined"
+      },
+      "response": {
+        "type": "null",
+        "value": null
+      },
+      "persisted": {
+        "type": "undefined"
+      },
+      "strictResponseMatches": false,
+      "meaningfulValueMatches": true
+    },
+    {
+      "field": "ecr_workflow_version",
+      "submitted": {
+        "type": "string",
+        "value": "extended_v1"
+      },
+      "response": {
+        "type": "string",
+        "value": "extended_v1"
+      },
+      "persisted": {
+        "type": "string",
+        "value": "extended_v1"
+      },
+      "strictResponseMatches": true,
+      "meaningfulValueMatches": true
+    }
+  ],
+  "firstStrictMismatch": "ecr_business_case",
+  "impactSupplierApprovalDataPreserved": true
+}

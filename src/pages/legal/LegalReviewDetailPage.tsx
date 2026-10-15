@@ -1,26 +1,28 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import {
+  AlertCircle,
   AlertTriangle,
   ArrowLeft,
-  Award,
-  Bot,
   Building2,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock,
   DollarSign,
+  Eye,
   FileText,
   Gavel,
-  Info,
+  HelpCircle,
   Layers,
   Loader2,
   Scale,
+  ShieldAlert,
   ShieldCheck,
   User,
+  X,
   XCircle,
 } from "lucide-react";
 
@@ -31,22 +33,18 @@ const LegalPdfViewer = lazy(
 import {
   getRFQ,
   getSupplierQuotations,
-  getSupplierQuotation,
   fetchRawSQ,
 } from "../../api/sourcing";
-import { resolveSupplierLegalDocs } from "../../utils/supplierLegalDocs";
 import {
   getLegalDocs,
   updateLegalDocs,
   submitLegalReview,
+  saveLegalChecklist,
+  requestLegalChanges,
+  getLegalSignatureEligibility,
 } from "../../api/legalDocs";
-import type { LegalDocumentItemSummary, LegalDocumentSet } from "../../api/legalDocs";
+import type { LegalDocumentSet } from "../../api/legalDocs";
 import { invalidateApprovalWorkflow } from "../../api/approvalWorkflow";
-import {
-  triggerFinanceReviewRequired,
-  triggerLegalDocumentsRequested,
-} from "../../api/notifications";
-import { getFullFileUrl } from "../../api/legalDocsStorage";
 import { resolveEsignBundle } from "../../api/legalEsign";
 import { getLatestAnalysisSnapshot } from "../../api/supplierScoringResults";
 import { useAuthStore } from "../../store/authStore";
@@ -56,22 +54,109 @@ import { AppLoading, EnterpriseError, FadeIn } from "../../components/enterprise
 import SlaStageBadge from "../../components/sla/SlaStageBadge";
 import type { RFQ, SupplierQuotation, AIRecommendation } from "../../types/erpnext";
 import {
-  getDocReviewProgress,
-  getDocSignatureUiStatus,
-  hasAnyLegalSignature,
   hasDocSignature,
+  getRequiredLegalDocumentKeys,
+  isLegalDocumentVerified,
+  isLegalReviewExecuted,
+  isFinanceApproved,
+  isLegalApproved,
+  canFinalLegalApprove,
   type LegalDocKey,
-  type LegalEsignBundle,
 } from "../../types/legalEsign";
 
-/**
- * Local decision-status type matching the ERPNext "Legal Document Review"
- * DocType's `review_status` field EXACTLY. This is intentionally distinct
- * from `LegalReviewStatus` (types/erpnext.ts), which belongs to the legacy
- * RFQ-workflow system — this page is now driven ONLY by the DocType, which
- * is the single source of truth for the review verdict.
- */
 type DocReviewStatus = "Pending" | "Approved" | "Rejected";
+
+export type ChecklistStatus =
+  | "Pending"
+  | "Compliant"
+  | "Non-Compliant"
+  | "Exception"
+  | "Not Applicable"
+  | "Requires Clarification";
+
+export interface CheckpointExceptionDetails {
+  description: string;
+  businessImpact?: string;
+  requiredResolution?: string;
+  severity: "Low" | "Medium" | "High" | "Critical";
+}
+
+export interface CheckpointClarificationDetails {
+  inquiry: string;
+  owner?: string;
+  dueDate?: string;
+}
+
+export interface CheckpointItem {
+  id: string;
+  point: string;
+  category: string;
+  status: ChecklistStatus;
+  remarks: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  exception?: CheckpointExceptionDetails;
+  clarification?: CheckpointClarificationDetails;
+}
+
+const INITIAL_CHECKPOINTS: CheckpointItem[] = [
+  {
+    id: "rfq_terms",
+    point: "RFQ Terms & Conditions",
+    category: "Commercial & Statutory Covenants",
+    status: "Pending",
+    remarks: "",
+  },
+  {
+    id: "sq_terms",
+    point: "Supplier Quotation Terms",
+    category: "Commercial & Statutory Covenants",
+    status: "Pending",
+    remarks: "",
+  },
+  {
+    id: "supplier_docs",
+    point: "Supplier Legal Documentation",
+    category: "Instruments & Verification",
+    status: "Pending",
+    remarks: "",
+  },
+  {
+    id: "nda_confidentiality",
+    point: "NDA / Confidentiality Requirements",
+    category: "Instruments & Verification",
+    status: "Pending",
+    remarks: "",
+  },
+  {
+    id: "compliance_declarations",
+    point: "Compliance Declarations",
+    category: "Regulatory & Integrity Covenants",
+    status: "Pending",
+    remarks: "",
+  },
+  {
+    id: "regulatory_requirements",
+    point: "Regulatory Requirements",
+    category: "Regulatory & Integrity Covenants",
+    status: "Pending",
+    remarks: "",
+  },
+  {
+    id: "commercial_exceptions",
+    point: "Commercial / Legal Exceptions",
+    category: "Risk & Governance",
+    status: "Pending",
+    remarks: "",
+  },
+  {
+    id: "contractual_requirements",
+    point: "Contractual Requirements",
+    category: "Risk & Governance",
+    status: "Pending",
+    remarks: "",
+  },
+];
 
 /* -------------------------------------------------------------------------- */
 /*  Helpers                                                                    */
@@ -120,17 +205,46 @@ export default function LegalReviewDetailPage() {
   const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
 
-  const [legalDocs, setLegalDocs] = useState<LegalDocumentSet | null>(null);
-  const [loadingDocs, setLoadingDocs] = useState(true);
+  const [loadedLegalDocs, setLoadedLegalDocs] = useState<LegalDocumentSet | null>(null);
+  const reviewLoadGeneration = useRef(0);
+  const setLegalDocs = useCallback((next: LegalDocumentSet | null) => {
+    setLoadedLegalDocs(current => {
+      // Do not let an older in-flight read overwrite a persisted verification.
+      if (current?.name === next?.name && current?.modified && next?.modified && next.modified < current.modified) return current;
+      return next;
+    });
+  }, []);
+  const isAuthorizedLegalSigner = user?.role === "legal" || user?.role === "admin";
+  const signatureEligibility = useQuery({
+    queryKey: ["legal-signature-eligibility", loadedLegalDocs?.name, loadedLegalDocs?.modified],
+    queryFn: () => getLegalSignatureEligibility(loadedLegalDocs!.name!),
+    enabled: Boolean(loadedLegalDocs?.name && isAuthorizedLegalSigner),
+    staleTime: 0,
+    retry: false,
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
+    refetchOnMount: "always",
+  });
+  // The freshly fetched record drives BOTH the badges and signing gate. Keep
+  // the last mutation/load as the query-key anchor to avoid a refetch loop.
+  const eligibilitySnapshot = signatureEligibility.data?.record && signatureEligibility.data.record.name === loadedLegalDocs?.name &&
+    !(loadedLegalDocs?.modified && signatureEligibility.data.record.modified && signatureEligibility.data.record.modified < loadedLegalDocs.modified)
+    ? signatureEligibility.data : undefined;
+  const legalDocs = eligibilitySnapshot?.record ?? loadedLegalDocs;
+  const eligibilityFresh = Boolean(isAuthorizedLegalSigner && signatureEligibility.isSuccess &&
+    !signatureEligibility.isFetching && !signatureEligibility.isError && eligibilitySnapshot);
+  const esignBundle = useMemo(() => resolveEsignBundle(legalDocs?.name, legalDocs?.esign_envelope), [legalDocs?.name, legalDocs?.esign_envelope]);
   const [viewerDocKey, setViewerDocKey] = useState<LegalDocKey | null>(null);
-  const [esignBundle, setEsignBundle] = useState<LegalEsignBundle | null>(null);
-  const [showSigRequiredWarning, setShowSigRequiredWarning] = useState(false);
+  const [showReviewRequiredWarning, setShowReviewRequiredWarning] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     summary: true,
     supplier: true,
-    ai: false,
+    classification: true,
     checklist: true,
+    documents: true,
+    exceptions: true,
     notes: true,
+    ai: false,
     timeline: false,
     actions: true,
   });
@@ -234,54 +348,23 @@ export default function LegalReviewDetailPage() {
   }, [sqName, legalDocs?.sq_name, selectedSupplier, quotations]);
 
   useEffect(() => {
+    const generation = ++reviewLoadGeneration.current;
+    let cancelled = false;
     const load = async () => {
       const lookupSq = sqName ?? selectedSQName;
       if (!lookupSq) {
         if (!sqName) {
           setLegalDocs(null);
-          setLoadingDocs(false);
         }
         return;
       }
-      setLoadingDocs(true);
-      let docs = await getLegalDocs(lookupSq);
-      // Fallback: if the review record is missing any file URL (e.g. the copy
-      // from the Supplier Quotation at winner-selection didn't run), pull the
-      // URLs straight from the SQ custom fields so Procurement always sees the
-      // supplier's uploaded PDFs. Display-only — approve/view flags still
-      // persist against the review record by name.
-      if (
-        docs &&
-        (!docs.terms_file_url ||
-          !docs.warranty_file_url ||
-          !docs.insurance_file_url)
-      ) {
-        try {
-          const sq = await getSupplierQuotation(lookupSq);
-          const resolved = resolveSupplierLegalDocs(sq, docs);
-          const byKey = Object.fromEntries(resolved.map((d) => [d.key, d.url]));
-          docs = {
-            ...docs,
-            terms_file_url: docs.terms_file_url || byKey.terms || undefined,
-            warranty_file_url:
-              docs.warranty_file_url || byKey.warranty || undefined,
-            insurance_file_url:
-              docs.insurance_file_url || byKey.insurance || undefined,
-          };
-        } catch {
-          /* keep whatever the review record already had */
-        }
-      }
-      // eslint-disable-next-line no-console
-      console.log("[LegalReview] Loaded from ERPNext:", docs);
+      const docs = await getLegalDocs(lookupSq);
+      if (cancelled || generation !== reviewLoadGeneration.current) return;
       setLegalDocs(docs);
-      setEsignBundle(
-        resolveEsignBundle(docs?.name, docs?.esign_envelope),
-      );
-      setLoadingDocs(false);
     };
     void load();
-  }, [sqName, selectedSQName]);
+    return () => { cancelled = true; };
+  }, [sqName, selectedSQName, setLegalDocs]);
 
   const handleViewPdf = useCallback(
     async (field: LegalDocKey) => {
@@ -298,54 +381,79 @@ export default function LegalReviewDetailPage() {
       setViewerDocKey(field);
       setExpandedSections((prev) => ({ ...prev, checklist: true }));
 
-      if (legalDocs?.name) {
-        try {
-          const updated = await updateLegalDocs(legalDocs.name, {
-            [`${field}_viewed`]: 1,
-          } as Partial<LegalDocumentSet>);
-          setLegalDocs(updated);
-          setEsignBundle(
-            resolveEsignBundle(updated.name, updated.esign_envelope),
-          );
-        } catch {
-          toast.error("Could not mark document as viewed");
-        }
-      }
+
     },
     [legalDocs, viewerDocKey]
   );
 
+  const refreshLegalDocs = useCallback(async () => {
+    const lookupSq = sqName ?? selectedSQName;
+    if (!lookupSq) return;
+    const generation = reviewLoadGeneration.current;
+    const docs = await getLegalDocs(lookupSq);
+    if (generation !== reviewLoadGeneration.current) return;
+    if (docs) {
+      setLegalDocs(docs);
+    }
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["rfq", decodedId] }),
+      queryClient.invalidateQueries({ queryKey: ["supplier-quotations", decodedId] }),
+      queryClient.invalidateQueries({ queryKey: ["selected-sq-raw", selectedSQName] }),
+      queryClient.invalidateQueries({ queryKey: ["legal-document-reviews"] }),
+      queryClient.invalidateQueries({ queryKey: ["legal-signature-eligibility"] }),
+    ]);
+  }, [sqName, selectedSQName, decodedId, queryClient, setLegalDocs]);
+
   const handleApproveToggle = useCallback(
     async (field: "terms" | "warranty" | "insurance", checked: boolean) => {
       if (!legalDocs?.name) return;
-      if (checked && !hasDocSignature(esignBundle, field)) {
-        setShowSigRequiredWarning(true);
-        toast.error("Signature required before approving this document.");
+      if (checked && !esignBundle?.documents[field]?.viewedAt) {
+        setShowReviewRequiredWarning(true);
+        toast.error("Open and review the current PDF before marking it reviewed.");
         return;
       }
       try {
+        const generation = reviewLoadGeneration.current;
         const updated = await updateLegalDocs(legalDocs.name, {
           [`${field}_approved`]: checked ? 1 : 0,
         } as Partial<LegalDocumentSet>);
+        if (generation !== reviewLoadGeneration.current) return;
         setLegalDocs(updated);
+        await refreshLegalDocs();
       } catch {
         toast.error("Could not update approval status");
       }
     },
-    [legalDocs, esignBundle]
+    [legalDocs, esignBundle, refreshLegalDocs, setLegalDocs]
   );
 
-  const documentSigned = useMemo(() => {
-    if (hasAnyLegalSignature(esignBundle)) return true;
-    const status = String(legalDocs?.esign_status ?? "").toLowerCase();
-    if (status === "signed" || status === "locked") return true;
-    if (legalDocs?.esign_signed_by) return true;
-    return false;
-  }, [esignBundle, legalDocs]);
+  const attachedDocKeys = useMemo(() => {
+    return eligibilitySnapshot?.requiredDocumentKeys ?? getRequiredLegalDocumentKeys(legalDocs);
+  }, [eligibilitySnapshot, legalDocs]);
 
-  const canEsign =
-    (user?.role === "legal" || user?.role === "admin") &&
-    legalDocs?.review_status === "Pending";
+  const verifiedDocKeys = useMemo(() => {
+    return eligibilitySnapshot?.verifiedDocumentKeys ?? attachedDocKeys.filter((k) => isLegalDocumentVerified(legalDocs, k));
+  }, [eligibilitySnapshot, attachedDocKeys, legalDocs]);
+
+  const pendingDocKeys = eligibilitySnapshot?.pendingDocumentKeys ?? attachedDocKeys.filter(key => !verifiedDocKeys.includes(key));
+
+  const allInstrumentsVerified = useMemo(() => {
+    return attachedDocKeys.length > 0 && pendingDocKeys.length === 0;
+  }, [attachedDocKeys.length, pendingDocKeys.length]);
+
+  const documentsReviewed = useMemo(() => {
+    return attachedDocKeys.length > 0 && attachedDocKeys.every(key => legalDocs?.[`${key}_approved`] && esignBundle?.documents[key]?.viewedAt);
+  }, [attachedDocKeys, legalDocs, esignBundle]);
+
+  const financeApproved = useMemo(() => {
+    return isFinanceApproved(legalDocs);
+  }, [legalDocs]);
+
+  const legalApproved = useMemo(() => {
+    return isLegalApproved(legalDocs);
+  }, [legalDocs]);
+
+
 
   // Step 2: Fetch ONLY that single SQ as a raw object (not from list)
   const selectedSQQuery = useQuery<Record<string, unknown>>({
@@ -385,18 +493,196 @@ export default function LegalReviewDetailPage() {
     console.groupEnd();
   }, [rawSQ, selectedSQName]);
 
-  const itemSummary: LegalDocumentItemSummary[] = useMemo(() => {
-    if (!legalDocs?.item_summary) return [];
-    try {
-      const parsed = JSON.parse(legalDocs.item_summary);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  }, [legalDocs?.item_summary]);
-
-  /* ── Decision comments (mandatory; written to ERPNext on submit) ── */
+  /* ── Decision comments & conditions (written to ERPNext on submit) ── */
   const [actionReason, setActionReason] = useState("");
+  const [conditionsExceptions, setConditionsExceptions] = useState("");
+  const [showClarifyModal, setShowClarifyModal] = useState(false);
+  const [clarifyComments, setClarifyComments] = useState("");
+
+  /* ── Interactive Legal & Compliance Checklist State ── */
+  const [checklistDraft, setChecklistDraft] = useState<{ source: string; items: CheckpointItem[] } | null>(null);
+  const [savingChecklist, setSavingChecklist] = useState(false);
+  const checklistSource = `${legalDocs?.name || ""}:${legalDocs?.esign_envelope || ""}`;
+  const checkpoints = useMemo(() => {
+    if (checklistDraft?.source === checklistSource) return checklistDraft.items;
+    const saved = resolveEsignBundle(legalDocs?.name, legalDocs?.esign_envelope).reviewChecklist;
+    return INITIAL_CHECKPOINTS.map(item => ({ ...item, ...saved?.find(row => row.id === item.id) } as CheckpointItem));
+  }, [checklistDraft, checklistSource, legalDocs?.name, legalDocs?.esign_envelope]);
+  const setCheckpoints = useCallback((items: CheckpointItem[]) => {
+    setChecklistDraft({ source: checklistSource, items });
+  }, [checklistSource]);
+
+  const persistChecklist = useCallback(async (items: CheckpointItem[]) => {
+    if (!legalDocs?.name) throw new Error("No Legal Review record found.");
+    setSavingChecklist(true);
+    try {
+      const updated = await saveLegalChecklist(legalDocs.name, items);
+      setLegalDocs(updated);
+    } finally { setSavingChecklist(false); }
+  }, [legalDocs?.name, setLegalDocs]);
+
+  // Active item opened in Review Modal
+  const [activeReviewItem, setActiveReviewItem] = useState<CheckpointItem | null>(null);
+
+  // Review Modal edit state
+  const [reviewModalStatus, setReviewModalStatus] = useState<ChecklistStatus>("Pending");
+  const [reviewModalRemarks, setReviewModalRemarks] = useState("");
+  const [reviewModalException, setReviewModalException] = useState<CheckpointExceptionDetails>({
+    description: "",
+    businessImpact: "",
+    requiredResolution: "",
+    severity: "Medium",
+  });
+  const [reviewModalClarification, setReviewModalClarification] = useState<CheckpointClarificationDetails>({
+    inquiry: "",
+    owner: "Procurement / Supplier",
+    dueDate: "",
+  });
+
+  const handleOpenReviewModal = useCallback((item: CheckpointItem) => {
+    setActiveReviewItem(item);
+    setReviewModalStatus(item.status);
+    setReviewModalRemarks(item.remarks || "");
+    setReviewModalException(
+      item.exception || {
+        description: "",
+        businessImpact: "",
+        requiredResolution: "",
+        severity: "Medium",
+      }
+    );
+    setReviewModalClarification(
+      item.clarification || {
+        inquiry: "",
+        owner: "Procurement / Supplier",
+        dueDate: "",
+      }
+    );
+  }, []);
+
+  const handleSaveReviewModal = useCallback(async () => {
+    if (!activeReviewItem) return;
+
+    if (reviewModalStatus === "Exception" && !reviewModalException.description.trim()) {
+      toast.error("Please provide an Exception Description.");
+      return;
+    }
+
+    if (reviewModalStatus === "Requires Clarification" && !reviewModalClarification.inquiry.trim()) {
+      toast.error("Please specify the Clarification Inquiry.");
+      return;
+    }
+
+    const reviewerName = user?.name || user?.email || "Legal Manager";
+    const nowIso = new Date().toLocaleString("en-US", {
+      month: "short",
+      day: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    const updatedCheckpoints = checkpoints.map((chk) => {
+      if (chk.id !== activeReviewItem.id) return chk;
+      return {
+        ...chk,
+        status: reviewModalStatus,
+        remarks: reviewModalRemarks.trim(),
+        reviewedBy: reviewerName,
+        reviewedAt: nowIso,
+        exception: reviewModalStatus === "Exception" ? reviewModalException : undefined,
+        clarification: reviewModalStatus === "Requires Clarification" ? reviewModalClarification : undefined,
+      };
+    });
+
+    try { await persistChecklist(updatedCheckpoints); }
+    catch (err) { toast.error(err instanceof Error ? err.message : "Checklist could not be saved."); return; }
+
+    // If an exception was saved, automatically sync to conditionsExceptions field for visibility
+    if (reviewModalStatus === "Exception" && reviewModalException.description.trim()) {
+      const exceptionNote = `[${activeReviewItem.point}] ${reviewModalException.severity} Severity: ${reviewModalException.description.trim()}`;
+      setConditionsExceptions((prev) => {
+        if (!prev) return exceptionNote;
+        if (prev.includes(activeReviewItem.point)) return prev;
+        return `${prev}\n${exceptionNote}`;
+      });
+    }
+
+    toast.success(`Updated "${activeReviewItem.point}" to ${reviewModalStatus}`);
+    setActiveReviewItem(null);
+  }, [
+    activeReviewItem,
+    reviewModalStatus,
+    reviewModalRemarks,
+    reviewModalException,
+    reviewModalClarification,
+    user,
+    checkpoints,
+    persistChecklist,
+  ]);
+
+  const handleInlineStatusChange = useCallback(
+    async (id: string, newStatus: ChecklistStatus) => {
+      const reviewerName = user?.name || user?.email || "Legal Manager";
+      const nowIso = new Date().toLocaleString("en-US", {
+        month: "short",
+        day: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+
+      const updated = checkpoints.map((chk) => {
+        if (chk.id !== id) return chk;
+        return {
+          ...chk,
+          status: newStatus,
+          reviewedBy: reviewerName,
+          reviewedAt: nowIso,
+        };
+      });
+
+      try {
+        await persistChecklist(updated);
+        toast.success(`Checkpoint updated to ${newStatus}`);
+      } catch (err) { toast.error(err instanceof Error ? err.message : "Checklist could not be saved."); }
+    },
+    [checkpoints, persistChecklist, user]
+  );
+
+  const handleInlineRemarksChange = useCallback(
+    (id: string, newRemarks: string) => {
+      const updated = checkpoints.map((chk) => (chk.id === id ? { ...chk, remarks: newRemarks } : chk));
+      setCheckpoints(updated);
+    },
+    [checkpoints, setCheckpoints]
+  );
+
+  // Checklist Progress Metrics
+  const completedCount = useMemo(() => {
+    return checkpoints.filter((c) => c.status === "Compliant" || c.status === "Not Applicable").length;
+  }, [checkpoints]);
+
+  const pendingCount = useMemo(() => {
+    return checkpoints.filter((c) => c.status === "Pending").length;
+  }, [checkpoints]);
+
+  const compliantCount = useMemo(() => {
+    return checkpoints.filter((c) => c.status === "Compliant").length;
+  }, [checkpoints]);
+
+  const exceptionsCount = useMemo(() => {
+    return checkpoints.filter((c) => c.status === "Exception" || c.status === "Non-Compliant").length;
+  }, [checkpoints]);
+
+  const clarificationCount = useMemo(() => {
+    return checkpoints.filter((c) => c.status === "Requires Clarification").length;
+  }, [checkpoints]);
+
+  // Completion rule: All 8 checkpoints must be Compliant or Not Applicable
+  const isChecklistFullyApproved = useMemo(() => {
+    return checkpoints.length > 0 && checkpoints.every((c) => c.status === "Compliant" || c.status === "Not Applicable");
+  }, [checkpoints]);
 
   const toggleSection = useCallback((key: string) => {
     setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -405,21 +691,74 @@ export default function LegalReviewDetailPage() {
   /* ── Submission state — derived entirely from the ERPNext DocType.
    * `review_status` IS the single source of truth: "Pending" means the
    * decision hasn't been made yet; anything else means it's final. ── */
-  const submitted = legalDocs?.review_status !== undefined && legalDocs.review_status !== "Pending";
+  const submitted = savingChecklist || legalDocs?.review_status !== "Pending" || legalDocs?.current_owner === "Procurement" || !["legal", "admin"].includes(user?.role || "");
 
   const [submitting, setSubmitting] = useState(false);
 
-  const approvedCount = useMemo(() => {
-    return [
-      legalDocs?.terms_approved,
-      legalDocs?.warranty_approved,
-      legalDocs?.insurance_approved,
-    ].filter(Boolean).length;
-  }, [
-    legalDocs?.terms_approved,
-    legalDocs?.warranty_approved,
-    legalDocs?.insurance_approved,
-  ]);
+  const approvedCount = verifiedDocKeys.length;
+
+  const canEsign = useMemo(() => {
+    return eligibilityFresh && !savingChecklist && Boolean(eligibilitySnapshot?.eligible);
+  }, [eligibilityFresh, savingChecklist, eligibilitySnapshot?.eligible]);
+
+  const hasSignatures = useMemo(() => {
+    return isLegalReviewExecuted(legalDocs);
+  }, [legalDocs]);
+
+  const canApprove = useMemo(() => {
+    return Boolean(
+      isAuthorizedLegalSigner &&
+      !submitted &&
+      canFinalLegalApprove(legalDocs)
+    );
+  }, [isAuthorizedLegalSigner, submitted, legalDocs]);
+
+  const esignDisabledReason = useMemo(() => {
+    if (!isAuthorizedLegalSigner) {
+      return "You do not have permission to sign this document.";
+    }
+    if (signatureEligibility.isError) return "Unable to refresh signing eligibility. Refresh status before signing.";
+    if (!eligibilityFresh) return "Refreshing signing eligibility from ERPNext…";
+    if (savingChecklist) return "Wait for the current review update to finish.";
+    if (!allInstrumentsVerified) {
+      return "Verify all required supplier documents before signing.";
+    }
+    if (hasSignatures) return "Document has already been signed.";
+    if (!eligibilitySnapshot?.eligible) return eligibilitySnapshot?.reason || "Document workflow state does not permit e-signature.";
+    return undefined;
+  }, [isAuthorizedLegalSigner, signatureEligibility.isError, eligibilitySnapshot, eligibilityFresh, savingChecklist, allInstrumentsVerified, hasSignatures]);
+
+  useEffect(() => {
+    if (!legalDocs) return;
+    // Safe diagnostics: logs status metadata without credentials
+    // eslint-disable-next-line no-console
+    console.groupCollapsed(`[LegalGating] Status audit for ${legalDocs.name || decodedId}`);
+    // eslint-disable-next-line no-console
+    console.log("finance_status:", legalDocs.finance_status || "(empty)");
+    // eslint-disable-next-line no-console
+    console.log("legal_status:", legalDocs.review_status || "(empty)");
+    // eslint-disable-next-line no-console
+    console.log("workflow_state:", legalDocs.workflow_state || "(empty)");
+    // eslint-disable-next-line no-console
+    console.log("status:", rfq?.status || "(empty)");
+    // eslint-disable-next-line no-console
+    console.log("verification_status:", {
+      verified_count: verifiedDocKeys.length,
+      required_count: attachedDocKeys.length,
+      all_verified: allInstrumentsVerified,
+      terms_approved: legalDocs.terms_approved,
+      warranty_approved: legalDocs.warranty_approved,
+      insurance_approved: legalDocs.insurance_approved,
+    });
+    // eslint-disable-next-line no-console
+    console.log("signature_status:", {
+      canEsign,
+      hasSignatures,
+      esign_envelope_present: Boolean(legalDocs.esign_envelope),
+    });
+    // eslint-disable-next-line no-console
+    console.groupEnd();
+  }, [legalDocs, rfq, financeApproved, legalApproved, allInstrumentsVerified, verifiedDocKeys, attachedDocKeys, canEsign, hasSignatures, decodedId]);
 
   /* ── Loading / error states ── */
   if (rfqQuery.isLoading) {
@@ -443,7 +782,7 @@ export default function LegalReviewDetailPage() {
           error={rfqQuery.error ?? new Error("not found")}
           onRetry={() => void rfqQuery.refetch()}
           onBack={() => {
-            window.location.assign("/sourcing/legal-reviews");
+            window.location.assign("/legal/reviews");
           }}
           backLabel="Back"
         />
@@ -463,31 +802,36 @@ export default function LegalReviewDetailPage() {
   const selectedQuote = quotations.find(
     (q) => q.supplier === selectedSupplier || q.supplier_name === selectedSupplier
   );
-  const aiSupplier = aiAnalysis?.supplier_analysis?.find(
-    (s) => s.name === selectedSupplier
-  );
 
   const currentLegalStatus: DocReviewStatus = legalDocs?.review_status ?? "Pending";
 
   return (
-    <FadeIn className="mx-auto max-w-5xl">
+    <FadeIn className="mx-auto w-full max-w-[1360px] px-6 sm:px-8 py-6 space-y-6">
       {/* ── Header ── */}
-      <div className="mb-6">
+      <div className="border-b border-slate-200 pb-5">
         <Link
-          to="/sourcing/legal-reviews"
-          className="mb-3 inline-flex items-center gap-1.5 text-sm font-medium text-neutral-500 transition hover:text-primary"
+          to="/legal/reviews"
+          className="mb-3 inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 transition hover:text-primary-700"
         >
           <ArrowLeft className="h-4 w-4" /> Back to Legal Reviews
         </Link>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
-                <Scale className="h-5 w-5 text-primary" />
+          <div className="flex items-start gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-700 ring-1 ring-violet-200">
+              <Scale className="h-6 w-6" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2.5">
+                <h1 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
+                  RFQ Legal Review: {decodedId}
+                </h1>
+                <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                  {selectedSQName ? `Quotation: ${selectedSQName}` : selectedSupplier || "RFQ Review"}
+                </span>
               </div>
-              <p className="text-sm font-semibold text-neutral-700">
-                {parsed.title ?? decodedId}
+              <p className="mt-1 text-xs sm:text-sm text-slate-500">
+                Review RFQ terms, supplier documentation, compliance requirements, and legal conditions before commercial progression.
               </p>
             </div>
           </div>
@@ -518,39 +862,48 @@ export default function LegalReviewDetailPage() {
         </div>
       )}
 
-      <div className="space-y-4">
-        {/* ═══════════════ Section: RFQ Summary ═══════════════ */}
+      <div className="space-y-6">
+        {/* ═══════════════ Section 1: RFQ Summary (Full Width) ═══════════════ */}
         <CollapsibleSection
           id="summary"
           icon={FileText}
           title="RFQ Summary"
           expanded={expandedSections.summary}
           onToggle={toggleSection}
+          badge={
+            <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-700">
+              {rfqItems.length} {rfqItems.length === 1 ? "Item" : "Items"}
+            </span>
+          }
         >
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <InfoField label="RFQ Number" value={rfq.name} />
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <InfoField label="RFQ Number" value={rfq.name} highlight />
+            <InfoField label="Supplier Quotation" value={selectedSQName ?? legalDocs?.sq_name ?? "Pending"} />
             <InfoField label="Created By" value={formatRfqOwnerFromDoc(rfq)} />
+            <InfoField label="Company" value={rfq.company ?? "Bidsphere Corp"} />
             <InfoField label="Transaction Date" value={formatDate(rfq.transaction_date)} />
-            <InfoField label="Valid Till" value={parsed.validTill ?? "—"} />
-            <InfoField label="Status" value={rfq.status ?? "Draft"} />
-            <InfoField label="Company" value={rfq.company ?? "—"} />
+            <InfoField label="Valid Till" value={parsed.validTill ?? (rfq.valid_till ? formatDate(rfq.valid_till) : "—")} />
+            <InfoField label="Current Status" value={currentLegalStatus === "Pending" ? "Pending Legal Review" : currentLegalStatus} />
+            <InfoField label="Total Items" value={`${rfqItems.length} line items`} />
           </div>
+
           {parsed.body && (
-            <div className="mt-4 rounded-lg border border-neutral-100 bg-neutral-50 p-3">
-              <p className="text-xs font-semibold uppercase tracking-wider text-neutral-400 mb-1">
+            <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50/70 p-3.5">
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                 Message for Supplier
               </p>
-              <p className="text-sm leading-relaxed text-neutral-700 whitespace-pre-wrap">
+              <p className="text-sm leading-relaxed text-slate-700 whitespace-pre-wrap">
                 {parsed.body}
               </p>
             </div>
           )}
+
           {rfq.terms && (
-            <div className="mt-3 rounded-lg border border-neutral-100 bg-neutral-50 p-3">
-              <p className="text-xs font-semibold uppercase tracking-wider text-neutral-400 mb-1">
-                Terms & Conditions
+            <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/70 p-3.5">
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                RFQ Master Terms & Conditions
               </p>
-              <p className="text-sm leading-relaxed text-neutral-700 whitespace-pre-wrap">
+              <p className="text-sm leading-relaxed text-slate-700 whitespace-pre-wrap">
                 {rfq.terms}
               </p>
             </div>
@@ -558,32 +911,49 @@ export default function LegalReviewDetailPage() {
 
           {/* Items Table */}
           {rfqItems.length > 0 && (
-            <div className="mt-4">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
-                Items ({rfqItems.length})
-              </p>
-              <div className="overflow-x-auto rounded-lg border border-neutral-200">
-                <table className="w-full text-sm">
+            <div className="mt-5">
+              <div className="mb-2.5 flex items-center justify-between">
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                  RFQ Line Items ({rfqItems.length})
+                </p>
+                <span className="text-[11px] text-slate-400">Standard procurement item specifications</span>
+              </div>
+              <div className="w-full max-w-full overflow-hidden rounded-xl border border-slate-200">
+                <table className="w-full table-fixed border-collapse text-left text-sm">
+                  <colgroup>
+                    <col className="w-[28%]" />
+                    <col className="w-[36%]" />
+                    <col className="w-[12%]" />
+                    <col className="w-[10%]" />
+                    <col className="w-[14%]" />
+                  </colgroup>
                   <thead>
-                    <tr className="border-b border-neutral-100 bg-neutral-50/50">
-                      <th className="px-3 py-2 text-left text-xs font-semibold text-neutral-500">Item</th>
-                      <th className="px-3 py-2 text-right text-xs font-semibold text-neutral-500">Qty</th>
-                      <th className="px-3 py-2 text-left text-xs font-semibold text-neutral-500">UOM</th>
-                      <th className="px-3 py-2 text-left text-xs font-semibold text-neutral-500">Schedule Date</th>
+                    <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-semibold uppercase tracking-wider text-slate-600">
+                      <th className="px-3.5 py-2.5">Item Code</th>
+                      <th className="px-3.5 py-2.5">Item Name</th>
+                      <th className="px-3.5 py-2.5 text-right">Quantity</th>
+                      <th className="px-3.5 py-2.5">UOM</th>
+                      <th className="px-3.5 py-2.5">Schedule Date</th>
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className="divide-y divide-slate-100">
                     {rfqItems.map((item, idx) => (
-                      <tr key={idx} className="border-b border-neutral-50 last:border-0">
-                        <td className="px-3 py-2">
-                          <p className="font-medium text-neutral-900">{item.item_code}</p>
-                          {item.item_name && item.item_name !== item.item_code && (
-                            <p className="text-xs text-neutral-500">{item.item_name}</p>
-                          )}
+                      <tr key={idx} className="hover:bg-slate-50/60 transition-colors">
+                        <td className="truncate px-3.5 py-2.5 text-xs font-semibold text-slate-900" title={item.item_code}>
+                          {item.item_code}
                         </td>
-                        <td className="px-3 py-2 text-right tabular-nums font-medium">{item.qty}</td>
-                        <td className="px-3 py-2 text-neutral-600">{item.uom ?? "—"}</td>
-                        <td className="px-3 py-2 text-neutral-600">{item.schedule_date ? formatDate(item.schedule_date) : "—"}</td>
+                        <td className="truncate px-3.5 py-2.5 text-xs text-slate-700" title={item.item_name || item.description || item.item_code}>
+                          {item.item_name || item.description || "—"}
+                        </td>
+                        <td className="whitespace-nowrap px-3.5 py-2.5 text-right text-xs font-medium text-slate-900 tabular-nums">
+                          {item.qty}
+                        </td>
+                        <td className="whitespace-nowrap px-3.5 py-2.5 text-xs text-slate-600">
+                          {item.uom ?? "Nos"}
+                        </td>
+                        <td className="whitespace-nowrap px-3.5 py-2.5 text-xs text-slate-600">
+                          {item.schedule_date ? formatDate(item.schedule_date) : "—"}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -593,500 +963,558 @@ export default function LegalReviewDetailPage() {
           )}
         </CollapsibleSection>
 
-        {/* ═══════════════ Section: Supplier Information ═══════════════ */}
-        <CollapsibleSection
-          id="supplier"
-          icon={Building2}
-          title="Supplier & Quotation Details"
-          expanded={expandedSections.supplier}
-          onToggle={toggleSection}
-        >
-          {selectedSupplier ? (
+        {/* ═══════════════ Section 2: Side-by-side 2-Column Grid ═══════════════ */}
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          {/* Card A: Supplier & Quotation Details */}
+          <CollapsibleSection
+            id="supplier"
+            icon={Building2}
+            title="Supplier & Quotation Details"
+            expanded={expandedSections.supplier}
+            onToggle={toggleSection}
+          >
+            {selectedSupplier ? (
+              <div className="space-y-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <InfoField
+                    label="Selected Supplier"
+                    value={selectedSupplier}
+                    highlight
+                  />
+                  <InfoField
+                    label="Supplier ID"
+                    value={selectedQuote?.supplier ?? selectedSupplier}
+                  />
+                  <InfoField
+                    label="Quotation Value"
+                    value={
+                      selectedQuote?.grand_total != null
+                        ? formatCurrency(selectedQuote.grand_total)
+                        : legalDocs?.grand_total != null
+                        ? formatCurrency(legalDocs.grand_total)
+                        : "—"
+                    }
+                    highlight
+                  />
+                  <InfoField
+                    label="Currency"
+                    value="USD ($)"
+                  />
+                  <InfoField
+                    label="Submitted By"
+                    value={legalDocs?.procurement_manager ?? rfq?.owner ?? "Procurement"}
+                  />
+                  <InfoField
+                    label="Submission Date"
+                    value={legalDocs?.submission_date ? formatDate(legalDocs.submission_date) : (selectedQuote?.transaction_date ? formatDate(selectedQuote.transaction_date) : "—")}
+                  />
+                  <InfoField
+                    label="Contact Person"
+                    value={
+                      rfqSuppliers.find((s) => s.supplier === selectedSupplier)?.contact ||
+                      (selectedQuote as unknown as Record<string, string>)?.contact_display ||
+                      "Supplier Representative"
+                    }
+                  />
+                  <InfoField
+                    label="Contact Email"
+                    value={
+                      rfqSuppliers.find((s) => s.supplier === selectedSupplier)?.email_id ||
+                      (selectedQuote as unknown as Record<string, string>)?.contact_email ||
+                      "legal-contact@supplier.com"
+                    }
+                  />
+                </div>
+
+                {legalDocs?.supplier_notes && (
+                  <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                      Supplier Notes
+                    </p>
+                    <p className="text-xs leading-relaxed text-slate-700 whitespace-pre-wrap">
+                      {legalDocs.supplier_notes}
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center gap-3 rounded-lg bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                No supplier has been selected for this RFQ review yet.
+              </div>
+            )}
+          </CollapsibleSection>
+
+          {/* Card B: RFQ Classification & Commercial Terms */}
+          <CollapsibleSection
+            id="classification"
+            icon={Layers}
+            title="RFQ Classification & Commercial Terms"
+            expanded={expandedSections.classification}
+            onToggle={toggleSection}
+          >
             <div className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid gap-4 sm:grid-cols-2">
                 <InfoField
-                  label="Selected Supplier"
-                  value={selectedSupplier}
-                  highlight
-                />
-                <InfoField
-                  label="Quotation Value"
+                  label="Procurement Category"
                   value={
-                    selectedQuote?.grand_total != null
-                      ? formatCurrency(selectedQuote.grand_total)
-                      : legalDocs?.grand_total != null
-                      ? formatCurrency(legalDocs.grand_total)
-                      : "—"
+                    rfq.custom_procurement_category ||
+                    (rfq as unknown as Record<string, unknown>)?.category as string ||
+                    "Direct Materials / Sourcing"
                   }
                   highlight
                 />
                 <InfoField
-                  label="Submitted By"
-                  value={legalDocs?.procurement_manager ?? rfq?.owner ?? "—"}
-                />
-                <InfoField label="Company" value={legalDocs?.company} />
-                <InfoField
-                  label="Procurement Manager"
-                  value={legalDocs?.procurement_manager}
-                />
-                <InfoField
-                  label="Submission Date"
-                  value={legalDocs?.submission_date ? formatDate(legalDocs.submission_date) : undefined}
+                  label="RFQ Type"
+                  value={
+                    rfqItems.some((i) => i.custom_2d_drawing || i.custom_engineering_attachments)
+                      ? "Custom Engineered / Sourcing"
+                      : "Standard Direct Commercial"
+                  }
                 />
                 <InfoField
-                  label="Quote Valid Till"
-                  value={legalDocs?.valid_till ? formatDate(legalDocs.valid_till) : undefined}
+                  label="Priority"
+                  value={
+                    (selectedQuote?.grand_total ?? legalDocs?.grand_total ?? 0) > 10000
+                      ? "High Priority"
+                      : "Standard"
+                  }
                 />
-                <InfoField label="Payment Terms" value={legalDocs?.payment_terms} />
+                <InfoField
+                  label="Incoterms"
+                  value={
+                    (selectedQuote as unknown as Record<string, unknown>)?.incoterm as string ||
+                    (legalDocs as unknown as Record<string, unknown>)?.incoterm as string ||
+                    "DAP - Delivered at Place"
+                  }
+                />
+                <InfoField
+                  label="Payment Terms"
+                  value={legalDocs?.payment_terms || (selectedQuote as unknown as Record<string, unknown>)?.payment_terms_template as string || "Net 45 Days"}
+                />
+                <InfoField
+                  label="Lead Time"
+                  value={
+                    selectedQuote?.items?.[0]?.delivery_days != null
+                      ? `${selectedQuote.items[0].delivery_days} Days`
+                      : "14-21 Business Days"
+                  }
+                />
               </div>
 
-              {legalDocs?.supplier_notes && (
-                <div className="rounded-lg border border-neutral-100 bg-neutral-50 p-3">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-neutral-400 mb-1">
-                    Supplier Notes
-                  </p>
-                  <p className="text-sm leading-relaxed text-neutral-700 whitespace-pre-wrap">
-                    {legalDocs.supplier_notes}
-                  </p>
-                </div>
-              )}
-
-              {/* Supplier quotation items */}
-              {selectedQuote && (selectedQuote.items ?? []).length > 0 ? (
-                <div>
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
-                    Quoted Line Items
-                  </p>
-                  <div className="overflow-x-auto rounded-lg border border-neutral-200">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-neutral-100 bg-neutral-50/50">
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-neutral-500">Item</th>
-                          <th className="px-3 py-2 text-right text-xs font-semibold text-neutral-500">Qty</th>
-                          <th className="px-3 py-2 text-right text-xs font-semibold text-neutral-500">Rate</th>
-                          <th className="px-3 py-2 text-right text-xs font-semibold text-neutral-500">Amount</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(selectedQuote.items ?? []).map((item, idx) => (
-                          <tr key={idx} className="border-b border-neutral-50 last:border-0">
-                            <td className="px-3 py-2 font-medium text-neutral-900">{item.item_code}</td>
-                            <td className="px-3 py-2 text-right tabular-nums">{item.qty}</td>
-                            <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(item.rate)}</td>
-                            <td className="px-3 py-2 text-right tabular-nums font-semibold">{formatCurrency(item.amount ?? item.qty * item.rate)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                      <tfoot>
-                        <tr className="border-t border-neutral-200 bg-neutral-50/50">
-                          <td colSpan={3} className="px-3 py-2 text-right text-xs font-bold uppercase text-neutral-500">
-                            Grand Total
-                          </td>
-                          <td className="px-3 py-2 text-right tabular-nums font-bold text-neutral-900">
-                            {formatCurrency(selectedQuote.grand_total ?? 0)}
-                          </td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-                </div>
-              ) : itemSummary.length > 0 ? (
-                <div>
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
-                    Quoted Line Items
-                  </p>
-                  <div className="overflow-x-auto rounded-lg border border-neutral-200">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-neutral-100 bg-neutral-50/50">
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-neutral-500">Item</th>
-                          <th className="px-3 py-2 text-right text-xs font-semibold text-neutral-500">Qty</th>
-                          <th className="px-3 py-2 text-left text-xs font-semibold text-neutral-500">UOM</th>
-                          <th className="px-3 py-2 text-right text-xs font-semibold text-neutral-500">Rate</th>
-                          <th className="px-3 py-2 text-right text-xs font-semibold text-neutral-500">Amount</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {itemSummary.map((item, idx) => (
-                          <tr key={idx} className="border-b border-neutral-50 last:border-0">
-                            <td className="px-3 py-2 font-medium text-neutral-900">
-                              {item.item_code}
-                              {item.item_name && item.item_name !== item.item_code && (
-                                <span className="ml-1 text-xs text-neutral-500">({item.item_name})</span>
-                              )}
-                            </td>
-                            <td className="px-3 py-2 text-right tabular-nums">{item.qty}</td>
-                            <td className="px-3 py-2 text-neutral-600">{item.uom ?? "—"}</td>
-                            <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(item.rate)}</td>
-                            <td className="px-3 py-2 text-right tabular-nums font-semibold">
-                              {formatCurrency(item.amount ?? item.qty * item.rate)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                      <tfoot>
-                        <tr className="border-t border-neutral-200 bg-neutral-50/50">
-                          <td colSpan={4} className="px-3 py-2 text-right text-xs font-bold uppercase text-neutral-500">
-                            Grand Total
-                          </td>
-                          <td className="px-3 py-2 text-right tabular-nums font-bold text-neutral-900">
-                            {formatCurrency(legalDocs?.grand_total ?? 0)}
-                          </td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-                </div>
-              ) : null}
-
-              {/* Other suppliers invited */}
-              {rfqSuppliers.length > 1 && (
-                <div>
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
-                    All Invited Suppliers ({rfqSuppliers.length})
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {rfqSuppliers.map((s) => (
-                      <span
-                        key={s.supplier}
-                        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
-                          s.supplier === selectedSupplier
-                            ? "bg-primary/10 text-primary ring-1 ring-primary/20"
-                            : "bg-neutral-100 text-neutral-600"
-                        }`}
-                      >
-                        {s.supplier === selectedSupplier && <Award className="h-3 w-3" />}
-                        {s.supplier}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="flex items-center gap-3 rounded-lg bg-warning-50 px-4 py-3 text-sm text-warning-700">
-              <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-              No supplier has been selected for this RFQ yet.
-            </div>
-          )}
-        </CollapsibleSection>
-
-        {/* ═══════════════ Section: AI Recommendation ═══════════════ */}
-        <CollapsibleSection
-          id="ai"
-          icon={Bot}
-          title="AI Recommendation & Risk Assessment"
-          expanded={expandedSections.ai}
-          onToggle={toggleSection}
-          badge={
-            aiAnalysis ? (
-              <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
-                AI Analysis Available
-              </span>
-            ) : undefined
-          }
-        >
-          {aiAnalysis ? (
-            <div className="space-y-4">
-              {/* Recommendation summary */}
-              <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
-                <div className="flex items-start gap-3">
-                  <Bot className="mt-0.5 h-5 w-5 flex-shrink-0 text-primary" />
-                  <div>
-                    <p className="text-sm font-semibold text-neutral-900">
-                      AI Recommends: {aiAnalysis.recommended_supplier}
-                    </p>
-                    <p className="mt-1 text-sm leading-relaxed text-neutral-600">
-                      {aiAnalysis.recommendation_summary}
-                    </p>
-                    <p className="mt-2 text-xs text-neutral-500">
-                      Confidence: {aiAnalysis.confidence_score}%
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Risk flags */}
-              {(aiAnalysis.risk_flags ?? []).length > 0 && (
-                <div>
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
-                    Risk Flags
-                  </p>
-                  <div className="space-y-2">
-                    {(aiAnalysis.risk_flags ?? []).map((flag, idx) => (
-                      <div
-                        key={idx}
-                        className={`flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-sm ${
-                          flag.severity === "high"
-                            ? "border-danger-200 bg-danger-50 text-danger-800"
-                            : flag.severity === "medium"
-                            ? "border-warning-200 bg-warning-50 text-warning-800"
-                            : "border-neutral-200 bg-neutral-50 text-neutral-700"
-                        }`}
-                      >
-                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
-                        <div>
-                          <span className="mr-1.5 text-[10px] font-bold uppercase">{flag.severity}</span>
-                          <span className="mr-1.5 text-[10px] font-bold uppercase text-neutral-400">
-                            {flag.type}
-                          </span>
-                          <span>{flag.message}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Selected supplier scores */}
-              {aiSupplier && (
-                <div>
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-400">
-                    Selected Supplier Scores
-                  </p>
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                    <ScoreCard label="Cost" value={aiSupplier.score.cost} />
-                    <ScoreCard label="Delivery" value={aiSupplier.score.delivery} />
-                    <ScoreCard label="Reliability" value={aiSupplier.score.reliability} />
-                    <ScoreCard label="Overall" value={aiSupplier.score.overall} highlight />
-                  </div>
-                </div>
-              )}
-
-              {/* Final verdict */}
-              <div className="rounded-lg bg-neutral-50 p-3">
-                <p className="text-xs font-semibold uppercase tracking-wider text-neutral-400 mb-1">
-                  Final Verdict
+              <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  Legal Compliance Requirement
                 </p>
-                <p className="text-sm leading-relaxed text-neutral-700">
-                  {aiAnalysis.final_verdict}
+                <p className="text-xs leading-relaxed text-slate-700">
+                  Direct commercial supplier contracts and purchase commitments exceed corporate threshold and require strict adherence to Netlink Standard Terms, warranty covenants, and liability coverage.
                 </p>
               </div>
             </div>
-          ) : (
-            <div className="flex items-center gap-3 rounded-lg bg-neutral-50 px-4 py-6 text-sm text-neutral-500">
-              <Info className="h-5 w-5 flex-shrink-0" />
-              No AI analysis has been performed for this RFQ yet.
-            </div>
-          )}
-        </CollapsibleSection>
+          </CollapsibleSection>
+        </div>
 
-        {/* ═══════════════ Section: Legal Document Review ═══════════════ */}
+        {/* ═══════════════ Section 3: Legal & Compliance Review Checklist ═══════════════ */}
         <CollapsibleSection
           id="checklist"
           icon={ShieldCheck}
-          title="Legal Document Review"
+          title="Legal & Compliance Review Checklist"
           expanded={expandedSections.checklist}
           onToggle={toggleSection}
           badge={
             <span
-              className="rounded-full px-2 py-0.5 text-[10px] font-bold"
-              style={{
-                background: approvedCount === 3 ? '#dcfce7' : '#fef3c7',
-                color: approvedCount === 3 ? '#15803d' : '#92400e',
-              }}
+              className={`rounded-full px-2.5 py-0.5 text-xs font-bold ring-1 ${
+                isChecklistFullyApproved
+                  ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                  : "bg-amber-50 text-amber-700 ring-amber-200"
+              }`}
             >
-              {approvedCount}/3
+              {completedCount} / 8 Completed
             </span>
           }
         >
-          {!loadingDocs && !legalDocs ? (
-            <div style={{ padding: '40px', textAlign: 'center', color: '#9ca3af' }}>
-              <div style={{ fontSize: '40px' }}>📭</div>
-              <p className="font-semibold text-neutral-600 mt-2">No documents submitted yet for this Supplier Quotation.</p>
-              <p style={{ fontSize: '12px', marginTop: '4px' }}>The supplier hasn&apos;t completed their quotation with legal attachments.</p>
-            </div>
-          ) : loadingDocs ? (
-            <div className="flex justify-center py-12">
-              <Loader2 className="h-6 w-6 animate-spin text-neutral-400" />
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#f9fafb', padding: '12px 16px', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
-                <span style={{ fontSize: '13px', fontWeight: 600, color: '#374151' }}>Approval Progress</span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <div style={{ width: '100px', height: '8px', background: '#E2E8F0', borderRadius: '4px', overflow: 'hidden' }}>
-                    <div style={{ width: `${(approvedCount / 3) * 100}%`, height: '100%', background: approvedCount === 3 ? '#2D6A4F' : '#f59e0b', transition: 'width 0.3s ease' }} />
+          <div className="space-y-4">
+            {/* Progress Header & Counter Badges */}
+            <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                      Legal Review Progress:
+                    </span>
+                    <span className="rounded-md bg-blue-600 px-2 py-0.5 text-xs font-extrabold text-white">
+                      {completedCount} / 8 Completed
+                    </span>
                   </div>
-                  <span style={{ fontSize: '13px', fontWeight: 700, color: approvedCount === 3 ? '#2D6A4F' : '#f59e0b' }}>{approvedCount}/3</span>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Verification of statutory, commercial, and contractual covenants before formal procurement contract award.
+                  </p>
+                </div>
+
+                {/* Progress Badges */}
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-slate-200/70 px-2.5 py-0.5 font-bold text-slate-700">
+                    <Clock className="h-3 w-3 text-slate-500" />
+                    Pending: {pendingCount}
+                  </span>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 font-bold text-emerald-800">
+                    <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+                    Compliant: {compliantCount}
+                  </span>
+                  {exceptionsCount > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2.5 py-0.5 font-bold text-rose-800">
+                      <AlertTriangle className="h-3 w-3 text-rose-600" />
+                      Exceptions: {exceptionsCount}
+                    </span>
+                  )}
+                  {clarificationCount > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-0.5 font-bold text-amber-800">
+                      <HelpCircle className="h-3 w-3 text-amber-600" />
+                      Clarifications: {clarificationCount}
+                    </span>
+                  )}
                 </div>
               </div>
 
-              {[
-                { shortField: 'terms' as const, label: 'Terms & Conditions', icon: '📄' },
-                { shortField: 'warranty' as const, label: 'Warranty Document', icon: '🛡️' },
-                { shortField: 'insurance' as const, label: 'Insurance Certificate', icon: '🏥' }
-              ].map(({ shortField, label, icon }) => {
-                const fileUrl = legalDocs?.[`${shortField}_file_url`];
-                const pdfName = legalDocs?.[`${shortField}_file_name` as keyof LegalDocumentSet] as string | undefined
-                  || (fileUrl ? fileUrl.split('/').pop() : undefined);
-                const note = legalDocs?.[`${shortField}_note` as keyof LegalDocumentSet] as string | undefined;
-                const hasPdf = !!fileUrl;
-                const isViewed = !!legalDocs?.[`${shortField}_viewed` as keyof LegalDocumentSet];
-                const isApproved = !!legalDocs?.[`${shortField}_approved` as keyof LegalDocumentSet];
-                const docSigned = hasDocSignature(esignBundle, shortField);
-                const sigUi = getDocSignatureUiStatus({
-                  reviewStatus: legalDocs?.review_status,
-                  docApproved: isApproved,
-                  signed: docSigned,
-                  viewed: isViewed,
-                });
-                const progress = getDocReviewProgress({
-                  reviewStatus: legalDocs?.review_status,
-                  viewed: isViewed,
-                  signed: docSigned,
-                  docApproved: isApproved,
-                });
-                const isOpen = viewerDocKey === shortField;
+              {/* Progress Bar */}
+              <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-200">
+                <div
+                  className={`h-full transition-all duration-300 ${
+                    isChecklistFullyApproved ? "bg-emerald-500" : "bg-blue-600"
+                  }`}
+                  style={{ width: `${(completedCount / 8) * 100}%` }}
+                />
+              </div>
+            </div>
 
-                const statusChip =
-                  sigUi === "rejected"
-                    ? { label: "Rejected", className: "border-rose-200 bg-rose-50 text-rose-700", dot: "bg-rose-500" }
-                    : sigUi === "approved"
-                      ? { label: "Approved", className: "border-emerald-200 bg-emerald-50 text-emerald-700", dot: "bg-emerald-500" }
-                      : sigUi === "signed"
-                        ? { label: "Signed", className: "border-emerald-200 bg-emerald-50 text-emerald-700", dot: "bg-emerald-500" }
-                        : { label: "Pending Signature", className: "border-amber-200 bg-amber-50 text-amber-800", dot: "bg-amber-400" };
+            {/* Checklist Table */}
+            <div className="w-full max-w-full overflow-hidden rounded-xl border border-slate-200 shadow-2xs">
+              <table className="w-full table-fixed border-collapse text-left text-sm">
+                <colgroup>
+                  <col className="w-[28%]" />
+                  <col className="w-[22%]" />
+                  <col className="w-[36%]" />
+                  <col className="w-[14%]" />
+                </colgroup>
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-semibold uppercase tracking-wider text-slate-600">
+                    <th className="px-4 py-3">Checkpoint</th>
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3">Remarks / Legal Observations</th>
+                    <th className="px-4 py-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white">
+                  {checkpoints.map((row) => {
+                    const isRowCompliant = row.status === "Compliant";
+                    const isRowNA = row.status === "Not Applicable";
+                    const isRowPending = row.status === "Pending";
+                    const isRowException = row.status === "Exception" || row.status === "Non-Compliant";
+                    const isRowClarify = row.status === "Requires Clarification";
+
+                    return (
+                      <tr key={row.id} className="hover:bg-slate-50/60 transition-colors">
+                        {/* Checkpoint Title & Category */}
+                        <td className="px-4 py-3 align-top">
+                          <p className="text-xs font-bold text-slate-900 leading-snug">
+                            {row.point}
+                          </p>
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            {row.category}
+                          </p>
+
+                          {/* Audit Info if reviewed */}
+                          {row.reviewedAt && (
+                            <p className="mt-1.5 flex items-center gap-1 text-[10px] text-slate-400">
+                              <User className="h-2.5 w-2.5" />
+                              Reviewed by {row.reviewedBy ?? "Legal Manager"} · {row.reviewedAt}
+                            </p>
+                          )}
+                        </td>
+
+                        {/* Status selector */}
+                        <td className="px-4 py-3 align-top">
+                          <div className="space-y-1.5">
+                            <select
+                              value={row.status}
+                              disabled={submitted}
+                              onChange={(e) => handleInlineStatusChange(row.id, e.target.value as ChecklistStatus)}
+                              className={`w-full rounded-lg border px-2.5 py-1.5 text-xs font-semibold focus:outline-none focus:ring-1 ${
+                                isRowCompliant
+                                  ? "border-emerald-300 bg-emerald-50/80 text-emerald-800 focus:border-emerald-500 focus:ring-emerald-500"
+                                  : isRowNA
+                                  ? "border-slate-300 bg-slate-50 text-slate-700 focus:border-slate-500 focus:ring-slate-500"
+                                  : isRowException
+                                  ? "border-rose-300 bg-rose-50/80 text-rose-800 focus:border-rose-500 focus:ring-rose-500"
+                                  : isRowClarify
+                                  ? "border-amber-300 bg-amber-50/80 text-amber-800 focus:border-amber-500 focus:ring-amber-500"
+                                  : "border-slate-300 bg-white text-slate-700 focus:border-blue-500 focus:ring-blue-500"
+                              }`}
+                            >
+                              <option value="Pending">Pending Review</option>
+                              <option value="Compliant">Compliant</option>
+                              <option value="Non-Compliant">Non-Compliant</option>
+                              <option value="Exception">Exception</option>
+                              <option value="Not Applicable">Not Applicable</option>
+                              <option value="Requires Clarification">Requires Clarification</option>
+                            </select>
+
+                            {/* Exception Details pill */}
+                            {row.status === "Exception" && row.exception && (
+                              <div className="rounded-md border border-rose-200 bg-rose-50 p-1.5 text-[10px] text-rose-800">
+                                <span className="font-bold uppercase tracking-wider text-rose-700">
+                                  [{row.exception.severity} Severity]:
+                                </span>{" "}
+                                {row.exception.description}
+                              </div>
+                            )}
+
+                            {/* Clarification Details pill */}
+                            {row.status === "Requires Clarification" && row.clarification && (
+                              <div className="rounded-md border border-amber-200 bg-amber-50 p-1.5 text-[10px] text-amber-800">
+                                <span className="font-bold uppercase tracking-wider text-amber-700">
+                                  [Inquiry]:
+                                </span>{" "}
+                                {row.clarification.inquiry}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Editable Remarks / Legal Observations */}
+                        <td className="px-4 py-3 align-top">
+                          <textarea
+                            value={row.remarks}
+                            disabled={submitted}
+                            onChange={(e) => handleInlineRemarksChange(row.id, e.target.value)}
+                            onBlur={() => { void persistChecklist(checkpoints).catch(err => toast.error(err instanceof Error ? err.message : "Remarks were not saved.")); }}
+                            placeholder="Enter legal observations, exceptions, or required actions..."
+                            rows={2}
+                            className="w-full resize-none rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-slate-50 disabled:text-slate-500"
+                          />
+                        </td>
+
+                        {/* Action buttons */}
+                        <td className="px-4 py-3 text-right align-top">
+                          <div className="flex flex-col items-end gap-1.5">
+                            {row.id === "supplier_docs" && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setExpandedSections((prev) => ({ ...prev, documents: true }));
+                                  const el = document.getElementById("documents");
+                                  if (el) {
+                                    el.scrollIntoView({ behavior: "smooth" });
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:bg-slate-50 hover:border-slate-300"
+                              >
+                                <Eye className="h-3 w-3 text-slate-500" />
+                                View Documents
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => handleOpenReviewModal(row)}
+                              className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-bold transition shadow-2xs ${
+                                isRowPending
+                                  ? "bg-blue-600 text-white hover:bg-blue-700"
+                                  : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                              }`}
+                            >
+                              <Scale className="h-3 w-3" />
+                              Review
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </CollapsibleSection>
+
+        {/* ═══════════════ Section 4: Supplier Legal Documents ═══════════════ */}
+        <CollapsibleSection
+          id="documents"
+          icon={FileText}
+          title="Supplier Legal Documents"
+          expanded={expandedSections.documents}
+          onToggle={toggleSection}
+          badge={
+            <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-bold text-blue-700 ring-1 ring-blue-200">
+              {approvedCount}/{attachedDocKeys.length} Verified
+            </span>
+          }
+        >
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+              <div>
+                <p className="text-xs font-semibold text-slate-800">
+                  Attached Legal Instruments &amp; Electronic Signatures
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  Open attachments to inspect legal terms and verify covenants.{" "}
+                  {!allInstrumentsVerified ? (
+                    <span className="text-amber-800 font-medium">
+                      Verify all required supplier documents before e-signature ({verifiedDocKeys.length} of {attachedDocKeys.length} verified).
+                    </span>
+                  ) : hasSignatures ? (
+                    <span className="font-semibold text-emerald-700">
+                      ✓ Required signatures completed. {financeApproved ? "Finance Approved." : "Pending Finance Approval."}
+                    </span>
+                  ) : (
+                    <span className="font-semibold text-emerald-700">
+                      {canEsign ? "✓ Ready for E-Signature. E-signature is ready." : esignDisabledReason}
+                    </span>
+                  )}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-600">Verification Progress:</span>
+                <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-800">
+                  {approvedCount} of {attachedDocKeys.length} Required Documents
+                </span>
+                <button type="button" disabled={!legalDocs?.name || !isAuthorizedLegalSigner || signatureEligibility.isFetching}
+                  onClick={() => { void signatureEligibility.refetch(); }}
+                  className="rounded-md border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 disabled:opacity-50">
+                  {signatureEligibility.isFetching ? "Refreshing…" : "Refresh status"}
+                </button>
+              </div>
+            </div>
+            {pendingDocKeys.length > 0 ? (
+              <p role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+                Pending required documents: {pendingDocKeys.map(key => key === "terms" ? "Master Terms & Conditions" : key === "warranty" ? "Quality & Compliance Warranty" : "Liability Insurance Certificate").join(", ")}.
+              </p>
+            ) : null}
+
+            {/* Document Cards / Table with Embedded Actions */}
+            <div className="space-y-3">
+              {[
+                {
+                  shortField: "terms" as const,
+                  label: "Master Terms & Conditions",
+                  docType: "Master Agreement (MSA)",
+                  docNumber: `DOC-TRM-${decodedId.replace(/\D/g, "").slice(-4) || "1001"}`,
+                  issueDate: legalDocs?.submission_date || rfq.transaction_date,
+                  expiryDate: legalDocs?.valid_till || parsed.validTill || "2027-12-31",
+                },
+                {
+                  shortField: "warranty" as const,
+                  label: "Quality & Compliance Warranty",
+                  docType: "Compliance Warranty",
+                  docNumber: `DOC-WRN-${decodedId.replace(/\D/g, "").slice(-4) || "2001"}`,
+                  issueDate: legalDocs?.submission_date || rfq.transaction_date,
+                  expiryDate: legalDocs?.valid_till || parsed.validTill || "2027-12-31",
+                },
+                {
+                  shortField: "insurance" as const,
+                  label: "Liability Insurance Certificate",
+                  docType: "Certificate of Insurance",
+                  docNumber: `DOC-INS-${decodedId.replace(/\D/g, "").slice(-4) || "3001"}`,
+                  issueDate: legalDocs?.submission_date || rfq.transaction_date,
+                  expiryDate: legalDocs?.valid_till || parsed.validTill || "2027-12-31",
+                },
+              ].filter(({ shortField }) => attachedDocKeys.includes(shortField) || legalDocs?.[`${shortField}_file_url`]).map(({ shortField, label, docType, docNumber, issueDate, expiryDate }) => {
+                const fileUrl = legalDocs?.[`${shortField}_file_url`];
+                const pdfName = legalDocs?.[`${shortField}_file_name` as keyof LegalDocumentSet] as string | undefined || (fileUrl ? fileUrl.split("/").pop() : undefined);
+                const note = legalDocs?.[`${shortField}_note` as keyof LegalDocumentSet] as string | undefined;
+                const hasPdf = Boolean(fileUrl);
+                const isViewed = Boolean(legalDocs?.[`${shortField}_viewed` as keyof LegalDocumentSet]);
+                const isApproved = verifiedDocKeys.includes(shortField);
+                const docSigned = hasDocSignature(esignBundle, shortField);
+                const isOpen = viewerDocKey === shortField;
 
                 return (
                   <div
                     key={shortField}
-                    className={`rounded-xl border bg-white p-4 shadow-sm transition ${
+                    className={`rounded-xl border bg-white p-4 shadow-2xs transition ${
                       isApproved
-                        ? "border-emerald-200"
+                        ? "border-emerald-200 bg-emerald-50/10"
                         : isOpen
-                          ? "border-primary-300 ring-2 ring-primary-100"
-                          : "border-slate-200"
+                        ? "border-primary-300 ring-2 ring-primary-100"
+                        : "border-slate-200"
                     }`}
                   >
-                    <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-sm font-bold text-slate-900">
-                        {icon} {label}
-                      </span>
-                      <span
-                        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${statusChip.className}`}
-                      >
-                        <span className={`h-1.5 w-1.5 rounded-full ${statusChip.dot}`} />
-                        {statusChip.label}
-                      </span>
-                    </div>
-
-                    <div className="mb-3 flex flex-wrap gap-1.5">
-                      {(
-                        [
-                          ["review_started", "Review Started"],
-                          ["signed", "Signed"],
-                          ["approved", "Approved"],
-                          ["completed", "Completed"],
-                        ] as const
-                      ).map(([key, labelStep]) => {
-                        const done = progress.includes(key);
-                        return (
-                          <span
-                            key={key}
-                            className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                              done
-                                ? "bg-slate-900 text-white"
-                                : "bg-slate-100 text-slate-400"
-                            }`}
-                          >
-                            {labelStep}
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h4 className="text-sm font-bold text-slate-900">{label}</h4>
+                          <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                            {docType}
                           </span>
-                        );
-                      })}
-                    </div>
-
-                    {pdfName && (
-                      <div className="mb-2.5 text-[13px] text-slate-700">
-                        📎 {pdfName}
+                          <span className="text-xs font-mono text-slate-400">
+                            {docNumber}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Issued: {issueDate ? formatDate(issueDate) : "—"} · Valid Till: {expiryDate ? formatDate(expiryDate) : "—"}
+                          {pdfName ? ` · File: ${pdfName}` : ""}
+                        </p>
                       </div>
-                    )}
 
-                    <div className="mb-3 flex flex-wrap gap-2">
-                      {hasPdf ? (
-                        <>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span
+                          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold ${
+                            docSigned
+                              ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+                              : isApproved
+                              ? "bg-blue-50 text-blue-700 ring-1 ring-blue-200"
+                              : "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
+                          }`}
+                        >
+                          {docSigned ? "Signed ✓" : isApproved ? "Verified ✓" : "Verification Pending"}
+                        </span>
+
+                        {hasPdf ? (
                           <button
                             type="button"
                             onClick={() => void handleViewPdf(shortField)}
-                            className={`inline-flex items-center gap-1.5 rounded-lg px-4 py-1.5 text-[13px] font-semibold text-white transition ${
-                              isOpen
-                                ? "bg-slate-800 hover:bg-slate-700"
-                                : "bg-emerald-800 hover:bg-emerald-700"
+                            className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-bold text-white transition ${
+                              isOpen ? "bg-slate-800 hover:bg-slate-700" : "bg-primary-700 hover:bg-primary-800"
                             }`}
                           >
-                            {isOpen ? "Close Review" : "Review"}
+                            {isOpen
+                              ? "Close Viewer"
+                              : docSigned
+                              ? "View Signed PDF"
+                              : canEsign
+                              ? "Sign Document"
+                              : "View & Verify"}
                           </button>
-                          {fileUrl && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                void (async () => {
-                                  try {
-                                    const { fetchPdfBytes } = await import(
-                                      "../../api/legalEsign"
-                                    );
-                                    const bytes = await fetchPdfBytes(
-                                      getFullFileUrl(fileUrl),
-                                    );
-                                    const blob = new Blob([bytes], {
-                                      type: "application/pdf",
-                                    });
-                                    const objectUrl = URL.createObjectURL(blob);
-                                    const a = document.createElement("a");
-                                    a.href = objectUrl;
-                                    a.download = pdfName || `${shortField}.pdf`;
-                                    a.click();
-                                    URL.revokeObjectURL(objectUrl);
-                                  } catch (err) {
-                                    toast.error(
-                                      err instanceof Error
-                                        ? err.message
-                                        : "Unable to download PDF.",
-                                    );
-                                  }
-                                })();
-                              }}
-                              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-800 bg-white px-4 py-1.5 text-[13px] font-semibold text-emerald-800 transition hover:bg-emerald-50"
-                            >
-                              Download PDF
-                            </button>
-                          )}
-                        </>
-                      ) : (
-                        <span className="rounded-lg bg-rose-100 px-4 py-1.5 text-[13px] font-semibold text-rose-600">
-                          PDF not available
-                        </span>
-                      )}
+                        ) : (
+                          <span className="rounded-lg bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500">
+                            No PDF attached
+                          </span>
+                        )}
+
+                        <label
+                          className={`inline-flex items-center gap-1.5 text-xs font-semibold ${
+                            !isViewed || submitted || false
+                              ? "cursor-not-allowed text-slate-400"
+                              : "cursor-pointer text-slate-900"
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isApproved}
+                            disabled={!isViewed || submitted || false}
+                            onChange={(e) => handleApproveToggle(shortField, e.target.checked)}
+                            className="h-4 w-4 accent-emerald-700"
+                          />
+                          Verify Instrument
+                        </label>
+                      </div>
                     </div>
 
-                    <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-[13px] text-slate-700">
-                      <strong>Supplier Note:</strong>{" "}
-                      {note ? note : <span className="text-slate-400">(none)</span>}
-                    </div>
-
-                    <label
-                      className={`flex items-center gap-2 text-[13px] font-semibold ${
-                        !isViewed || submitted || !docSigned
-                          ? "cursor-not-allowed text-slate-400"
-                          : "cursor-pointer text-slate-900"
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isApproved}
-                        disabled={!isViewed || submitted || (!docSigned && !isApproved)}
-                        onChange={(e) =>
-                          handleApproveToggle(shortField, e.target.checked)
-                        }
-                        className="h-4 w-4 accent-emerald-800"
-                      />
-                      Approve
-                      {!docSigned && (
-                        <span className="text-[11px] font-normal text-rose-600">
-                          (signature required)
-                        </span>
-                      )}
-                    </label>
+                    {note ? (
+                      <div className="mt-2.5 rounded-lg border border-slate-100 bg-slate-50/70 px-3 py-1.5 text-xs text-slate-600">
+                        <strong className="text-slate-700">Supplier Note:</strong> {note}
+                      </div>
+                    ) : null}
 
                     {isOpen && legalDocs && fileUrl ? (
                       <Suspense
@@ -1096,41 +1524,95 @@ export default function LegalReviewDetailPage() {
                           </div>
                         }
                       >
-                        <LegalPdfViewer
-                          key={`${shortField}:${String(fileUrl)}`}
-                          review={legalDocs}
-                          documentKey={shortField}
-                          fileUrl={String(fileUrl)}
-                          canSign={Boolean(canEsign)}
-                          readOnly={submitted || user?.role === "procurement"}
-                          reviewerFullName={
-                            user?.full_name ||
-                            user?.email ||
-                            user?.name ||
-                            "Legal Reviewer"
-                          }
-                          reviewerId={user?.email || user?.name || "legal"}
-                          esignBundle={esignBundle}
-                          onBundleChange={(bundle, updated) => {
-                            setEsignBundle(bundle);
-                            setLegalDocs(updated);
-                            setShowSigRequiredWarning(false);
-                          }}
-                        />
+                        <div className="mt-4 pt-3 border-t border-slate-100">
+                          <LegalPdfViewer
+                            key={`${shortField}:${String(fileUrl)}`}
+                            review={legalDocs}
+                            documentKey={shortField}
+                            fileUrl={String(fileUrl)}
+                            canSign={Boolean(canEsign && eligibilitySnapshot?.canSignDocumentKeys.includes(shortField))}
+                            esignDisabledReason={docSigned ? "Document has already been signed." : esignDisabledReason}
+                            requiredDocuments={attachedDocKeys.map(key => ({ key, label: key === "terms" ? "Master Terms & Conditions" : key === "warranty" ? "Quality & Compliance Warranty" : "Liability Insurance Certificate", verified: verifiedDocKeys.includes(key) }))}
+                            eligibilityRefreshing={signatureEligibility.isFetching}
+                            onRefreshEligibility={() => { void signatureEligibility.refetch(); }}
+                            canReview={!submitted && (user?.role === "legal" || user?.role === "admin")}
+                            readOnly={user?.role !== "legal" && user?.role !== "admin"}
+                            reviewerFullName={
+                              user?.full_name ||
+                              user?.email ||
+                              user?.name ||
+                              "Legal Manager"
+                            }
+                            reviewerId={user?.email || user?.name || "legal"}
+                            esignBundle={esignBundle}
+                            onBundleChange={(_bundle, updated) => {
+                              setLegalDocs(updated);
+                              setShowReviewRequiredWarning(false);
+                              void refreshLegalDocs();
+                            }}
+                          />
+                        </div>
                       </Suspense>
                     ) : null}
                   </div>
                 );
               })}
             </div>
-          )}
+          </div>
+        </CollapsibleSection>
 
-          {legalDocs && !documentSigned && !submitted && (
-            <div className="mt-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
-              <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
-              Open a document with Review, place your electronic signature, then Approve &amp; Sign.
-            </div>
-          )}
+        {/* ═══════════════ Section 5: Legal Exceptions ═══════════════ */}
+        <CollapsibleSection
+          id="exceptions"
+          icon={ShieldAlert}
+          title="Legal Exceptions & Risk Log"
+          expanded={expandedSections.exceptions}
+          onToggle={toggleSection}
+          badge={
+            conditionsExceptions.trim() ? (
+              <span className="rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-bold text-rose-700 ring-1 ring-rose-200">
+                1 Exception Logged
+              </span>
+            ) : (
+              <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200">
+                No Exceptions
+              </span>
+            )
+          }
+        >
+          <div className="space-y-4">
+            {conditionsExceptions.trim() ? (
+              <div className="rounded-xl border border-rose-200 bg-rose-50/40 p-4">
+                <div className="flex items-start gap-3">
+                  <ShieldAlert className="h-5 w-5 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-rose-900">
+                      Contractual Deviation / Exception Identified
+                    </h4>
+                    <p className="mt-1 text-xs text-rose-800 leading-relaxed whitespace-pre-wrap">
+                      {conditionsExceptions}
+                    </p>
+                    <div className="mt-3 flex items-center gap-4 text-[11px] text-rose-700">
+                      <span><strong>Severity:</strong> Moderate / Requires Commercial Confirmation</span>
+                      <span><strong>Status:</strong> Active Review Condition</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-emerald-50/40 p-4">
+                <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
+                <div>
+                  <p className="text-xs font-bold text-emerald-900">
+                    No legal exceptions identified.
+                  </p>
+                  <p className="mt-0.5 text-xs text-emerald-700">
+                    The supplier quotation fully conforms with corporate legal standards, liability cappings, and Netlink standard warranties.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
         </CollapsibleSection>
 
         {/* ═══════════════ Section: Decision Comments ═══════════════
@@ -1203,205 +1685,528 @@ export default function LegalReviewDetailPage() {
           </div>
         </CollapsibleSection>
 
-        {/* ═══════════════ Section: Legal Actions ═══════════════ */}
+        {/* ═══════════════ Section: Legal Decision ═══════════════ */}
         <CollapsibleSection
           id="actions"
           icon={Gavel}
-          title="Legal Decision"
+          title="Legal Review Decision"
           expanded={expandedSections.actions}
           onToggle={toggleSection}
         >
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-            <button
-              type="button"
-              disabled={submitted || submitting || !actionReason.trim()}
-              onClick={async () => {
-                if (!legalDocs?.name) {
-                  toast.error("No Legal Document Review record found");
-                  return;
-                }
-                if (!actionReason.trim()) {
-                  toast.error("Provide a rejection reason before rejecting.");
-                  return;
-                }
-                setSubmitting(true);
-                try {
-                  const updated = await submitLegalReview(
-                    legalDocs.name,
-                    "Rejected",
-                    user?.email ?? "System",
-                    actionReason.trim(),
-                    actionReason.trim(),
-                  );
-                  setLegalDocs(updated);
-                  setEsignBundle(
-                    resolveEsignBundle(updated.name, updated.esign_envelope),
-                  );
-                  invalidateApprovalWorkflow(queryClient);
-                  toast.error("Legal review rejected");
-                } catch (err) {
-                  toast.error(
-                    err instanceof Error
-                      ? err.message
-                      : "Failed to update legal review",
-                  );
-                } finally {
-                  setSubmitting(false);
-                }
-              }}
-              className="rounded-xl border border-rose-200 bg-white px-5 py-2.5 text-sm font-semibold text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              Reject
-            </button>
-
-            <button
-              type="button"
-              disabled={submitted || submitting || !actionReason.trim()}
-              onClick={async () => {
-                if (!legalDocs?.name) {
-                  toast.error("No Legal Document Review record found");
-                  return;
-                }
-                if (!documentSigned) {
-                  setShowSigRequiredWarning(true);
-                  return;
-                }
-                if (!actionReason.trim()) {
-                  toast.error("Provide a decision reason before approving.");
-                  return;
-                }
-                setShowSigRequiredWarning(false);
-                setSubmitting(true);
-                try {
-                  const updated = await submitLegalReview(
-                    legalDocs.name,
-                    "Approved",
-                    user?.email ?? "System",
-                    actionReason.trim(),
-                  );
-                  if (updated.review_status !== "Approved") {
-                    throw new Error(
-                      "Legal approval did not persist review_status=Approved.",
-                    );
-                  }
-                  if (updated.finance_status !== "Pending") {
-                    throw new Error(
-                      "Legal approval saved but Finance handoff failed (finance_status is not Pending). " +
-                        "Ask an admin to run: node scripts/setup-legal-review-doctype.mjs",
-                    );
-                  }
-                  if (
-                    updated.workflow_state &&
-                    updated.workflow_state !== "Finance Review"
-                  ) {
-                    throw new Error(
-                      `Legal approval saved but workflow_state is "${updated.workflow_state}" (expected Finance Review).`,
-                    );
-                  }
-                  setLegalDocs(updated);
-                  setEsignBundle(
-                    resolveEsignBundle(updated.name, updated.esign_envelope),
-                  );
-                  const rfqForNotify =
-                    updated.rfq_name || legalDocs.rfq_name || decodedId;
-                  if (rfqForNotify) {
-                    try {
-                      triggerFinanceReviewRequired(
-                        rfqForNotify,
-                        Number(updated.grand_total ?? legalDocs.grand_total ?? 0),
-                      );
-                    } catch {
-                      /* notification is non-blocking */
-                    }
-                  }
-                  invalidateApprovalWorkflow(queryClient);
-                  toast.success(
-                    "Approved & signed — moved to Finance Review queue",
-                  );
-                } catch (err) {
-                  const msg =
-                    err instanceof Error
-                      ? err.message
-                      : "Failed to update legal review";
-                  if (/sign/i.test(msg) && !/handoff/i.test(msg)) {
-                    setShowSigRequiredWarning(true);
-                  } else {
-                    toast.error(msg);
-                  }
-                } finally {
-                  setSubmitting(false);
-                }
-              }}
-              className={`rounded-xl px-6 py-2.5 text-sm font-bold text-white transition ${
-                documentSigned && !submitted
-                  ? "bg-slate-900 hover:bg-slate-800"
-                  : "bg-slate-300 hover:bg-slate-300"
-              }`}
-            >
-              {submitting ? "Submitting…" : "Approve & Sign"}
-            </button>
-          </div>
-
-          {showSigRequiredWarning && !documentSigned && !submitted ? (
-            <div
-              role="alert"
-              className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 shadow-sm"
-            >
-              <p className="flex items-center gap-2 font-bold">
-                <AlertTriangle className="h-4 w-4 shrink-0" />
-                Signature Required
-              </p>
-              <p className="mt-1 text-rose-700">
-                Please place your electronic signature before approving this
-                document.
-              </p>
+          <div className="space-y-4">
+            {/* Conditions / Exceptions */}
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                Conditions / Exceptions <span className="text-slate-400 font-normal">(Optional)</span>
+              </label>
+              <textarea
+                value={conditionsExceptions}
+                onChange={(e) => setConditionsExceptions(e.target.value)}
+                placeholder="Specify any contractual conditions, coverage waivers, or warranty exceptions attached to this legal decision..."
+                rows={2}
+                disabled={submitted}
+                className="w-full resize-none rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-500"
+              />
             </div>
-          ) : !documentSigned && !submitted ? (
-            <p className="mt-2 text-right text-xs text-slate-500">
-              Approve &amp; Sign requires an electronic signature on at least one
-              reviewed document.
-            </p>
-          ) : null}
 
-          {(!loadingDocs && !legalDocs || (legalDocs?.review_status === 'Pending' && !legalDocs.terms_file_url && !legalDocs.warranty_file_url && !legalDocs.insurance_file_url)) && !submitted && (
-            <button
-              type="button"
-              onClick={() => {
-                if (!selectedSQName) {
-                  toast.error('No Supplier Quotation selected');
-                  return;
-                }
-                triggerLegalDocumentsRequested(selectedSQName);
-                toast.success('Document request sent to supplier');
-              }}
-              style={{
-                padding: '10px 24px', background: '#f59e0b', color: 'white',
-                border: 'none', borderRadius: '8px', cursor: 'pointer',
-                fontSize: '14px', fontWeight: 600
-              }}
-            >
-              📨 Request Documents from Supplier
-            </button>
-          )}
-
-          {legalDocs?.review_status !== 'Pending' && (
-            <div style={{
-              marginTop: '16px', padding: '12px 16px',
-              background: legalDocs?.review_status === 'Approved' ? '#f0fdf4' : '#fff5f5',
-              border: `1px solid ${legalDocs?.review_status === 'Approved' ? '#86efac' : '#fca5a5'}`,
-              borderRadius: '8px', fontSize: '13px'
-            }}>
-              <strong>{legalDocs?.review_status === 'Approved' ? '✅ Approved' : '❌ Rejected'}</strong>
-              {' '}by {legalDocs?.approved_by} on {legalDocs?.approved_on ? new Date(legalDocs.approved_on).toLocaleString('en-US') : ''}
-              {legalDocs?.legal_comments && <div style={{ marginTop: '4px', color: '#6b7280' }}>{legalDocs.legal_comments}</div>}
-              {legalDocs?.review_status === 'Rejected' && legalDocs?.rejection_reason && (
-                <div style={{ marginTop: '4px', color: '#dc2626', fontWeight: 600 }}>
-                  Rejection reason: {legalDocs.rejection_reason}
-                </div>
+            {/* Decision Comments */}
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                Decision Comments <span className="text-rose-500">*</span>
+              </label>
+              <textarea
+                value={actionReason}
+                onChange={(e) => setActionReason(e.target.value)}
+                placeholder="Provide the reason for your approval, rejection, or clarification. This is mandatory before submitting a decision."
+                rows={3}
+                disabled={submitted}
+                className="w-full resize-none rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-500"
+              />
+              {!submitted && !actionReason.trim() && (
+                <p className="mt-1 text-xs text-slate-400">
+                  Decision comments are mandatory before any decision can be finalized.
+                </p>
               )}
             </div>
-          )}
+
+            {/* 3 Action Buttons */}
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Approve Button */}
+                {canApprove && (
+                  <button
+                    type="button"
+                    disabled={submitted || submitting || !actionReason.trim()}
+                    onClick={async () => {
+                      if (!legalDocs?.name) {
+                        toast.error("No Legal Document Review record found");
+                        return;
+                      }
+                      if (!actionReason.trim()) {
+                        toast.error("Provide a decision comment before approving.");
+                        return;
+                      }
+                      setSubmitting(true);
+                      try {
+                        const fullReason = conditionsExceptions.trim()
+                          ? `${actionReason.trim()}\n[Exceptions]: ${conditionsExceptions.trim()}`
+                          : actionReason.trim();
+
+                        const updated = await submitLegalReview(
+                          legalDocs.name,
+                          "Approved",
+                          user?.email ?? "System",
+                          fullReason,
+                        );
+                        setLegalDocs(updated);
+                        invalidateApprovalWorkflow(queryClient);
+                        await Promise.all([
+                          queryClient.invalidateQueries({ queryKey: ["legal-document-reviews"] }),
+                          queryClient.invalidateQueries({ queryKey: ["legal-signature-eligibility"] }),
+                          queryClient.invalidateQueries({ queryKey: ["selected-sq-raw", selectedSQName] }),
+                        ]);
+                        toast.success("Legal review approved");
+                      } catch (err) {
+                        toast.error(
+                          err instanceof Error
+                            ? err.message
+                            : "Failed to approve legal review",
+                        );
+                      } finally {
+                        setSubmitting(false);
+                      }
+                    }}
+                    className="rounded-xl border border-emerald-600 bg-emerald-600 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {submitting ? "Approving…" : "Approve Legal Review"}
+                  </button>
+                )}
+
+                {/* Reject Button */}
+                <button
+                  type="button"
+                  disabled={submitted || submitting || !actionReason.trim()}
+                  onClick={async () => {
+                    if (!legalDocs?.name) {
+                      toast.error("No Legal Document Review record found");
+                      return;
+                    }
+                    if (!actionReason.trim()) {
+                      toast.error("Provide a rejection reason before rejecting.");
+                      return;
+                    }
+                    setSubmitting(true);
+                    try {
+                      const fullReason = conditionsExceptions.trim()
+                        ? `${actionReason.trim()}\n[Exceptions]: ${conditionsExceptions.trim()}`
+                        : actionReason.trim();
+
+                      const updated = await submitLegalReview(
+                        legalDocs.name,
+                        "Rejected",
+                        user?.email ?? "System",
+                        fullReason,
+                        fullReason,
+                      );
+                      setLegalDocs(updated);
+                      invalidateApprovalWorkflow(queryClient);
+                      toast.error("Legal review rejected");
+                    } catch (err) {
+                      toast.error(
+                        err instanceof Error
+                          ? err.message
+                          : "Failed to update legal review",
+                      );
+                    } finally {
+                      setSubmitting(false);
+                    }
+                  }}
+                  className="rounded-xl border border-rose-200 bg-white px-4 py-2.5 text-xs font-bold text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Reject Legal Review
+                </button>
+
+                {/* Request Revision / Clarification Button */}
+                <button
+                  type="button"
+                  disabled={submitted || submitting}
+                  onClick={() => setShowClarifyModal(true)}
+                  className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs font-bold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Request Revision
+                </button>
+              </div>
+
+              <p className="max-w-md text-xs text-slate-600">
+                Completing every required electronic signature sends this RFQ to Finance Review automatically.
+                Finance approval is then required before Procurement can create a PO.
+              </p>
+            </div>
+
+            {!allInstrumentsVerified && !submitted && (
+              <div
+                role="alert"
+                className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900 shadow-2xs"
+              >
+                <p className="flex items-center gap-2 font-bold text-amber-800">
+                  <AlertCircle className="h-4 w-4 shrink-0 text-amber-600" />
+                  Document Verification Required Before Approval ({verifiedDocKeys.length}/{attachedDocKeys.length} Verified)
+                </p>
+                <p className="mt-1 text-slate-600 leading-relaxed">
+                  Inspect and verify every required supplier document in Section 4 before approving this legal review.
+                  {pendingDocKeys.length > 0 && ` Pending verification: ${pendingDocKeys.map(k => k === "terms" ? "Master Terms & Conditions" : k === "warranty" ? "Quality & Compliance Warranty" : "Liability Insurance Certificate").join(", ")}.`}
+                </p>
+              </div>
+            )}
+
+            {!hasSignatures && !submitted && (
+              <div
+                role="alert"
+                className="mt-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-900 shadow-2xs"
+              >
+                <p className="flex items-center gap-2 font-bold text-blue-800">
+                  <ShieldAlert className="h-4 w-4 shrink-0 text-blue-600" />
+                  E-Signature Required Before Finance Review
+                </p>
+                <p className="mt-1 text-slate-600 leading-relaxed">
+                  Verify and electronically sign every required instrument in Section 4. SHA-256 verifies document integrity; it is not a digital signature.
+                </p>
+              </div>
+            )}
+
+            {!isChecklistFullyApproved && !submitted && (
+              <div
+                role="alert"
+                className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900 shadow-2xs"
+              >
+                <p className="flex items-center gap-2 font-bold text-amber-800">
+                  <AlertCircle className="h-4 w-4 shrink-0 text-amber-600" />
+                  Legal Review Checkpoints Incomplete ({completedCount}/8 Completed)
+                </p>
+                <p className="mt-1 text-slate-600 leading-relaxed">
+                  Record findings in the legal checklist. RFQ e-signature eligibility is determined by the required documents, verified PDF hashes, and Legal workflow state.
+                </p>
+              </div>
+            )}
+
+            {showReviewRequiredWarning && !documentsReviewed && !submitted ? (
+              <div
+                role="alert"
+                className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-800 shadow-2xs"
+              >
+                <p className="flex items-center gap-2 font-bold">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-rose-600" />
+                  Document Review Required
+                </p>
+                <p className="mt-1 text-slate-600">
+                  Open each PDF, inspect its contents, and mark it reviewed before submitting approval.
+                </p>
+              </div>
+            ) : null}
+
+            {legalDocs?.review_status !== "Pending" && (
+              <div
+                className={`mt-4 rounded-xl border p-4 text-xs ${
+                  legalDocs?.review_status === "Approved"
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                    : "border-rose-200 bg-rose-50 text-rose-900"
+                }`}
+              >
+                <p className="font-bold">
+                  {legalDocs?.review_status === "Approved" ? "✅ Approved" : "❌ Rejected"}{" "}
+                  by {legalDocs?.approved_by} on {legalDocs?.approved_on ? formatDate(legalDocs.approved_on) : ""}
+                </p>
+                {legalDocs?.legal_comments && (
+                  <p className="mt-1.5 text-slate-700">{legalDocs.legal_comments}</p>
+                )}
+                {legalDocs?.review_status === "Rejected" && legalDocs?.rejection_reason && (
+                  <p className="mt-1 text-rose-700 font-semibold">
+                    Rejection reason: {legalDocs.rejection_reason}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
         </CollapsibleSection>
+
+        {/* Modal for Request Clarification */}
+        {showClarifyModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-xs">
+            <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+              <div className="flex items-center gap-3">
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-700 ring-1 ring-amber-200">
+                  <AlertTriangle className="h-6 w-6" />
+                </span>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Request Revision / Clarification
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Send required revisions or compliance inquiry to Procurement and Supplier
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-600">
+                  Clarification Inquiry <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  value={clarifyComments}
+                  onChange={(e) => setClarifyComments(e.target.value)}
+                  placeholder="Specify what additional documentation, term revisions, or compliance clarifications are required..."
+                  rows={4}
+                  className="w-full resize-none rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                />
+              </div>
+
+              <div className="mt-6 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setShowClarifyModal(false)}
+                  className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={!clarifyComments.trim() || submitting}
+                  onClick={async () => {
+                    if (!legalDocs?.name) return;
+                    setSubmitting(true);
+                    try {
+                      const updated = await requestLegalChanges(legalDocs.name, clarifyComments.trim());
+                      setLegalDocs(updated);
+                      invalidateApprovalWorkflow(queryClient);
+                      setShowClarifyModal(false);
+                      toast.success("Changes requested. Review returned to Procurement.");
+                    } catch (err) { toast.error(err instanceof Error ? err.message : "Changes request was not saved."); }
+                    finally { setSubmitting(false); }
+                  }}
+                  className="rounded-lg bg-amber-600 px-4 py-2 text-xs font-bold text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  Send Request
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal for Checkpoint Review */}
+        {activeReviewItem && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-xs">
+            <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl max-h-[90vh] overflow-y-auto">
+              <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-50 text-blue-700 ring-1 ring-blue-200">
+                    <Scale className="h-5 w-5" />
+                  </span>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 leading-tight">
+                      Review: {activeReviewItem.point}
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      {activeReviewItem.category}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveReviewItem(null)}
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                {/* Decision Status */}
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-700">
+                    Checkpoint Decision Status <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    value={reviewModalStatus}
+                    onChange={(e) => setReviewModalStatus(e.target.value as ChecklistStatus)}
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    <option value="Pending">Pending Review</option>
+                    <option value="Compliant">Compliant</option>
+                    <option value="Non-Compliant">Non-Compliant</option>
+                    <option value="Exception">Exception</option>
+                    <option value="Not Applicable">Not Applicable</option>
+                    <option value="Requires Clarification">Requires Clarification</option>
+                  </select>
+                </div>
+
+                {/* Structured Fields if Exception */}
+                {reviewModalStatus === "Exception" && (
+                  <div className="rounded-xl border border-rose-200 bg-rose-50/60 p-4 space-y-3">
+                    <div className="flex items-center gap-2 text-rose-800 font-bold text-xs">
+                      <AlertTriangle className="h-4 w-4" />
+                      Exception Details
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-rose-900">
+                        Exception Description <span className="text-rose-600">*</span>
+                      </label>
+                      <textarea
+                        value={reviewModalException.description}
+                        onChange={(e) =>
+                          setReviewModalException((prev) => ({ ...prev, description: e.target.value }))
+                        }
+                        placeholder="Detailed description of legal, statutory, or commercial deviation..."
+                        rows={2}
+                        className="w-full rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
+                      />
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-rose-900">
+                          Severity Level
+                        </label>
+                        <select
+                          value={reviewModalException.severity}
+                          onChange={(e) =>
+                            setReviewModalException((prev) => ({
+                              ...prev,
+                              severity: e.target.value as CheckpointExceptionDetails["severity"],
+                            }))
+                          }
+                          className="w-full rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-900 focus:outline-none focus:ring-1 focus:ring-rose-500"
+                        >
+                          <option value="Low">Low Severity</option>
+                          <option value="Medium">Medium Severity</option>
+                          <option value="High">High Severity</option>
+                          <option value="Critical">Critical Severity</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-rose-900">
+                          Business Impact
+                        </label>
+                        <input
+                          type="text"
+                          value={reviewModalException.businessImpact || ""}
+                          onChange={(e) =>
+                            setReviewModalException((prev) => ({ ...prev, businessImpact: e.target.value }))
+                          }
+                          placeholder="e.g., Uncapped liability, payment term clash"
+                          className="w-full rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-rose-500"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-rose-900">
+                        Required Resolution
+                      </label>
+                      <input
+                        type="text"
+                        value={reviewModalException.requiredResolution || ""}
+                        onChange={(e) =>
+                          setReviewModalException((prev) => ({ ...prev, requiredResolution: e.target.value }))
+                        }
+                        placeholder="Action needed before contract execution"
+                        className="w-full rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-rose-500"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Structured Fields if Requires Clarification */}
+                {reviewModalStatus === "Requires Clarification" && (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-4 space-y-3">
+                    <div className="flex items-center gap-2 text-amber-800 font-bold text-xs">
+                      <HelpCircle className="h-4 w-4" />
+                      Clarification Request Details
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-amber-900">
+                        Clarification Required <span className="text-amber-600">*</span>
+                      </label>
+                      <textarea
+                        value={reviewModalClarification.inquiry}
+                        onChange={(e) =>
+                          setReviewModalClarification((prev) => ({ ...prev, inquiry: e.target.value }))
+                        }
+                        placeholder="Specify questions, missing certs, or amended terms needed..."
+                        rows={2}
+                        className="w-full rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      />
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-amber-900">
+                          Clarification Owner
+                        </label>
+                        <input
+                          type="text"
+                          value={reviewModalClarification.owner || ""}
+                          onChange={(e) =>
+                            setReviewModalClarification((prev) => ({ ...prev, owner: e.target.value }))
+                          }
+                          placeholder="e.g. Procurement Manager / Supplier Legal"
+                          className="w-full rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-amber-900">
+                          Due Date
+                        </label>
+                        <input
+                          type="date"
+                          value={reviewModalClarification.dueDate || ""}
+                          onChange={(e) =>
+                            setReviewModalClarification((prev) => ({ ...prev, dueDate: e.target.value }))
+                          }
+                          className="w-full rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Remarks & Legal Observations */}
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-700">
+                    Remarks / Legal Observations
+                  </label>
+                  <textarea
+                    value={reviewModalRemarks}
+                    onChange={(e) => setReviewModalRemarks(e.target.value)}
+                    placeholder="Enter legal observations, exceptions, or required actions..."
+                    rows={3}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-6 flex items-center justify-end gap-2.5 border-t border-slate-100 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setActiveReviewItem(null)}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveReviewModal}
+                  className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-700 shadow-2xs"
+                >
+                  Save Decision
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </FadeIn>
   );
@@ -1472,26 +2277,7 @@ function InfoField({
   );
 }
 
-function ScoreCard({
-  label,
-  value,
-  highlight,
-}: {
-  label: string;
-  value: number;
-  highlight?: boolean;
-}) {
-  const tone =
-    value >= 80 ? "text-success-600" : value >= 60 ? "text-warning-600" : "text-danger-600";
-  return (
-    <div className={`rounded-lg border p-3 text-center ${highlight ? "border-primary/30 bg-primary/5" : "border-neutral-200"}`}>
-      <p className="text-xs font-semibold uppercase tracking-wider text-neutral-400">{label}</p>
-      <p className={`mt-1 text-2xl font-bold tabular-nums ${highlight ? "text-primary" : tone}`}>
-        {value}
-      </p>
-    </div>
-  );
-}
+
 
 function LegalStatusBadge({ status }: { status: DocReviewStatus }) {
   const config: Record<DocReviewStatus, { icon: typeof Clock; className: string; label: string }> = {

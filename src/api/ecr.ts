@@ -37,6 +37,9 @@ const ECR_DOCTYPE = "Engineering Change Request";
 const ECR_LIST_FIELDS = [
   "name",
   "ecr_number",
+  "ecr_workflow_version",
+  "rfq_required",
+  "rfq_decision_reason",
   "ecr_title",
   "ecr_type",
   "priority",
@@ -71,6 +74,7 @@ const ECR_LIST_FIELDS = [
 const ECR_DETAIL_FIELDS = [
   ...ECR_LIST_FIELDS,
   "ecr_number",
+  "ecr_business_case",
   "chnage_description",   // note: typo is real
   "reason_for_change",
   "business_justification",
@@ -106,6 +110,14 @@ const ACTIONABLE_ECR_LIST_STAGES = new Set([
   "Engineering Review",
   "Procurement Review",
   "RFQ Pending",
+  "Technical Approved",
+  "Finance Review",
+  "Procurement BC Review",
+  "Quality Review",
+  "Business Case Approved",
+  "Final ECR Approval",
+  "ECR Approved",
+  "Procurement Decision",
 ]);
 const ECR_LIST_DETAIL_CONCURRENCY = 6;
 
@@ -275,7 +287,7 @@ async function hydrateActionableECRDetails(
     .map((row, index) => ({ row, index }))
     .filter(({ row }) =>
       Boolean(row.name) &&
-      ACTIONABLE_ECR_LIST_STAGES.has(canonicalECRStage(row.select_pxfp)),
+      ACTIONABLE_ECR_LIST_STAGES.has(canonicalECRStage(row.select_pxfp, row)),
     );
   if (candidates.length === 0) return rows;
 
@@ -395,12 +407,12 @@ export type ECRPostSaveWorkflowAction = "Submit ECR";
 export function getECRPostSaveWorkflowAction(
   ecr: Pick<
     ECRSaveResult,
-    "select_pxfp" | "docstatus" | "approval_requirements" | "create_replayed"
+    "select_pxfp" | "docstatus" | "approval_requirements" | "create_replayed" | "ecr_workflow_version"
   >,
   options: { submitImmediately: boolean; isEditing: boolean },
 ): ECRPostSaveWorkflowAction | null {
   if (!options.submitImmediately) return null;
-  const stage = canonicalECRStage(ecr.select_pxfp);
+  const stage = canonicalECRStage(ecr.select_pxfp, ecr);
   // Returned ECRs are persisted as Draft with completed history and no active
   // task. The same Submit ECR transition safely creates a fresh manager task.
   if (stage !== "Draft" || Number(ecr.docstatus || 0) !== 0) return null;
@@ -463,6 +475,7 @@ export async function applyECRWorkflowAction(
       ecrId: effectiveName,
       ecr_number: ecr?.ecr_number || effectiveName,
       action,
+      ...(ecr?.ecr_workflow_version === "extended_v1" ? { expected_modified: ecr.modified } : {}),
       comment: comment?.trim() ?? "",
       reviewFields: reviewFields ?? {},
     }, withoutNetworkRetry());
@@ -488,8 +501,11 @@ export interface ECRComment {
 }
 
 // ── Submit (Doc Submit — transitions Draft → Submitted) ──
-export async function submitECR(name: string): Promise<ECRWorkflowActionResult> {
-  return applyECRWorkflowAction(name, "Submit ECR");
+export async function submitECR(name: string, ecr?: Partial<EngineeringChangeRequest>): Promise<ECRWorkflowActionResult> {
+  try {
+    const current = ecr ?? await fetchECR(name);
+    return applyECRWorkflowAction(current.name || name, "Submit ECR", undefined, current);
+  } catch (error) { return { success: false, message: extractECRErrorMessage(error) }; }
 }
 
 // ── Get workflow actions available for the current user on this ECR ──

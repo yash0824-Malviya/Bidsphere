@@ -88,6 +88,16 @@ describe("fetchErpFile persisted metadata gate", () => {
     attached_to_field: "engineering_drawing",
   };
 
+  it("rejects a File ID paired with another path before authorization or byte fetch", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({ data: record }), { headers: { "Content-Type": "application/json" } }));
+    const authorizeFile = vi.fn();
+    const result = await fetchErpFile({ baseUrl: "https://erp.test", filePath: "/private/files/other.pdf", fileId: record.name, apiKey: "key", apiSecret: "secret", authorizeFile });
+    expect(result).toMatchObject({ ok: false, status: 403 });
+    expect(authorizeFile).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockRestore();
+  });
+
   it("fails closed on a missing or ambiguous File lookup before fetching bytes", async () => {
     const missingFetch = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: [] }), {

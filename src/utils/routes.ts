@@ -19,12 +19,16 @@ export interface NavChild {
   to: string;
   /** Optional section header rendered above this child in the sidebar. */
   group?: string;
+  badgeKey?: string;
+  badgeUrgent?: boolean;
 }
 
 export interface NavItem {
   label: string;
   to: string;
   icon: LucideIcon;
+  badgeKey?: string;
+  badgeUrgent?: boolean;
   children?: NavChild[];
 }
 
@@ -38,7 +42,7 @@ const P2P_CHILDREN: NavChild[] = [
     ? [{ label: "Material Requests", to: "/p2p/requisitions" }]
     : []),
   { label: "Purchase Orders", to: "/p2p/purchase-orders" },
-  { label: "New PO", to: "/p2p/purchase-orders/create" },
+  { label: "New PO", to: "/p2p/purchase-orders/create", badgeKey: "newPoQueue" },
   { label: "GRN", to: "/p2p/grn" },
   { label: "Vouchers", to: "/p2p/vouchers" },
   { label: "Invoices", to: "/p2p/invoices" },
@@ -138,6 +142,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/p2p/payments/new": "New Payment",
   "/suppliers": "Suppliers",
   "/suppliers/onboarding": "Supplier Onboarding",
+  "/suppliers/onboarding/new": "New Onboarding",
   "/suppliers/new": "Add Supplier",
   "/sourcing": "Sourcing (RFx)",
   "/sourcing/rfi": "RFIs",
@@ -145,6 +150,7 @@ export const ROUTE_TITLES: Record<string, string> = {
   "/sourcing/rfp": "RFPs",
   "/sourcing/rfp/new": "Create RFP",
   "/sourcing/rfq": "RFQs",
+  "/sourcing/quotations": "Supplier Quotations",
   "/sourcing/rfi/responses": "Supplier Responses",
   "/sourcing/rfp/responses": "Supplier Responses",
   "/sourcing/rfq/new": "New RFQ",

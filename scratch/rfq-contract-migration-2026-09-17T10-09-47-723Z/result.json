@@ -1,0 +1,12 @@
+{
+  "verified": true,
+  "operations": 2,
+  "recordsPreserved": 87,
+  "workflowsPreserved": 5,
+  "permissionsPreserved": true,
+  "rolesPreserved": true,
+  "bindings": {
+    "contract_required": "contract_required",
+    "request_rfq": "custom_rfq"
+  }
+}

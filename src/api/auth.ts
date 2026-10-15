@@ -28,6 +28,7 @@ export interface AuthUserProfile {
   department?: string;
   /** Raw ERPNext User.roles names from the last login fetch. */
   erpnext_roles?: string[];
+  access_token?: string;
 }
 
 interface ErpNextUserProfile {
@@ -225,7 +226,11 @@ export async function loginWithPassword(
     }
   }
 
-  const role: AppRole = payload?.role ?? resolveRoleFromUser({
+  // The backend issues the access token with this role. A mailbox alias must
+  // never expose a different workspace than the authenticated API permits.
+  const role: AppRole =
+    payload?.role ??
+    resolveRoleFromUser({
       name: payload?.name || usr,
       email,
       erpnext_roles: erpnextRoles,
@@ -262,6 +267,7 @@ export async function loginWithPassword(
     full_name: fullName,
     role,
     erpnext_roles: erpnextRoles,
+    access_token: payload?.access_token,
   };
 }
 
@@ -273,6 +279,7 @@ export function restoreAuthenticatedUserProfile(
     ...user,
     role: user.role,
     full_name: displayNameForAuthenticatedUser(user),
+    access_token: user.access_token,
   };
 }
 

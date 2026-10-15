@@ -22,6 +22,7 @@ import { useAuthStore } from "../store/authStore";
 import { buildUpcomingDeliveries } from "../utils/upcomingDeliveries";
 import { formatCurrency, todayIso } from "../utils/format";
 import { useRoleNotifications } from "../hooks/useRoleNotifications";
+import { useECRNotifications } from "../hooks/useECRNotifications";
 import type { EnterpriseNotification, NotificationModule } from "../types/notification";
 import type { IncomingPORow } from "../utils/upcomingDeliveries";
 
@@ -71,6 +72,7 @@ const EMPTY_OVERDUE_INVOICES: InvoiceRow[] = [];
  * Header bell — shows only notifications visible to the logged-in user's role.
  */
 export default function NotificationsBell() {
+  useECRNotifications();
   const { t } = useTranslation();
   const navigate = useNavigate();
   const role = useAuthStore((s) => s.user?.role);

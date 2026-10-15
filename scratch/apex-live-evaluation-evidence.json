@@ -1,0 +1,487 @@
+{
+  "checked_at": "2026-09-23T08:30:10.621Z",
+  "read_only": true,
+  "mutation_performed": false,
+  "evaluations": [
+    {
+      "result": "SCORE-PUR-RFQ-2026-00095-00123",
+      "rfq": "PUR-RFQ-2026-00095",
+      "scored_at": "2026-09-23 13:55:32",
+      "suppliers": [
+        {
+          "name": "Apex Fasteners Ltd",
+          "supplier_id": "Apex Fasteners Ltd",
+          "quotation_id": "PUR-SQTN-2026-00271",
+          "rank": 1,
+          "score": 88,
+          "risk": "High",
+          "verdict": "QUOTE INCOMPLETE",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Blue Ridge Manufacturing Inc",
+          "supplier_id": "\"Blue Ridge Manufacturing Inc\"",
+          "quotation_id": "PUR-SQTN-2026-00270",
+          "rank": 2,
+          "score": 85,
+          "risk": "Low",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Redwood Supply Chain Partners",
+          "supplier_id": "\"Redwood Supply Chain Partners\"",
+          "quotation_id": "PUR-SQTN-2026-00272",
+          "rank": 3,
+          "score": 81,
+          "risk": "Medium",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        }
+      ]
+    },
+    {
+      "result": "SCORE-PUR-RFQ-2026-00095-00122",
+      "rfq": "PUR-RFQ-2026-00095",
+      "scored_at": "2026-09-23 13:47:19",
+      "suppliers": [
+        {
+          "name": "Apex Fasteners Ltd",
+          "supplier_id": "Apex Fasteners Ltd",
+          "quotation_id": "PUR-SQTN-2026-00271",
+          "rank": 1,
+          "score": 88,
+          "risk": "High",
+          "verdict": "QUOTE INCOMPLETE",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Blue Ridge Manufacturing Inc",
+          "supplier_id": "\"Blue Ridge Manufacturing Inc\"",
+          "quotation_id": "PUR-SQTN-2026-00270",
+          "rank": 2,
+          "score": 85,
+          "risk": "Low",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Redwood Supply Chain Partners",
+          "supplier_id": "\"Redwood Supply Chain Partners\"",
+          "quotation_id": "PUR-SQTN-2026-00272",
+          "rank": 3,
+          "score": 81,
+          "risk": "Medium",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        }
+      ]
+    },
+    {
+      "result": "SCORE-PUR-RFQ-2026-00094-00121",
+      "rfq": "PUR-RFQ-2026-00094",
+      "scored_at": "2026-09-23 12:14:03",
+      "suppliers": [
+        {
+          "name": "FEMSA",
+          "supplier_id": "FEMSA",
+          "quotation_id": "PUR-SQTN-2026-00267",
+          "rank": 1,
+          "score": 97,
+          "risk": "Low",
+          "verdict": "BEST VALUE",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Atlantic Precision Manufacturing.",
+          "supplier_id": "\"Atlantic Precision Manufacturing.\"",
+          "quotation_id": "PUR-SQTN-2026-00265",
+          "rank": 2,
+          "score": 91,
+          "risk": "Medium",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Blue Ridge Manufacturing Inc",
+          "supplier_id": "\"Blue Ridge Manufacturing Inc\"",
+          "quotation_id": "PUR-SQTN-2026-00269",
+          "rank": 3,
+          "score": 85,
+          "risk": "Medium",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        }
+      ]
+    },
+    {
+      "result": "SCORE-PUR-RFQ-2026-00094-00120",
+      "rfq": "PUR-RFQ-2026-00094",
+      "scored_at": "2026-09-23 11:35:12",
+      "suppliers": [
+        {
+          "name": "Atlantic Precision Manufacturing.",
+          "supplier_id": "\"Atlantic Precision Manufacturing.\"",
+          "quotation_id": "PUR-SQTN-2026-00265",
+          "rank": 1,
+          "score": 91,
+          "risk": "High",
+          "verdict": "AVOID",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "FEMSA",
+          "supplier_id": "FEMSA",
+          "quotation_id": "PUR-SQTN-2026-00267",
+          "rank": 2,
+          "score": 87,
+          "risk": "Low",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Blue Ridge Manufacturing Inc",
+          "supplier_id": "\"Blue Ridge Manufacturing Inc\"",
+          "quotation_id": "PUR-SQTN-2026-00269",
+          "rank": 3,
+          "score": 85,
+          "risk": "Medium",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        }
+      ]
+    },
+    {
+      "result": "SCORE-PUR-RFQ-2026-00094-00119",
+      "rfq": "PUR-RFQ-2026-00094",
+      "scored_at": "2026-09-21 16:18:47",
+      "suppliers": [
+        {
+          "name": "Atlantic Precision Manufacturing.",
+          "supplier_id": "\"Atlantic Precision Manufacturing.\"",
+          "quotation_id": "PUR-SQTN-2026-00265",
+          "rank": 1,
+          "score": 91,
+          "risk": "Medium",
+          "verdict": "BEST VALUE",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "FEMSA",
+          "supplier_id": "FEMSA",
+          "quotation_id": "PUR-SQTN-2026-00267",
+          "rank": 2,
+          "score": 87,
+          "risk": "Low",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Blue Ridge Manufacturing Inc",
+          "supplier_id": "\"Blue Ridge Manufacturing Inc\"",
+          "quotation_id": "PUR-SQTN-2026-00269",
+          "rank": 3,
+          "score": 85,
+          "risk": "Medium",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        }
+      ]
+    },
+    {
+      "result": "SCORE-PUR-RFQ-2026-00093-00118",
+      "rfq": "PUR-RFQ-2026-00093",
+      "scored_at": "2026-09-21 11:44:17",
+      "suppliers": [
+        {
+          "name": "Apex Fasteners Ltd",
+          "supplier_id": "Apex Fasteners Ltd",
+          "quotation_id": "PUR-SQTN-2026-00263",
+          "rank": 1,
+          "score": 88,
+          "risk": "Medium",
+          "verdict": "BEST VALUE",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Blue Ridge Manufacturing Inc",
+          "supplier_id": "\"Blue Ridge Manufacturing Inc\"",
+          "quotation_id": "PUR-SQTN-2026-00262",
+          "rank": 2,
+          "score": 85,
+          "risk": "Low",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Eagle Peak Technologies Inc.",
+          "supplier_id": "\"Eagle Peak Technologies Inc.\"",
+          "quotation_id": "PUR-SQTN-2026-00264",
+          "rank": 3,
+          "score": 84,
+          "risk": "Low",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        }
+      ]
+    },
+    {
+      "result": "SCORE-PUR-RFQ-2026-00092-00117",
+      "rfq": "PUR-RFQ-2026-00092",
+      "scored_at": "2026-09-18 12:20:38",
+      "suppliers": [
+        {
+          "name": "FEMSA",
+          "supplier_id": "FEMSA",
+          "quotation_id": "PUR-SQTN-2026-00258",
+          "rank": 1,
+          "score": 100,
+          "risk": "Low",
+          "verdict": "BEST VALUE",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Titan Industrial Products LLC",
+          "supplier_id": "\"Titan Industrial Products LLC\"",
+          "quotation_id": "PUR-SQTN-2026-00261",
+          "rank": 2,
+          "score": 100,
+          "risk": "Low",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Atlantic Precision Manufacturing.",
+          "supplier_id": "\"Atlantic Precision Manufacturing.\"",
+          "quotation_id": "PUR-SQTN-2026-00260",
+          "rank": 3,
+          "score": 91,
+          "risk": "Medium",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        }
+      ]
+    },
+    {
+      "result": "SCORE-PUR-RFQ-2026-00092-00116",
+      "rfq": "PUR-RFQ-2026-00092",
+      "scored_at": "2026-09-18 11:45:37",
+      "suppliers": [
+        {
+          "name": "Titan Industrial Products LLC",
+          "supplier_id": "\"Titan Industrial Products LLC\"",
+          "quotation_id": "PUR-SQTN-2026-00261",
+          "rank": 1,
+          "score": 100,
+          "risk": "Low",
+          "verdict": "BEST VALUE",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "FEMSA",
+          "supplier_id": "FEMSA",
+          "quotation_id": "PUR-SQTN-2026-00258",
+          "rank": 2,
+          "score": 100,
+          "risk": "Low",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Atlantic Precision Manufacturing.",
+          "supplier_id": "\"Atlantic Precision Manufacturing.\"",
+          "quotation_id": "PUR-SQTN-2026-00260",
+          "rank": 3,
+          "score": 91,
+          "risk": "Medium",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        }
+      ]
+    },
+    {
+      "result": "SCORE-PUR-RFQ-2026-00091-00115",
+      "rfq": "PUR-RFQ-2026-00091",
+      "scored_at": "2026-09-17 16:30:32",
+      "suppliers": [
+        {
+          "name": "FEMSA",
+          "supplier_id": "FEMSA",
+          "quotation_id": "PUR-SQTN-2026-00256",
+          "rank": 1,
+          "score": 100,
+          "risk": "Low",
+          "verdict": "BEST VALUE",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Titan Industrial Products LLC",
+          "supplier_id": "\"Titan Industrial Products LLC\"",
+          "quotation_id": "PUR-SQTN-2026-00253",
+          "rank": 2,
+          "score": 100,
+          "risk": "Low",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Eagle Peak Technologies Inc.",
+          "supplier_id": "\"Eagle Peak Technologies Inc.\"",
+          "quotation_id": "PUR-SQTN-2026-00257",
+          "rank": 3,
+          "score": 84,
+          "risk": "Medium",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": "complete",
+          "quote_price_status": "submitted"
+        }
+      ]
+    },
+    {
+      "result": "SCORE-PUR-RFQ-2026-00091-00114",
+      "rfq": "PUR-RFQ-2026-00091",
+      "scored_at": "2026-09-17 16:09:39",
+      "suppliers": [
+        {
+          "name": "Titan Industrial Products LLC",
+          "supplier_id": "\"Titan Industrial Products LLC\"",
+          "quotation_id": "PUR-SQTN-2026-00253",
+          "rank": 1,
+          "score": 75,
+          "risk": "Low",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": null,
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "FEMSA",
+          "supplier_id": "FEMSA",
+          "quotation_id": "PUR-SQTN-2026-00256",
+          "rank": 2,
+          "score": 75,
+          "risk": "Low",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": null,
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Eagle Peak Technologies Inc.",
+          "supplier_id": "\"Eagle Peak Technologies Inc.\"",
+          "quotation_id": "PUR-SQTN-2026-00257",
+          "rank": 3,
+          "score": 75,
+          "risk": "Low",
+          "verdict": "BEST VALUE",
+          "evaluation_status": null,
+          "quote_price_status": "submitted"
+        }
+      ]
+    },
+    {
+      "result": "SCORE-PUR-RFQ-2026-00089-00113",
+      "rfq": "PUR-RFQ-2026-00089",
+      "scored_at": "2026-09-11 13:59:55",
+      "suppliers": [
+        {
+          "name": "Atlantic Precision Manufacturing.",
+          "supplier_id": "\"Atlantic Precision Manufacturing.\"",
+          "quotation_id": "PUR-SQTN-2026-00249",
+          "rank": 1,
+          "score": 82.5,
+          "risk": "Low",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": null,
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Apex Fasteners Ltd",
+          "supplier_id": "Apex Fasteners Ltd",
+          "quotation_id": "PUR-SQTN-2026-00251",
+          "rank": 2,
+          "score": 82.5,
+          "risk": "Low",
+          "verdict": "GOOD OPTION",
+          "evaluation_status": null,
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Eagle Peak Technologies Inc.",
+          "supplier_id": "\"Eagle Peak Technologies Inc.\"",
+          "quotation_id": "PUR-SQTN-2026-00252",
+          "rank": 3,
+          "score": 82.5,
+          "risk": "Low",
+          "verdict": "BEST VALUE",
+          "evaluation_status": null,
+          "quote_price_status": "submitted"
+        }
+      ]
+    },
+    {
+      "result": "SCORE-PUR-RFQ-2026-00089-00112",
+      "rfq": "PUR-RFQ-2026-00089",
+      "scored_at": "2026-09-11 13:43:08",
+      "suppliers": [
+        {
+          "name": "Atlantic Precision Manufacturing.",
+          "supplier_id": "\"Atlantic Precision Manufacturing.\"",
+          "quotation_id": "PUR-SQTN-2026-00249",
+          "rank": 1,
+          "score": 93,
+          "verdict": "AVOID",
+          "evaluation_status": null,
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Apex Fasteners Ltd",
+          "supplier_id": "Apex Fasteners Ltd",
+          "quotation_id": "PUR-SQTN-2026-00251",
+          "rank": 2,
+          "score": 93,
+          "verdict": "GOOD OPTION",
+          "evaluation_status": null,
+          "quote_price_status": "submitted"
+        },
+        {
+          "name": "Eagle Peak Technologies Inc.",
+          "supplier_id": "\"Eagle Peak Technologies Inc.\"",
+          "quotation_id": "PUR-SQTN-2026-00252",
+          "rank": 3,
+          "score": 93,
+          "verdict": "BEST VALUE",
+          "evaluation_status": null,
+          "quote_price_status": "submitted"
+        }
+      ]
+    }
+  ],
+  "matching_rfqs": [
+    "PUR-RFQ-2026-00095"
+  ]
+}

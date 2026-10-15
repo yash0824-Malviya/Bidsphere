@@ -1,0 +1,33 @@
+{
+  "mode": "READ ONLY",
+  "expected_stage": "initial",
+  "at": "2026-09-29T07:09:02.354Z",
+  "contract": "CON-2026-00001",
+  "po": "PUR-ORD-2026-00028",
+  "workflow": {
+    "purchase_order": "PUR-ORD-2026-00028",
+    "acceptance_status": "Pending",
+    "signature_status": "Pending",
+    "status": "Contract Acceptance Required",
+    "current_stage": "Contract Acceptance",
+    "next_stage": "Supplier E-Signature",
+    "responsible_role": "supplier",
+    "responsible": "Supplier",
+    "can_accept_contract": true,
+    "can_sign_contract": false,
+    "can_accept_po": false,
+    "version": "1.0",
+    "document_file_id": "c53c993072",
+    "document_hash": "92ed2d5e91f9816866d60dd32635d7733c5043cc93d6ed46eebb7be709f61097"
+  },
+  "signatures": [
+    {
+      "party": "inteva",
+      "at": "2026-09-28 17:10:07",
+      "version": "1.0",
+      "file_id": "c53c993072",
+      "hash": "92ed2d5e91f9816866d60dd32635d7733c5043cc93d6ed46eebb7be709f61097"
+    }
+  ],
+  "original_pdf_and_legal_signature": "verified unchanged"
+}

@@ -42,7 +42,6 @@ import {
   parseErpDateTime,
   sameSupplier,
   scheduleAuction,
-  sendAuctionWinnerToReview,
   sendInvitations,
   setItemTargets,
   startAuctionNow,
@@ -51,6 +50,8 @@ import {
   type AuctionSupplierScore,
   type FinalRecommendation,
 } from "../../api/reverseBidding";
+import { confirmReverseAuctionContractDecision } from "../../api/reverseAuctionContractDecision";
+import { clmViewerKey, getRfqClmSummary } from "../../api/clm";
 import { syncReverseAuctionSla } from "../../api/slaIntegration";
 import { isSlaVisibleForRole } from "../../config/slaAccess";
 import type {
@@ -1153,6 +1154,9 @@ function CompletionCard({
   submittedBy?: string;
   onDone: () => void;
 }) {
+  const queryClient = useQueryClient();
+  const contractSummary = useQuery({ queryKey: ["clm", "rfq-contract", auction.rfq, clmViewerKey()], queryFn: () => getRfqClmSummary(auction.rfq), enabled: canManage && approved });
+  const decisionPending = approved && (contractSummary.data?.decision === "Pending" || contractSummary.data?.recovery_required && contractSummary.data.can_decide);
   const currency = auction.currency;
   const winner = auction.winning_supplier ?? "";
   const winnerPrice = auction.winner_price ?? auction.lowest_bid ?? 0;
@@ -1177,6 +1181,7 @@ function CompletionCard({
   const [picked, setPicked] = useState<string>("");
   const [reviewed, setReviewed] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [decisionError, setDecisionError] = useState("");
   const selectedSupplier = picked || winner;
 
   const priceFor = (supplier: string): number => {
@@ -1185,7 +1190,9 @@ function CompletionCard({
     );
     return row?.current_bid ?? row?.initial_quotation_amount ?? 0;
   };
-  const selectedPrice = priceFor(selectedSupplier);
+  // Match the existing award API: the accepted winner uses its saved final
+  // winner_price; a manual supplier override uses that participant's bid.
+  const selectedPrice = sameSupplier(selectedSupplier, winner) ? winnerPrice : priceFor(selectedSupplier);
   const isManualChoice =
     !!selectedSupplier && !sameSupplier(selectedSupplier, winner);
 
@@ -1196,21 +1203,22 @@ function CompletionCard({
   );
 
   const approve = useMutation({
-    mutationFn: () =>
-      sendAuctionWinnerToReview(
-        auction.name,
-        submittedBy,
-        isManualChoice
-          ? { supplier: selectedSupplier, price: selectedPrice }
-          : undefined
-      ),
-    onSuccess: () => {
-      toast.success("Winner approved — sent to Legal & Finance review.");
+    mutationFn: () => {
+      setDecisionError("");
+      return confirmReverseAuctionContractDecision({ auction: auction.name, rfq: auction.rfq, supplier: selectedSupplier, finalAwardValue: selectedPrice, submittedBy, override: isManualChoice ? { supplier: selectedSupplier, price: selectedPrice } : undefined });
+    },
+    onSuccess: ({ result }) => {
+      toast.success(result.summary.decision === "Yes" ? `Award confirmed — Contract Request ${result.request?.record.name} is pending with Procurement.` : "Award confirmed — the existing procurement workflow continues.");
+      void queryClient.invalidateQueries({ queryKey: ["clm"] });
       setConfirmOpen(false);
       onDone();
     },
-    onError: (e: unknown) =>
-      toast.error(e instanceof Error ? e.message : "Could not approve winner"),
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : "Could not confirm the award and contract decision.";
+      setDecisionError(message);
+      toast.error(message);
+      void queryClient.invalidateQueries({ queryKey: ["clm"] });
+    },
   });
 
   const cancel = useMutation({
@@ -1338,10 +1346,10 @@ function CompletionCard({
       {canManage && (
         <div className="mt-5 border-t border-emerald-100 pt-4">
           {approved ? (
-            <span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-100 px-4 py-2 text-sm font-semibold text-emerald-700">
+            <div className="flex flex-wrap items-center gap-3"><span className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-100 px-4 py-2 text-sm font-semibold text-emerald-700">
               <ShieldCheck className="h-4 w-4" />
-              Sent to Legal &amp; Finance Review
-            </span>
+              Supplier award saved
+            </span>{decisionPending && <button type="button" className="btn-primary" disabled={approve.isPending} onClick={() => setConfirmOpen(true)}>Retry Contract Handoff</button>}</div>
           ) : (
             <>
               <label className="flex items-start gap-2 text-sm text-neutral-700">
@@ -1426,8 +1434,8 @@ function CompletionCard({
             ? "Award to selected supplier?"
             : "Approve auction winner?"
         }
-        description="This sends the chosen supplier to Legal & Finance review and then creates the Purchase Order using the final reverse-bid prices."
-        confirmLabel="Approve & Send to Review"
+        description="Confirm the supplier award using the final reverse-bid value. The saved RFQ contract requirement will apply automatically after the award is saved."
+        confirmLabel="Confirm Award"
         tone="primary"
         isLoading={approve.isPending}
       >
@@ -1446,6 +1454,7 @@ function CompletionCard({
           <ConfirmRow label="Bids Submitted">{totalBidsSubmitted}</ConfirmRow>
           <ConfirmRow label="Auction Duration">{auctionDuration}</ConfirmRow>
         </dl>
+        {decisionError && <p role="alert" className="mt-3 text-sm text-rose-700">{decisionError}</p>}
       </ConfirmDialog>
     </div>
   );

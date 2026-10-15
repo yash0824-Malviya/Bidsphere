@@ -80,6 +80,7 @@ export async function listRfqParentsForMaterialRequest(
       const parent = String(row.parent ?? "").trim();
       if (parent && !out.includes(parent)) out.push(parent);
     }
+
     return out;
   } catch {
     return [];
@@ -151,6 +152,7 @@ export async function batchFindActiveRfqNamesForMaterialRequests(
       parentsByMr.set(mr, list);
       allParents.add(parent);
     }
+
     if (fieldLinks) {
       for (const [mr, rfq] of fieldLinks) {
         const parent = String(rfq || "").trim();

@@ -46,17 +46,11 @@ const RequisitionDetailPage = lazy(
 const PendingBusinessCasesDashboardPage = lazy(
   () => import("./pages/intake/PendingBusinessCasesDashboardPage")
 );
-const BusinessNeedsListPage = lazy(
-  () => import("./pages/intake/BusinessNeedsListPage")
-);
-const BusinessNeedCreatePage = lazy(
-  () => import("./pages/intake/BusinessNeedCreatePage")
-);
-const BusinessNeedDetailPage = lazy(
-  () => import("./pages/intake/BusinessNeedDetailPage")
-);
 const BusinessCasesListPage = lazy(
   () => import("./pages/intake/BusinessCasesListPage")
+);
+const BusinessCaseCreatePage = lazy(
+  () => import("./pages/intake/BusinessCaseCreatePage")
 );
 const BusinessCaseDetailPage = lazy(
   () => import("./pages/intake/BusinessCaseDetailPage")
@@ -71,6 +65,7 @@ const MaterialRequestDashboardPage = lazy(
 const ECRListPage = lazy(() => import("./pages/ecr/ECRListPage"));
 const NewECRPage = lazy(() => import("./pages/ecr/NewECRPage"));
 const ECRDetailPage = lazy(() => import("./pages/ecr/ECRDetailPage"));
+const ECRBusinessCasePage = lazy(() => import("./pages/ecr/ECRBusinessCasePage"));
 const PurchaseRequisitionListPage = lazy(
   () => import("./pages/ecr/PurchaseRequisitionListPage")
 );
@@ -151,6 +146,9 @@ const SupplierDetailPage = lazy(() => import("./pages/supplier/SupplierDetailPag
 const SupplierOnboardingListPage = lazy(
   () => import("./pages/supplier/SupplierOnboardingListPage"),
 );
+const SupplierOnboardingCreatePage = lazy(
+  () => import("./pages/supplier/SupplierOnboardingCreatePage"),
+);
 const SupplierOnboardingDetailPage = lazy(
   () => import("./pages/supplier/SupplierOnboardingDetailPage"),
 );
@@ -174,6 +172,9 @@ const SupplierLockedPage = lazy(
 );
 
 const NewRFQPage = lazy(() => import("./pages/sourcing/NewRFQPage"));
+const SupplierQuotationsListPage = lazy(
+  () => import("./pages/sourcing/SupplierQuotationsListPage")
+);
 const RFQDetailPage = lazy(() => import("./pages/sourcing/RFQDetailPage"));
 const RFQTemplatesPage = lazy(() => import("./pages/sourcing/RFQTemplatesPage"));
 const RFIListPage = lazy(() => import("./pages/sourcing/RFIListPage"));
@@ -196,6 +197,28 @@ const ReverseBiddingDetailPage = lazy(
 );
 const LegalReviewDetailPage = lazy(() => import("./pages/legal/LegalReviewDetailPage"));
 const LegalReviewsListPage = lazy(() => import("./pages/legal/LegalReviewsListPage"));
+const LegalSupplierDocumentsPage = lazy(
+  () => import("./pages/legal/LegalSupplierDocumentsPage"),
+);
+const LegalDocumentsPage = lazy(
+  () => import("./pages/legal/LegalDocumentsPage"),
+);
+const LegalContractReviewPage = lazy(
+  () => import("./pages/legal/LegalContractReviewPage"),
+);
+const LegalContractRegisterPage = lazy(
+  () => import("./pages/legal/LegalContractRegisterPage"),
+);
+const ContractsPage = lazy(() => import("./pages/contracts/ContractsPage"));
+const ContractCreatePage = lazy(() => import("./pages/contracts/ContractCreatePage"));
+const ContractDetailPage = lazy(() => import("./pages/contracts/ContractDetailPage"));
+const ContractSettingsPage = lazy(() => import("./pages/contracts/ContractSettingsPage"));
+const LegalExpiringContractsPage = lazy(
+  () => import("./pages/legal/LegalExpiringContractsPage"),
+);
+const LegalEsignaturesPage = lazy(
+  () => import("./pages/legal/LegalEsignaturesPage"),
+);
 const FinanceReviewDetailPage = lazy(() => import("./pages/finance/FinanceReviewDetailPage"));
 
 const SupplierLoginPage = lazy(
@@ -485,7 +508,25 @@ function App() {
         <RFQSchemaBootstrap />
         <VoucherStoreSync />
         <SlaEngine />
-        <Toaster position="top-right" />
+        <Toaster
+          position="top-right"
+          containerStyle={{
+            top: 24,
+            right: 24,
+            zIndex: 99999,
+          }}
+          toastOptions={{
+            duration: 5000,
+            style: {
+              background: "#1e293b",
+              color: "#f8fafc",
+              fontSize: "13px",
+              fontWeight: 500,
+              borderRadius: "10px",
+              boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.2)",
+            },
+          }}
+        />
         <Suspense fallback={<RouteFallback />}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
@@ -534,6 +575,9 @@ function App() {
               <Route path="/supplier/profile" element={<SupplierPortalProfilePage />} />
               <Route path="/supplier/locked" element={<SupplierLockedPage />} />
               <Route path="/supplier/dashboard" element={<SupplierDashboard />} />
+              <Route path="/supplier/live-auctions" element={<Navigate to="/supplier/auctions" replace />} />
+              <Route path="/supplier/orders" element={<Navigate to="/supplier/purchase-orders" replace />} />
+              <Route path="/supplier/finance" element={<Navigate to="/supplier/vouchers" replace />} />
               <Route path="/supplier/rfqs" element={<SupplierRFQsPage />} />
               <Route path="/supplier/rfis" element={<SupplierRFIsPage />} />
               <Route path="/supplier/rfis/:id" element={<SupplierRFIDetailPage />} />
@@ -569,6 +613,8 @@ function App() {
               <Route path="/supplier/rfq/:rfqName" element={<SupplierRFQPage />} />
               <Route path="/supplier/po/:poName" element={<SupplierPOPage />} />
               <Route path="/supplier/auctions" element={<SupplierAuctionsListPage />} />
+              <Route path="/supplier/contracts" element={<ContractsPage supplier />} />
+              <Route path="/supplier/contracts/:name" element={<ContractDetailPage supplier />} />
               <Route
                 path="/supplier/auctions/:auctionName"
                 element={<SupplierAuctionPage />}
@@ -588,23 +634,31 @@ function App() {
             />
             <Route
               path="/intake/business-needs"
-              element={<BusinessNeedsListPage />}
+              element={<Navigate to="/intake/business-cases" replace />}
             />
             <Route
               path="/intake/business-needs/new"
-              element={<BusinessNeedCreatePage />}
+              element={<Navigate to="/intake/business-cases/new" replace />}
             />
             <Route
               path="/intake/business-needs/:id/edit"
-              element={<BusinessNeedCreatePage />}
+              element={<Navigate to="/intake/business-cases" replace />}
             />
             <Route
               path="/intake/business-needs/:id"
-              element={<BusinessNeedDetailPage />}
+              element={<Navigate to="/intake/business-cases" replace />}
             />
             <Route
               path="/intake/business-cases"
               element={<BusinessCasesListPage />}
+            />
+            <Route
+              path="/intake/business-cases/new"
+              element={<BusinessCaseCreatePage />}
+            />
+            <Route
+              path="/intake/business-cases/:id/edit"
+              element={<BusinessCaseCreatePage />}
             />
             <Route
               path="/intake/business-cases/:id"
@@ -619,6 +673,7 @@ function App() {
             <Route path="/ecr" element={<ECRListPage />} />
             <Route path="/ecr/new" element={<NewECRPage />} />
             <Route path="/ecr/:name" element={<ECRDetailPage />} />
+            <Route path="/ecr/:name/business-case" element={<ECRBusinessCasePage />} />
             <Route path="/ecr/:name/review" element={<ECRDetailPage />} />
             <Route path="/ecr/:name/edit" element={<NewECRPage />} />
             <Route
@@ -798,6 +853,7 @@ function App() {
               element={<InvoiceDetailRoutePage />}
             />
             <Route path="/p2p/total-spend" element={<TotalSpendDetailsPage />} />
+            <Route path="/reports" element={<Navigate to="/reports/operations" replace />} />
             <Route
               path="/reports/operations"
               element={<OperationalReportsPage />}
@@ -839,6 +895,10 @@ function App() {
               element={<SupplierOnboardingListPage />}
             />
             <Route
+              path="/suppliers/onboarding/new"
+              element={<SupplierOnboardingCreatePage />}
+            />
+            <Route
               path="/suppliers/onboarding/:id"
               element={<SupplierOnboardingDetailPage />}
             />
@@ -850,6 +910,8 @@ function App() {
               element={<Navigate to="/sourcing/rfq" replace />}
             />
             <Route path="/sourcing/rfq" element={<RFQListPage />} />
+            <Route path="/sourcing/rfqs" element={<RFQListPage />} />
+            <Route path="/sourcing/quotations" element={<SupplierQuotationsListPage />} />
             <Route path="/sourcing/rfq/new" element={<NewRFQPage />} />
             <Route path="/sourcing/rfq/:id" element={<RFQDetailPage />} />
             <Route path="/sourcing/rfi" element={<RFIListPage />} />
@@ -891,6 +953,31 @@ function App() {
             <Route path="/legal/reviews/:rfqId" element={<LegalReviewDetailPage />} />
             <Route path="/legal/reviews" element={<LegalReviewsListPage />} />
             <Route path="/legal/review/:sqName" element={<LegalReviewDetailPage />} />
+            <Route
+              path="/legal/supplier-documents"
+              element={<LegalSupplierDocumentsPage />}
+            />
+            <Route path="/legal/documents" element={<LegalDocumentsPage />} />
+            <Route
+              path="/legal/contracts/review"
+              element={<LegalContractReviewPage />}
+            />
+            <Route
+              path="/legal/contracts/expiring"
+              element={<LegalExpiringContractsPage />}
+            />
+            <Route
+              path="/legal/contracts"
+              element={<LegalContractRegisterPage />}
+            />
+            <Route
+              path="/legal/esignatures/pending"
+              element={<LegalEsignaturesPage mode="pending" />}
+            />
+            <Route
+              path="/legal/esignatures/completed"
+              element={<LegalEsignaturesPage mode="completed" />}
+            />
 
             {/* Budget — finance & admin */}
             <Route path="/budget" element={<BudgetDashboardPage />} />
@@ -904,8 +991,14 @@ function App() {
             <Route path="/budget/history" element={<BudgetHistoryPage />} />
             <Route path="/budget/pending-reviews" element={<FinanceReviewsPage />} />
             <Route path="/finance/reviews/:rfqId" element={<FinanceReviewDetailPage />} />
-            <Route path="/contracts" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/contracts/:name" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/contracts" element={<ContractsPage />} />
+            <Route path="/contracts/new" element={<ContractCreatePage doctype="Contract" />} />
+            <Route path="/contracts/settings" element={<ContractSettingsPage />} />
+            <Route path="/contracts/records/:recordType/:name" element={<ContractDetailPage />} />
+            <Route path="/contracts/:name" element={<ContractDetailPage doctype="Contract" />} />
+            <Route path="/contract-requests" element={<ContractsPage doctype="Contract Request" />} />
+            <Route path="/contract-requests/new" element={<ContractCreatePage doctype="Contract Request" />} />
+            <Route path="/contract-requests/:name" element={<ContractDetailPage doctype="Contract Request" />} />
             <Route path="/assets" element={<Navigate to="/dashboard" replace />} />
 
             {/* Warehouse */}

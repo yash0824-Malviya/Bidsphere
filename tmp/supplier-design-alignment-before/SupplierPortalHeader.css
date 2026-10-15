@@ -1,0 +1,60 @@
+/* Shared Supplier Portal header entry points; page content and staff UI are untouched. */
+.supplier-portal-layout .supplier-portal-header { height: auto; border-color: #e5eaf2; background: #fff; box-shadow: none; }
+.supplier-portal-layout .supplier-portal-header-inner { height: 68px; padding: 0 24px; gap: 16px; }
+.supplier-portal-layout .supplier-portal-header-brand { flex: 1 1 auto; min-width: 0; }
+.supplier-portal-brand { display: flex; align-items: center; gap: 10px; min-width: 0; color: #0f1b36; text-decoration: none; }
+.supplier-portal-brand > img { width: 30px; height: 30px; flex-shrink: 0; }
+.supplier-portal-brand-copy { display: grid; gap: 3px; min-width: 0; }
+.supplier-portal-brand-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 1.4; font-weight: 650; }
+.supplier-portal-brand-company { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #718098; font-size: 11px; line-height: 1.4; }
+.supplier-header-actions { display: flex; align-items: center; justify-content: flex-end; flex: 0 0 auto; gap: 10px; }
+.supplier-header-control { position: relative; display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 6px; height: 34px; padding: 0 9px; border: 1px solid transparent; border-radius: 7px; color: #52647e; background: #fff; font-size: 12px; font-weight: 500; text-decoration: none; }
+.supplier-header-control > svg { height: 17px; width: 17px; flex-shrink: 0; stroke-width: 1.7; }
+.supplier-header-control:hover, .supplier-header-control[data-state="open"] { color: #146ce8; background: #f3f7fd; }
+.supplier-header-notifications { width: 34px; padding: 0; }
+.supplier-header-unread { position: absolute; top: -3px; right: -2px; display: flex; align-items: center; justify-content: center; height: 16px; min-width: 16px; padding: 0 3px; border-radius: 10px; background: #1f3a6d; color: #fff; font-size: 10px; line-height: 1; font-weight: 600; }
+.supplier-header-language button[aria-haspopup="listbox"] { height: 34px; padding: 0 10px; border-color: #e5eaf2; border-radius: 7px; font-size: 12px; box-shadow: none; }
+.supplier-header-profile { display: flex; align-items: center; min-width: 0; gap: 8px; height: 40px; max-width: 300px; padding: 3px 8px 3px 3px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #1f3a6d; text-align: left; }
+.supplier-header-profile:hover, .supplier-header-profile[data-state="open"] { background: #f3f7fd; border-color: #e5eaf2; }
+.supplier-header-avatar { display: flex; flex: 0 0 32px; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; border: 1px solid #dfe7f2; background: #eef3fb; }
+.supplier-header-avatar svg { width: 17px; height: 17px; stroke-width: 1.7; }
+.supplier-header-profile-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 1.4; font-weight: 550; }
+.supplier-header-chevron { width: 13px; height: 13px; flex-shrink: 0; color: #718098; }
+.supplier-header-popover { z-index: 150; width: 240px; max-width: calc(100vw - 24px); padding: 6px; border: 1px solid #e5eaf2; border-radius: 10px; background: #fff; color: #243652; box-shadow: 0 8px 28px #0f1b3614; }
+.supplier-header-account { width: 292px; }
+.supplier-header-account-name { margin: 0 4px 5px; padding: 8px 7px 12px; border-bottom: 1px solid #e5eaf2; overflow-wrap: anywhere; font-size: 12px; line-height: 1.5; font-weight: 600; }
+.supplier-header-menu-item { display: flex; width: 100%; align-items: center; gap: 10px; padding: 10px; border-radius: 6px; color: #40516c; background: transparent; font-size: 12px; line-height: 1.5; text-align: left; text-decoration: none; }
+.supplier-header-menu-item > svg { width: 16px; height: 16px; flex-shrink: 0; color: #718098; stroke-width: 1.7; }
+a.supplier-header-menu-item:hover, button.supplier-header-menu-item:hover { background: #f2f6fc; color: #146ce8; }
+.supplier-header-menu-divider { height: 1px; background: #e5eaf2; margin: 4px; }
+.supplier-header-account-status { cursor: default; }
+.supplier-header-status { margin-left: auto; padding: 2px 6px; border-radius: 4px; color: #996315; background: #fff7e8; font-size: 10px; }
+.supplier-header-status[data-tone="approved"] { color: #147354; background: #edf8f2; }
+.supplier-header-status[data-tone="rejected"] { color: #b33c47; background: #fff1f2; }
+.supplier-header-mobile-language { display: none; }
+.supplier-header-actions a:focus-visible, .supplier-header-actions button:focus-visible,
+.supplier-header-popover a:focus-visible, .supplier-header-popover button:focus-visible,
+.supplier-portal-brand:focus-visible { outline: 2px solid #146ce8; outline-offset: 2px; }
+
+@media (max-width: 1279px) {
+  .supplier-header-profile { max-width: 200px; }
+  .supplier-header-support > span { display: none; }
+  .supplier-header-support { width: 34px; padding: 0; }
+  .supplier-header-logout { display: none; }
+}
+@media (max-width: 1023px) {
+  .supplier-portal-layout .supplier-portal-header-inner { padding: 0 20px; gap: 12px; }
+  .supplier-header-profile { max-width: 190px; }
+}
+@media (max-width: 767px) {
+  .supplier-portal-layout .supplier-portal-header-inner { height: 64px; padding: 0 12px; gap: 8px; }
+  .supplier-header-actions { gap: 4px; }
+  .supplier-header-language, .supplier-header-profile-name, .supplier-portal-brand > img { display: none; }
+  .supplier-header-profile { padding: 3px; gap: 3px; }
+  .supplier-portal-brand-title { font-size: 11px; }
+  .supplier-portal-brand-company { font-size: 10px; }
+  .supplier-header-mobile-language { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; gap: 10px; color: #40516c; font-size: 12px; }
+  .supplier-header-mobile-language button[aria-haspopup="listbox"] { height: 32px; font-size: 12px; border-radius: 6px; }
+  .supplier-header-mobile-language button[aria-haspopup="listbox"] > span { display: inline; }
+  .supplier-portal-layout .supplier-portal-menu-toggle { width: 30px; height: 32px; min-height: 32px; border-radius: 6px; }
+}

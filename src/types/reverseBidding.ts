@@ -9,6 +9,13 @@
  */
 import type { ErpDoc } from "./erpnext";
 
+/** Source quotation identity passed from the recommendation to auction creation. */
+export interface ReverseBiddingQuotationSelection {
+  quotation_id: string;
+  supplier_id: string;
+  rfq_id: string;
+}
+
 export type AuctionStatus =
   | "Draft"
   | "Scheduled"

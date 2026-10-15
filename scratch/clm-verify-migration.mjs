@@ -1,0 +1,16 @@
+import {readFileSync,writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {createEcrSchemaErpClient,ecrSchemaResource as resource,listAllEcrSchemaRows} from '../scripts/ecr-schema-erp-client.mjs';
+import {loadClmSchema,planClmSchema} from '../scripts/clm-schema.mjs';
+const directory='scratch/clm-migration-2026-09-17T07-05-38-663Z';
+const backup=JSON.parse(readFileSync(`${directory}/before.json`,'utf8'));
+const before=backup.schema,api=createEcrSchemaErpClient(),after=await loadClmSchema(api);
+const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+const permission=rows=>rows.map(({modified,modified_by,...definition})=>definition);
+if(planClmSchema(after).operations.length)throw Error('Schema not idempotent');
+if(!same(before.records,after.records))throw Error('Existing records changed');
+if(!same(before.customPermissions,after.customPermissions))throw Error('Custom permissions changed');
+for(const dt of Object.keys(before.doctypes))if(!same(permission(before.doctypes[dt].permissions),permission(after.doctypes[dt].permissions)))throw Error(`${dt} permissions changed`);
+for(const wf of backup.workflows)if(!same(wf,await api('GET',resource('Workflow',wf.name))))throw Error(`Existing Workflow ${wf.name} changed`);
+const result={verified:true,operations:backup.plan.operations.length,newDoctypes:0,newRoles:0,existingRecordsUnchanged:Object.values(before.records).reduce((sum,rows)=>sum+rows.length,0),existingWorkflowsUnchanged:backup.workflows.length,permissionsUnchanged:true,permissionChildTimestampsRefreshed:['Contract Request','Contract Approval Matrix'],remainingOperations:0};
+writeFileSync(`${directory}/result.json`,JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));

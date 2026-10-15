@@ -13,9 +13,11 @@ function clamp(val: number, min: number, max: number): number {
 }
 
 function defaultPosition(): Position {
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 640;
+  const offset = isMobile ? 16 : 24;
   return {
-    x: Math.max(16, window.innerWidth - FAB_SIZE - 24),
-    y: Math.max(20, window.innerHeight - FAB_SIZE - 92),
+    x: Math.max(16, (typeof window !== "undefined" ? window.innerWidth : 1024) - FAB_SIZE - offset),
+    y: Math.max(20, (typeof window !== "undefined" ? window.innerHeight : 768) - FAB_SIZE - offset),
   };
 }
 

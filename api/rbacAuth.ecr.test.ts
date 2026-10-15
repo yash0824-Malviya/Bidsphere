@@ -21,6 +21,49 @@ function principal(role: AppRole): Extract<AccessPrincipal, { typ: "internal" }>
 }
 
 describe("server ECR RBAC", () => {
+  it("protects linked Business Case, workflow version and sourcing decision from all direct writers", () => {
+    for (const role of ["engineer", "finance", "quality", "procurement", "admin"] as const) {
+      for (const field of ["ecr_workflow_version", "ecr_business_case", "rfq_required", "rfq_decision_reason"]) {
+        expect(() => enforceEcrMutationRbac(principal(role), "resource/Engineering%20Change%20Request/ECR-1", "PUT", { [field]: "forged" }, "Draft", { ecr_owner: "engineer@example.com" })).toThrow(/server-managed/i);
+      }
+    }
+  });
+
+  it("permits only owner Engineer supporting document edits during Business Case preparation", () => {
+    const doc = { ecr_owner: "engineer@example.com", ecr_workflow_version: "extended_v1" };
+    const path = "resource/Engineering%20Change%20Request/ECR-1";
+    expect(() => enforceEcrMutationRbac(principal("engineer"), path, "PUT", { supporting_documents: "/private/files/a.pdf" }, "Technical Approved", doc)).not.toThrow();
+    expect(() => enforceEcrMutationRbac(principal("engineer"), path, "PUT", { ecr_title: "forged" }, "Technical Approved", doc)).toThrow(/only Draft or Sent Back/i);
+    expect(() => enforceEcrMutationRbac(principal("engineer"), path, "PUT", { supporting_documents: "" }, "Technical Approved", { ...doc, ecr_owner: "other@example.com" })).toThrow(/only their own/i);
+  });
+
+  it("assigns the extended final approver and decision by version without granting generic BC approval", () => {
+    expect(() => assertEcrWorkflowPermission(principal("program_manager"), "Approve ECR", "Final ECR Approval", "extended_v1")).not.toThrow();
+    expect(() => assertEcrWorkflowPermission(principal("admin"), "Approve ECR", "Final ECR Approval", "extended_v1")).toThrow();
+    expect(() => assertEcrWorkflowPermission(principal("finance"), "Approve Finance", "Finance Review", "extended_v1")).toThrow();
+    expect(() => assertEcrWorkflowPermission(principal("procurement"), "Record Procurement Decision", "ECR Approved", "extended_v1")).not.toThrow();
+    expect(() => assertEcrWorkflowPermission(principal("procurement_team"), "Record Procurement Decision", "ECR Approved", "extended_v1")).toThrow();
+  });
+
+  it("does not give a Finance-only account Legal authority from its mailbox", () => {
+    expect(resolveServerRole({
+      name: "legal@netlink.com",
+      email: "legal@netlink.com",
+      erpnext_roles: ["Accounts Manager", "Purchase Manager", "Quality Manager"],
+    })).toBe("finance");
+  });
+
+  it.each(["Legal Reviewer", "Legal Manager"])(
+    "recognizes the actual %s role independently of the mailbox",
+    (role) => {
+      expect(resolveServerRole({
+        name: "reviewer@example.test",
+        email: "reviewer@example.test",
+        erpnext_roles: ["Accounts Manager", "Purchase Manager", role],
+      })).toBe("legal");
+    },
+  );
+
   it("uses actual ERP roles for ECR identities", () => {
     expect(resolveServerRole({ name: "any", email: "any@example.com", erpnext_roles: ["Desk User", "Purchase User", "Quality Manager"] })).toBe("quality");
   });

@@ -19,7 +19,6 @@ import {
   Truck,
 } from "lucide-react";
 
-import { APP_NAME } from "../../config/branding";
 import { getInvoicesForPO } from "../../api/accounts";
 import type { InvoiceRow } from "../../api/accounts";
 import {
@@ -46,6 +45,7 @@ import {
   syncDeliveryStateFromERPNext,
 } from "../../api/poDeliveryWorkflow";
 import POStatusTimeline from "../../components/p2p/POStatusTimeline";
+import PurchaseOrderContractInformation from "../../components/p2p/PurchaseOrderContractInformation";
 import {
   buildPOWorkflowSteps,
   derivePOWorkflowSnapshot,
@@ -232,6 +232,20 @@ export default function PurchaseOrderDetailPage() {
     hasSubmittedGRN && poVouchers.length === 0 && !hasInvoice;
 
   const itemCount = (po.items ?? []).length;
+  const sourceRfq = po.custom_rfq_reference || po.rfq_name || po.rfq || (po as { custom_clm_rfq?: string }).custom_clm_rfq;
+  const awardedQuotation =
+    (po as { supplier_quotation?: string }).supplier_quotation ||
+    po.items?.find((it) => it.supplier_quotation)?.supplier_quotation;
+  const paymentTerms =
+    (po as { payment_terms_template?: string }).payment_terms_template ||
+    po.terms ||
+    "Standard Terms";
+  const deliveryDetailsText =
+    syncedDeliveryState?.tracking_number
+      ? `Tracking: ${syncedDeliveryState.tracking_number}`
+      : syncedDeliveryState?.overall_status ||
+        (syncedDeliveryState as { delivery_status?: string })?.delivery_status ||
+        (po.schedule_date ? `Expected: ${formatDate(po.schedule_date)}` : "Standard Delivery");
   const grandTotal = po.grand_total ?? 0;
   const netTotal = po.net_total ?? po.total ?? grandTotal;
   const taxTotal = po.total_taxes_and_charges ?? (grandTotal - netTotal);
@@ -375,6 +389,8 @@ export default function PurchaseOrderDetailPage() {
         <Kpi icon={Receipt} label="Billed" value={formatPercent(billedPct)} tone={billedPct >= 100 ? "success" : "warning"} />
       </div>
 
+      <PurchaseOrderContractInformation key={po.name} purchaseOrder={po.name ?? name} />
+
       {/* ── Main two-column layout ── */}
       <div className="grid gap-2 lg:grid-cols-[1fr_250px]">
         {/* ── Left column ── */}
@@ -384,15 +400,42 @@ export default function PurchaseOrderDetailPage() {
             <div className="border-b border-neutral-100 px-3 py-1.5">
               <h2 className="text-[10px] font-bold uppercase tracking-wider text-neutral-500">PO Information</h2>
             </div>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-1 px-3 py-2 text-xs lg:grid-cols-4">
+            <div className="grid grid-cols-2 gap-x-6 gap-y-2 px-3 py-2 text-xs sm:grid-cols-3 lg:grid-cols-4">
               <InfoField label="PO Number" value={po.name} mono />
               <InfoField label="Status" badge={displayStatus} />
               <InfoField label="Supplier" value={po.supplier_name ?? po.supplier ?? "—"} />
               <InfoField label="Company" value={po.company ?? "—"} />
               <InfoField label="PO Date" value={formatDate(po.transaction_date)} />
               <InfoField label="Required By" value={po.schedule_date ? formatDate(po.schedule_date) : "—"} />
+              <InfoField label="Total Value" value={formatCurrency(grandTotal)} />
               <InfoField label="Currency" value={po.currency ?? "USD"} />
-              <InfoField label="Owner" value={APP_NAME} />
+              <InfoField
+                label="Linked RFQ"
+                value={
+                  sourceRfq ? (
+                    <Link
+                      to={`/sourcing/rfq/${encodeURIComponent(sourceRfq)}`}
+                      className="font-medium text-primary-600 hover:underline"
+                    >
+                      {sourceRfq}
+                    </Link>
+                  ) : (
+                    "—"
+                  )
+                }
+              />
+              <InfoField
+                label="Awarded Quotation"
+                value={
+                  awardedQuotation ? (
+                    <span className="font-mono text-neutral-800">{awardedQuotation}</span>
+                  ) : (
+                    "—"
+                  )
+                }
+              />
+              <InfoField label="Payment Terms" value={paymentTerms} />
+              <InfoField label="Delivery Details" value={deliveryDetailsText} />
             </div>
           </div>
 
@@ -562,9 +605,16 @@ export default function PurchaseOrderDetailPage() {
             <RelatedDoc
               icon={FileText}
               label="Source RFQ"
-              value={po.custom_rfq_reference ?? "—"}
-              to={po.custom_rfq_reference ? `/sourcing/rfq/${encodeURIComponent(po.custom_rfq_reference)}` : undefined}
+              value={sourceRfq || "—"}
+              to={sourceRfq ? `/sourcing/rfq/${encodeURIComponent(sourceRfq)}` : undefined}
             />
+            {awardedQuotation && (
+              <RelatedDoc
+                icon={FileText}
+                label="Quotation"
+                value={awardedQuotation}
+              />
+            )}
             <RelatedDoc
               icon={PackagePlus}
               label="Goods Receipts"
@@ -834,14 +884,14 @@ function CountBadge({ n }: { n: number }) {
   return <span className="ml-0.5 rounded-full bg-neutral-100 px-1.5 py-px text-[9px] font-bold text-neutral-600">{n}</span>;
 }
 
-function InfoField({ label, value, badge, mono }: { label: string; value?: string; badge?: string; mono?: boolean }) {
+function InfoField({ label, value, badge, mono }: { label: string; value?: React.ReactNode; badge?: string; mono?: boolean }) {
   return (
     <div className="py-0.5">
       <p className="text-[9px] font-semibold uppercase tracking-wider text-neutral-400">{label}</p>
       {badge ? (
         <StatusBadge status={badge} />
       ) : (
-        <p className={`text-xs font-medium text-neutral-800 truncate leading-snug ${mono ? "font-mono" : ""}`}>{value ?? "—"}</p>
+        <div className={`text-xs font-medium text-neutral-800 truncate leading-snug ${mono ? "font-mono" : ""}`}>{value ?? "—"}</div>
       )}
     </div>
   );

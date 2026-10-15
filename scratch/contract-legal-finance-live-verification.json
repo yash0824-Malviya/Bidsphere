@@ -1,0 +1,72 @@
+{
+  "mode": "READ ONLY",
+  "contract": "CON-2026-00001",
+  "changed": false,
+  "status": "Executed",
+  "workflow": {
+    "phase": "procurement",
+    "status": "Finance Approved",
+    "stage": "Procurement Finalization",
+    "owner": "Procurement Team",
+    "ownerRole": "procurement_team",
+    "instruction": "Continue the existing procurement/PO process, then finalize using the submitted Purchase Order.",
+    "rfq": "PUR-RFQ-2026-00104",
+    "award": "LDC2026-00027",
+    "createdBy": "procurement.team@netlink.com",
+    "createdAt": "2026-09-25 13:20:51",
+    "purchaseOrder": ""
+  },
+  "modified": "2026-09-29 11:18:48.401630",
+  "signatures": [
+    {
+      "party": "inteva",
+      "by": "legal@netlink.com",
+      "version": "1.0",
+      "file_id": "c53c993072",
+      "hash": "92ed2d5e91f9816866d60dd32635d7733c5043cc93d6ed46eebb7be709f61097",
+      "unchanged": true
+    }
+  ],
+  "finance_approvals": [
+    {
+      "id": "55d84831-f774-4cf0-ac10-99a77f4d8e41",
+      "role": "finance",
+      "stage": 1,
+      "rule": "RFQ Award: Finance Approval after Legal Manager E-Signature",
+      "status": "Approved",
+      "by": "finance@netlink.com",
+      "at": "2026-09-29 11:18:45",
+      "comment": "Approved for the requested workflow acceptance test after verifying the persisted Legal Manager signature."
+    }
+  ],
+  "finance_users": [
+    "admin@netlink.com",
+    "finance@netlink.com",
+    "abhayp@netlink.com"
+  ],
+  "finance_notices": [
+    {
+      "name": "51gpn48aj7",
+      "for_user": "abhayp@netlink.com",
+      "subject": "[CLM 331bae53047ecc433e25] Contract CON-2026-00001: Pending Finance Approval"
+    },
+    {
+      "name": "51e8e4267n",
+      "for_user": "finance@netlink.com",
+      "subject": "[CLM 331bae53047ecc433e25] Contract CON-2026-00001: Pending Finance Approval"
+    },
+    {
+      "name": "51dhclae87",
+      "for_user": "admin@netlink.com",
+      "subject": "[CLM 331bae53047ecc433e25] Contract CON-2026-00001: Pending Finance Approval"
+    }
+  ],
+  "procurement_notices": [
+    {
+      "name": "d0uruufkkl",
+      "for_user": "procurement.team@netlink.com",
+      "subject": "[CLM 02bbfdc42fa6be5f2dcc] Contract CON-2026-00001: Finance Approved"
+    }
+  ],
+  "warnings": []
+}

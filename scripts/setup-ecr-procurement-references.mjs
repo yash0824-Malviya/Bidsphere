@@ -7,6 +7,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ECR_SOURCE_DOCTYPE, ECR_SOURCE_FIELD, ECR_SOURCE_OPTIONAL_SETTINGS, ensureOptionalEcrSourceReferenceSchema } from "./ecr-source-reference-schema.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const envPath = resolve(root, ".env");
@@ -90,6 +91,14 @@ async function findField(dt, fieldname) {
 async function ensureField(definition) {
   const existing = await findField(definition.dt, definition.fieldname);
   if (existing) {
+    if (definition.dt === ECR_SOURCE_DOCTYPE && definition.fieldname === ECR_SOURCE_FIELD) {
+      if (existing.fieldtype !== "Select" || Number(existing.hidden || 0) !== 1) {
+        throw new Error(`${definition.dt}.${definition.fieldname} exists with an incompatible definition.`);
+      }
+      const repair = await ensureOptionalEcrSourceReferenceSchema((method, path, body) => api(method, `/api/${path}`, body));
+      doctypeMetaCache.delete(definition.dt);
+      return { status: repair.nativeChanged || repair.customFieldsChanged ? "updated" : "existing", name: existing.name, source: existing.source, fieldname: definition.fieldname };
+    }
     if (
       existing.fieldtype !== definition.fieldtype ||
       String(existing.options ?? "") !== String(definition.options ?? "") ||
@@ -152,7 +161,7 @@ const definitions = [
     fieldname: "source_reference_type",
     label: "Source Reference Type",
     fieldtype: "Select",
-    options: "RFQ\nPurchase Order",
+    ...ECR_SOURCE_OPTIONAL_SETTINGS,
     insert_after: "technical_notes",
     hidden: 1,
   },

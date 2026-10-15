@@ -2,8 +2,17 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "crons": [{ "path": "/api/clm-monitor", "schedule": "0 3 * * *" }],
 
   "rewrites": [
+    {
+      "source": "/api/clm-monitor",
+      "destination": "/api/clm-monitor"
+    },
+    {
+      "source": "/api/clm",
+      "destination": "/api/clm"
+    },
     {
       "source": "/api/auth/:action",
       "destination": "/api/auth-login?action=:action"
@@ -89,6 +98,10 @@
       "destination": "/api/erp-server-date"
     },
     {
+      "source": "/api/business-cases/:caseId/attachments/:path*",
+      "destination": "/api/business-cases-attachment?caseId=:caseId&path=:path*"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api/proxy?path=$1"
     },
@@ -100,7 +113,8 @@
 
   "functions": {
     "api/*.ts": {
-      "maxDuration": 30
+      "maxDuration": 30,
+      "includeFiles": "public/{netlink-logo-transparent.png,fonts/Roboto-Regular.ttf}"
     }
   }
 }

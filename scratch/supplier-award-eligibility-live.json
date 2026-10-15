@@ -1,0 +1,31 @@
+{
+  "checked_at": "2026-09-23T06:41:30.647Z",
+  "read_only": true,
+  "rfq": "PUR-RFQ-2026-00094",
+  "rows": [
+    {
+      "supplierId": "\"Atlantic Precision Manufacturing.\"",
+      "quotationId": "PUR-SQTN-2026-00265",
+      "allowed": false,
+      "blocked": true,
+      "status": 403,
+      "reason": "Supplier is currently marked AVOID due to high risk and cannot be selected for award."
+    },
+    {
+      "supplierId": "FEMSA",
+      "quotationId": "PUR-SQTN-2026-00267",
+      "allowed": true,
+      "blocked": false
+    },
+    {
+      "supplierId": "\"Blue Ridge Manufacturing Inc\"",
+      "quotationId": "PUR-SQTN-2026-00269",
+      "allowed": true,
+      "blocked": false
+    }
+  ],
+  "reverse_bidding_guard": {
+    "atlantic_and_femsa": "blocked",
+    "femsa_and_blue_ridge": "allowed by eligibility; existing workflow gates still apply"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "checked_at": "2026-09-29T10:53:27.804Z",
+  "mode": "GET-only ERPNext and private PDF verification",
+  "contract": "CON-2026-00001",
+  "version": "1.0",
+  "status": "Active",
+  "modified": "2026-09-29 13:16:09.395607",
+  "preserved": [
+    {
+      "file_id": "be1e1f2d01",
+      "hash": "42f8bd8f489c49a4efd088167e106ae068bf527b2d0f1841593de328d9c75cfe",
+      "version": "1.0",
+      "unchanged": true
+    },
+    {
+      "file_id": "c53c993072",
+      "hash": "92ed2d5e91f9816866d60dd32635d7733c5043cc93d6ed46eebb7be709f61097",
+      "version": "1.0",
+      "unchanged": true
+    }
+  ],
+  "current": {
+    "file_id": "b4d5a45c42",
+    "file_url": "/private/files/CON-2026-00001-supplier-signed-fa2b6ce033485346.pdf",
+    "hash": "fa2b6ce033485346930e3396b5ad9baae2157e087f1320b738d9fdc8fbffdb6e",
+    "version": "1.0",
+    "kind": "signed"
+  },
+  "pages": 2
+}

@@ -5,10 +5,18 @@
  * projects ERPNext "Legal Document Review" rows — the SAME records Legal
  * uses. There is no separate Finance DocType and no mock/demo arrays.
  *
+ * RFQ workflow trigger order:
+ *   Legal documents verified + E-Signature completed → Finance Review
+ *   Finance Review → Procurement / PO
+ *
  * Filters are stage-based:
  *   Pending Finance Review → Workflow Stage == Finance Review
  *   Budget Approved        → Workflow Stage == Completed | Procurement
  *   Rejected               → Workflow Stage == Rejected
+ *
+ * IMPORTANT: Finance Review becomes available after e-signature completion,
+ * NOT after Legal Final Approval. Legal Final Approval is itself gated on
+ * a completed e-signature — so the trigger is the signature, not the approval.
  */
 import {
   filterByWorkflowStage,
@@ -119,12 +127,18 @@ function toFinanceItem(record: ApprovalWorkflowRecord): FinanceReviewItem {
   };
 }
 
-/** Records that have entered (or finished) the Finance funnel. */
+/**
+ * Records that have entered (or finished) the Finance funnel.
+ * A record enters Finance Review ONLY after successful e-signature completion
+ * (which also sets review_status=Approved and workflow_state=Finance Review).
+ * Finance does NOT depend on Legal Final Approval alone — signature is required.
+ */
 function isFinanceFunnel(record: ApprovalWorkflowRecord): boolean {
   return (
     record.workflowStage === "Finance Review" ||
     record.workflowStage === "Completed" ||
     record.workflowStage === "Procurement" ||
+    // Rejected after Finance stage: legalStatus was Approved (i.e., signed) before rejection.
     (record.workflowStage === "Rejected" && record.legalStatus === "Approved")
   );
 }
@@ -145,7 +159,7 @@ export async function fetchAllFinanceReviewRecords(): Promise<FinanceReviewQuery
     diagnostics.recordsReturned = items.length;
     if (items.length === 0) {
       diagnostics.emptyReason =
-        "No RFQs have reached Finance Review yet. RFQs appear here once Legal Review is approved.";
+        "No RFQs are currently ready for Finance Review. RFQs appear here once the Legal Manager completes the required e-signatures on all supplier documents.";
     }
 
     // eslint-disable-next-line no-console

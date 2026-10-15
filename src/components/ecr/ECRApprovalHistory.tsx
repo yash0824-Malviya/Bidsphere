@@ -42,7 +42,7 @@ function findLegacyComment(
   item: ApprovalTimelineItem,
 ): ECRComment | undefined {
   const stageTerm = item.stage.toLowerCase();
-  const fieldTerms: Record<ApprovalTimelineItem["stage"], string[]> = {
+  const fieldTerms: Partial<Record<ApprovalTimelineItem["stage"], string[]>> = {
     "Engineering Review": ["technical feasibility", "engineering impact"],
     "Procurement Review": ["procurement assessment", "supplier requirement", "rfq requirement"],
     "RFQ Pending": ["rfq creation", "create rfq"],
@@ -50,14 +50,18 @@ function findLegacyComment(
 
   return [...comments].reverse().find((comment) => {
     const content = String(comment.content ?? "").toLowerCase();
-    return content.includes(stageTerm) || fieldTerms[item.stage].some((term) => content.includes(term));
+    return content.includes(stageTerm) || fieldTerms[item.stage]?.some((term) => content.includes(term));
   });
 }
 
 function stateLabel(item: ApprovalTimelineItem): string {
   switch (item.state) {
     case "completed":
-      return item.stage === "RFQ Pending" ? "RFQ Created" : "Approved";
+      if (item.action) return item.action.label;
+      if (item.stage === "RFQ Pending" || item.stage === "Procurement Decision") return "RFQ Created";
+      if (item.stage === "Business Case Approved") return "Final Review Started";
+      if (item.stage === "ECR Approved") return "Decision Recorded";
+      return "Approved";
     case "current":
       return "Pending";
     case "unassigned":
@@ -66,6 +70,8 @@ function stateLabel(item: ApprovalTimelineItem): string {
       return "Sent Back";
     case "rejected":
       return "Rejected";
+    case "skipped":
+      return "Not Required";
     default:
       return "Upcoming";
   }
@@ -85,8 +91,8 @@ export default function ECRApprovalHistory({
   ecr,
   comments = [],
 }: ECRApprovalHistoryProps) {
-  const timeline = getECRApprovalTimeline(status, ecr?.approval_requirements ?? []);
-  const decisionHistory = getECRDecisionHistory(ecr?.approval_requirements ?? []);
+  const timeline = getECRApprovalTimeline(status, ecr?.approval_requirements ?? [], ecr);
+  const decisionHistory = getECRDecisionHistory(ecr?.approval_requirements ?? [], ecr);
 
   return (
     <section className="space-y-3" aria-labelledby="ecr-approval-history-title">
@@ -108,10 +114,10 @@ export default function ECRApprovalHistory({
             const legacyComment = item.decision?.comments
               ? undefined
               : findLegacyComment(comments, item);
-            const decisionComment = item.decision?.comments || legacyComment?.content;
-            const approver = item.decision?.approver || legacyComment?.comment_by || legacyComment?.owner;
+            const decisionComment = item.action?.comment || item.decision?.comments || legacyComment?.content;
+            const approver = item.action?.actor || item.decision?.approver || legacyComment?.comment_by || legacyComment?.owner;
             const decisionDate = formatDecisionDate(
-              item.decision?.approval_date || legacyComment?.creation,
+              item.action?.timestamp || item.decision?.approval_date || legacyComment?.creation,
             );
             const emphasized = item.state === "current";
             const negative = item.state === "rejected" || item.state === "sent-back" || item.state === "unassigned";
@@ -169,6 +175,10 @@ export default function ECRApprovalHistory({
                   ) : item.state === "unassigned" ? (
                     <p className="mt-1.5 text-[11px] font-medium text-amber-800">
                       No active approval task is assigned for this workflow stage.
+                    </p>
+                  ) : item.state === "skipped" ? (
+                    <p className="mt-1.5 text-[11px] text-neutral-500">
+                      {item.stage === "Procurement Decision" ? "RFQ not required by the procurement decision." : "This impact review is not required for this ECR."}
                     </p>
                   ) : item.state === "upcoming" ? (
                     <p className="mt-1.5 text-[11px] text-neutral-400">

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -22,19 +23,44 @@ import {
   X,
 } from "lucide-react";
 
+import { useOptionalLayout } from "../contexts/LayoutContext";
+import { toast } from "react-hot-toast";
 import type {
   AIRecommendation,
   SupplierAnalysisRow,
   SupplierVerdict,
 } from "../types/erpnext";
 import { formatCurrency } from "../utils/format";
+import {
+  formatQuoteTotal,
+  isSubmittedQuoteAmount,
+} from "../utils/quotePrice";
 import { ANALYSIS_STEPS } from "./aiAnalysisSteps";
+import { findRecommendationWinner } from "../utils/aiRecommendationNormalization";
+import { buildEvaluationSummary, getEvaluationRisk, projectSupplierDecision } from "../utils/aiEvaluationDecision";
+import type { ReverseBiddingQuotationSelection } from "../types/reverseBidding";
+import { reverseBiddingSelectionForRow, selectedReverseBiddingQuotations } from "../utils/reverseBiddingSelection";
+import { getSupplierAwardEligibility } from "../utils/supplierAwardEligibility";
 
 export { ANALYSIS_STEPS };
 
 type TabId = "overview" | "rankings" | "compare";
 type ResultsViewMode = "recommendation" | "comparison";
-type RiskLevel = "Low" | "Medium" | "High";
+type RiskLevel = "Low" | "Medium" | "High" | "Unavailable";
+
+/** Dynamic helper guidance based on selected supplier count for reverse bidding. */
+export function getReverseBiddingHelperText(count: number, maxSuppliers: number = 5): string {
+  if (count === 0) {
+    return `Select ${maxSuppliers === 2 ? "2" : `2–${maxSuppliers}`} suppliers to start reverse bidding.`;
+  }
+  if (count === 1) {
+    return "Select at least 1 more supplier to start reverse bidding.";
+  }
+  if (count === 2) {
+    return "2 suppliers selected — ready to start reverse bidding.";
+  }
+  return `${count} suppliers selected — ready to start reverse bidding.`;
+}
 
 /**
  * Supplier selection payload returned by the confirmation dialog.
@@ -42,6 +68,9 @@ type RiskLevel = "Low" | "Medium" | "High";
  */
 export interface SupplierSelectionPayload {
   supplierName: string;
+  quotation_id: string;
+  supplier_id: string;
+  rfq_id: string;
   aiRank: number;
   riskLevel: RiskLevel;
   reason: string;
@@ -54,7 +83,7 @@ interface Props {
   loadingStep: number;
   result: AIRecommendation | null;
   error: string | null;
-  quoteAmount: number;
+  quoteAmount: number | null;
   quotationCount: number;
   creatingPO: boolean;
   hasApiKey: boolean;
@@ -72,13 +101,13 @@ interface Props {
   onRetry: () => void;
   onCreatePO: () => void;
   /** Called when the user confirms supplier selection via the new dialog. */
-  onSelectSupplier?: (payload: SupplierSelectionPayload) => void;
+  onSelectSupplier?: (payload: SupplierSelectionPayload) => void | Promise<void>;
   /**
    * When provided, enables the multi-select ranking checkboxes and the
-   * "Start Reverse Bidding" action. Receives the selected supplier display
-   * names (2–5). Omit to hide reverse-bidding entirely (unchanged behaviour).
+   * "Start Reverse Bidding" action. Receives the exact selected quotation,
+   * supplier and RFQ identities (2–5). Omit to hide reverse bidding entirely.
    */
-  onStartReverseBidding?: (supplierNames: string[]) => void;
+  onStartReverseBidding?: (quotations: ReverseBiddingQuotationSelection[]) => void;
   /** Loading flag for the reverse-bidding action button. */
   startingReverseBidding?: boolean;
 }
@@ -98,11 +127,25 @@ const VERDICT_STYLES: Record<SupplierVerdict, { bg: string; text: string }> = {
   "GOOD OPTION": { bg: "bg-primary-100", text: "text-primary-700" },
   EXPENSIVE: { bg: "bg-warning-100", text: "text-warning-600" },
   AVOID: { bg: "bg-danger-100", text: "text-danger-600" },
+  "QUOTE INCOMPLETE": { bg: "bg-amber-100", text: "text-amber-700" },
+  "HIGH RISK / REVIEW": { bg: "bg-rose-100", text: "text-rose-700" },
+  "NOT EVALUATED": { bg: "bg-neutral-100", text: "text-neutral-600" },
 };
 
 function clampScore(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)));
 }
+
+function hasScore(score: unknown): score is number {
+  return typeof score === "number" && Number.isFinite(score) && score >= 0 && score <= 100;
+}
+
+function scoreLabel(score: unknown, suffix = "/100"): string {
+  return hasScore(score) ? `${clampScore(score)}${suffix}` : "AI evaluation unavailable";
+}
+
+const supplierRowKey = (row: SupplierAnalysisRow): string =>
+  row.quotation_id || row.supplier_quotation_id || row.supplier_id || row.name;
 
 /** Muted gold / silver / bronze tones for the top three, neutral beyond. */
 function rankBadgeStyle(rank: number): string {
@@ -139,38 +182,23 @@ function RankBadge({
 }
 
 function qualityScore(s: SupplierAnalysisRow): number {
-  // Use the real quality score from the scoring engine when available
+  const quality = (s.score as typeof s.score & { quality?: number })?.quality;
+  if (quality !== undefined) return hasScore(quality) ? quality : -1;
+  // Legacy snapshots recorded their own quality dimension in score_sources.
   const row = s as unknown as Record<string, unknown>;
   const sources = row.score_sources as Array<{ dimension: string; value: number }> | undefined;
   if (sources) {
     const qs = sources.find((src) => src.dimension === "Quality");
-    if (qs && qs.value >= 0) return clampScore(qs.value);
+    if (qs && hasScore(qs.value)) return qs.value;
   }
-  // Fallback: use overall score as proxy (never average unrelated dimensions)
-  return clampScore(s.score?.overall ?? 0);
-}
-
-function complianceScore(s: SupplierAnalysisRow, result: AIRecommendation): number {
-  const sources = getScoreSources(s);
-  const compliance = sources.find((src) => src.dimension === "Compliance");
-  if (compliance && compliance.value >= 0) return clampScore(compliance.value);
-
-  const quality = qualityScore(s);
-  const termsFlags = (result.risk_flags ?? []).filter(
-    (f) =>
-      f.type === "terms" &&
-      f.message.toLowerCase().includes(s.name.toLowerCase())
-  );
-  if (termsFlags.some((f) => f.severity === "high")) return clampScore(35);
-  if (termsFlags.some((f) => f.severity === "medium")) return clampScore(55);
-  if (quality >= 0 && !hasInsufficientData(s)) return quality;
-  return clampScore(((s.score?.reliability ?? 50) + 50) / 2);
+  return -1;
 }
 
 function formatConfidenceLevel(
   score: number,
   supplier?: SupplierAnalysisRow
 ): string {
+  if (!hasScore(score)) return "Unavailable";
   const level = supplier
     ? getConfidenceLevel(supplier)
     : score >= 80
@@ -188,14 +216,13 @@ function getExpectedSavings(
 ) {
   const totals = result.supplier_analysis
     .map((s) => s.grand_total)
-    .filter((t) => t > 0);
-  const highest = totals.length ? Math.max(...totals) : 0;
-  const amount =
-    highest > recommended.grand_total ? highest - recommended.grand_total : 0;
-  const pct =
-    highest > 0
-      ? Math.round((amount / highest) * 100)
-      : (result.cost_analysis?.savings_percentage ?? 0);
+    .filter(isSubmittedQuoteAmount);
+  if (totals.length < 2 || !isSubmittedQuoteAmount(recommended.grand_total)) {
+    return { amount: 0, pct: 0 };
+  }
+  const highest = Math.max(...totals);
+  const amount = highest > recommended.grand_total ? highest - recommended.grand_total : 0;
+  const pct = highest > 0 ? Math.round((amount / highest) * 100) : 0;
   return { amount, pct };
 }
 
@@ -221,17 +248,27 @@ function getScoreSources(s: SupplierAnalysisRow): ScoreSourceInfo[] {
   return (row.score_sources as ScoreSourceInfo[]) ?? [];
 }
 
+function quoteTotalLabel(
+  supplier: SupplierAnalysisRow,
+  fallback?: number | null,
+): string {
+  if (isSubmittedQuoteAmount(supplier.grand_total)) {
+    return formatQuoteTotal(supplier.grand_total, "submitted");
+  }
+  if (isSubmittedQuoteAmount(fallback)) {
+    return formatQuoteTotal(fallback, "submitted");
+  }
+  return formatQuoteTotal(supplier.grand_total, supplier.quote_price_status);
+}
+
 function supplierRiskLevel(s: SupplierAnalysisRow): RiskLevel {
-  if (s.verdict === "AVOID") return "High";
-  if (s.verdict === "EXPENSIVE") return "Medium";
-  const rel = s.score?.reliability ?? 50;
-  if (rel < 40 || (s.weaknesses ?? []).length >= 3) return "High";
-  if (rel < 65 || s.verdict === "GOOD OPTION") return "Medium";
-  return "Low";
+  return getEvaluationRisk(s);
 }
 
 function riskStyles(level: RiskLevel) {
   switch (level) {
+    case "Unavailable":
+      return { label: "Risk unavailable", tone: "bg-neutral-100 text-neutral-600 ring-neutral-200", bar: "bg-neutral-300" };
     case "High":
       return {
         label: "High Risk",
@@ -253,13 +290,48 @@ function riskStyles(level: RiskLevel) {
   }
 }
 
-function sortRankedSuppliers(
+function normalizeSupplierModalKey(name: string): string {
+  return (name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^["'\\]+|["'\\]+$/g, "")
+    .replace(/[.,/#!$%^&*;:{}=\-_`~()]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function sortRankedSuppliers(
   analysis: SupplierAnalysisRow[]
 ): SupplierAnalysisRow[] {
-  return [...analysis].sort((a, b) => {
+  // Sort descending by overall AI score first (not by insertion order rank)
+  const sorted = [...analysis].sort((a, b) => {
+    const aScore = hasScore(a.score?.overall) ? a.score.overall : -1;
+    const bScore = hasScore(b.score?.overall) ? b.score.overall : -1;
+    if (bScore !== aScore) return bScore - aScore;
     if (a.rank !== b.rank) return a.rank - b.rank;
-    return (b.score?.overall ?? 0) - (a.score?.overall ?? 0);
+    const idA = a.quotation_id || a.name || "";
+    const idB = b.quotation_id || b.name || "";
+    return idA.localeCompare(idB);
   });
+
+  const seen = new Set<string>();
+  const deduplicated: SupplierAnalysisRow[] = [];
+  for (const row of sorted) {
+    const key =
+      row.quotation_id ||
+      row.supplier_quotation_id ||
+      row.supplier_id ||
+      normalizeSupplierModalKey(row.name);
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      deduplicated.push(row);
+    }
+  }
+
+  return deduplicated.map((row, idx) => ({
+    ...row,
+    rank: idx + 1,
+  }));
 }
 
 function ScoreBar({
@@ -275,8 +347,8 @@ function ScoreBar({
   source?: string;
   hasData?: boolean;
 }) {
-  const v = value < 0 ? 0 : clampScore(value);
-  const isInsufficient = value < 0 || !hasData;
+  const v = hasScore(value) ? clampScore(value) : 0;
+  const isInsufficient = !hasScore(value) || !hasData;
   return (
     <div>
       <div className="mb-1 flex justify-between text-[11px] font-medium text-neutral-600">
@@ -361,46 +433,42 @@ function BulletList({ items, empty }: { items: string[]; empty: string }) {
 function buildObservations(
   supplier: SupplierAnalysisRow,
   rank1: SupplierAnalysisRow | undefined,
-  result: AIRecommendation
 ) {
   const costDiff =
-    rank1 && supplier.rank !== 1
+    rank1 &&
+    supplier.rank !== 1 &&
+    isSubmittedQuoteAmount(supplier.grand_total) &&
+    isSubmittedQuoteAmount(rank1.grand_total)
       ? supplier.grand_total - rank1.grand_total
-      : 0;
+      : null;
   const scoreDiff =
-    rank1 && supplier.rank !== 1
-      ? (rank1.score?.overall ?? 0) - (supplier.score?.overall ?? 0)
-      : 0;
+    rank1 && supplier.rank !== 1 && hasScore(rank1.score?.overall) && hasScore(supplier.score?.overall)
+      ? rank1.score.overall - supplier.score.overall
+      : null;
 
-  const pricing =
-    supplier.rank === 1
-      ? `Benchmark quote at ${formatCurrency(supplier.grand_total)}. Price score ${clampScore(supplier.score?.cost ?? 0)}% — best evaluated cost position.`
-      : costDiff > 0
-      ? `${formatCurrency(costDiff)} above Rank #1 (${rank1?.name}). Price score ${clampScore(supplier.score?.cost ?? 0)}% vs ${clampScore(rank1?.score?.cost ?? 0)}% for the leader.`
-      : `Quote ${formatCurrency(Math.abs(costDiff))} below Rank #1 on total — validate line-item coverage before selecting.`;
+  const pricing = !isSubmittedQuoteAmount(supplier.grand_total)
+    ? "Quotation pricing was not provided. Price score is unavailable and the missing amount was not treated as zero."
+    : isSubmittedQuoteAmount(rank1?.grand_total) && supplier.rank === 1
+      ? `Benchmark quote at ${formatCurrency(supplier.grand_total)}. Price evaluation: ${scoreLabel(supplier.score?.cost, "%")}.`
+      : costDiff !== null && costDiff > 0
+      ? `${formatCurrency(costDiff)} above Rank #1 (${rank1?.name}). Price score ${scoreLabel(supplier.score?.cost, "%")} vs ${scoreLabel(rank1?.score?.cost, "%")} for the leader.`
+      : costDiff === 0
+        ? "Quote total is equal to Rank #1."
+      : costDiff !== null
+        ? `Quote ${formatCurrency(Math.abs(costDiff))} below Rank #1 on total — validate line-item coverage before selecting.`
+        : "Valid price comparison is not available for this quote.";
 
-  const delivery = `Delivery score ${clampScore(supplier.score?.delivery ?? 0)}%. ${
-    (supplier.score?.delivery ?? 0) >= 75
-      ? "Competitive lead times relative to other bidders."
-      : (supplier.score?.delivery ?? 0) >= 50
-      ? "Acceptable delivery profile with some schedule risk."
-      : "Delivery timeline may require mitigation or expediting."
-  }`;
+  const deliverySource = getScoreSources(supplier).find((source) => source.dimension === "Delivery");
+  const delivery = !hasScore(supplier.score?.delivery) ? "Delivery evaluation is unavailable."
+    : `Delivery performance score ${clampScore(supplier.score.delivery)}%. ${deliverySource?.source || "Confirm the current quotation's delivery commitment separately from historical performance."}`;
 
-  const riskFlagMsgs = (result.risk_flags ?? [])
-    .filter((f) => f.message.toLowerCase().includes(supplier.name.toLowerCase()))
-    .map((f) => f.message);
-  const risk =
-    riskFlagMsgs.length > 0
-      ? riskFlagMsgs.join(" ")
-      : `${riskStyles(supplierRiskLevel(supplier)).label}. Reliability score ${clampScore(supplier.score?.reliability ?? 0)}%. ${
-          supplier.weaknesses[0] ?? "No critical risk flags for this supplier."
-        }`;
+  const risk = `${riskStyles(supplierRiskLevel(supplier)).label}. ${supplier.why_best_or_worst ||
+    "A risk explanation was not provided in this evaluation."}`;
 
   return { pricing, delivery, risk, costDiff, scoreDiff };
 }
 
-function SupplierRankCard({
+export function SupplierRankCard({
   supplier,
   rankIndex,
   isRecommended,
@@ -419,13 +487,15 @@ function SupplierRankCard({
   onSelect: () => void;
   onChooseSupplier?: (supplier: SupplierAnalysisRow) => void;
 }) {
-  const score = clampScore(supplier.score?.overall ?? 0);
+  const hasPrice = isSubmittedQuoteAmount(supplier.grand_total);
+  const score = hasScore(supplier.score?.overall) ? clampScore(supplier.score.overall) : 0;
   const risk = supplierRiskLevel(supplier);
   const verdictStyle =
     VERDICT_STYLES[supplier.verdict] ?? VERDICT_STYLES["GOOD OPTION"];
 
   const isChosen = chosenSupplier === supplier.name;
   const isLocked = !!chosenSupplier && !isChosen;
+  const eligibility = getSupplierAwardEligibility(supplier);
 
   return (
     <div
@@ -449,10 +519,13 @@ function SupplierRankCard({
             >
               {supplier.verdict}
             </span>
-            {isRecommended && (
-              <span className="rounded-full bg-primary-100 px-2 py-0.5 text-[10px] font-bold text-primary-700">
-                AI Pick
+            {isRecommended && hasPrice && (
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${eligibility.awardEligible ? "bg-primary-100 text-primary-700" : "bg-neutral-100 text-neutral-700"}`}>
+                {eligibility.awardEligible ? "AI top-ranked" : "TOP SCORE"}
               </span>
+            )}
+            {projectSupplierDecision(supplier, !!isRecommended).recommendation_status === "REQUIRES_REVIEW" && (
+              <span className="rounded-full bg-danger-50 px-2 py-0.5 text-[10px] font-bold text-danger-700">Requires review</span>
             )}
             {isChosen && (
               <span className="inline-flex items-center gap-1 rounded-full bg-success-100 px-2 py-0.5 text-[10px] font-bold text-success-700">
@@ -460,6 +533,10 @@ function SupplierRankCard({
                 Chosen Supplier
               </span>
             )}
+          </div>
+          <div className="mt-2 flex items-center justify-between text-xs">
+            <span className="text-neutral-500 font-medium">Quote Total:</span>
+            <span className="font-bold text-neutral-900 tabular-nums">{quoteTotalLabel(supplier)}</span>
           </div>
           {!compact && (
             <p className="mt-1 line-clamp-2 text-xs text-neutral-500">
@@ -470,7 +547,9 @@ function SupplierRankCard({
             <div className="flex-1">
               <div className="mb-1 flex justify-between text-xs text-neutral-500">
                 <span>AI Score</span>
-                <span className="font-bold text-primary-700">{score}/100</span>
+                <span className="font-bold text-primary-700">
+                  {scoreLabel(supplier.score?.overall)}
+                </span>
               </div>
               <div className="h-2 overflow-hidden rounded-full bg-primary-100">
                 <div
@@ -498,12 +577,20 @@ function SupplierRankCard({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              onChooseSupplier(supplier);
+              if (eligibility.awardEligible && hasPrice) onChooseSupplier(supplier);
             }}
-            className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-primary-600"
+            disabled={!hasPrice || !eligibility.awardEligible}
+            title={
+              !eligibility.awardEligible
+                ? undefined
+                : hasPrice
+                ? undefined
+                : "Quotation pricing is required before supplier selection"
+            }
+            className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-primary-600 disabled:cursor-not-allowed disabled:bg-neutral-300"
           >
             <ShoppingCart className="h-3 w-3" />
-            Select Supplier
+            {hasPrice ? "Select Supplier" : "Price Required"}
           </button>
         )}
       </div>
@@ -524,12 +611,13 @@ function TopThreeComparison({
   return (
     <div className="grid gap-4 md:grid-cols-3">
       {top3.map((s, idx) => {
+        const hasPrice = isSubmittedQuoteAmount(s.grand_total);
         const risk = supplierRiskLevel(s);
         return (
           <button
-            key={s.name}
+            key={supplierRowKey(s)}
             type="button"
-            onClick={() => onSelect(s.name)}
+            onClick={() => onSelect(supplierRowKey(s))}
             className="flex flex-col rounded-xl border border-neutral-200 bg-white p-4 text-left shadow-sm transition hover:border-primary-300 hover:shadow-md"
           >
             <div className="mb-3 flex items-center justify-between">
@@ -538,17 +626,16 @@ function TopThreeComparison({
             </div>
             <p className="font-bold text-neutral-900">{s.name}</p>
             <p className="mt-1 text-2xl font-bold text-primary-700">
-              {clampScore(s.score?.overall ?? 0)}
-              <span className="text-sm font-normal text-neutral-400">/100</span>
+              {scoreLabel(s.score?.overall)}
             </p>
             <p className="mt-2 text-sm font-semibold text-neutral-800">
-              {formatCurrency(s.grand_total)}
+              {quoteTotalLabel(s)}
             </p>
             <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] text-neutral-500">
-              <span>Price {clampScore(s.score?.cost ?? 0)}%</span>
-              <span>Delivery {(s.score?.delivery ?? 0) < 0 ? "—" : `${clampScore(s.score?.delivery ?? 0)}%`}</span>
+              <span>Price {!hasPrice || (s.score?.cost ?? -1) < 0 ? "N/A" : `${clampScore(s.score?.cost ?? 0)}%`}</span>
+              <span>Delivery {(s.score?.delivery ?? -1) < 0 ? "—" : `${clampScore(s.score?.delivery ?? 0)}%`}</span>
               <span>Quality {qualityScore(s) < 0 ? "—" : `${qualityScore(s)}%`}</span>
-              <span>Reliability {(s.score?.reliability ?? 0) < 0 ? "—" : `${clampScore(s.score?.reliability ?? 0)}%`}</span>
+              <span>Reliability {(s.score?.reliability ?? -1) < 0 ? "—" : `${clampScore(s.score?.reliability ?? 0)}%`}</span>
             </div>
             <p className="mt-3 text-xs text-primary-600 font-medium">
               View full analysis →
@@ -573,17 +660,19 @@ function ReAnalysisComparisonBanner({
 }) {
   const ranked = sortRankedSuppliers(result.supplier_analysis ?? []);
   const currentBest = result.recommended_supplier;
-  const isSame = previousSupplier.toLowerCase() === currentBest.toLowerCase();
-
-  const previousRow = ranked.find(
-    (s) => s.name.toLowerCase() === previousSupplier.toLowerCase()
-  );
-  const bestRow = ranked.find(
-    (s) => s.name.toLowerCase() === currentBest.toLowerCase()
-  );
+  const previousCandidates = ranked.filter((s) => s.supplier_id === previousSupplier ||
+    s.name.toLowerCase() === previousSupplier.toLowerCase());
+  const previousRow = previousCandidates.length === 1 ? previousCandidates[0] : undefined;
+  const bestRow = findRecommendationWinner(result, ranked);
+  const bestIsEligible = getSupplierAwardEligibility(bestRow).awardEligible;
+  const isSame = !!previousRow && !!bestRow && supplierRowKey(previousRow) === supplierRowKey(bestRow);
 
   const savingsAmount =
-    previousRow && bestRow && previousRow.grand_total > bestRow.grand_total
+    previousRow &&
+    bestRow &&
+    isSubmittedQuoteAmount(previousRow.grand_total) &&
+    isSubmittedQuoteAmount(bestRow.grand_total) &&
+    previousRow.grand_total > bestRow.grand_total
       ? previousRow.grand_total - bestRow.grand_total
       : 0;
 
@@ -615,8 +704,8 @@ function ReAnalysisComparisonBanner({
           {previousRow && (
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-neutral-600">
               <span>Rank #{previousRow.rank}</span>
-              <span>Score {clampScore(previousRow.score?.overall ?? 0)}/100</span>
-              <span>{formatCurrency(previousRow.grand_total)}</span>
+              <span>Score {scoreLabel(previousRow.score?.overall)}</span>
+              <span>{quoteTotalLabel(previousRow)}</span>
             </div>
           )}
         </div>
@@ -624,7 +713,7 @@ function ReAnalysisComparisonBanner({
         {/* Current AI recommendation */}
         <div className="rounded-xl border border-primary-200 bg-primary-50 p-4">
           <p className="text-[10px] font-bold uppercase tracking-wider text-primary-600">
-            Current AI Recommendation
+            {bestIsEligible ? "Current AI top-ranked supplier" : "Current top score"}
           </p>
           <p className="mt-1 text-lg font-bold text-neutral-900">
             {currentBest}
@@ -632,8 +721,8 @@ function ReAnalysisComparisonBanner({
           {bestRow && (
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-neutral-600">
               <span>Rank #{bestRow.rank}</span>
-              <span>Score {clampScore(bestRow.score?.overall ?? 0)}/100</span>
-              <span>{formatCurrency(bestRow.grand_total)}</span>
+              <span>Score {scoreLabel(bestRow.score?.overall)}</span>
+              <span>{quoteTotalLabel(bestRow)}</span>
             </div>
           )}
         </div>
@@ -643,13 +732,13 @@ function ReAnalysisComparisonBanner({
       {isSame ? (
         <div className="flex items-center gap-2 rounded-xl border border-success-200 bg-success-50 px-5 py-3.5 text-sm font-semibold text-success-700">
           <CheckCircle2 className="h-5 w-5" />
-          Recommendation unchanged — AI still recommends the selected supplier.
+          Top score unchanged — the selected supplier still has the highest numerical score. Review its risk and verdict separately.
         </div>
       ) : (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
           <div className="flex items-center gap-2 text-sm font-semibold text-amber-800">
             <AlertTriangle className="h-5 w-5" />
-            Better supplier available than the originally selected supplier.
+            A different supplier has the highest numerical score. Review its risk and verdict before any selection decision.
           </div>
           {(savingsAmount > 0 || deliveryDiff < 0) && (
             <div className="mt-3 flex flex-wrap gap-4 text-sm text-neutral-700">
@@ -689,14 +778,16 @@ function KpiTile({
   valueClassName?: string;
 }) {
   return (
-    <div className="rounded-xl border border-neutral-200/80 bg-white p-4 shadow-sm ring-1 ring-neutral-100/80">
-      <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
-        {label}
-      </p>
-      <p className={`mt-1.5 text-xl font-bold tabular-nums sm:text-2xl ${valueClassName}`}>
-        {value}
-      </p>
-      {sub && <p className="mt-0.5 text-xs text-neutral-500">{sub}</p>}
+    <div className="flex h-full flex-col justify-between rounded-xl border border-neutral-200/80 bg-white p-4 shadow-xs">
+      <div>
+        <p className="text-[11px] font-bold uppercase tracking-wider text-neutral-500">
+          {label}
+        </p>
+        <div className={`mt-1.5 text-2xl font-bold tabular-nums ${valueClassName}`}>
+          {value}
+        </div>
+      </div>
+      {sub && <p className="mt-1 text-xs text-neutral-500">{sub}</p>}
     </div>
   );
 }
@@ -704,32 +795,41 @@ function KpiTile({
 function DimensionScoreCard({
   label,
   value,
+  weight,
   icon: Icon,
   barClass,
 }: {
   label: string;
   value: number;
+  weight?: string;
   icon: typeof BarChart3;
   barClass: string;
 }) {
-  const v = value < 0 ? 0 : clampScore(value);
-  const missing = value < 0;
+  const v = hasScore(value) ? clampScore(value) : 0;
+  const missing = !hasScore(value);
   return (
-    <div className="rounded-xl border border-neutral-200/80 bg-white p-4 shadow-sm">
-      <div className="mb-3 flex items-center justify-between">
+    <div className="rounded-xl border border-neutral-200/80 bg-white p-3.5 shadow-xs">
+      <div className="mb-2 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-neutral-50 ring-1 ring-neutral-200/80">
-            <Icon className="h-4 w-4 text-neutral-500" />
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-neutral-50 ring-1 ring-neutral-200/70">
+            <Icon className="h-3.5 w-3.5 text-neutral-600" />
           </span>
-          <span className="text-xs font-semibold text-neutral-600">{label}</span>
+          <div>
+            <span className="text-xs font-semibold text-neutral-700">{label}</span>
+            {weight && (
+              <span className="ml-1 text-[10px] font-normal text-neutral-400">
+                ({weight})
+              </span>
+            )}
+          </div>
         </div>
-        <span className="text-lg font-bold tabular-nums text-neutral-900">
+        <span className="text-sm font-bold tabular-nums text-neutral-900">
           {missing ? "—" : `${v}%`}
         </span>
       </div>
-      <div className="h-2 overflow-hidden rounded-full bg-neutral-100">
+      <div className="h-1.5 overflow-hidden rounded-full bg-neutral-100">
         <div
-          className={`h-full rounded-full transition-all duration-700 ${missing ? "bg-neutral-200" : barClass}`}
+          className={`h-full rounded-full transition-all duration-500 ${missing ? "bg-neutral-200" : barClass}`}
           style={{ width: `${missing ? 0 : v}%` }}
         />
       </div>
@@ -737,14 +837,14 @@ function DimensionScoreCard({
   );
 }
 
-function SupplierLeaderboard({
+export function SupplierLeaderboard({
   suppliers,
   recommendedName,
   onSelect,
   selectable = false,
   selected,
   onToggle,
-  maxReached = false,
+  maxSelectableSuppliers = REVERSE_BIDDING_MAX_SUPPLIERS,
 }: {
   suppliers: SupplierAnalysisRow[];
   recommendedName: string;
@@ -753,90 +853,126 @@ function SupplierLeaderboard({
   selectable?: boolean;
   selected?: Set<string>;
   onToggle?: (name: string) => void;
-  /** True once the max number of suppliers is already selected. */
-  maxReached?: boolean;
+  maxSelectableSuppliers?: number;
 }) {
+  const selectedCount = suppliers.filter((supplier) => {
+    const identity = reverseBiddingSelectionForRow(supplier);
+    return identity && selected?.has(identity.quotation_id) &&
+      isSubmittedQuoteAmount(supplier.grand_total) && getSupplierAwardEligibility(supplier).awardEligible;
+  }).length;
+  const isReady =
+    selectedCount >= REVERSE_BIDDING_MIN_SUPPLIERS &&
+    selectedCount <= maxSelectableSuppliers;
+
   return (
-    <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
+    <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-xs">
+      <p className="border-b border-neutral-200 px-4 py-3 text-xs text-neutral-600">
+        Highest numerical score does not automatically mean award eligibility.
+      </p>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[640px] text-left text-sm">
+        <table className="w-full min-w-[700px] text-left text-sm">
           <thead>
-            <tr className="border-b border-neutral-200 bg-neutral-50/90 text-[10px] font-bold uppercase tracking-wider text-neutral-500">
-              {selectable && <th className="px-4 py-3">Select</th>}
-              <th className="px-4 py-3">Rank</th>
-              <th className="px-4 py-3">Supplier</th>
-              <th className="px-4 py-3">AI Score</th>
-              <th className="px-4 py-3">Quote Total</th>
-              <th className="px-4 py-3">Risk</th>
-              <th className="px-4 py-3">Verdict</th>
-              <th className="px-4 py-3" />
+            <tr className="border-b border-neutral-200 bg-neutral-50 text-[11px] font-bold uppercase tracking-wider text-neutral-500">
+              {selectable && <th className="w-12 px-4 py-3 text-center">Select</th>}
+              <th className="w-14 px-4 py-3 text-center">Rank</th>
+              <th className="min-w-[200px] px-4 py-3">Supplier</th>
+              <th className="w-28 px-4 py-3">AI Score</th>
+              <th className="w-36 px-4 py-3">Quote Total</th>
+              <th className="w-32 px-4 py-3">Risk</th>
+              <th className="w-32 px-4 py-3">Verdict</th>
+              <th className="w-24 px-4 py-3 text-right">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-neutral-100">
             {suppliers.map((s, idx) => {
-              const isRecommended =
-                s.name.toLowerCase() === recommendedName.toLowerCase();
+              const hasPrice = isSubmittedQuoteAmount(s.grand_total);
+              const isTopRanked = supplierRowKey(s) === recommendedName;
               const risk = supplierRiskLevel(s);
               const verdictStyle =
                 VERDICT_STYLES[s.verdict] ?? VERDICT_STYLES["GOOD OPTION"];
-              const isChecked = selected?.has(s.name) ?? false;
+              const selection = reverseBiddingSelectionForRow(s);
+              const eligibility = getSupplierAwardEligibility(s);
+              const isRecommended = isTopRanked && hasPrice && eligibility.awardEligible;
+              const rowId = selection?.quotation_id;
+              const isChecked = eligibility.awardEligible && hasPrice && !!rowId && !!selected?.has(rowId);
               return (
                 <tr
-                  key={s.name}
-                  className={`transition hover:bg-neutral-50/80 ${
+                  key={s.quotation_id || s.supplier_id || s.name}
+                  className={`transition-colors duration-150 ${
                     isChecked
-                      ? "bg-primary-50/60"
+                      ? "bg-primary-50/70 font-medium"
                       : isRecommended
-                        ? "bg-primary-50/40"
-                        : ""
+                        ? "bg-emerald-50/30 hover:bg-emerald-50/50"
+                        : "hover:bg-neutral-50/80"
                   }`}
                 >
                   {selectable && (
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3.5 text-center">
                       <input
                         type="checkbox"
                         checked={isChecked}
-                        disabled={!isChecked && maxReached}
-                        onChange={() => onToggle?.(s.name)}
+                        disabled={!eligibility.awardEligible || !hasPrice || !rowId}
+                        onChange={() => { if (rowId && eligibility.awardEligible && hasPrice) onToggle?.(rowId); }}
                         aria-label={`Select ${s.name} for reverse bidding`}
+                        title={
+                          !eligibility.awardEligible
+                            ? undefined
+                            : !rowId
+                            ? "Current Supplier Quotation identity required for reverse bidding"
+                            : hasPrice
+                            ? isChecked
+                              ? `Deselect ${s.name}`
+                              : `Select ${s.name}`
+                            : "Quotation pricing required for reverse bidding"
+                        }
                         className="h-4 w-4 cursor-pointer rounded border-neutral-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-40"
                       />
                     </td>
                   )}
-                  <td className="px-4 py-3">
-                    <RankBadge rank={idx + 1} />
+                  <td className="px-4 py-3.5 text-center">
+                    <div className="flex justify-center">
+                      <RankBadge rank={idx + 1} />
+                    </div>
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3.5">
                     <div className="flex items-center gap-2">
                       <span className="font-semibold text-neutral-900">{s.name}</span>
-                      {isRecommended && (
-                        <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700">
-                          Recommended
+                      {isTopRanked && hasPrice && (
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${eligibility.awardEligible ? "bg-emerald-100 text-emerald-700" : "bg-neutral-100 text-neutral-700"}`}>
+                          {eligibility.awardEligible ? "AI top-ranked" : "TOP SCORE"}
                         </span>
+                      )}
+                      {projectSupplierDecision(s, isTopRanked).recommendation_status === "REQUIRES_REVIEW" && (
+                        <span className="rounded-full bg-danger-50 px-2 py-0.5 text-[10px] font-bold text-danger-700">Requires review</span>
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-3 font-bold tabular-nums text-primary-700">
-                    {clampScore(s.score?.overall ?? 0)}
+                  <td className="px-4 py-3.5 font-bold tabular-nums text-primary-700">
+                    {scoreLabel(s.score?.overall)}
                   </td>
-                  <td className="px-4 py-3 font-medium tabular-nums text-neutral-800">
-                    {formatCurrency(s.grand_total)}
+                  <td className="px-4 py-3.5 font-semibold tabular-nums text-neutral-900">
+                    {quoteTotalLabel(s)}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3.5">
                     <RiskBadge level={risk} />
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3.5">
                     <span
-                      className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${verdictStyle.bg} ${verdictStyle.text}`}
+                      className={`inline-block rounded-full px-2.5 py-0.5 text-[10px] font-bold ${verdictStyle.bg} ${verdictStyle.text}`}
                     >
                       {s.verdict}
                     </span>
+                    {s.is_complete === false && s.missing_fields && s.missing_fields.length > 0 && (
+                      <span className="block mt-1 text-[10px] font-medium text-amber-700">
+                        Missing: {s.missing_fields.join(", ")}
+                      </span>
+                    )}
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-3.5 text-right">
                     <button
                       type="button"
-                      onClick={() => onSelect(s.name)}
-                      className="text-xs font-semibold text-primary-700 hover:text-primary-900"
+                      onClick={() => onSelect(supplierRowKey(s))}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-primary-700 hover:text-primary-900 hover:underline"
                     >
                       Details →
                     </button>
@@ -847,11 +983,46 @@ function SupplierLeaderboard({
           </tbody>
         </table>
       </div>
+
+      {selectable && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-200 bg-neutral-50/80 px-4 py-2.5 text-xs">
+          <div className="flex items-center gap-2">
+            <span
+              className={`inline-flex items-center justify-center rounded-full px-2.5 py-0.5 text-[11px] font-bold ${
+                isReady
+                  ? "bg-emerald-100 text-emerald-800"
+                  : selectedCount === 1
+                    ? "bg-amber-100 text-amber-800"
+                    : "bg-neutral-200 text-neutral-700"
+              }`}
+            >
+              {selectedCount} of {maxSelectableSuppliers} selected
+            </span>
+            <span className={isReady ? "font-semibold text-emerald-900" : "text-neutral-600"}>
+              {getReverseBiddingHelperText(selectedCount, maxSelectableSuppliers)}
+            </span>
+          </div>
+          {selectedCount > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                suppliers.forEach((s) => {
+                  const id = reverseBiddingSelectionForRow(s)?.quotation_id;
+                  if (id && selected?.has(id)) onToggle?.(id);
+                });
+              }}
+              className="text-xs font-semibold text-neutral-500 hover:text-neutral-800 hover:underline"
+            >
+              Clear selection
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-function RecommendationResultsScreen({
+export function RecommendationResultsScreen({
   result,
   ranked,
   recommendedRow,
@@ -862,31 +1033,33 @@ function RecommendationResultsScreen({
   bidSelectable = false,
   bidSelected,
   onToggleBid,
-  bidMaxReached = false,
+  maxSelectableSuppliers,
 }: {
   result: AIRecommendation;
   ranked: SupplierAnalysisRow[];
   recommendedRow: SupplierAnalysisRow;
-  quoteAmount: number;
+  quoteAmount: number | null;
   chosenSupplier?: string | null;
   onSelectSupplier: (name: string) => void;
   onViewComparison: () => void;
   bidSelectable?: boolean;
   bidSelected?: Set<string>;
   onToggleBid?: (name: string) => void;
-  bidMaxReached?: boolean;
+  maxSelectableSuppliers?: number;
 }) {
-  const overallScore = clampScore(recommendedRow.score?.overall ?? result.confidence_score);
+  const hasValidPrice = isSubmittedQuoteAmount(recommendedRow.grand_total);
+  const overallScore = hasScore(recommendedRow.score?.overall) ? clampScore(recommendedRow.score.overall) : null;
+  const overallLabel = scoreLabel(recommendedRow.score?.overall);
   const risk = supplierRiskLevel(recommendedRow);
   const savings = getExpectedSavings(result, recommendedRow);
-  const priceScore = recommendedRow.score?.cost ?? -1;
+  const priceScore = hasValidPrice ? (recommendedRow.score?.cost ?? -1) : -1;
   const deliveryScore = recommendedRow.score?.delivery ?? -1;
   const reliabilityScore = recommendedRow.score?.reliability ?? -1;
-  const compliance = complianceScore(recommendedRow, result);
-  const executiveSummary =
-    result.final_verdict?.trim() ||
-    result.recommendation_summary ||
-    `${result.recommended_supplier} delivers the strongest overall value across price, delivery, reliability, and compliance for this RFQ.`;
+  const decision = projectSupplierDecision(recommendedRow, true);
+  const eligibility = getSupplierAwardEligibility(recommendedRow);
+  const weights = (result as AIRecommendation & { evaluation_weights?: Record<string, number> }).evaluation_weights;
+  const weightLabel = (key: string) => typeof weights?.[key] === "number" ? `${weights[key]}%` : undefined;
+  const executiveSummary = buildEvaluationSummary(ranked);
 
   return (
     <div className="space-y-6">
@@ -897,52 +1070,69 @@ function RecommendationResultsScreen({
         />
       )}
 
-      {/* Recommended supplier hero */}
-      <div className="relative overflow-hidden rounded-2xl border border-emerald-200/80 bg-gradient-to-br from-emerald-50 via-white to-primary-50/30 p-6 shadow-sm ring-1 ring-emerald-100/80">
-        <div className="pointer-events-none absolute -right-8 -top-8 h-32 w-32 rounded-full bg-emerald-200/30 blur-2xl" />
-        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+      {/* Numerical score leader */}
+      <div
+        className={`relative overflow-hidden rounded-2xl border ${
+          eligibility.awardEligible && hasValidPrice
+            ? "border-emerald-200/90 bg-gradient-to-br from-emerald-50/70 via-white to-emerald-50/20 ring-1 ring-emerald-100/80"
+            : "border-neutral-200 bg-gradient-to-br from-neutral-50/70 via-white to-neutral-50/20 ring-1 ring-neutral-100/80"
+        } p-5 sm:p-6 shadow-xs`}
+      >
+        <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
           <div className="min-w-0 flex-1">
-            <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-600 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-white shadow-sm">
-              <Award className="h-3 w-3" />
-              Recommended Supplier
+            <div className="flex items-center gap-2">
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-md ${
+                  eligibility.awardEligible && hasValidPrice ? "bg-emerald-600 text-white" : "bg-neutral-100 text-neutral-700"
+                } px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider`}
+              >
+                {eligibility.awardEligible && hasValidPrice ? <Award className="h-3 w-3" /> : <BarChart3 className="h-3 w-3" />}
+                {eligibility.awardEligible && hasValidPrice ? "AI TOP-RANKED" : overallScore !== null ? "TOP SCORE" : "EVALUATION UNAVAILABLE"}
+              </span>
             </div>
-            <h3 className="mt-3 text-2xl font-bold tracking-tight text-neutral-900 sm:text-3xl">
-              {result.recommended_supplier}
+            <h3 className="mt-2 text-xl font-bold tracking-tight text-neutral-900 sm:text-2xl">
+              {recommendedRow.name}
             </h3>
-            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-neutral-600">
-              {result.recommendation_summary}
+            <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-neutral-600">
+              {decision.recommendation_reason}
             </p>
-            <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-neutral-600">
-              <span className="inline-flex items-center gap-1.5 rounded-lg bg-white/80 px-3 py-1.5 ring-1 ring-neutral-200/80">
-                <ShoppingCart className="h-3.5 w-3.5 text-neutral-400" />
-                Quote:{" "}
-                <strong className="text-neutral-900">
-                  {formatCurrency(recommendedRow.grand_total || quoteAmount)}
-                </strong>
+            <div className="mt-3.5 flex flex-wrap items-center gap-2.5 text-sm">
+              <span className="inline-flex items-center gap-1.5 rounded-lg bg-primary-50 px-2.5 py-1 text-xs font-bold text-primary-700 ring-1 ring-primary-200/60">
+                AI SCORE {overallLabel}
               </span>
               <RiskBadge level={risk} />
+              <span className="rounded-lg bg-neutral-100 px-2.5 py-1 text-xs font-bold text-neutral-700">{recommendedRow.verdict}</span>
+              <span className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1 text-xs text-neutral-700 ring-1 ring-neutral-200/80">
+                <ShoppingCart className="h-3.5 w-3.5 text-neutral-400" />
+                Quote:{" "}
+                <strong className="font-bold text-neutral-900">
+                  {quoteTotalLabel(recommendedRow, quoteAmount)}
+                </strong>
+              </span>
             </div>
           </div>
 
-          <div className="flex shrink-0 flex-col items-center justify-center rounded-2xl border border-white/80 bg-white/90 px-8 py-6 shadow-md ring-1 ring-neutral-200/60">
-            <div className="relative flex h-24 w-24 items-center justify-center">
-              <svg className="absolute inset-0 h-24 w-24 -rotate-90" viewBox="0 0 100 100">
-                <circle cx="50" cy="50" r="42" fill="none" stroke="#E2E8F0" strokeWidth="8" />
+          <div className="flex shrink-0 flex-col items-center justify-center rounded-xl border border-neutral-200/80 bg-white px-6 py-4 shadow-xs">
+            <div className="relative flex h-20 w-20 items-center justify-center">
+              <svg className="absolute inset-0 h-20 w-20 -rotate-90" viewBox="0 0 100 100">
+                <circle cx="50" cy="50" r="40" fill="none" stroke="#E2E8F0" strokeWidth="8" />
                 <circle
                   cx="50"
                   cy="50"
-                  r="42"
+                  r="40"
                   fill="none"
                   stroke="currentColor"
                   strokeWidth="8"
                   strokeLinecap="round"
-                  className="text-primary-600"
-                  strokeDasharray={`${overallScore * 2.64} 264`}
+                  className={hasValidPrice ? "text-primary-600" : "text-amber-500"}
+                  strokeDasharray={`${(overallScore ?? 0) * 2.51} 251`}
                 />
               </svg>
               <div className="text-center">
-                <p className="text-3xl font-bold tabular-nums text-neutral-900">{overallScore}</p>
-                <p className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                <p className="text-2xl font-bold tabular-nums text-neutral-900">
+                  {overallScore ?? "—"}
+                </p>
+                <p className="text-[9px] font-bold uppercase tracking-wider text-neutral-400">
                   AI Score
                 </p>
               </div>
@@ -950,13 +1140,18 @@ function RecommendationResultsScreen({
           </div>
         </div>
       </div>
+      {eligibility.awardEligible && decision.recommendation_status === "REQUIRES_REVIEW" && (
+        <div className="rounded-lg border border-danger-200 bg-danger-50 px-4 py-3 text-sm text-danger-700">
+          Requires review — the highest weighted score is not an endorsement. Review this supplier’s risk and verdict before making a selection.
+        </div>
+      )}
 
-      {/* KPI row */}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {/* KPI row - 4 columns desktop, 2 cols tablet, 1 col mobile */}
+      <div className="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
         <KpiTile
           label="Overall AI Score"
-          value={`${overallScore}/100`}
-          valueClassName="text-primary-700"
+          value={hasValidPrice ? overallLabel : `${overallLabel} (Incomplete)`}
+          valueClassName={hasValidPrice ? "text-primary-700" : "text-amber-700"}
         />
         <KpiTile
           label="Confidence Level"
@@ -969,107 +1164,103 @@ function RecommendationResultsScreen({
         />
         <KpiTile
           label="Expected Savings"
-          value={
-            savings.amount > 0 ? formatCurrency(savings.amount) : "—"
-          }
+          value={savings.amount > 0 ? formatCurrency(savings.amount) : "—"}
           sub={
             savings.pct > 0
               ? `${savings.pct}% vs highest bid`
-              : "No material spread detected"
+              : "No price spread available"
           }
           valueClassName={savings.amount > 0 ? "text-emerald-700" : "text-neutral-500"}
         />
       </div>
 
-      {/* Dimension scores */}
+      {/* Evaluation Breakdown */}
       <div>
-        <p className="mb-3 text-xs font-bold uppercase tracking-wider text-neutral-500">
-          Evaluation Breakdown
+        <p className="mb-2.5 text-xs font-bold uppercase tracking-wider text-neutral-500">
+          Evaluation Breakdown — {recommendedRow.name}
         </p>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <DimensionScoreCard
-            label="Price Score"
+            label="Price"
+            weight={weightLabel("price_weight")}
             value={priceScore}
             icon={TrendingDown}
             barClass="bg-emerald-500"
           />
           <DimensionScoreCard
-            label="Delivery Score"
+            label="Delivery"
+            weight={weightLabel("delivery_weight")}
             value={deliveryScore}
             icon={Truck}
             barClass="bg-primary-500"
           />
           <DimensionScoreCard
-            label="Reliability Score"
-            value={reliabilityScore}
+            label="Quality"
+            weight={weightLabel("quality_weight")}
+            value={qualityScore(recommendedRow)}
             icon={Shield}
             barClass="bg-indigo-500"
           />
           <DimensionScoreCard
-            label="Compliance Score"
-            value={compliance}
+            label="Reliability"
+            weight={weightLabel("reliability_weight")}
+            value={reliabilityScore}
             icon={ShieldCheck}
             barClass="bg-violet-500"
           />
         </div>
       </div>
 
-      {/* Leaderboard */}
+      {/* Supplier Ranking Leaderboard */}
       <div>
-        <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+        <div className="mb-2.5 flex flex-wrap items-end justify-between gap-2">
           <div>
             <p className="text-xs font-bold uppercase tracking-wider text-neutral-500">
               Supplier Ranking Leaderboard
             </p>
-            <p className="mt-0.5 text-sm text-neutral-600">
+            <p className="mt-0.5 text-xs text-neutral-600">
               {bidSelectable
-                ? `Select ${REVERSE_BIDDING_MIN_SUPPLIERS}–${REVERSE_BIDDING_MAX_SUPPLIERS} suppliers to run a reverse auction. AI ranking is a recommendation — the final decision is yours.`
+                ? `Select ${maxSelectableSuppliers === REVERSE_BIDDING_MIN_SUPPLIERS ? REVERSE_BIDDING_MIN_SUPPLIERS : `${REVERSE_BIDDING_MIN_SUPPLIERS}–${maxSelectableSuppliers ?? REVERSE_BIDDING_MAX_SUPPLIERS}`} suppliers to run a reverse auction. AI ranking reflects weighted scores; review risk and verdict separately.`
                 : "Ranked by composite AI score across all evaluation criteria"}
             </p>
           </div>
           <button
             type="button"
             onClick={onViewComparison}
-            className="inline-flex items-center gap-1.5 text-xs font-semibold text-primary-700 hover:text-primary-900"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs font-semibold text-neutral-700 shadow-xs hover:bg-neutral-50"
           >
-            <GitCompare className="h-3.5 w-3.5" />
-            View Detailed Comparison
+            <GitCompare className="h-3.5 w-3.5 text-neutral-500" />
+            Comparison Table
           </button>
         </div>
         <SupplierLeaderboard
           suppliers={ranked}
-          recommendedName={result.recommended_supplier}
+          recommendedName={supplierRowKey(recommendedRow)}
           onSelect={onSelectSupplier}
           selectable={bidSelectable}
           selected={bidSelected}
           onToggle={onToggleBid}
-          maxReached={bidMaxReached}
+          maxSelectableSuppliers={maxSelectableSuppliers}
         />
-        {bidSelectable && (
-          <p className="mt-2 text-xs text-neutral-500">
-            {(bidSelected?.size ?? 0)} selected
-            {bidMaxReached
-              ? ` · maximum ${REVERSE_BIDDING_MAX_SUPPLIERS} reached`
-              : ""}
-          </p>
-        )}
       </div>
 
-      {/* Executive summary */}
-      <div className="rounded-2xl border border-neutral-800/10 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-6 text-white shadow-lg">
-        <div className="mb-3 flex items-center gap-2">
-          <ClipboardList className="h-4 w-4 text-primary-300" />
-          <p className="text-xs font-bold uppercase tracking-wider text-primary-200/90">
+      {/* AI Executive Summary */}
+      <div className="rounded-xl border border-slate-800 bg-slate-900 p-5 text-white shadow-xs sm:p-6">
+        <div className="mb-2.5 flex items-center gap-2">
+          <ClipboardList className="h-4 w-4 text-primary-400" />
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-300">
             AI Executive Summary
           </p>
         </div>
-        <p className="text-sm leading-relaxed text-slate-100/95">{executiveSummary}</p>
-        {(recommendedRow.strengths ?? []).length > 0 && (
+        <p className="max-w-3xl text-sm leading-relaxed text-slate-200">
+          {executiveSummary}
+        </p>
+        {(decision.strengths ?? []).length > 0 && (
           <ul className="mt-4 space-y-1.5 border-t border-white/10 pt-4">
-            {(recommendedRow.strengths ?? []).slice(0, 3).map((item) => (
-              <li key={item} className="flex gap-2 text-sm text-slate-200/90">
+            {(decision.strengths ?? []).slice(0, 3).map((item) => (
+              <li key={item} className="flex items-start gap-2 text-sm text-slate-300">
                 <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-                {item}
+                <span>{item}</span>
               </li>
             ))}
           </ul>
@@ -1083,7 +1274,7 @@ function RecommendationResultsScreen({
 /*  Supplier Selection Confirmation Dialog                                     */
 /* -------------------------------------------------------------------------- */
 
-function SelectionConfirmDialog({
+export function SelectionConfirmDialog({
   supplier,
   isTopPick,
   onConfirm,
@@ -1098,75 +1289,125 @@ function SelectionConfirmDialog({
 }) {
   const [reason, setReason] = useState("");
   const risk = supplierRiskLevel(supplier);
+  const eligibility = getSupplierAwardEligibility(supplier);
+  const layout = useOptionalLayout();
+  const isDrawer = layout?.sidebarMode === "drawer";
+  const sidebarOffset = isDrawer ? 0 : (layout?.sidebarOffset ?? 240);
 
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-neutral-950/50" onClick={onCancel} />
-      <div className="relative w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
-        <h3 className="text-lg font-bold text-neutral-900">Confirm Supplier Selection</h3>
+  if (typeof document === "undefined") return null;
 
-        {!isTopPick && (
-          <div className="mt-3 flex items-start gap-2 rounded-lg border border-warning-200 bg-warning-50 p-3">
-            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-warning-600" />
-            <p className="text-sm text-warning-800">
-              You are selecting a supplier that is not the top AI recommendation.
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[10001] overflow-hidden"
+      style={{
+        position: "fixed",
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+        width: "100vw",
+        height: "100vh",
+        zIndex: 10001,
+      }}
+    >
+      <div
+        className="fixed inset-0 bg-slate-950/65 backdrop-blur-xs transition-opacity"
+        style={{
+          position: "fixed",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: 0,
+          width: "100vw",
+          height: "100vh",
+        }}
+        onClick={busy ? undefined : onCancel}
+      />
+      <div
+        className="fixed top-0 right-0 bottom-0 z-10 flex items-center justify-center p-4 pointer-events-none"
+        style={{
+          position: "fixed",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: isDrawer ? "0px" : `var(--sidebar-width, ${sidebarOffset}px)`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <div className="relative w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl border border-neutral-200 pointer-events-auto">
+          <h3 className="text-lg font-bold text-neutral-900">Confirm Supplier Award</h3>
+
+          {!isTopPick && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-warning-200 bg-warning-50 p-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-warning-600" />
+              <p className="text-sm text-warning-800">
+                You are selecting a supplier other than the numerical score leader. Ranking describes the weighted score, not an approval decision.
+              </p>
+            </div>
+          )}
+          {projectSupplierDecision(supplier, isTopPick).recommendation_status === "REQUIRES_REVIEW" && (
+            <p className="mt-3 rounded-lg border border-danger-200 bg-danger-50 p-3 text-sm text-danger-700">
+              {projectSupplierDecision(supplier, isTopPick).recommendation_reason}
             </p>
-          </div>
-        )}
+          )}
 
-        <div className="mt-4 space-y-3 rounded-lg border border-neutral-200 bg-neutral-50 p-4 text-sm">
-          <div className="flex justify-between">
-            <span className="text-neutral-500">Selected Supplier</span>
-            <span className="font-semibold text-neutral-900">{supplier.name}</span>
+          <div className="mt-4 space-y-3 rounded-lg border border-neutral-200 bg-neutral-50 p-4 text-sm">
+            <div className="flex justify-between">
+              <span className="text-neutral-500">Selected Supplier</span>
+              <span className="font-semibold text-neutral-900">{supplier.name}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-neutral-500">AI Rank</span>
+              <span className="font-semibold text-neutral-900">#{supplier.rank}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-neutral-500">Risk Level</span>
+              <RiskBadge level={risk} />
+            </div>
+            <div className="flex justify-between">
+              <span className="text-neutral-500">Quote Total</span>
+              <span className="font-semibold text-neutral-900">{quoteTotalLabel(supplier)}</span>
+            </div>
           </div>
-          <div className="flex justify-between">
-            <span className="text-neutral-500">AI Rank</span>
-            <span className="font-semibold text-neutral-900">#{supplier.rank}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-neutral-500">Risk Level</span>
-            <RiskBadge level={risk} />
-          </div>
-          <div className="flex justify-between">
-            <span className="text-neutral-500">Quote Total</span>
-            <span className="font-semibold text-neutral-900">{formatCurrency(supplier.grand_total)}</span>
-          </div>
-        </div>
 
-        <div className="mt-4">
-          <label className="mb-1.5 block text-sm font-medium text-neutral-700">
-            Reason for Selection<span className="text-danger-500">*</span>
-          </label>
-          <textarea
-            rows={3}
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="Provide a business justification for selecting this supplier…"
-            className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-          />
-        </div>
+          <div className="mt-4">
+            <label className="mb-1.5 block text-sm font-medium text-neutral-700">
+              Reason for Selection<span className="text-danger-500">*</span>
+            </label>
+            <textarea
+              rows={3}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Provide a business justification for selecting this supplier…"
+              className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+            />
+          </div>
 
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={busy}
-            className="rounded-lg border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={() => onConfirm(reason)}
-            disabled={!reason.trim() || busy}
-            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-600 disabled:opacity-60"
-          >
-            {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-            Confirm Selection
-          </button>
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={busy}
+              className="rounded-lg border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => { if (eligibility.awardEligible && reason.trim()) onConfirm(reason); }}
+              disabled={!reason.trim() || busy || !eligibility.awardEligible}
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-600 disabled:opacity-60"
+            >
+              {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+              Confirm Award
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -1174,11 +1415,11 @@ function SelectionConfirmDialog({
 /*  Supplier Detail Panel                                                      */
 /* -------------------------------------------------------------------------- */
 
-function SupplierDetailPanel({
+export function SupplierDetailPanel({
   supplier,
   rank1,
   result,
-  quoteAmount,
+  quoteAmount: _quoteAmount,
   creatingPO,
   canSelect,
   chosenSupplier,
@@ -1192,7 +1433,7 @@ function SupplierDetailPanel({
   supplier: SupplierAnalysisRow;
   rank1: SupplierAnalysisRow | undefined;
   result: AIRecommendation;
-  quoteAmount: number;
+  quoteAmount: number | null;
   creatingPO: boolean;
   canSelect: boolean;
   chosenSupplier: string | null;
@@ -1205,18 +1446,22 @@ function SupplierDetailPanel({
 }) {
   const [expandedWhy, setExpandedWhy] = useState(false);
   const risk = supplierRiskLevel(supplier);
-  const obs = buildObservations(supplier, rank1, result);
+  const obs = buildObservations(supplier, rank1);
   const isRank1 = supplier.rank === 1;
+  const winner = findRecommendationWinner(result);
+  const isRecommended = !!winner && supplierRowKey(winner) === supplierRowKey(supplier);
+  const decision = projectSupplierDecision(supplier, isRecommended);
+  const eligibility = getSupplierAwardEligibility(supplier);
 
   const whyBetter =
     supplier.rank === 1
-      ? `${supplier.why_best_or_worst} ${result.recommendation_summary} Compared to other bidders, this supplier leads on overall score (${clampScore(supplier.score?.overall ?? 0)}%), price (${clampScore(supplier.score?.cost ?? 0)}%), and total quote value at ${formatCurrency(supplier.grand_total)}.`
+      ? `${supplier.why_best_or_worst} Overall score: ${scoreLabel(supplier.score?.overall)}. Quote total: ${quoteTotalLabel(supplier)}.`
       : rank1
-      ? `${supplier.name} ranks #${supplier.rank} with an overall score of ${clampScore(supplier.score?.overall ?? 0)}% vs ${clampScore(rank1.score?.overall ?? 0)}% for ${rank1.name}. ${supplier.why_best_or_worst} ${
-          obs.costDiff > 0
-            ? `The quote is ${formatCurrency(obs.costDiff)} higher than the recommended supplier.`
-            : obs.costDiff < 0
-            ? `Total quote is lower than Rank #1, but composite scoring favours ${rank1.name} on delivery, reliability, and risk.`
+      ? `${supplier.name} ranks #${supplier.rank} with an overall score of ${scoreLabel(supplier.score?.overall)} vs ${scoreLabel(rank1.score?.overall)} for ${rank1.name}. ${supplier.why_best_or_worst} ${
+          obs.costDiff !== null && obs.costDiff > 0
+            ? `The quote is ${formatCurrency(obs.costDiff)} higher than the top-ranked supplier.`
+            : obs.costDiff !== null && obs.costDiff < 0
+            ? `Total quote is lower than Rank #1. Compare the individual weighted dimensions and separate risk assessment.`
             : ""
         }`
       : supplier.why_best_or_worst;
@@ -1251,8 +1496,7 @@ function SupplierDetailPanel({
           </div>
           <div className="text-right">
             <p className="text-3xl font-bold text-primary-700">
-              {clampScore(supplier.score?.overall ?? 0)}
-              <span className="text-base font-normal text-neutral-400">/100</span>
+              {scoreLabel(supplier.score?.overall)}
             </p>
             <p className="text-xs text-neutral-500">Overall AI Score</p>
             <div className="mt-2">
@@ -1261,7 +1505,7 @@ function SupplierDetailPanel({
           </div>
         </div>
         <p className="mt-4 text-lg font-semibold text-neutral-900">
-          {formatCurrency(isRank1 ? quoteAmount || supplier.grand_total : supplier.grand_total)}
+          {quoteTotalLabel(supplier)}
         </p>
       </div>
 
@@ -1280,10 +1524,10 @@ function SupplierDetailPanel({
           const qualitySource = sources.find((s) => s.dimension === "Quality");
           const reliabilitySource = sources.find((s) => s.dimension === "Reliability");
           return (<>
-            <ScoreBar label="Price Score" value={supplier.score?.cost ?? 0} color="bg-emerald-500" source={priceSource?.source} hasData={priceSource?.has_data ?? true} />
-            <ScoreBar label="Delivery Score" value={supplier.score?.delivery ?? 0} color="bg-primary" source={deliverySource?.source} hasData={deliverySource?.has_data} />
+            <ScoreBar label="Price Score" value={supplier.score?.cost ?? -1} color="bg-emerald-500" source={priceSource?.source} hasData={priceSource?.has_data ?? true} />
+            <ScoreBar label="Delivery Score" value={supplier.score?.delivery ?? -1} color="bg-primary" source={deliverySource?.source} hasData={deliverySource?.has_data} />
             <ScoreBar label="Quality Score" value={qualityScore(supplier)} color="bg-primary" source={qualitySource?.source} hasData={qualitySource?.has_data} />
-            <ScoreBar label="Reliability Score" value={supplier.score?.reliability ?? 0} color="bg-primary" source={reliabilitySource?.source} hasData={reliabilitySource?.has_data} />
+            <ScoreBar label="Reliability Score" value={supplier.score?.reliability ?? -1} color="bg-primary" source={reliabilitySource?.source} hasData={reliabilitySource?.has_data} />
           </>);
         })()}
       </div>
@@ -1295,22 +1539,22 @@ function SupplierDetailPanel({
             Comparison vs Rank #1 — {rank1.name}
           </p>
           {isRank1 ? (
-            <p className="text-sm text-success-600 font-medium">
-              ✓ Benchmark supplier — highest AI ranking for this RFQ.
+            <p className="text-sm text-neutral-700 font-medium">
+              Highest numerical score for this RFQ.
             </p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="rounded-lg bg-neutral-50 px-3 py-2">
                 <p className="text-[10px] uppercase text-neutral-500">Cost difference</p>
-                <p className={`text-sm font-bold ${obs.costDiff > 0 ? "text-danger-600" : "text-success-600"}`}>
-                  {obs.costDiff > 0 ? "+" : ""}
-                  {formatCurrency(obs.costDiff)}
+                <p className={`text-sm font-bold ${obs.costDiff !== null && obs.costDiff > 0 ? "text-danger-600" : "text-success-600"}`}>
+                  {obs.costDiff !== null && obs.costDiff > 0 ? "+" : ""}
+                  {obs.costDiff === null ? "—" : formatCurrency(obs.costDiff)}
                 </p>
               </div>
               <div className="rounded-lg bg-neutral-50 px-3 py-2">
                 <p className="text-[10px] uppercase text-neutral-500">Score difference</p>
                 <p className="text-sm font-bold text-neutral-800">
-                  −{clampScore(obs.scoreDiff)} pts behind leader
+                  {obs.scoreDiff === null ? "Score comparison unavailable" : `−${clampScore(obs.scoreDiff)} pts behind leader`}
                 </p>
               </div>
             </div>
@@ -1318,23 +1562,24 @@ function SupplierDetailPanel({
         </div>
       )}
 
-      {isRank1 && (
-        <ObservationBlock title="Why this supplier was selected">
-          {result.recommendation_summary || supplier.why_best_or_worst}
-        </ObservationBlock>
-      )}
+      <ObservationBlock title="Ranking and review guidance">
+        {decision.recommendation_reason}
+      </ObservationBlock>
+      <ObservationBlock title="Evaluation reasoning">
+        {supplier.why_best_or_worst || "No evaluation reasoning was provided."}
+      </ObservationBlock>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <ObservationBlock title="Strengths">
           <BulletList
-            items={supplier.strengths}
+            items={decision.strengths}
             empty="No specific strengths identified."
           />
         </ObservationBlock>
         <ObservationBlock title="Weaknesses">
           <BulletList
             items={supplier.weaknesses}
-            empty="No significant weaknesses identified."
+            empty="No separate weakness assessment provided."
           />
         </ObservationBlock>
       </div>
@@ -1357,7 +1602,7 @@ function SupplierDetailPanel({
           className="flex w-full items-center justify-between px-4 py-3 text-left"
         >
           <span className="text-sm font-semibold text-primary-800">
-            Why this supplier is better than others
+            Why this supplier has this ranking
           </span>
           <ChevronDown
             className={`h-5 w-5 text-primary-600 transition ${expandedWhy ? "rotate-180" : ""}`}
@@ -1384,8 +1629,8 @@ function SupplierDetailPanel({
       ) : canSelect ? (
         <button
           type="button"
-          onClick={() => onSelectSupplier(supplier)}
-          disabled={creatingPO}
+          onClick={() => { if (eligibility.awardEligible) onSelectSupplier(supplier); }}
+          disabled={creatingPO || !eligibility.awardEligible || !isSubmittedQuoteAmount(supplier.grand_total)}
           className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-6 py-4 text-base font-bold text-white shadow-lg shadow-primary-500/25 transition hover:bg-primary-600 disabled:opacity-70"
         >
           {creatingPO ? (
@@ -1396,7 +1641,9 @@ function SupplierDetailPanel({
           ) : (
             <>
               <ShoppingCart className="h-5 w-5" />
-              Select Supplier
+              {isSubmittedQuoteAmount(supplier.grand_total)
+                ? "Select Supplier"
+                : "Price Required Before Selection"}
             </>
           )}
         </button>
@@ -1478,21 +1725,31 @@ export default function AIAnalysisModal({
     () => sortRankedSuppliers(result?.supplier_analysis ?? []),
     [result]
   );
+  const eligibleBidRows = ranked.filter((row) => getSupplierAwardEligibility(row).awardEligible &&
+    isSubmittedQuoteAmount(row.grand_total) && reverseBiddingSelectionForRow(row));
+  const eligibleBidSelection = new Set(eligibleBidRows
+    .map((row) => reverseBiddingSelectionForRow(row)!.quotation_id)
+    .filter((quotationId) => bidSelection.has(quotationId)));
+
+  const maxSelectableSuppliers = Math.min(
+    REVERSE_BIDDING_MAX_SUPPLIERS,
+    Math.max(REVERSE_BIDDING_MIN_SUPPLIERS, eligibleBidRows.length)
+  );
 
   const rank1 = ranked[0];
-  const recommendedRow =
-    ranked.find(
-      (s) =>
-        result?.recommended_supplier &&
-        s.name.toLowerCase() === result.recommended_supplier.toLowerCase()
-    ) ?? rank1;
-  const selectedRow = ranked.find((s) => s.name === selectedSupplier);
+  const recommendedRow = result ? findRecommendationWinner(result, ranked) : undefined;
+  const recommendedEligibility = getSupplierAwardEligibility(recommendedRow);
+  const selectedRow = ranked.find((s) => supplierRowKey(s) === selectedSupplier);
 
   const primaryActionLabel = ctaLabel ?? "Create Purchase Order";
   const primaryLoadingLabel = ctaLoadingLabel ?? "Creating Purchase Order…";
 
   function handlePrimaryAction() {
     if (!recommendedRow) return;
+    if (!recommendedEligibility.awardEligible) {
+      toast.error(recommendedEligibility.awardIneligibilityReason || "Supplier is not eligible for selection.");
+      return;
+    }
     if (onSelectSupplier && !poAlreadyExists && !chosenSupplier) {
       handleSelectSupplierClick(recommendedRow);
       return;
@@ -1506,108 +1763,215 @@ export default function AIAnalysisModal({
   }
 
   function handleSelectSupplierClick(supplier: SupplierAnalysisRow) {
+    if (!isSubmittedQuoteAmount(supplier.grand_total) || !getSupplierAwardEligibility(supplier).awardEligible) return;
     setConfirmingSupplier(supplier);
   }
 
-  function handleConfirmSelection(reason: string) {
-    if (!confirmingSupplier || !onSelectSupplier) return;
+  async function handleConfirmSelection(reason: string) {
+    if (
+      !confirmingSupplier ||
+      !onSelectSupplier ||
+      !isSubmittedQuoteAmount(confirmingSupplier.grand_total) ||
+      !getSupplierAwardEligibility(confirmingSupplier).awardEligible
+    ) return;
+    const identity = reverseBiddingSelectionForRow(confirmingSupplier);
+    if (!identity) {
+      toast.error("Current Supplier Quotation identity is required. Refresh Recommendation Results and try again.");
+      return;
+    }
     const risk = supplierRiskLevel(confirmingSupplier);
-    onSelectSupplier({
+    try { await onSelectSupplier({
+      ...identity,
       supplierName: confirmingSupplier.name,
       aiRank: confirmingSupplier.rank,
       riskLevel: risk,
       reason,
       grandTotal: confirmingSupplier.grand_total,
     });
-    setConfirmingSupplier(null);
+    setConfirmingSupplier(null); } catch { /* The parent displays the real error; preserve the selection reason for retry. */ }
   }
 
   const reverseBiddingEnabled =
     !!onStartReverseBidding && !poAlreadyExists && !chosenSupplier;
 
-  function toggleBidSupplier(name: string) {
+  function toggleBidSupplier(quotationId: string) {
+    if (bidSelection.has(quotationId)) {
+      setBidSelection((previous) => new Set([...previous].filter((id) => id !== quotationId)));
+      return;
+    }
+    const row = ranked.find((r) => reverseBiddingSelectionForRow(r)?.quotation_id === quotationId);
+    const eligibility = getSupplierAwardEligibility(row);
+    if (!eligibility.awardEligible) {
+      toast.error(eligibility.awardIneligibilityReason || "Supplier is not eligible for reverse bidding.");
+      return;
+    }
+    if (!row || !isSubmittedQuoteAmount(row.grand_total)) {
+      toast.error(
+        "Cannot start reverse bidding because this supplier has an invalid or missing quotation amount.",
+        { id: "rb-missing-amount" },
+      );
+      return;
+    }
+
     setBidSelection((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) {
-        next.delete(name);
-      } else if (next.size < REVERSE_BIDDING_MAX_SUPPLIERS) {
-        next.add(name);
+      const next = new Set([...prev].filter((id) => eligibleBidSelection.has(id)));
+      if (next.has(quotationId)) {
+        next.delete(quotationId);
+      } else {
+        if (next.size >= maxSelectableSuppliers) {
+          toast.error(`You can select a maximum of ${maxSelectableSuppliers} suppliers.`, {
+            id: "rb-max-suppliers",
+          });
+          return prev;
+        }
+        next.add(quotationId);
       }
       return next;
     });
   }
 
-  const bidCount = bidSelection.size;
+  const bidCount = eligibleBidSelection.size;
   const canStartReverseBidding =
     reverseBiddingEnabled &&
+    eligibleBidRows.length >= REVERSE_BIDDING_MIN_SUPPLIERS &&
     bidCount >= REVERSE_BIDDING_MIN_SUPPLIERS &&
-    bidCount <= REVERSE_BIDDING_MAX_SUPPLIERS &&
+    bidCount <= maxSelectableSuppliers &&
     !startingReverseBidding &&
     !creatingPO;
 
   function handleStartReverseBidding() {
     if (!onStartReverseBidding || !canStartReverseBidding) return;
-    onStartReverseBidding([...bidSelection]);
+
+    for (const quotationId of bidSelection) {
+      const row = ranked.find((r) => reverseBiddingSelectionForRow(r)?.quotation_id === quotationId);
+      const eligibility = getSupplierAwardEligibility(row);
+      if (!eligibility.awardEligible) {
+        toast.error(eligibility.awardIneligibilityReason || "Supplier is no longer eligible. Select the suppliers again.");
+        return;
+      }
+      if (!row || !isSubmittedQuoteAmount(row.grand_total)) {
+        toast.error(
+          "Cannot start reverse bidding because this supplier has an invalid or missing quotation amount.",
+          { id: "rb-missing-amount" },
+        );
+        return;
+      }
+    }
+
+    try {
+      onStartReverseBidding(selectedReverseBiddingQuotations(ranked, eligibleBidSelection));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Selected quotation is no longer available.");
+    }
   }
 
-  if (!open) {
+  const layout = useOptionalLayout();
+  if (!open || typeof document === "undefined") {
     return null;
   }
 
+  const isDrawer = layout?.sidebarMode === "drawer";
+  const sidebarOffset = isDrawer ? 0 : (layout?.sidebarOffset ?? 240);
+
   const progressPct = loading
     ? Math.min(100, ((loadingStep + 1) / ANALYSIS_STEPS.length) * 100)
-    : result
-    ? 100
     : 0;
 
-  return (
+  const modalTitle = loading
+    ? "AI Procurement Analysis"
+    : selectedSupplier
+      ? "Supplier Analysis"
+      : viewMode === "comparison"
+        ? "Detailed Comparison"
+        : chosenSupplier
+          ? "Market Re-Analysis"
+          : "Recommendation Results";
+
+  const modalSubtitle = loading
+    ? "Evaluating supplier quotations and generating recommendations"
+    : selectedSupplier
+      ? `Detailed analysis — ${selectedRow?.name ?? selectedSupplier}`
+      : viewMode === "comparison"
+        ? "Side-by-side supplier evaluation and rankings"
+        : chosenSupplier
+          ? "Comparing current market data against selected supplier"
+          : "Supplier evaluation report";
+
+  const modalNode = (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-[9999] overflow-hidden"
+      style={{
+        position: "fixed",
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+        width: "100vw",
+        height: "100vh",
+        zIndex: 9999,
+      }}
       role="dialog"
       aria-modal="true"
       aria-labelledby="ai-modal-title"
     >
-      <button
-        type="button"
-        aria-label="Close"
-        className="absolute inset-0 bg-neutral-950/70 backdrop-blur-md"
+      {/* 1. Full-screen backdrop (dims background, covers whole screen behind modal) */}
+      <div
+        className="fixed inset-0 bg-slate-950/55 backdrop-blur-xs transition-opacity"
+        style={{
+          position: "fixed",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: 0,
+          width: "100vw",
+          height: "100vh",
+          background: "rgba(15, 23, 42, 0.55)",
+          zIndex: 9999,
+        }}
         onClick={creatingPO ? undefined : onClose}
-        disabled={creatingPO}
       />
 
-      <div className="relative flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/95 shadow-[0_25px_80px_rgba(124,58,237,0.35)] backdrop-blur-2xl">
-        <div className="pointer-events-none absolute -inset-px rounded-2xl ring-1 ring-inset ring-primary-500/10" />
-
-        <div className="relative flex min-h-0 flex-1 flex-col">
-          <div className="relative shrink-0 overflow-hidden bg-sidebar px-6 py-5">
-            <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-primary-400/20 blur-2xl" />
-            <div className="relative flex items-start justify-between gap-3">
+      {/* 2. Main-content modal positioning layer: positioned from left: var(--sidebar-width) to right: 0 */}
+      <div
+        className="fixed top-0 right-0 bottom-0 z-[10000] flex items-center justify-center pointer-events-none"
+        style={{
+          position: "fixed",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: isDrawer ? "0px" : `var(--sidebar-width, ${sidebarOffset}px)`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: isDrawer ? "8px" : "24px 32px",
+          boxSizing: "border-box",
+          zIndex: 10000,
+        }}
+      >
+        {/* Centered Modal Card inside Main Content Area */}
+        <div
+          className="relative flex flex-col bg-white shadow-2xl border border-neutral-200/90 overflow-hidden pointer-events-auto"
+          style={{
+            width: "min(1100px, 100%)",
+            maxWidth: "1100px",
+            maxHeight: isDrawer ? "calc(100vh - 16px)" : "calc(100vh - 48px)",
+            margin: 0,
+            borderRadius: isDrawer ? "14px" : "18px",
+          }}
+        >
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            {/* STICKY HEADER */}
+            <div className="relative shrink-0 border-b border-neutral-200 bg-sidebar px-6 py-4 flex items-center justify-between text-white">
               <div className="flex items-center gap-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/10 ring-1 ring-white/20">
-                  <Sparkles className="h-5 w-5 text-white/90" />
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/10 ring-1 ring-white/20">
+                  <Sparkles className="h-5 w-5 text-white" />
                 </div>
                 <div>
-                  <h2 id="ai-modal-title" className="text-lg font-bold text-white">
-                    {loading
-                      ? "AI Procurement Analysis"
-                      : selectedSupplier
-                        ? "Supplier Analysis"
-                        : viewMode === "comparison"
-                          ? "Detailed Comparison"
-                          : chosenSupplier
-                            ? "Market Re-Analysis"
-                            : "Recommendation Results"}
+                  <h2 id="ai-modal-title" className="text-lg font-bold text-white leading-tight">
+                    {modalTitle}
                   </h2>
-                  <p className="text-xs text-white/70">
-                    {loading
-                      ? "Evaluating supplier quotations and generating recommendations"
-                      : selectedSupplier
-                        ? `Detailed analysis — ${selectedSupplier}`
-                        : viewMode === "comparison"
-                          ? "Side-by-side supplier evaluation and rankings"
-                          : chosenSupplier
-                            ? "Comparing current market data against selected supplier"
-                            : "Procurement decision ready — review recommendation and proceed"}
+                  <p className="text-xs text-white/70 mt-0.5">
+                    {modalSubtitle}
                   </p>
                 </div>
               </div>
@@ -1615,29 +1979,31 @@ export default function AIAnalysisModal({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="rounded-lg p-1.5 text-white/80 transition hover:bg-white/15"
+                  aria-label="Close modal"
+                  className="flex h-9 w-9 items-center justify-center rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors focus:outline-none"
                 >
                   <X className="h-5 w-5" />
                 </button>
               )}
             </div>
-            {(loading || result) && (
-              <div className="relative mt-4 h-1.5 overflow-hidden rounded-full bg-white/15">
+
+            {/* Active Loading Progress Bar (only shown while loading) */}
+            {loading && (
+              <div className="relative h-1 overflow-hidden bg-white/15">
                 <div
-                  className="h-full rounded-full bg-primary-400 transition-all duration-700"
+                  className="h-full bg-primary-400 transition-all duration-500"
                   style={{ width: `${progressPct}%` }}
                 />
               </div>
             )}
-          </div>
 
-          {result && !loading && !selectedSupplier && viewMode === "comparison" && (
-            <div className="shrink-0 border-b border-neutral-200 bg-slate-50/80 px-4">
-              <div className="flex items-center gap-2 overflow-x-auto py-2">
+            {/* Comparison Mode Sub-Tabs */}
+            {result && !loading && !selectedSupplier && viewMode === "comparison" && (
+              <div className="shrink-0 border-b border-neutral-200 bg-slate-50 px-6 py-2 flex items-center gap-2 overflow-x-auto">
                 <button
                   type="button"
                   onClick={() => setViewMode("recommendation")}
-                  className="inline-flex shrink-0 items-center gap-1 rounded-lg px-3 py-2 text-xs font-semibold text-neutral-600 transition hover:bg-white hover:text-primary-700"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold text-neutral-600 transition-colors hover:bg-white hover:text-primary-700"
                 >
                   <ArrowLeft className="h-3.5 w-3.5" />
                   Back to Recommendation
@@ -1648,9 +2014,9 @@ export default function AIAnalysisModal({
                     key={id}
                     type="button"
                     onClick={() => setActiveTab(id)}
-                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold transition ${
+                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition ${
                       activeTab === id
-                        ? "bg-primary-700 text-white shadow-md"
+                        ? "bg-primary-700 text-white shadow-xs"
                         : "text-neutral-600 hover:bg-white hover:text-primary-700"
                     }`}
                   >
@@ -1659,282 +2025,305 @@ export default function AIAnalysisModal({
                   </button>
                 ))}
               </div>
-            </div>
-          )}
+            )}
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
-            {loading && (
-              <div className="py-10">
-                <div className="relative mx-auto mb-8 flex h-24 w-24 items-center justify-center">
-                  <span className="absolute inset-0 animate-ping rounded-full bg-primary-200/40" />
-                  <span className="absolute inset-2 animate-pulse rounded-full bg-primary-100/80" />
-                  <div className="relative flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-600 to-primary-800 shadow-lg shadow-primary-500/25">
-                    <Sparkles className="h-6 w-6 text-white" />
+            {/* SCROLLABLE CONTENT */}
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 sm:px-6 py-5 sm:py-6 space-y-6">
+              {loading && (
+                <div className="py-10">
+                  <div className="relative mx-auto mb-8 flex h-20 w-20 items-center justify-center">
+                    <span className="absolute inset-0 animate-ping rounded-full bg-primary-200/40" />
+                    <span className="absolute inset-2 animate-pulse rounded-full bg-primary-100/80" />
+                    <div className="relative flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-600 to-primary-800 shadow-md shadow-primary-500/25">
+                      <Sparkles className="h-5 w-5 text-white" />
+                    </div>
                   </div>
-                </div>
-                <div className="mx-auto max-w-md space-y-2.5">
-                  {ANALYSIS_STEPS.map((step, idx) => (
-                    <div
-                      key={step}
-                      className={`flex items-center gap-3 rounded-xl px-4 py-3 text-sm transition-all duration-500 ${
-                        idx <= loadingStep
-                          ? "bg-primary-50 text-primary-900 ring-1 ring-primary-100"
-                          : "text-neutral-400"
-                      }`}
-                    >
-                      <span
-                        className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold transition-colors duration-500 ${
+                  <div className="mx-auto max-w-md space-y-2.5">
+                    {ANALYSIS_STEPS.map((step, idx) => (
+                      <div
+                        key={step}
+                        className={`flex items-center gap-3 rounded-xl px-4 py-3 text-sm transition-all duration-500 ${
                           idx <= loadingStep
-                            ? "bg-primary-600 text-white"
-                            : "bg-neutral-100 text-neutral-400"
+                            ? "bg-primary-50 text-primary-900 ring-1 ring-primary-100"
+                            : "text-neutral-400"
                         }`}
                       >
-                        {idx <= loadingStep ? "✓" : ""}
-                      </span>
-                      {step}
-                    </div>
-                  ))}
+                        <span
+                          className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold transition-colors duration-500 ${
+                            idx <= loadingStep
+                              ? "bg-primary-600 text-white"
+                              : "bg-neutral-100 text-neutral-400"
+                          }`}
+                        >
+                          {idx <= loadingStep ? "✓" : ""}
+                        </span>
+                        {step}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            {error && !loading && !result && (
-              <div className="py-10 text-center">
-                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary-50">
-                  <Sparkles className="h-7 w-7 text-primary-600" />
+              {error && !loading && !result && (
+                <div className="py-10 text-center">
+                  <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary-50">
+                    <Sparkles className="h-6 w-6 text-primary-600" />
+                  </div>
+                  <p className="mx-auto max-w-md text-sm text-neutral-700">{error}</p>
+                  <button
+                    type="button"
+                    onClick={onRetry}
+                    className="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-800"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    Retry Analysis
+                  </button>
                 </div>
-                <p className="mx-auto max-w-md text-sm text-neutral-700">{error}</p>
-                <button
-                  type="button"
-                  onClick={onRetry}
-                  className="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary-700 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-800"
-                >
-                  <Sparkles className="h-4 w-4" />
-                  Retry Analysis
-                </button>
-              </div>
-            )}
+              )}
 
-            {result && !loading && selectedRow && (
-              <SupplierDetailPanel
-                supplier={selectedRow}
-                rank1={rank1}
-                result={result}
-                quoteAmount={quoteAmount}
-                creatingPO={creatingPO}
-                canSelect={!poAlreadyExists && !!onSelectSupplier}
-                chosenSupplier={chosenSupplier}
-                onBack={() => setSelectedSupplier(null)}
-                onSelectSupplier={handleSelectSupplierClick}
-                onCreatePO={onCreatePO}
-                ctaLabel={ctaLabel}
-                ctaLoadingLabel={ctaLoadingLabel}
-                ctaDoneMessage={ctaDoneMessage}
-              />
-            )}
+              {result && !loading && selectedRow && (
+                <SupplierDetailPanel
+                  supplier={selectedRow}
+                  rank1={rank1}
+                  result={result}
+                  quoteAmount={quoteAmount}
+                  creatingPO={creatingPO}
+                  canSelect={!poAlreadyExists && !!onSelectSupplier}
+                  chosenSupplier={chosenSupplier}
+                  onBack={() => setSelectedSupplier(null)}
+                  onSelectSupplier={handleSelectSupplierClick}
+                  onCreatePO={onCreatePO}
+                  ctaLabel={ctaLabel}
+                  ctaLoadingLabel={ctaLoadingLabel}
+                  ctaDoneMessage={ctaDoneMessage}
+                />
+              )}
 
-            {result && !loading && !selectedSupplier && viewMode === "recommendation" && recommendedRow && (
-              <RecommendationResultsScreen
-                result={result}
-                ranked={ranked}
-                recommendedRow={recommendedRow}
-                quoteAmount={quoteAmount}
-                chosenSupplier={chosenSupplier}
-                onSelectSupplier={setSelectedSupplier}
-                onViewComparison={openComparisonView}
-                bidSelectable={reverseBiddingEnabled}
-                bidSelected={bidSelection}
-                onToggleBid={toggleBidSupplier}
-                bidMaxReached={bidCount >= REVERSE_BIDDING_MAX_SUPPLIERS}
-              />
-            )}
+              {result && !loading && !selectedSupplier && !recommendedRow && (
+                <div className="py-10 text-center text-sm text-neutral-700">
+                  <p>AI evaluation unavailable or incomplete for the current quotations.</p>
+                  <button type="button" onClick={onRetry} className="btn-primary mt-4">Retry Analysis</button>
+                </div>
+              )}
 
-            {result && !loading && !selectedSupplier && viewMode === "comparison" && (
-              <>
-                {activeTab === "overview" && (
-                  <div className="space-y-6">
-                    {chosenSupplier && (
-                      <ReAnalysisComparisonBanner
-                        previousSupplier={chosenSupplier}
-                        result={result}
-                      />
-                    )}
+              {result && !loading && !selectedSupplier && viewMode === "recommendation" && recommendedRow && (
+                <RecommendationResultsScreen
+                  result={result}
+                  ranked={ranked}
+                  recommendedRow={recommendedRow}
+                  quoteAmount={quoteAmount}
+                  chosenSupplier={chosenSupplier}
+                  onSelectSupplier={setSelectedSupplier}
+                  onViewComparison={openComparisonView}
+                  bidSelectable={reverseBiddingEnabled}
+                  bidSelected={bidSelection}
+                  onToggleBid={toggleBidSupplier}
+                  maxSelectableSuppliers={maxSelectableSuppliers}
+                />
+              )}
 
-                    <div className="rounded-xl border border-primary-200 bg-primary-50 p-5">
-                      <p className="text-xs font-bold uppercase tracking-wider text-primary-700">
-                        {chosenSupplier ? "Current AI Recommendation" : "Recommended Supplier"}
-                      </p>
-                      <p className="mt-1 text-2xl font-bold text-neutral-900">
-                        {result.recommended_supplier}
-                      </p>
-                      <p className="mt-2 text-sm leading-relaxed text-neutral-700">
-                        {result.recommendation_summary}
-                      </p>
-                      <div className="mt-4 flex flex-wrap gap-4">
-                        <div>
-                          <p className="text-[10px] uppercase text-neutral-500">Confidence</p>
-                          <p className="text-xl font-bold text-primary-700">
-                            {clampScore(result.confidence_score)}%
-                          </p>
+              {result && !loading && !selectedSupplier && viewMode === "comparison" && (
+                <>
+                  {activeTab === "overview" && (
+                    <div className="space-y-6">
+                      {chosenSupplier && (
+                        <ReAnalysisComparisonBanner
+                          previousSupplier={chosenSupplier}
+                          result={result}
+                        />
+                      )}
+
+                      <div className="rounded-xl border border-primary-200 bg-primary-50 p-5">
+                        <p className="text-xs font-bold uppercase tracking-wider text-primary-700">
+                          {recommendedEligibility.awardEligible ? (chosenSupplier ? "Current AI top-ranked supplier" : "AI top-ranked supplier") : "Top score"}
+                        </p>
+                        <p className="mt-1 text-2xl font-bold text-neutral-900">
+                          {result.recommended_supplier}
+                        </p>
+                        <p className="mt-2 text-sm leading-relaxed text-neutral-700">
+                          {recommendedRow ? projectSupplierDecision(recommendedRow, true).recommendation_reason : "Evaluation unavailable."}
+                        </p>
+                        <div className="mt-4 flex flex-wrap gap-4">
+                          <div>
+                            <p className="text-[10px] uppercase text-neutral-500">Confidence</p>
+                            <p className="text-xl font-bold text-primary-700">
+                              {scoreLabel(result.confidence_score, "%")}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] uppercase text-neutral-500">Quote Amount</p>
+                            <p className="text-xl font-bold text-neutral-900">
+                              {recommendedRow ? quoteTotalLabel(recommendedRow, quoteAmount) : "Unavailable"}
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-[10px] uppercase text-neutral-500">Quote Amount</p>
-                          <p className="text-xl font-bold text-neutral-900">
-                            {formatCurrency(quoteAmount)}
-                          </p>
+                      </div>
+
+                      <div>
+                        <p className="mb-3 text-xs font-bold uppercase tracking-wider text-neutral-500">
+                          Top 3 Suppliers — click to compare
+                        </p>
+                        <TopThreeComparison
+                          suppliers={ranked}
+                          onSelect={setSelectedSupplier}
+                        />
+                      </div>
+
+                      <div>
+                        <p className="mb-3 text-xs font-bold uppercase tracking-wider text-neutral-500">
+                          All Rankings
+                        </p>
+                        <div className="space-y-2">
+                          {ranked.map((s, idx) => (
+                            <SupplierRankCard
+                              key={supplierRowKey(s)}
+                              supplier={s}
+                              rankIndex={idx}
+                              isRecommended={!!recommendedRow && supplierRowKey(s) === supplierRowKey(recommendedRow)}
+                              compact
+                              selected={false}
+                              chosenSupplier={chosenSupplier}
+                              onSelect={() => setSelectedSupplier(supplierRowKey(s))}
+                              onChooseSupplier={!poAlreadyExists && onSelectSupplier ? handleSelectSupplierClick : undefined}
+                            />
+                          ))}
                         </div>
                       </div>
                     </div>
+                  )}
 
-                    <div>
-                      <p className="mb-3 text-xs font-bold uppercase tracking-wider text-neutral-500">
-                        Top 3 Suppliers — click to compare
+                  {activeTab === "rankings" && (
+                    <div className="space-y-3">
+                      <p className="text-sm text-neutral-600">
+                        Click any supplier for a full AI breakdown and comparison vs Rank #1.
+                      </p>
+                      {ranked.map((s, idx) => (
+                        <SupplierRankCard
+                          key={supplierRowKey(s)}
+                          supplier={s}
+                          rankIndex={idx}
+                          isRecommended={!!recommendedRow && supplierRowKey(s) === supplierRowKey(recommendedRow)}
+                          chosenSupplier={chosenSupplier}
+                          onSelect={() => setSelectedSupplier(supplierRowKey(s))}
+                          onChooseSupplier={!poAlreadyExists && onSelectSupplier ? handleSelectSupplierClick : undefined}
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  {activeTab === "compare" && (
+                    <div className="space-y-4">
+                      <p className="text-sm text-neutral-600">
+                        Side-by-side comparison of the top three ranked suppliers.
                       </p>
                       <TopThreeComparison
                         suppliers={ranked}
                         onSelect={setSelectedSupplier}
                       />
+                      {ranked.length > 3 && (
+                        <p className="text-center text-xs text-neutral-500">
+                          +{ranked.length - 3} additional supplier
+                          {ranked.length - 3 === 1 ? "" : "s"} in Rankings tab
+                        </p>
+                      )}
                     </div>
+                  )}
+                </>
+              )}
+            </div>
 
-                    <div>
-                      <p className="mb-3 text-xs font-bold uppercase tracking-wider text-neutral-500">
-                        All Rankings
-                      </p>
-                      <div className="space-y-2">
-                        {ranked.map((s, idx) => (
-                          <SupplierRankCard
-                            key={s.name}
-                            supplier={s}
-                            rankIndex={idx}
-                            isRecommended={s.name === result.recommended_supplier}
-                            compact
-                            selected={false}
-                            chosenSupplier={chosenSupplier}
-                            onSelect={() => setSelectedSupplier(s.name)}
-                            onChooseSupplier={!poAlreadyExists && onSelectSupplier ? handleSelectSupplierClick : undefined}
-                          />
-                        ))}
+            {/* STICKY FOOTER ACTION BAR */}
+            {result &&
+              !loading &&
+              !selectedSupplier &&
+              viewMode === "recommendation" &&
+              recommendedRow && (
+                <div className="shrink-0 border-t border-neutral-200 bg-neutral-50/95 px-6 py-4">
+                  <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <button
+                      type="button"
+                      onClick={openComparisonView}
+                      disabled={creatingPO}
+                      className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-neutral-300 bg-white px-5 text-sm font-semibold text-neutral-700 shadow-xs transition hover:bg-neutral-50 hover:text-neutral-900 disabled:opacity-60"
+                    >
+                      <GitCompare className="h-4 w-4" />
+                      View Detailed Comparison
+                    </button>
+
+                    {poAlreadyExists || chosenSupplier ? (
+                      <div className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-success-200 bg-success-50 px-5 text-sm font-semibold text-success-700">
+                        <CheckCircle2 className="h-4 w-4" />
+                        {ctaDoneMessage ??
+                          (chosenSupplier
+                            ? `${chosenSupplier} has been selected for this RFQ.`
+                            : "A purchase order has already been created for this RFQ.")}
                       </div>
-                    </div>
-                  </div>
-                )}
-
-                {activeTab === "rankings" && (
-                  <div className="space-y-3">
-                    <p className="text-sm text-neutral-600">
-                      Click any supplier for a full AI breakdown and comparison vs Rank #1.
-                    </p>
-                    {ranked.map((s, idx) => (
-                      <SupplierRankCard
-                        key={s.name}
-                        supplier={s}
-                        rankIndex={idx}
-                        isRecommended={s.name === result.recommended_supplier}
-                        chosenSupplier={chosenSupplier}
-                        onSelect={() => setSelectedSupplier(s.name)}
-                        onChooseSupplier={!poAlreadyExists && onSelectSupplier ? handleSelectSupplierClick : undefined}
-                      />
-                    ))}
-                  </div>
-                )}
-
-                {activeTab === "compare" && (
-                  <div className="space-y-4">
-                    <p className="text-sm text-neutral-600">
-                      Side-by-side comparison of the top three ranked suppliers.
-                    </p>
-                    <TopThreeComparison
-                      suppliers={ranked}
-                      onSelect={setSelectedSupplier}
-                    />
-                    {ranked.length > 3 && (
-                      <p className="text-center text-xs text-neutral-500">
-                        +{ranked.length - 3} additional supplier
-                        {ranked.length - 3 === 1 ? "" : "s"} in Rankings tab
-                      </p>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-
-          {result &&
-            !loading &&
-            !selectedSupplier &&
-            viewMode === "recommendation" &&
-            recommendedRow && (
-              <div className="shrink-0 border-t border-neutral-200 bg-neutral-50/95 px-6 py-4">
-                <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <button
-                    type="button"
-                    onClick={openComparisonView}
-                    disabled={creatingPO}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-neutral-300 bg-white px-5 py-3 text-sm font-semibold text-neutral-700 shadow-sm transition hover:border-primary-300 hover:bg-neutral-50 hover:text-primary-800 disabled:opacity-60"
-                  >
-                    <GitCompare className="h-4 w-4" />
-                    View Detailed Comparison
-                  </button>
-
-                  {poAlreadyExists || chosenSupplier ? (
-                    <div className="inline-flex items-center justify-center gap-2 rounded-xl border border-success-200 bg-success-50 px-6 py-3 text-sm font-semibold text-success-700">
-                      <CheckCircle2 className="h-4 w-4" />
-                      {ctaDoneMessage ??
-                        (chosenSupplier
-                          ? `${chosenSupplier} has been selected for this RFQ.`
-                          : "A purchase order has already been created for this RFQ.")}
-                    </div>
-                  ) : (
-                    <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center">
-                      {reverseBiddingEnabled && (
+                    ) : (
+                      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center">
+                        {reverseBiddingEnabled && (
+                          <button
+                            type="button"
+                            onClick={handleStartReverseBidding}
+                            disabled={!canStartReverseBidding}
+                            title={
+                              bidCount < REVERSE_BIDDING_MIN_SUPPLIERS
+                                ? "Select at least 2 suppliers to start reverse bidding."
+                                : undefined
+                            }
+                            className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-amber-600 px-5 text-sm font-bold text-white shadow-xs transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {startingReverseBidding ? (
+                              <>
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                Starting Reverse Bidding…
+                              </>
+                            ) : (
+                              <>
+                                <Gavel className="h-4 w-4" />
+                                Start Reverse Bidding
+                                {bidCount > 0 ? ` (${bidCount})` : ""}
+                              </>
+                            )}
+                          </button>
+                        )}
                         <button
                           type="button"
-                          onClick={handleStartReverseBidding}
-                          disabled={!canStartReverseBidding}
-                          title={
-                            bidCount < REVERSE_BIDDING_MIN_SUPPLIERS
-                              ? `Select at least ${REVERSE_BIDDING_MIN_SUPPLIERS} suppliers`
-                              : undefined
+                          onClick={handlePrimaryAction}
+                          disabled={
+                            creatingPO ||
+                            startingReverseBidding ||
+                            !recommendedEligibility.awardEligible ||
+                            !isSubmittedQuoteAmount(recommendedRow.grand_total)
                           }
-                          className="inline-flex items-center justify-center gap-2 rounded-xl bg-orange-500 px-6 py-3.5 text-sm font-bold text-white shadow-lg shadow-orange-500/20 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50"
+                          title={
+                            !recommendedEligibility.awardEligible
+                              ? undefined
+                              : isSubmittedQuoteAmount(recommendedRow.grand_total)
+                              ? undefined
+                            : "Quotation pricing is required before supplier selection"
+                          }
+                          className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-primary-700 px-7 text-sm font-bold text-white shadow-xs transition hover:bg-primary-800 disabled:opacity-70"
                         >
-                          {startingReverseBidding ? (
+                          {creatingPO ? (
                             <>
                               <Loader2 className="h-4 w-4 animate-spin" />
-                              Starting Reverse Bidding…
+                              {primaryLoadingLabel}
                             </>
                           ) : (
                             <>
-                              <Gavel className="h-4 w-4" />
-                              Start Reverse Bidding
-                              {bidCount > 0 ? ` (${bidCount})` : ""}
+                              <ShoppingCart className="h-4 w-4" />
+                              {isSubmittedQuoteAmount(recommendedRow.grand_total)
+                                ? primaryActionLabel
+                                : "Price Required Before Selection"}
                             </>
                           )}
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={handlePrimaryAction}
-                        disabled={creatingPO || startingReverseBidding}
-                        className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary-700 px-8 py-3.5 text-sm font-bold text-white shadow-lg shadow-primary-500/20 transition hover:bg-primary-800 disabled:opacity-70"
-                      >
-                        {creatingPO ? (
-                          <>
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                            {primaryLoadingLabel}
-                          </>
-                        ) : (
-                          <>
-                            <ShoppingCart className="h-4 w-4" />
-                            {primaryActionLabel}
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  )}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+          </div>
         </div>
       </div>
 
@@ -1950,4 +2339,6 @@ export default function AIAnalysisModal({
       )}
     </div>
   );
+
+  return createPortal(modalNode, document.body);
 }

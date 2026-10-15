@@ -459,25 +459,15 @@ export default function GlobalSearch({ onSelect }: Props) {
         </span>
 
         <input
-
           ref={inputRef}
-
           value={query}
-
           onChange={(e) => {
-
             setQuery(e.target.value);
-
             setOpen(true);
-
           }}
-
           onFocus={() => trimmed.length >= 2 && setOpen(true)}
-
-          placeholder={FEATURE_FLAGS.showMaterialRequests ? t("search.placeholderFull") : t("search.placeholder")}
-
-          className="input-search pr-14"
-
+          placeholder="Search ECR, RFQ, Supplier, PO..."
+          className="h-[38px] w-full rounded-lg border border-[#E2E8F0] bg-[#F8FAFC] pl-9 pr-12 text-[13px] text-[#12213F] placeholder:text-[#94A3B8] transition-all focus:border-[#1554D1] focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#1554D1]"
         />
 
         <kbd className="pointer-events-none absolute inset-y-0 right-3 hidden items-center text-[10px] font-medium text-neutral-400 sm:flex">

@@ -1,0 +1,758 @@
+{
+  "input": {
+    "rfq_name": "PUR-RFQ-2026-00091",
+    "rfq_title": "PUR-RFQ-2026-00091",
+    "evaluation_run_id": "86ebda3c-27bb-4acf-a908-0cdb30e4ff55",
+    "items_requested": [
+      {
+        "item": "Brake Disc",
+        "qty": 1,
+        "uom": "Nos"
+      }
+    ],
+    "quotations": [
+      {
+        "quotation_id": "PUR-SQTN-2026-00253",
+        "supplier_id": "\"Titan Industrial Products LLC\"",
+        "supplier_name": "Titan Industrial Products LLC",
+        "total_value": 15,
+        "price_status": "submitted",
+        "notes": "",
+        "documents": {
+          "warranty_certificate": true,
+          "terms_conditions": true,
+          "insurance_certificate": true
+        },
+        "historical_data": {
+          "supplier_name": "\"Titan Industrial Products LLC\"",
+          "total_pos": 2,
+          "completed_pos": 2,
+          "cancelled_pos": 0,
+          "total_po_value": 82970,
+          "total_grns": 2,
+          "on_time_deliveries": 2,
+          "late_deliveries": 0,
+          "avg_delay_days": 0,
+          "total_ordered_qty": 1320,
+          "total_received_qty": 1320,
+          "total_rejected_qty": 0,
+          "qty_accuracy_pct": 100,
+          "total_invoices": 1,
+          "invoices_on_time": 1,
+          "delivery_score": 100,
+          "quality_score": 100,
+          "reliability_score": 100,
+          "has_sufficient_data": true,
+          "has_delivery_data": true,
+          "has_quality_data": true,
+          "has_reliability_data": true,
+          "unavailable_metrics": [],
+          "invoice_timeliness_basis": "Invoice posting date compared with its due date; actual payment history is unavailable.",
+          "data_sources": [
+            "2 Purchase Orders",
+            "2 GRNs",
+            "1 Invoices"
+          ],
+          "data_points_count": 5
+        },
+        "items": [
+          {
+            "item": "Brake Disc",
+            "requested_qty": 1,
+            "unit_price": 15,
+            "total": 15,
+            "notes": ""
+          }
+        ]
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00256",
+        "supplier_id": "FEMSA",
+        "supplier_name": "FEMSA",
+        "total_value": 15,
+        "price_status": "submitted",
+        "notes": "",
+        "documents": {
+          "warranty_certificate": true,
+          "terms_conditions": true,
+          "insurance_certificate": true
+        },
+        "historical_data": {
+          "supplier_name": "FEMSA",
+          "total_pos": 3,
+          "completed_pos": 3,
+          "cancelled_pos": 0,
+          "total_po_value": 40450,
+          "total_grns": 3,
+          "on_time_deliveries": 3,
+          "late_deliveries": 0,
+          "avg_delay_days": 0,
+          "total_ordered_qty": 565,
+          "total_received_qty": 565,
+          "total_rejected_qty": 0,
+          "qty_accuracy_pct": 100,
+          "total_invoices": 3,
+          "invoices_on_time": 3,
+          "delivery_score": 100,
+          "quality_score": 100,
+          "reliability_score": 100,
+          "has_sufficient_data": true,
+          "has_delivery_data": true,
+          "has_quality_data": true,
+          "has_reliability_data": true,
+          "unavailable_metrics": [],
+          "invoice_timeliness_basis": "Invoice posting date compared with its due date; actual payment history is unavailable.",
+          "data_sources": [
+            "3 Purchase Orders",
+            "3 GRNs",
+            "3 Invoices"
+          ],
+          "data_points_count": 9
+        },
+        "items": [
+          {
+            "item": "Brake Disc",
+            "requested_qty": 1,
+            "unit_price": 15,
+            "total": 15,
+            "notes": ""
+          }
+        ]
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00257",
+        "supplier_id": "\"Eagle Peak Technologies Inc.\"",
+        "supplier_name": "Eagle Peak Technologies Inc.",
+        "total_value": 15,
+        "price_status": "submitted",
+        "notes": "",
+        "documents": {
+          "warranty_certificate": true,
+          "terms_conditions": true,
+          "insurance_certificate": true
+        },
+        "historical_data": {
+          "supplier_name": "\"Eagle Peak Technologies Inc.\"",
+          "total_pos": 2,
+          "completed_pos": 2,
+          "cancelled_pos": 0,
+          "total_po_value": 1571,
+          "total_grns": 2,
+          "on_time_deliveries": 1,
+          "late_deliveries": 1,
+          "avg_delay_days": 5,
+          "total_ordered_qty": 10,
+          "total_received_qty": 10,
+          "total_rejected_qty": 0,
+          "qty_accuracy_pct": 100,
+          "total_invoices": 1,
+          "invoices_on_time": 1,
+          "delivery_score": 35,
+          "quality_score": 100,
+          "reliability_score": 100,
+          "has_sufficient_data": true,
+          "has_delivery_data": true,
+          "has_quality_data": true,
+          "has_reliability_data": true,
+          "unavailable_metrics": [],
+          "invoice_timeliness_basis": "Invoice posting date compared with its due date; actual payment history is unavailable.",
+          "data_sources": [
+            "2 Purchase Orders",
+            "2 GRNs",
+            "1 Invoices"
+          ],
+          "data_points_count": 5
+        },
+        "items": [
+          {
+            "item": "Brake Disc",
+            "requested_qty": 1,
+            "unit_price": 15,
+            "total": 15,
+            "notes": ""
+          }
+        ]
+      }
+    ]
+  },
+  "history": {
+    "\"Titan Industrial Products LLC\"": {
+      "supplier_name": "\"Titan Industrial Products LLC\"",
+      "total_pos": 2,
+      "completed_pos": 2,
+      "cancelled_pos": 0,
+      "total_po_value": 82970,
+      "total_grns": 2,
+      "on_time_deliveries": 2,
+      "late_deliveries": 0,
+      "avg_delay_days": 0,
+      "total_ordered_qty": 1320,
+      "total_received_qty": 1320,
+      "total_rejected_qty": 0,
+      "qty_accuracy_pct": 100,
+      "total_invoices": 1,
+      "invoices_on_time": 1,
+      "delivery_score": 100,
+      "quality_score": 100,
+      "reliability_score": 100,
+      "has_sufficient_data": true,
+      "has_delivery_data": true,
+      "has_quality_data": true,
+      "has_reliability_data": true,
+      "unavailable_metrics": [],
+      "invoice_timeliness_basis": "Invoice posting date compared with its due date; actual payment history is unavailable.",
+      "data_sources": [
+        "2 Purchase Orders",
+        "2 GRNs",
+        "1 Invoices"
+      ],
+      "data_points_count": 5
+    },
+    "FEMSA": {
+      "supplier_name": "FEMSA",
+      "total_pos": 3,
+      "completed_pos": 3,
+      "cancelled_pos": 0,
+      "total_po_value": 40450,
+      "total_grns": 3,
+      "on_time_deliveries": 3,
+      "late_deliveries": 0,
+      "avg_delay_days": 0,
+      "total_ordered_qty": 565,
+      "total_received_qty": 565,
+      "total_rejected_qty": 0,
+      "qty_accuracy_pct": 100,
+      "total_invoices": 3,
+      "invoices_on_time": 3,
+      "delivery_score": 100,
+      "quality_score": 100,
+      "reliability_score": 100,
+      "has_sufficient_data": true,
+      "has_delivery_data": true,
+      "has_quality_data": true,
+      "has_reliability_data": true,
+      "unavailable_metrics": [],
+      "invoice_timeliness_basis": "Invoice posting date compared with its due date; actual payment history is unavailable.",
+      "data_sources": [
+        "3 Purchase Orders",
+        "3 GRNs",
+        "3 Invoices"
+      ],
+      "data_points_count": 9
+    },
+    "\"Eagle Peak Technologies Inc.\"": {
+      "supplier_name": "\"Eagle Peak Technologies Inc.\"",
+      "total_pos": 2,
+      "completed_pos": 2,
+      "cancelled_pos": 0,
+      "total_po_value": 1571,
+      "total_grns": 2,
+      "on_time_deliveries": 1,
+      "late_deliveries": 1,
+      "avg_delay_days": 5,
+      "total_ordered_qty": 10,
+      "total_received_qty": 10,
+      "total_rejected_qty": 0,
+      "qty_accuracy_pct": 100,
+      "total_invoices": 1,
+      "invoices_on_time": 1,
+      "delivery_score": 35,
+      "quality_score": 100,
+      "reliability_score": 100,
+      "has_sufficient_data": true,
+      "has_delivery_data": true,
+      "has_quality_data": true,
+      "has_reliability_data": true,
+      "unavailable_metrics": [],
+      "invoice_timeliness_basis": "Invoice posting date compared with its due date; actual payment history is unavailable.",
+      "data_sources": [
+        "2 Purchase Orders",
+        "2 GRNs",
+        "1 Invoices"
+      ],
+      "data_points_count": 5
+    }
+  },
+  "exchanges": [
+    {
+      "request": {
+        "prompt": "You are an expert procurement analyst for Netlink, a manufacturing company.\nAnalyze these 3 supplier quotations for RFQ: PUR-RFQ-2026-00091\nRFQ ID: \"PUR-RFQ-2026-00091\"\nEvaluation run ID: \"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\"\n\nITEMS REQUESTED:\n- Brake Disc: 1 Nos\n\nSUPPLIER QUOTATIONS:\n\nSUPPLIER 1: Titan Industrial Products LLC\nQuotation ID (JSON string; preserve escaped characters): \"PUR-SQTN-2026-00253\"\nSupplier ID (JSON string; preserve escaped characters): \"\\\"Titan Industrial Products LLC\\\"\"\nGrand Total: $15.00\n⭐ LOWEST TOTAL\nItems:\n  - Brake Disc: $15.00/unit × 1 = $15.00 | Delivery: Unavailable (supplier did not provide delivery days)\nPayment Terms: Not specified\nCompliance & Certificates: Warranty certificate attached; verification status unavailable, Terms and conditions attached; verification status unavailable, Insurance certificate attached; verification status unavailable\nAdditional Notes: Unavailable\nHistorical performance: {\"supplier_name\":\"\\\"Titan Industrial Products LLC\\\"\",\"total_pos\":2,\"completed_pos\":2,\"cancelled_pos\":0,\"total_po_value\":82970,\"total_grns\":2,\"on_time_deliveries\":2,\"late_deliveries\":0,\"avg_delay_days\":0,\"total_ordered_qty\":1320,\"total_received_qty\":1320,\"total_rejected_qty\":0,\"qty_accuracy_pct\":100,\"total_invoices\":1,\"invoices_on_time\":1,\"delivery_score\":100,\"quality_score\":100,\"reliability_score\":100,\"has_sufficient_data\":true,\"has_delivery_data\":true,\"has_quality_data\":true,\"has_reliability_data\":true,\"unavailable_metrics\":[],\"invoice_timeliness_basis\":\"Invoice posting date compared with its due date; actual payment history is unavailable.\",\"data_sources\":[\"2 Purchase Orders\",\"2 GRNs\",\"1 Invoices\"],\"data_points_count\":5}\nTechnical compliance: unavailable unless explicitly described in this quotation's item notes.\n---\nSUPPLIER 2: FEMSA\nQuotation ID (JSON string; preserve escaped characters): \"PUR-SQTN-2026-00256\"\nSupplier ID (JSON string; preserve escaped characters): \"FEMSA\"\nGrand Total: $15.00\n⭐ LOWEST TOTAL\nItems:\n  - Brake Disc: $15.00/unit × 1 = $15.00 | Delivery: Unavailable (supplier did not provide delivery days)\nPayment Terms: Not specified\nCompliance & Certificates: Warranty certificate attached; verification status unavailable, Terms and conditions attached; verification status unavailable, Insurance certificate attached; verification status unavailable\nAdditional Notes: Unavailable\nHistorical performance: {\"supplier_name\":\"FEMSA\",\"total_pos\":3,\"completed_pos\":3,\"cancelled_pos\":0,\"total_po_value\":40450,\"total_grns\":3,\"on_time_deliveries\":3,\"late_deliveries\":0,\"avg_delay_days\":0,\"total_ordered_qty\":565,\"total_received_qty\":565,\"total_rejected_qty\":0,\"qty_accuracy_pct\":100,\"total_invoices\":3,\"invoices_on_time\":3,\"delivery_score\":100,\"quality_score\":100,\"reliability_score\":100,\"has_sufficient_data\":true,\"has_delivery_data\":true,\"has_quality_data\":true,\"has_reliability_data\":true,\"unavailable_metrics\":[],\"invoice_timeliness_basis\":\"Invoice posting date compared with its due date; actual payment history is unavailable.\",\"data_sources\":[\"3 Purchase Orders\",\"3 GRNs\",\"3 Invoices\"],\"data_points_count\":9}\nTechnical compliance: unavailable unless explicitly described in this quotation's item notes.\n---\nSUPPLIER 3: Eagle Peak Technologies Inc.\nQuotation ID (JSON string; preserve escaped characters): \"PUR-SQTN-2026-00257\"\nSupplier ID (JSON string; preserve escaped characters): \"\\\"Eagle Peak Technologies Inc.\\\"\"\nGrand Total: $15.00\n⭐ LOWEST TOTAL\nItems:\n  - Brake Disc: $15.00/unit × 1 = $15.00 | Delivery: Unavailable (supplier did not provide delivery days)\nPayment Terms: Not specified\nCompliance & Certificates: Warranty certificate attached; verification status unavailable, Terms and conditions attached; verification status unavailable, Insurance certificate attached; verification status unavailable\nAdditional Notes: Unavailable\nHistorical performance: {\"supplier_name\":\"\\\"Eagle Peak Technologies Inc.\\\"\",\"total_pos\":2,\"completed_pos\":2,\"cancelled_pos\":0,\"total_po_value\":1571,\"total_grns\":2,\"on_time_deliveries\":1,\"late_deliveries\":1,\"avg_delay_days\":5,\"total_ordered_qty\":10,\"total_received_qty\":10,\"total_rejected_qty\":0,\"qty_accuracy_pct\":100,\"total_invoices\":1,\"invoices_on_time\":1,\"delivery_score\":35,\"quality_score\":100,\"reliability_score\":100,\"has_sufficient_data\":true,\"has_delivery_data\":true,\"has_quality_data\":true,\"has_reliability_data\":true,\"unavailable_metrics\":[],\"invoice_timeliness_basis\":\"Invoice posting date compared with its due date; actual payment history is unavailable.\",\"data_sources\":[\"2 Purchase Orders\",\"2 GRNs\",\"1 Invoices\"],\"data_points_count\":5}\nTechnical compliance: unavailable unless explicitly described in this quotation's item notes.\n\nANALYSIS WEIGHTS (use these to compute the score for each supplier):\n- Price/Cost: 40%\n- Delivery speed: 25%\n- Quality (item coverage, specs): 20%\n- Reliability (documentation, terms): 15%\n\nScore formula: Final = (PriceScore×40 + DeliveryScore×25 + QualityScore×20 + ReliabilityScore×15) / 100\n\nRank every supplier: Titan Industrial Products LLC, FEMSA, Eagle Peak Technologies Inc.\n\nCRITICAL OUTPUT RULES — YOU MUST FOLLOW EXACTLY:\n1. Return ONLY valid JSON.\n2. Do NOT use markdown.\n3. Do NOT wrap the response in triple backticks.\n4. Do NOT add any text, explanation, or commentary before or after the JSON.\n5. The first character of your response must be { and the last must be }.\n\nReturn exactly this JSON structure (fill with real analysis data from the quotations above):\n{\n  \"rfq_id\": \"PUR-RFQ-2026-00091\",\n  \"evaluation_run_id\": \"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\",\n  \"ranking\": [\n    {\n      \"evaluation_run_id\": \"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\",\n      \"quotation_id\": \"exact quotation_id from quotation\",\n      \"supplier_id\": \"exact supplier_id from quotation\",\n      \"supplier\": \"exact supplier name from quotations\",\n      \"rank\": 1,\n      \"score\": 85,\n      \"price_score\": 92,\n      \"delivery_score\": 78,\n      \"quality_score\": 85,\n      \"reliability_score\": 80,\n      \"risk\": \"Low\",\n      \"verdict\": \"BEST VALUE\",\n      \"reason\": \"Specific explanation referencing actual price difference, delivery days, item coverage, and terms\"\n    }\n  ],\n  \"recommendedSupplier\": \"exact supplier name of rank 1 winner\",\n  \"summary\": \"2-3 sentence executive summary referencing specific cost differences, delivery timelines, and completeness\"\n}\n\nSCORING RULES — FOLLOW STRICTLY:\n- Evaluate EACH supplier independently. Never copy the score, risk, verdict, or reasoning from another supplier.\n- \"score\": overall weighted number 0-100 calculated using the formula above.\n- \"price_score\": 0-100 based ONLY on the actual quoted grand total. Lowest price = highest score. If all suppliers quoted the exact same price, price_score must be equal for all.\n- If a grand total is \"Price Not Provided\", set price_score to -1 (insufficient data). Never treat it as $0.00 or as the cheapest quote.\n- Historical availability is dimension-specific: use a historical dimension only when its has_delivery_data, has_quality_data, or has_reliability_data flag is true and its corresponding score is a finite number from 0 to 100. The general has_sufficient_data flag alone does not establish that a particular metric is available. Never reinterpret or replace a supplied valid historical score.\n- \"delivery_score\": first check has_delivery_data. If valid history and actual quoted delivery days both exist, preserve the existing blend: round(quotedDeliveryScore * 0.40 + historical_data.delivery_score * 0.60). The quotedDeliveryScore uses the existing inverse linear comparison of actual average quoted days: fastest=100, slowest=0, equal quoted days=100. Exclude unavailable quoted days from that comparison. If history is valid but quoted days are unavailable, use historical_data.delivery_score unchanged; missing quotation days must NOT erase available delivery history. If only quoted days exist, use quotedDeliveryScore. Only when BOTH quoted days and valid delivery history are unavailable, retain the existing neutral scoring rule (70-75), explicitly identify that assumption in the reason, and use the same neutral value for equivalent missing-data situations. Never invent a quoted delivery timeline.\n- \"quality_score\": use the existing quoted-item coverage score (direct linear comparison of item coverage across quotations; equal coverage=100). If has_quality_data is true and historical_data.quality_score is valid, preserve the existing blend: round(coverageScore * 0.30 + historical_data.quality_score * 0.70). Otherwise use coverageScore and explicitly say historical quality is unavailable. Item coverage is a proxy, not an inspection result or technical-compliance verification.\n- \"reliability_score\": if has_reliability_data is true and historical_data.reliability_score is valid, use that supplied historical score unchanged. Only when reliability history is unavailable, apply the existing quotation-completeness assessment using payment terms, notes, delivery information, and attached warranty/insurance/terms evidence. Attachment presence does not verify its contents.\n- \"risk\": exactly \"Low\", \"Medium\", or \"High\".\n- \"verdict\": exactly one of \"BEST VALUE\", \"GOOD OPTION\", \"EXPENSIVE\", \"AVOID\", \"QUOTE INCOMPLETE\".\n- A supplier must NEVER be labeled \"AVOID\" simply for being lowest-ranked. Only assign \"AVOID\" if there is severe risk, non-compliance, missing quote, or unacceptable terms.\n- Equal scores are valid when the supplier-specific scoring criteria genuinely match. Never force differences. Compare actual delivery, quality, warranty evidence, documentation, payment terms and history independently; do not invent missing data.\n- \"reason\": MUST reference specific data points (e.g. price difference, actual historical on-time/late deliveries, quoted delivery days, attachment presence, payment terms), and distinguish available history from missing quotation fields.\n- The summary MUST distinguish suppliers with submitted pricing from suppliers with missing pricing. Never describe missing pricing as \"$0.00 pricing\".\n- \"ranking\": include ONLY the 3 suppliers listed above, sorted best to worst (rank 1 = best).\n- Do NOT invent, add, or reference any supplier not in the SUPPLIER QUOTATIONS section.\n- \"recommendedSupplier\": must match the rank 1 supplier name exactly.\n- Return exactly one result per quotation_id. Preserve its exact supplier_id and the current evaluation_run_id. IDs above are JSON strings: literal quotation marks inside an ID must be escaped, never removed.\n- Include all four dimension scores and their weighted overall score for EVERY quotation. The server validates identities and computes the final weighted arithmetic.\n- Use supplier names, quotation_id, and supplier_id EXACTLY as shown in SUPPLIER QUOTATIONS.",
+        "max_tokens": 2048,
+        "rfq_id": "PUR-RFQ-2026-00091",
+        "evaluation_context": {
+          "rfq_id": "PUR-RFQ-2026-00091",
+          "evaluation_run_id": "86ebda3c-27bb-4acf-a908-0cdb30e4ff55",
+          "weights": {
+            "price_weight": 40,
+            "delivery_weight": 25,
+            "quality_weight": 20,
+            "reliability_weight": 15
+          },
+          "quotations": [
+            {
+              "quotation_id": "PUR-SQTN-2026-00253",
+              "supplier_id": "\"Titan Industrial Products LLC\"",
+              "supplier_name": "Titan Industrial Products LLC",
+              "total_value": 15
+            },
+            {
+              "quotation_id": "PUR-SQTN-2026-00256",
+              "supplier_id": "FEMSA",
+              "supplier_name": "FEMSA",
+              "total_value": 15
+            },
+            {
+              "quotation_id": "PUR-SQTN-2026-00257",
+              "supplier_id": "\"Eagle Peak Technologies Inc.\"",
+              "supplier_name": "Eagle Peak Technologies Inc.",
+              "total_value": 15
+            }
+          ]
+        },
+        "evaluation_debug": {
+          "enabled": true,
+          "evaluation_run_id": "86ebda3c-27bb-4acf-a908-0cdb30e4ff55"
+        },
+        "request_type": "recommendation"
+      },
+      "response": {
+        "success": true,
+        "text": "{\"rfq_id\":\"PUR-RFQ-2026-00091\",\"evaluation_run_id\":\"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\",\"ranking\":[{\"evaluation_run_id\":\"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\",\"quotation_id\":\"PUR-SQTN-2026-00256\",\"supplier_id\":\"FEMSA\",\"supplier\":\"FEMSA\",\"rank\":1,\"score\":100,\"price_score\":100,\"delivery_score\":100,\"quality_score\":100,\"reliability_score\":100,\"risk\":\"Low\",\"verdict\":\"BEST VALUE\",\"reason\":\"FEMSA delivers the strongest overall performance across all dimensions. Price is identical to competitors at $15.00/unit (price_score: 100). Delivery performance is exceptional with 100% on-time delivery record across 3 POs and 3 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is perfect at 100 with 100% quantity accuracy and zero rejected items across all transactions. Reliability score is 100 based on complete historical data: 3 invoices submitted on time, all required compliance certificates attached (warranty, terms, insurance), and robust transaction history (9 data points from 3 POs, 3 GRNs, 3 invoices). FEMSA has the most extensive verified transaction history among all three suppliers, demonstrating consistent excellence.\",\"raw_ai_score\":100,\"evaluation_status\":\"complete\"},{\"evaluation_run_id\":\"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\",\"quotation_id\":\"PUR-SQTN-2026-00253\",\"supplier_id\":\"\\\"Titan Industrial Products LLC\\\"\",\"supplier\":\"Titan Industrial Products LLC\",\"rank\":2,\"score\":100,\"price_score\":100,\"delivery_score\":100,\"quality_score\":100,\"reliability_score\":100,\"risk\":\"Low\",\"verdict\":\"GOOD OPTION\",\"reason\":\"Titan Industrial Products LLC matches FEMSA on price at $15.00/unit (price_score: 100) and demonstrates perfect historical delivery performance with 100% on-time delivery across 2 POs and 2 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is 100 with perfect 100% quantity accuracy and zero rejected items. Reliability score is 100 based on historical data showing 1 invoice submitted on time and all required compliance certificates attached. However, Titan has a smaller transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) compared to FEMSA's 9 data points, providing less extensive verification of sustained performance. Both suppliers are equally qualified, but FEMSA's larger proven track record provides marginally greater confidence.\",\"raw_ai_score\":100,\"evaluation_status\":\"complete\"},{\"evaluation_run_id\":\"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\",\"quotation_id\":\"PUR-SQTN-2026-00257\",\"supplier_id\":\"\\\"Eagle Peak Technologies Inc.\\\"\",\"supplier\":\"Eagle Peak Technologies Inc.\",\"rank\":3,\"score\":84,\"price_score\":100,\"delivery_score\":35,\"quality_score\":100,\"reliability_score\":100,\"risk\":\"Medium\",\"verdict\":\"GOOD OPTION\",\"reason\":\"Eagle Peak Technologies Inc. matches competitors on price at $15.00/unit (price_score: 100) and maintains perfect quality with 100% quantity accuracy and zero rejected items (quality_score: 100). Reliability score is 100 based on historical data with 1 invoice submitted on time and all required compliance certificates attached. However, delivery performance is significantly weaker with a delivery_score of only 35: historical data shows 1 on-time delivery and 1 late delivery across 2 POs, resulting in an average delay of 5 days. This inconsistency in on-time performance, combined with the smallest transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) and lowest total PO value ($1,571), introduces medium risk. While price and quality are competitive, the delivery reliability concern makes this supplier less preferable than FEMSA or Titan for time-sensitive requirements.\",\"raw_ai_score\":78,\"evaluation_status\":\"complete\"}],\"recommendedSupplier\":\"FEMSA\",\"summary\":\"FEMSA ranks first among 3 current supplier quotations with a weighted score of 100/100. The configured weights are price 40%, delivery 25%, quality 20%, and reliability 15%. Matching calculated scores are retained; the model's ranking resolves the tie.\",\"evaluation_weights\":{\"price_weight\":40,\"delivery_weight\":25,\"quality_weight\":20,\"reliability_weight\":15},\"recommended_quotation_id\":\"PUR-SQTN-2026-00256\",\"recommended_supplier_id\":\"FEMSA\"}",
+        "tokensUsed": 4286,
+        "model": "claude-haiku-4-5-20251001",
+        "requestedModel": "claude-haiku-4-5-20251001",
+        "stopReason": "end_turn",
+        "usage": {
+          "input_tokens": 2922,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 1364,
+          "service_tier": "standard",
+          "inference_geo": "not_available"
+        },
+        "evaluation_debug": {
+          "rfq_id": "PUR-RFQ-2026-00091",
+          "evaluation_run_id": "86ebda3c-27bb-4acf-a908-0cdb30e4ff55",
+          "request": {
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 2048,
+            "temperature": 0,
+            "messages": [
+              {
+                "role": "user",
+                "content": "You are an expert procurement analyst for Netlink, a manufacturing company.\nAnalyze these 3 supplier quotations for RFQ: PUR-RFQ-2026-00091\nRFQ ID: \"PUR-RFQ-2026-00091\"\nEvaluation run ID: \"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\"\n\nITEMS REQUESTED:\n- Brake Disc: 1 Nos\n\nSUPPLIER QUOTATIONS:\n\nSUPPLIER 1: Titan Industrial Products LLC\nQuotation ID (JSON string; preserve escaped characters): \"PUR-SQTN-2026-00253\"\nSupplier ID (JSON string; preserve escaped characters): \"\\\"Titan Industrial Products LLC\\\"\"\nGrand Total: $15.00\n⭐ LOWEST TOTAL\nItems:\n  - Brake Disc: $15.00/unit × 1 = $15.00 | Delivery: Unavailable (supplier did not provide delivery days)\nPayment Terms: Not specified\nCompliance & Certificates: Warranty certificate attached; verification status unavailable, Terms and conditions attached; verification status unavailable, Insurance certificate attached; verification status unavailable\nAdditional Notes: Unavailable\nHistorical performance: {\"supplier_name\":\"\\\"Titan Industrial Products LLC\\\"\",\"total_pos\":2,\"completed_pos\":2,\"cancelled_pos\":0,\"total_po_value\":82970,\"total_grns\":2,\"on_time_deliveries\":2,\"late_deliveries\":0,\"avg_delay_days\":0,\"total_ordered_qty\":1320,\"total_received_qty\":1320,\"total_rejected_qty\":0,\"qty_accuracy_pct\":100,\"total_invoices\":1,\"invoices_on_time\":1,\"delivery_score\":100,\"quality_score\":100,\"reliability_score\":100,\"has_sufficient_data\":true,\"has_delivery_data\":true,\"has_quality_data\":true,\"has_reliability_data\":true,\"unavailable_metrics\":[],\"invoice_timeliness_basis\":\"Invoice posting date compared with its due date; actual payment history is unavailable.\",\"data_sources\":[\"2 Purchase Orders\",\"2 GRNs\",\"1 Invoices\"],\"data_points_count\":5}\nTechnical compliance: unavailable unless explicitly described in this quotation's item notes.\n---\nSUPPLIER 2: FEMSA\nQuotation ID (JSON string; preserve escaped characters): \"PUR-SQTN-2026-00256\"\nSupplier ID (JSON string; preserve escaped characters): \"FEMSA\"\nGrand Total: $15.00\n⭐ LOWEST TOTAL\nItems:\n  - Brake Disc: $15.00/unit × 1 = $15.00 | Delivery: Unavailable (supplier did not provide delivery days)\nPayment Terms: Not specified\nCompliance & Certificates: Warranty certificate attached; verification status unavailable, Terms and conditions attached; verification status unavailable, Insurance certificate attached; verification status unavailable\nAdditional Notes: Unavailable\nHistorical performance: {\"supplier_name\":\"FEMSA\",\"total_pos\":3,\"completed_pos\":3,\"cancelled_pos\":0,\"total_po_value\":40450,\"total_grns\":3,\"on_time_deliveries\":3,\"late_deliveries\":0,\"avg_delay_days\":0,\"total_ordered_qty\":565,\"total_received_qty\":565,\"total_rejected_qty\":0,\"qty_accuracy_pct\":100,\"total_invoices\":3,\"invoices_on_time\":3,\"delivery_score\":100,\"quality_score\":100,\"reliability_score\":100,\"has_sufficient_data\":true,\"has_delivery_data\":true,\"has_quality_data\":true,\"has_reliability_data\":true,\"unavailable_metrics\":[],\"invoice_timeliness_basis\":\"Invoice posting date compared with its due date; actual payment history is unavailable.\",\"data_sources\":[\"3 Purchase Orders\",\"3 GRNs\",\"3 Invoices\"],\"data_points_count\":9}\nTechnical compliance: unavailable unless explicitly described in this quotation's item notes.\n---\nSUPPLIER 3: Eagle Peak Technologies Inc.\nQuotation ID (JSON string; preserve escaped characters): \"PUR-SQTN-2026-00257\"\nSupplier ID (JSON string; preserve escaped characters): \"\\\"Eagle Peak Technologies Inc.\\\"\"\nGrand Total: $15.00\n⭐ LOWEST TOTAL\nItems:\n  - Brake Disc: $15.00/unit × 1 = $15.00 | Delivery: Unavailable (supplier did not provide delivery days)\nPayment Terms: Not specified\nCompliance & Certificates: Warranty certificate attached; verification status unavailable, Terms and conditions attached; verification status unavailable, Insurance certificate attached; verification status unavailable\nAdditional Notes: Unavailable\nHistorical performance: {\"supplier_name\":\"\\\"Eagle Peak Technologies Inc.\\\"\",\"total_pos\":2,\"completed_pos\":2,\"cancelled_pos\":0,\"total_po_value\":1571,\"total_grns\":2,\"on_time_deliveries\":1,\"late_deliveries\":1,\"avg_delay_days\":5,\"total_ordered_qty\":10,\"total_received_qty\":10,\"total_rejected_qty\":0,\"qty_accuracy_pct\":100,\"total_invoices\":1,\"invoices_on_time\":1,\"delivery_score\":35,\"quality_score\":100,\"reliability_score\":100,\"has_sufficient_data\":true,\"has_delivery_data\":true,\"has_quality_data\":true,\"has_reliability_data\":true,\"unavailable_metrics\":[],\"invoice_timeliness_basis\":\"Invoice posting date compared with its due date; actual payment history is unavailable.\",\"data_sources\":[\"2 Purchase Orders\",\"2 GRNs\",\"1 Invoices\"],\"data_points_count\":5}\nTechnical compliance: unavailable unless explicitly described in this quotation's item notes.\n\nANALYSIS WEIGHTS (use these to compute the score for each supplier):\n- Price/Cost: 40%\n- Delivery speed: 25%\n- Quality (item coverage, specs): 20%\n- Reliability (documentation, terms): 15%\n\nScore formula: Final = (PriceScore×40 + DeliveryScore×25 + QualityScore×20 + ReliabilityScore×15) / 100\n\nRank every supplier: Titan Industrial Products LLC, FEMSA, Eagle Peak Technologies Inc.\n\nCRITICAL OUTPUT RULES — YOU MUST FOLLOW EXACTLY:\n1. Return ONLY valid JSON.\n2. Do NOT use markdown.\n3. Do NOT wrap the response in triple backticks.\n4. Do NOT add any text, explanation, or commentary before or after the JSON.\n5. The first character of your response must be { and the last must be }.\n\nReturn exactly this JSON structure (fill with real analysis data from the quotations above):\n{\n  \"rfq_id\": \"PUR-RFQ-2026-00091\",\n  \"evaluation_run_id\": \"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\",\n  \"ranking\": [\n    {\n      \"evaluation_run_id\": \"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\",\n      \"quotation_id\": \"exact quotation_id from quotation\",\n      \"supplier_id\": \"exact supplier_id from quotation\",\n      \"supplier\": \"exact supplier name from quotations\",\n      \"rank\": 1,\n      \"score\": 85,\n      \"price_score\": 92,\n      \"delivery_score\": 78,\n      \"quality_score\": 85,\n      \"reliability_score\": 80,\n      \"risk\": \"Low\",\n      \"verdict\": \"BEST VALUE\",\n      \"reason\": \"Specific explanation referencing actual price difference, delivery days, item coverage, and terms\"\n    }\n  ],\n  \"recommendedSupplier\": \"exact supplier name of rank 1 winner\",\n  \"summary\": \"2-3 sentence executive summary referencing specific cost differences, delivery timelines, and completeness\"\n}\n\nSCORING RULES — FOLLOW STRICTLY:\n- Evaluate EACH supplier independently. Never copy the score, risk, verdict, or reasoning from another supplier.\n- \"score\": overall weighted number 0-100 calculated using the formula above.\n- \"price_score\": 0-100 based ONLY on the actual quoted grand total. Lowest price = highest score. If all suppliers quoted the exact same price, price_score must be equal for all.\n- If a grand total is \"Price Not Provided\", set price_score to -1 (insufficient data). Never treat it as $0.00 or as the cheapest quote.\n- Historical availability is dimension-specific: use a historical dimension only when its has_delivery_data, has_quality_data, or has_reliability_data flag is true and its corresponding score is a finite number from 0 to 100. The general has_sufficient_data flag alone does not establish that a particular metric is available. Never reinterpret or replace a supplied valid historical score.\n- \"delivery_score\": first check has_delivery_data. If valid history and actual quoted delivery days both exist, preserve the existing blend: round(quotedDeliveryScore * 0.40 + historical_data.delivery_score * 0.60). The quotedDeliveryScore uses the existing inverse linear comparison of actual average quoted days: fastest=100, slowest=0, equal quoted days=100. Exclude unavailable quoted days from that comparison. If history is valid but quoted days are unavailable, use historical_data.delivery_score unchanged; missing quotation days must NOT erase available delivery history. If only quoted days exist, use quotedDeliveryScore. Only when BOTH quoted days and valid delivery history are unavailable, retain the existing neutral scoring rule (70-75), explicitly identify that assumption in the reason, and use the same neutral value for equivalent missing-data situations. Never invent a quoted delivery timeline.\n- \"quality_score\": use the existing quoted-item coverage score (direct linear comparison of item coverage across quotations; equal coverage=100). If has_quality_data is true and historical_data.quality_score is valid, preserve the existing blend: round(coverageScore * 0.30 + historical_data.quality_score * 0.70). Otherwise use coverageScore and explicitly say historical quality is unavailable. Item coverage is a proxy, not an inspection result or technical-compliance verification.\n- \"reliability_score\": if has_reliability_data is true and historical_data.reliability_score is valid, use that supplied historical score unchanged. Only when reliability history is unavailable, apply the existing quotation-completeness assessment using payment terms, notes, delivery information, and attached warranty/insurance/terms evidence. Attachment presence does not verify its contents.\n- \"risk\": exactly \"Low\", \"Medium\", or \"High\".\n- \"verdict\": exactly one of \"BEST VALUE\", \"GOOD OPTION\", \"EXPENSIVE\", \"AVOID\", \"QUOTE INCOMPLETE\".\n- A supplier must NEVER be labeled \"AVOID\" simply for being lowest-ranked. Only assign \"AVOID\" if there is severe risk, non-compliance, missing quote, or unacceptable terms.\n- Equal scores are valid when the supplier-specific scoring criteria genuinely match. Never force differences. Compare actual delivery, quality, warranty evidence, documentation, payment terms and history independently; do not invent missing data.\n- \"reason\": MUST reference specific data points (e.g. price difference, actual historical on-time/late deliveries, quoted delivery days, attachment presence, payment terms), and distinguish available history from missing quotation fields.\n- The summary MUST distinguish suppliers with submitted pricing from suppliers with missing pricing. Never describe missing pricing as \"$0.00 pricing\".\n- \"ranking\": include ONLY the 3 suppliers listed above, sorted best to worst (rank 1 = best).\n- Do NOT invent, add, or reference any supplier not in the SUPPLIER QUOTATIONS section.\n- \"recommendedSupplier\": must match the rank 1 supplier name exactly.\n- Return exactly one result per quotation_id. Preserve its exact supplier_id and the current evaluation_run_id. IDs above are JSON strings: literal quotation marks inside an ID must be escaped, never removed.\n- Include all four dimension scores and their weighted overall score for EVERY quotation. The server validates identities and computes the final weighted arithmetic.\n- Use supplier names, quotation_id, and supplier_id EXACTLY as shown in SUPPLIER QUOTATIONS."
+              }
+            ]
+          },
+          "response": {
+            "model": "claude-haiku-4-5-20251001",
+            "stop_reason": "end_turn",
+            "usage": {
+              "input_tokens": 2922,
+              "cache_creation_input_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 0
+              },
+              "output_tokens": 1364,
+              "service_tier": "standard",
+              "inference_geo": "not_available"
+            },
+            "text": "```json\n{\n  \"rfq_id\": \"PUR-RFQ-2026-00091\",\n  \"evaluation_run_id\": \"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\",\n  \"ranking\": [\n    {\n      \"evaluation_run_id\": \"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\",\n      \"quotation_id\": \"PUR-SQTN-2026-00256\",\n      \"supplier_id\": \"FEMSA\",\n      \"supplier\": \"FEMSA\",\n      \"rank\": 1,\n      \"score\": 100,\n      \"price_score\": 100,\n      \"delivery_score\": 100,\n      \"quality_score\": 100,\n      \"reliability_score\": 100,\n      \"risk\": \"Low\",\n      \"verdict\": \"BEST VALUE\",\n      \"reason\": \"FEMSA delivers the strongest overall performance across all dimensions. Price is identical to competitors at $15.00/unit (price_score: 100). Delivery performance is exceptional with 100% on-time delivery record across 3 POs and 3 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is perfect at 100 with 100% quantity accuracy and zero rejected items across all transactions. Reliability score is 100 based on complete historical data: 3 invoices submitted on time, all required compliance certificates attached (warranty, terms, insurance), and robust transaction history (9 data points from 3 POs, 3 GRNs, 3 invoices). FEMSA has the most extensive verified transaction history among all three suppliers, demonstrating consistent excellence.\"\n    },\n    {\n      \"evaluation_run_id\": \"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\",\n      \"quotation_id\": \"PUR-SQTN-2026-00253\",\n      \"supplier_id\": \"\\\"Titan Industrial Products LLC\\\"\",\n      \"supplier\": \"Titan Industrial Products LLC\",\n      \"rank\": 2,\n      \"score\": 100,\n      \"price_score\": 100,\n      \"delivery_score\": 100,\n      \"quality_score\": 100,\n      \"reliability_score\": 100,\n      \"risk\": \"Low\",\n      \"verdict\": \"GOOD OPTION\",\n      \"reason\": \"Titan Industrial Products LLC matches FEMSA on price at $15.00/unit (price_score: 100) and demonstrates perfect historical delivery performance with 100% on-time delivery across 2 POs and 2 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is 100 with perfect 100% quantity accuracy and zero rejected items. Reliability score is 100 based on historical data showing 1 invoice submitted on time and all required compliance certificates attached. However, Titan has a smaller transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) compared to FEMSA's 9 data points, providing less extensive verification of sustained performance. Both suppliers are equally qualified, but FEMSA's larger proven track record provides marginally greater confidence.\"\n    },\n    {\n      \"evaluation_run_id\": \"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\",\n      \"quotation_id\": \"PUR-SQTN-2026-00257\",\n      \"supplier_id\": \"\\\"Eagle Peak Technologies Inc.\\\"\",\n      \"supplier\": \"Eagle Peak Technologies Inc.\",\n      \"rank\": 3,\n      \"score\": 78,\n      \"price_score\": 100,\n      \"delivery_score\": 35,\n      \"quality_score\": 100,\n      \"reliability_score\": 100,\n      \"risk\": \"Medium\",\n      \"verdict\": \"GOOD OPTION\",\n      \"reason\": \"Eagle Peak Technologies Inc. matches competitors on price at $15.00/unit (price_score: 100) and maintains perfect quality with 100% quantity accuracy and zero rejected items (quality_score: 100). Reliability score is 100 based on historical data with 1 invoice submitted on time and all required compliance certificates attached. However, delivery performance is significantly weaker with a delivery_score of only 35: historical data shows 1 on-time delivery and 1 late delivery across 2 POs, resulting in an average delay of 5 days. This inconsistency in on-time performance, combined with the smallest transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) and lowest total PO value ($1,571), introduces medium risk. While price and quality are competitive, the delivery reliability concern makes this supplier less preferable than FEMSA or Titan for time-sensitive requirements.\"\n    }\n  ],\n  \"recommendedSupplier\": \"FEMSA\",\n  \"summary\": \"All three suppliers submitted identical pricing at $15.00/unit for the brake disc. FEMSA is the recommended supplier, delivering superior overall value with a perfect 100-point score across all dimensions: 100% on-time delivery history (3 of 3 POs), zero quality issues (100% accuracy, zero rejections), and the most extensive verified transaction history (9 data points). While Titan Industrial Products LLC matches FEMSA's performance metrics, FEMSA's larger proven track record (3 completed POs vs. 2) provides greater confidence. Eagle Peak Technologies Inc., though price-competitive and quality-compliant, presents medium risk due to inconsistent delivery performance (50% on-time rate, 5-day average delay) and limited transaction history.\"\n}\n```"
+          }
+        }
+      }
+    }
+  ],
+  "parsed": {
+    "recommendation": {
+      "rfq_id": "PUR-RFQ-2026-00091",
+      "evaluation_run_id": "86ebda3c-27bb-4acf-a908-0cdb30e4ff55",
+      "evaluation_weights": {
+        "price_weight": 40,
+        "delivery_weight": 25,
+        "quality_weight": 20,
+        "reliability_weight": 15
+      },
+      "recommended_quotation_id": "PUR-SQTN-2026-00256",
+      "recommended_supplier_id": "FEMSA",
+      "recommended_supplier": "FEMSA",
+      "confidence_score": 100,
+      "recommendation_summary": "FEMSA ranks first among 3 current supplier quotations with a weighted score of 100/100. The configured weights are price 40%, delivery 25%, quality 20%, and reliability 15%. Matching calculated scores are retained; the model's ranking resolves the tie.",
+      "supplier_analysis": [
+        {
+          "name": "FEMSA",
+          "rank": 1,
+          "verdict": "BEST VALUE",
+          "risk": "Low",
+          "grand_total": 15,
+          "quote_price_status": "submitted",
+          "strengths": [
+            "FEMSA delivers the strongest overall performance across all dimensions. Price is identical to competitors at $15.00/unit (price_score: 100). Delivery performance is exceptional with 100% on-time delivery record across 3 POs and 3 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is perfect at 100 with 100% quantity accuracy and zero rejected items across all transactions. Reliability score is 100 based on complete historical data: 3 invoices submitted on time, all required compliance certificates attached (warranty, terms, insurance), and robust transaction history (9 data points from 3 POs, 3 GRNs, 3 invoices). FEMSA has the most extensive verified transaction history among all three suppliers, demonstrating consistent excellence."
+          ],
+          "weaknesses": [],
+          "score": {
+            "cost": 100,
+            "delivery": 100,
+            "quality": 100,
+            "reliability": 100,
+            "overall": 100
+          },
+          "why_best_or_worst": "FEMSA delivers the strongest overall performance across all dimensions. Price is identical to competitors at $15.00/unit (price_score: 100). Delivery performance is exceptional with 100% on-time delivery record across 3 POs and 3 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is perfect at 100 with 100% quantity accuracy and zero rejected items across all transactions. Reliability score is 100 based on complete historical data: 3 invoices submitted on time, all required compliance certificates attached (warranty, terms, insurance), and robust transaction history (9 data points from 3 POs, 3 GRNs, 3 invoices). FEMSA has the most extensive verified transaction history among all three suppliers, demonstrating consistent excellence.",
+          "quotation_id": "PUR-SQTN-2026-00256",
+          "supplier_quotation_id": "PUR-SQTN-2026-00256",
+          "supplier_id": "FEMSA",
+          "evaluation_run_id": "86ebda3c-27bb-4acf-a908-0cdb30e4ff55",
+          "evaluation_status": "complete",
+          "raw_ai_score": 100
+        },
+        {
+          "name": "Titan Industrial Products LLC",
+          "rank": 2,
+          "verdict": "GOOD OPTION",
+          "risk": "Low",
+          "grand_total": 15,
+          "quote_price_status": "submitted",
+          "strengths": [
+            "Titan Industrial Products LLC matches FEMSA on price at $15.00/unit (price_score: 100) and demonstrates perfect historical delivery performance with 100% on-time delivery across 2 POs and 2 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is 100 with perfect 100% quantity accuracy and zero rejected items. Reliability score is 100 based on historical data showing 1 invoice submitted on time and all required compliance certificates attached. However, Titan has a smaller transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) compared to FEMSA's 9 data points, providing less extensive verification of sustained performance. Both suppliers are equally qualified, but FEMSA's larger proven track record provides marginally greater confidence."
+          ],
+          "weaknesses": [],
+          "score": {
+            "cost": 100,
+            "delivery": 100,
+            "quality": 100,
+            "reliability": 100,
+            "overall": 100
+          },
+          "why_best_or_worst": "Titan Industrial Products LLC matches FEMSA on price at $15.00/unit (price_score: 100) and demonstrates perfect historical delivery performance with 100% on-time delivery across 2 POs and 2 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is 100 with perfect 100% quantity accuracy and zero rejected items. Reliability score is 100 based on historical data showing 1 invoice submitted on time and all required compliance certificates attached. However, Titan has a smaller transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) compared to FEMSA's 9 data points, providing less extensive verification of sustained performance. Both suppliers are equally qualified, but FEMSA's larger proven track record provides marginally greater confidence.",
+          "quotation_id": "PUR-SQTN-2026-00253",
+          "supplier_quotation_id": "PUR-SQTN-2026-00253",
+          "supplier_id": "\"Titan Industrial Products LLC\"",
+          "evaluation_run_id": "86ebda3c-27bb-4acf-a908-0cdb30e4ff55",
+          "evaluation_status": "complete",
+          "raw_ai_score": 100
+        },
+        {
+          "name": "Eagle Peak Technologies Inc.",
+          "rank": 3,
+          "verdict": "GOOD OPTION",
+          "risk": "Medium",
+          "grand_total": 15,
+          "quote_price_status": "submitted",
+          "strengths": [
+            "Eagle Peak Technologies Inc. matches competitors on price at $15.00/unit (price_score: 100) and maintains perfect quality with 100% quantity accuracy and zero rejected items (quality_score: 100). Reliability score is 100 based on historical data with 1 invoice submitted on time and all required compliance certificates attached. However, delivery performance is significantly weaker with a delivery_score of only 35: historical data shows 1 on-time delivery and 1 late delivery across 2 POs, resulting in an average delay of 5 days. This inconsistency in on-time performance, combined with the smallest transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) and lowest total PO value ($1,571), introduces medium risk. While price and quality are competitive, the delivery reliability concern makes this supplier less preferable than FEMSA or Titan for time-sensitive requirements."
+          ],
+          "weaknesses": [],
+          "score": {
+            "cost": 100,
+            "delivery": 35,
+            "quality": 100,
+            "reliability": 100,
+            "overall": 84
+          },
+          "why_best_or_worst": "Eagle Peak Technologies Inc. matches competitors on price at $15.00/unit (price_score: 100) and maintains perfect quality with 100% quantity accuracy and zero rejected items (quality_score: 100). Reliability score is 100 based on historical data with 1 invoice submitted on time and all required compliance certificates attached. However, delivery performance is significantly weaker with a delivery_score of only 35: historical data shows 1 on-time delivery and 1 late delivery across 2 POs, resulting in an average delay of 5 days. This inconsistency in on-time performance, combined with the smallest transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) and lowest total PO value ($1,571), introduces medium risk. While price and quality are competitive, the delivery reliability concern makes this supplier less preferable than FEMSA or Titan for time-sensitive requirements.",
+          "quotation_id": "PUR-SQTN-2026-00257",
+          "supplier_quotation_id": "PUR-SQTN-2026-00257",
+          "supplier_id": "\"Eagle Peak Technologies Inc.\"",
+          "evaluation_run_id": "86ebda3c-27bb-4acf-a908-0cdb30e4ff55",
+          "evaluation_status": "complete",
+          "raw_ai_score": 78
+        }
+      ],
+      "cost_analysis": {
+        "savings_vs_expensive": "",
+        "savings_percentage": 0,
+        "price_range": "$15.00 to $15.00"
+      },
+      "per_item_analysis": [],
+      "risk_flags": [
+        {
+          "type": "cost",
+          "severity": "low",
+          "message": "FEMSA (Low risk): FEMSA delivers the strongest overall performance across all dimensions. Price is identical to competitors at $15.00/unit (price_score: 100). Delivery performance is exceptional with 100% on-time delivery record across 3 POs and 3 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is perfect at 100 with 100% quantity accuracy and zero rejected items across all transactions. Reliability score is 100 based on complete historical data: 3 invoices submitted on time, all required compliance certificates attached (warranty, terms, insurance), and robust transaction history (9 data points from 3 POs, 3 GRNs, 3 invoices). FEMSA has the most extensive verified transaction history among all three suppliers, demonstrating consistent excellence."
+        },
+        {
+          "type": "cost",
+          "severity": "low",
+          "message": "Titan Industrial Products LLC (Low risk): Titan Industrial Products LLC matches FEMSA on price at $15.00/unit (price_score: 100) and demonstrates perfect historical delivery performance with 100% on-time delivery across 2 POs and 2 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is 100 with perfect 100% quantity accuracy and zero rejected items. Reliability score is 100 based on historical data showing 1 invoice submitted on time and all required compliance certificates attached. However, Titan has a smaller transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) compared to FEMSA's 9 data points, providing less extensive verification of sustained performance. Both suppliers are equally qualified, but FEMSA's larger proven track record provides marginally greater confidence."
+        },
+        {
+          "type": "cost",
+          "severity": "medium",
+          "message": "Eagle Peak Technologies Inc. (Medium risk): Eagle Peak Technologies Inc. matches competitors on price at $15.00/unit (price_score: 100) and maintains perfect quality with 100% quantity accuracy and zero rejected items (quality_score: 100). Reliability score is 100 based on historical data with 1 invoice submitted on time and all required compliance certificates attached. However, delivery performance is significantly weaker with a delivery_score of only 35: historical data shows 1 on-time delivery and 1 late delivery across 2 POs, resulting in an average delay of 5 days. This inconsistency in on-time performance, combined with the smallest transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) and lowest total PO value ($1,571), introduces medium risk. While price and quality are competitive, the delivery reliability concern makes this supplier less preferable than FEMSA or Titan for time-sensitive requirements."
+        }
+      ],
+      "negotiation_tips": [],
+      "split_order_option": {
+        "recommended": false,
+        "reason": "",
+        "suggestion": ""
+      },
+      "final_verdict": "FEMSA ranks first among 3 current supplier quotations with a weighted score of 100/100. The configured weights are price 40%, delivery 25%, quality 20%, and reliability 15%. Matching calculated scores are retained; the model's ranking resolves the tie.",
+      "reason": "FEMSA ranks first among 3 current supplier quotations with a weighted score of 100/100. The configured weights are price 40%, delivery 25%, quality 20%, and reliability 15%. Matching calculated scores are retained; the model's ranking resolves the tie.",
+      "cost_savings": "",
+      "risk_factors": [
+        "FEMSA (Low risk): FEMSA delivers the strongest overall performance across all dimensions. Price is identical to competitors at $15.00/unit (price_score: 100). Delivery performance is exceptional with 100% on-time delivery record across 3 POs and 3 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is perfect at 100 with 100% quantity accuracy and zero rejected items across all transactions. Reliability score is 100 based on complete historical data: 3 invoices submitted on time, all required compliance certificates attached (warranty, terms, insurance), and robust transaction history (9 data points from 3 POs, 3 GRNs, 3 invoices). FEMSA has the most extensive verified transaction history among all three suppliers, demonstrating consistent excellence.",
+        "Titan Industrial Products LLC (Low risk): Titan Industrial Products LLC matches FEMSA on price at $15.00/unit (price_score: 100) and demonstrates perfect historical delivery performance with 100% on-time delivery across 2 POs and 2 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is 100 with perfect 100% quantity accuracy and zero rejected items. Reliability score is 100 based on historical data showing 1 invoice submitted on time and all required compliance certificates attached. However, Titan has a smaller transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) compared to FEMSA's 9 data points, providing less extensive verification of sustained performance. Both suppliers are equally qualified, but FEMSA's larger proven track record provides marginally greater confidence.",
+        "Eagle Peak Technologies Inc. (Medium risk): Eagle Peak Technologies Inc. matches competitors on price at $15.00/unit (price_score: 100) and maintains perfect quality with 100% quantity accuracy and zero rejected items (quality_score: 100). Reliability score is 100 based on historical data with 1 invoice submitted on time and all required compliance certificates attached. However, delivery performance is significantly weaker with a delivery_score of only 35: historical data shows 1 on-time delivery and 1 late delivery across 2 POs, resulting in an average delay of 5 days. This inconsistency in on-time performance, combined with the smallest transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) and lowest total PO value ($1,571), introduces medium risk. While price and quality are competitive, the delivery reliability concern makes this supplier less preferable than FEMSA or Titan for time-sensitive requirements."
+      ],
+      "per_item_recommendation": []
+    },
+    "provider": "claude",
+    "tokensUsed": 4286
+  },
+  "persisted": {
+    "name": "SCORE-PUR-RFQ-2026-00091-00115",
+    "owner": "Administrator",
+    "creation": "2026-09-17 16:30:35.383547",
+    "modified": "2026-09-17 16:30:35.383547",
+    "modified_by": "Administrator",
+    "docstatus": 0,
+    "idx": 0,
+    "rfq": "PUR-RFQ-2026-00091",
+    "scored_at": "2026-09-17 16:30:32",
+    "price_weight": 40,
+    "delivery_weight": 25,
+    "quality_weight": 20,
+    "reliability_weight": 15,
+    "recommended_supplier": "FEMSA",
+    "analysis_snapshot": "{\"rfq_name\":\"PUR-RFQ-2026-00091\",\"evaluation_run_id\":\"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\",\"analysed_at\":\"2026-09-17T11:00:32.887Z\",\"recommended_supplier\":\"FEMSA\",\"confidence_score\":100,\"analysis\":{\"rfq_id\":\"PUR-RFQ-2026-00091\",\"evaluation_run_id\":\"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\",\"evaluation_weights\":{\"price_weight\":40,\"delivery_weight\":25,\"quality_weight\":20,\"reliability_weight\":15},\"recommended_quotation_id\":\"PUR-SQTN-2026-00256\",\"recommended_supplier_id\":\"FEMSA\",\"recommended_supplier\":\"FEMSA\",\"confidence_score\":100,\"recommendation_summary\":\"FEMSA ranks first among 3 current supplier quotations with a weighted score of 100/100. The configured weights are price 40%, delivery 25%, quality 20%, and reliability 15%. Matching calculated scores are retained; the model's ranking resolves the tie.\",\"supplier_analysis\":[{\"name\":\"FEMSA\",\"rank\":1,\"verdict\":\"BEST VALUE\",\"risk\":\"Low\",\"grand_total\":15,\"quote_price_status\":\"submitted\",\"strengths\":[\"FEMSA delivers the strongest overall performance across all dimensions. Price is identical to competitors at $15.00/unit (price_score: 100). Delivery performance is exceptional with 100% on-time delivery record across 3 POs and 3 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is perfect at 100 with 100% quantity accuracy and zero rejected items across all transactions. Reliability score is 100 based on complete historical data: 3 invoices submitted on time, all required compliance certificates attached (warranty, terms, insurance), and robust transaction history (9 data points from 3 POs, 3 GRNs, 3 invoices). FEMSA has the most extensive verified transaction history among all three suppliers, demonstrating consistent excellence.\"],\"weaknesses\":[],\"score\":{\"cost\":100,\"delivery\":100,\"quality\":100,\"reliability\":100,\"overall\":100},\"why_best_or_worst\":\"FEMSA delivers the strongest overall performance across all dimensions. Price is identical to competitors at $15.00/unit (price_score: 100). Delivery performance is exceptional with 100% on-time delivery record across 3 POs and 3 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is perfect at 100 with 100% quantity accuracy and zero rejected items across all transactions. Reliability score is 100 based on complete historical data: 3 invoices submitted on time, all required compliance certificates attached (warranty, terms, insurance), and robust transaction history (9 data points from 3 POs, 3 GRNs, 3 invoices). FEMSA has the most extensive verified transaction history among all three suppliers, demonstrating consistent excellence.\",\"quotation_id\":\"PUR-SQTN-2026-00256\",\"supplier_quotation_id\":\"PUR-SQTN-2026-00256\",\"supplier_id\":\"FEMSA\",\"evaluation_run_id\":\"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\",\"evaluation_status\":\"complete\",\"raw_ai_score\":100},{\"name\":\"Titan Industrial Products LLC\",\"rank\":2,\"verdict\":\"GOOD OPTION\",\"risk\":\"Low\",\"grand_total\":15,\"quote_price_status\":\"submitted\",\"strengths\":[\"Titan Industrial Products LLC matches FEMSA on price at $15.00/unit (price_score: 100) and demonstrates perfect historical delivery performance with 100% on-time delivery across 2 POs and 2 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is 100 with perfect 100% quantity accuracy and zero rejected items. Reliability score is 100 based on historical data showing 1 invoice submitted on time and all required compliance certificates attached. However, Titan has a smaller transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) compared to FEMSA's 9 data points, providing less extensive verification of sustained performance. Both suppliers are equally qualified, but FEMSA's larger proven track record provides marginally greater confidence.\"],\"weaknesses\":[],\"score\":{\"cost\":100,\"delivery\":100,\"quality\":100,\"reliability\":100,\"overall\":100},\"why_best_or_worst\":\"Titan Industrial Products LLC matches FEMSA on price at $15.00/unit (price_score: 100) and demonstrates perfect historical delivery performance with 100% on-time delivery across 2 POs and 2 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is 100 with perfect 100% quantity accuracy and zero rejected items. Reliability score is 100 based on historical data showing 1 invoice submitted on time and all required compliance certificates attached. However, Titan has a smaller transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) compared to FEMSA's 9 data points, providing less extensive verification of sustained performance. Both suppliers are equally qualified, but FEMSA's larger proven track record provides marginally greater confidence.\",\"quotation_id\":\"PUR-SQTN-2026-00253\",\"supplier_quotation_id\":\"PUR-SQTN-2026-00253\",\"supplier_id\":\"\\\"Titan Industrial Products LLC\\\"\",\"evaluation_run_id\":\"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\",\"evaluation_status\":\"complete\",\"raw_ai_score\":100},{\"name\":\"Eagle Peak Technologies Inc.\",\"rank\":3,\"verdict\":\"GOOD OPTION\",\"risk\":\"Medium\",\"grand_total\":15,\"quote_price_status\":\"submitted\",\"strengths\":[\"Eagle Peak Technologies Inc. matches competitors on price at $15.00/unit (price_score: 100) and maintains perfect quality with 100% quantity accuracy and zero rejected items (quality_score: 100). Reliability score is 100 based on historical data with 1 invoice submitted on time and all required compliance certificates attached. However, delivery performance is significantly weaker with a delivery_score of only 35: historical data shows 1 on-time delivery and 1 late delivery across 2 POs, resulting in an average delay of 5 days. This inconsistency in on-time performance, combined with the smallest transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) and lowest total PO value ($1,571), introduces medium risk. While price and quality are competitive, the delivery reliability concern makes this supplier less preferable than FEMSA or Titan for time-sensitive requirements.\"],\"weaknesses\":[],\"score\":{\"cost\":100,\"delivery\":35,\"quality\":100,\"reliability\":100,\"overall\":84},\"why_best_or_worst\":\"Eagle Peak Technologies Inc. matches competitors on price at $15.00/unit (price_score: 100) and maintains perfect quality with 100% quantity accuracy and zero rejected items (quality_score: 100). Reliability score is 100 based on historical data with 1 invoice submitted on time and all required compliance certificates attached. However, delivery performance is significantly weaker with a delivery_score of only 35: historical data shows 1 on-time delivery and 1 late delivery across 2 POs, resulting in an average delay of 5 days. This inconsistency in on-time performance, combined with the smallest transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) and lowest total PO value ($1,571), introduces medium risk. While price and quality are competitive, the delivery reliability concern makes this supplier less preferable than FEMSA or Titan for time-sensitive requirements.\",\"quotation_id\":\"PUR-SQTN-2026-00257\",\"supplier_quotation_id\":\"PUR-SQTN-2026-00257\",\"supplier_id\":\"\\\"Eagle Peak Technologies Inc.\\\"\",\"evaluation_run_id\":\"86ebda3c-27bb-4acf-a908-0cdb30e4ff55\",\"evaluation_status\":\"complete\",\"raw_ai_score\":78}],\"cost_analysis\":{\"savings_vs_expensive\":\"\",\"savings_percentage\":0,\"price_range\":\"$15.00 to $15.00\"},\"per_item_analysis\":[],\"risk_flags\":[{\"type\":\"cost\",\"severity\":\"low\",\"message\":\"FEMSA (Low risk): FEMSA delivers the strongest overall performance across all dimensions. Price is identical to competitors at $15.00/unit (price_score: 100). Delivery performance is exceptional with 100% on-time delivery record across 3 POs and 3 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is perfect at 100 with 100% quantity accuracy and zero rejected items across all transactions. Reliability score is 100 based on complete historical data: 3 invoices submitted on time, all required compliance certificates attached (warranty, terms, insurance), and robust transaction history (9 data points from 3 POs, 3 GRNs, 3 invoices). FEMSA has the most extensive verified transaction history among all three suppliers, demonstrating consistent excellence.\"},{\"type\":\"cost\",\"severity\":\"low\",\"message\":\"Titan Industrial Products LLC (Low risk): Titan Industrial Products LLC matches FEMSA on price at $15.00/unit (price_score: 100) and demonstrates perfect historical delivery performance with 100% on-time delivery across 2 POs and 2 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is 100 with perfect 100% quantity accuracy and zero rejected items. Reliability score is 100 based on historical data showing 1 invoice submitted on time and all required compliance certificates attached. However, Titan has a smaller transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) compared to FEMSA's 9 data points, providing less extensive verification of sustained performance. Both suppliers are equally qualified, but FEMSA's larger proven track record provides marginally greater confidence.\"},{\"type\":\"cost\",\"severity\":\"medium\",\"message\":\"Eagle Peak Technologies Inc. (Medium risk): Eagle Peak Technologies Inc. matches competitors on price at $15.00/unit (price_score: 100) and maintains perfect quality with 100% quantity accuracy and zero rejected items (quality_score: 100). Reliability score is 100 based on historical data with 1 invoice submitted on time and all required compliance certificates attached. However, delivery performance is significantly weaker with a delivery_score of only 35: historical data shows 1 on-time delivery and 1 late delivery across 2 POs, resulting in an average delay of 5 days. This inconsistency in on-time performance, combined with the smallest transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) and lowest total PO value ($1,571), introduces medium risk. While price and quality are competitive, the delivery reliability concern makes this supplier less preferable than FEMSA or Titan for time-sensitive requirements.\"}],\"negotiation_tips\":[],\"split_order_option\":{\"recommended\":false,\"reason\":\"\",\"suggestion\":\"\"},\"final_verdict\":\"FEMSA ranks first among 3 current supplier quotations with a weighted score of 100/100. The configured weights are price 40%, delivery 25%, quality 20%, and reliability 15%. Matching calculated scores are retained; the model's ranking resolves the tie.\",\"reason\":\"FEMSA ranks first among 3 current supplier quotations with a weighted score of 100/100. The configured weights are price 40%, delivery 25%, quality 20%, and reliability 15%. Matching calculated scores are retained; the model's ranking resolves the tie.\",\"cost_savings\":\"\",\"risk_factors\":[\"FEMSA (Low risk): FEMSA delivers the strongest overall performance across all dimensions. Price is identical to competitors at $15.00/unit (price_score: 100). Delivery performance is exceptional with 100% on-time delivery record across 3 POs and 3 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is perfect at 100 with 100% quantity accuracy and zero rejected items across all transactions. Reliability score is 100 based on complete historical data: 3 invoices submitted on time, all required compliance certificates attached (warranty, terms, insurance), and robust transaction history (9 data points from 3 POs, 3 GRNs, 3 invoices). FEMSA has the most extensive verified transaction history among all three suppliers, demonstrating consistent excellence.\",\"Titan Industrial Products LLC (Low risk): Titan Industrial Products LLC matches FEMSA on price at $15.00/unit (price_score: 100) and demonstrates perfect historical delivery performance with 100% on-time delivery across 2 POs and 2 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is 100 with perfect 100% quantity accuracy and zero rejected items. Reliability score is 100 based on historical data showing 1 invoice submitted on time and all required compliance certificates attached. However, Titan has a smaller transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) compared to FEMSA's 9 data points, providing less extensive verification of sustained performance. Both suppliers are equally qualified, but FEMSA's larger proven track record provides marginally greater confidence.\",\"Eagle Peak Technologies Inc. (Medium risk): Eagle Peak Technologies Inc. matches competitors on price at $15.00/unit (price_score: 100) and maintains perfect quality with 100% quantity accuracy and zero rejected items (quality_score: 100). Reliability score is 100 based on historical data with 1 invoice submitted on time and all required compliance certificates attached. However, delivery performance is significantly weaker with a delivery_score of only 35: historical data shows 1 on-time delivery and 1 late delivery across 2 POs, resulting in an average delay of 5 days. This inconsistency in on-time performance, combined with the smallest transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) and lowest total PO value ($1,571), introduces medium risk. While price and quality are competitive, the delivery reliability concern makes this supplier less preferable than FEMSA or Titan for time-sensitive requirements.\"],\"per_item_recommendation\":[]},\"quotations_snapshot\":[{\"quotation_id\":\"PUR-SQTN-2026-00253\",\"supplier_id\":\"\\\"Titan Industrial Products LLC\\\"\",\"supplier\":\"Titan Industrial Products LLC\",\"grand_total\":15},{\"quotation_id\":\"PUR-SQTN-2026-00256\",\"supplier_id\":\"FEMSA\",\"supplier\":\"FEMSA\",\"grand_total\":15},{\"quotation_id\":\"PUR-SQTN-2026-00257\",\"supplier_id\":\"\\\"Eagle Peak Technologies Inc.\\\"\",\"supplier\":\"Eagle Peak Technologies Inc.\",\"grand_total\":15}]}",
+    "doctype": "Supplier Scoring Result",
+    "supplier_scores": [
+      {
+        "name": "kq18ioaods",
+        "owner": "Administrator",
+        "creation": "2026-09-17 16:30:35.383547",
+        "modified": "2026-09-17 16:30:35.383547",
+        "modified_by": "Administrator",
+        "docstatus": 0,
+        "idx": 1,
+        "supplier": "FEMSA",
+        "supplier_name": "FEMSA",
+        "price_score": 100,
+        "delivery_score": 100,
+        "quality_score": 100,
+        "reliability_score": 100,
+        "final_score": 100,
+        "ranking": 1,
+        "recommendation_reason": "FEMSA delivers the strongest overall performance across all dimensions. Price is identical to competitors at $15.00/unit (price_score: 100). Delivery performance is exceptional with 100% on-time delivery record across 3 POs and 3 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is perfect at 100 with 100% quantity accuracy and zero rejected items across all transactions. Reliability score is 100 based on complete historical data: 3 invoices submitted on time, all required compliance certificates attached (warranty, terms, insurance), and robust transaction history (9 data points from 3 POs, 3 GRNs, 3 invoices). FEMSA has the most extensive verified transaction history among all three suppliers, demonstrating consistent excellence.",
+        "parent": "SCORE-PUR-RFQ-2026-00091-00115",
+        "parentfield": "supplier_scores",
+        "parenttype": "Supplier Scoring Result",
+        "doctype": "Supplier Score Row"
+      },
+      {
+        "name": "kq1cpktn14",
+        "owner": "Administrator",
+        "creation": "2026-09-17 16:30:35.383547",
+        "modified": "2026-09-17 16:30:35.383547",
+        "modified_by": "Administrator",
+        "docstatus": 0,
+        "idx": 2,
+        "supplier": "\"Titan Industrial Products LLC\"",
+        "supplier_name": "Titan Industrial Products LLC",
+        "price_score": 100,
+        "delivery_score": 100,
+        "quality_score": 100,
+        "reliability_score": 100,
+        "final_score": 100,
+        "ranking": 2,
+        "recommendation_reason": "Titan Industrial Products LLC matches FEMSA on price at $15.00/unit (price_score: 100) and demonstrates perfect historical delivery performance with 100% on-time delivery across 2 POs and 2 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is 100 with perfect 100% quantity accuracy and zero rejected items. Reliability score is 100 based on historical data showing 1 invoice submitted on time and all required compliance certificates attached. However, Titan has a smaller transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) compared to FEMSA's 9 data points, providing less extensive verification of sustained performance. Both suppliers are equally qualified, but FEMSA's larger proven track record provides marginally greater confidence.",
+        "parent": "SCORE-PUR-RFQ-2026-00091-00115",
+        "parentfield": "supplier_scores",
+        "parenttype": "Supplier Scoring Result",
+        "doctype": "Supplier Score Row"
+      },
+      {
+        "name": "kq1idgs5ng",
+        "owner": "Administrator",
+        "creation": "2026-09-17 16:30:35.383547",
+        "modified": "2026-09-17 16:30:35.383547",
+        "modified_by": "Administrator",
+        "docstatus": 0,
+        "idx": 3,
+        "supplier": "\"Eagle Peak Technologies Inc.\"",
+        "supplier_name": "Eagle Peak Technologies Inc.",
+        "price_score": 100,
+        "delivery_score": 35,
+        "quality_score": 100,
+        "reliability_score": 100,
+        "final_score": 84,
+        "ranking": 3,
+        "recommendation_reason": "Eagle Peak Technologies Inc. matches competitors on price at $15.00/unit (price_score: 100) and maintains perfect quality with 100% quantity accuracy and zero rejected items (quality_score: 100). Reliability score is 100 based on historical data with 1 invoice submitted on time and all required compliance certificates attached. However, delivery performance is significantly weaker with a delivery_score of only 35: historical data shows 1 on-time delivery and 1 late delivery across 2 POs, resulting in an average delay of 5 days. This inconsistency in on-time performance, combined with the smallest transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) and lowest total PO value ($1,571), introduces medium risk. While price and quality are competitive, the delivery reliability concern makes this supplier less preferable than FEMSA or Titan for time-sensitive requirements.",
+        "parent": "SCORE-PUR-RFQ-2026-00091-00115",
+        "parentfield": "supplier_scores",
+        "parenttype": "Supplier Scoring Result",
+        "doctype": "Supplier Score Row"
+      }
+    ]
+  },
+  "api_response": {
+    "rfq_name": "PUR-RFQ-2026-00091",
+    "evaluation_run_id": "86ebda3c-27bb-4acf-a908-0cdb30e4ff55",
+    "analysed_at": "2026-09-17T11:00:32.887Z",
+    "recommended_supplier": "FEMSA",
+    "confidence_score": 100,
+    "analysis": {
+      "rfq_id": "PUR-RFQ-2026-00091",
+      "evaluation_run_id": "86ebda3c-27bb-4acf-a908-0cdb30e4ff55",
+      "evaluation_weights": {
+        "price_weight": 40,
+        "delivery_weight": 25,
+        "quality_weight": 20,
+        "reliability_weight": 15
+      },
+      "recommended_quotation_id": "PUR-SQTN-2026-00256",
+      "recommended_supplier_id": "FEMSA",
+      "recommended_supplier": "FEMSA",
+      "confidence_score": 100,
+      "recommendation_summary": "FEMSA ranks first among 3 current supplier quotations with a weighted score of 100/100. The configured weights are price 40%, delivery 25%, quality 20%, and reliability 15%. Matching calculated scores are retained; the model's ranking resolves the tie.",
+      "supplier_analysis": [
+        {
+          "name": "FEMSA",
+          "rank": 1,
+          "verdict": "BEST VALUE",
+          "risk": "Low",
+          "grand_total": 15,
+          "quote_price_status": "submitted",
+          "strengths": [
+            "FEMSA delivers the strongest overall performance across all dimensions. Price is identical to competitors at $15.00/unit (price_score: 100). Delivery performance is exceptional with 100% on-time delivery record across 3 POs and 3 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is perfect at 100 with 100% quantity accuracy and zero rejected items across all transactions. Reliability score is 100 based on complete historical data: 3 invoices submitted on time, all required compliance certificates attached (warranty, terms, insurance), and robust transaction history (9 data points from 3 POs, 3 GRNs, 3 invoices). FEMSA has the most extensive verified transaction history among all three suppliers, demonstrating consistent excellence."
+          ],
+          "weaknesses": [],
+          "score": {
+            "cost": 100,
+            "delivery": 100,
+            "quality": 100,
+            "reliability": 100,
+            "overall": 100
+          },
+          "why_best_or_worst": "FEMSA delivers the strongest overall performance across all dimensions. Price is identical to competitors at $15.00/unit (price_score: 100). Delivery performance is exceptional with 100% on-time delivery record across 3 POs and 3 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is perfect at 100 with 100% quantity accuracy and zero rejected items across all transactions. Reliability score is 100 based on complete historical data: 3 invoices submitted on time, all required compliance certificates attached (warranty, terms, insurance), and robust transaction history (9 data points from 3 POs, 3 GRNs, 3 invoices). FEMSA has the most extensive verified transaction history among all three suppliers, demonstrating consistent excellence.",
+          "quotation_id": "PUR-SQTN-2026-00256",
+          "supplier_quotation_id": "PUR-SQTN-2026-00256",
+          "supplier_id": "FEMSA",
+          "evaluation_run_id": "86ebda3c-27bb-4acf-a908-0cdb30e4ff55",
+          "evaluation_status": "complete",
+          "raw_ai_score": 100,
+          "rfq_id": "PUR-RFQ-2026-00091"
+        },
+        {
+          "name": "Titan Industrial Products LLC",
+          "rank": 2,
+          "verdict": "GOOD OPTION",
+          "risk": "Low",
+          "grand_total": 15,
+          "quote_price_status": "submitted",
+          "strengths": [
+            "Titan Industrial Products LLC matches FEMSA on price at $15.00/unit (price_score: 100) and demonstrates perfect historical delivery performance with 100% on-time delivery across 2 POs and 2 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is 100 with perfect 100% quantity accuracy and zero rejected items. Reliability score is 100 based on historical data showing 1 invoice submitted on time and all required compliance certificates attached. However, Titan has a smaller transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) compared to FEMSA's 9 data points, providing less extensive verification of sustained performance. Both suppliers are equally qualified, but FEMSA's larger proven track record provides marginally greater confidence."
+          ],
+          "weaknesses": [],
+          "score": {
+            "cost": 100,
+            "delivery": 100,
+            "quality": 100,
+            "reliability": 100,
+            "overall": 100
+          },
+          "why_best_or_worst": "Titan Industrial Products LLC matches FEMSA on price at $15.00/unit (price_score: 100) and demonstrates perfect historical delivery performance with 100% on-time delivery across 2 POs and 2 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is 100 with perfect 100% quantity accuracy and zero rejected items. Reliability score is 100 based on historical data showing 1 invoice submitted on time and all required compliance certificates attached. However, Titan has a smaller transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) compared to FEMSA's 9 data points, providing less extensive verification of sustained performance. Both suppliers are equally qualified, but FEMSA's larger proven track record provides marginally greater confidence.",
+          "quotation_id": "PUR-SQTN-2026-00253",
+          "supplier_quotation_id": "PUR-SQTN-2026-00253",
+          "supplier_id": "\"Titan Industrial Products LLC\"",
+          "evaluation_run_id": "86ebda3c-27bb-4acf-a908-0cdb30e4ff55",
+          "evaluation_status": "complete",
+          "raw_ai_score": 100,
+          "rfq_id": "PUR-RFQ-2026-00091"
+        },
+        {
+          "name": "Eagle Peak Technologies Inc.",
+          "rank": 3,
+          "verdict": "GOOD OPTION",
+          "risk": "Medium",
+          "grand_total": 15,
+          "quote_price_status": "submitted",
+          "strengths": [
+            "Eagle Peak Technologies Inc. matches competitors on price at $15.00/unit (price_score: 100) and maintains perfect quality with 100% quantity accuracy and zero rejected items (quality_score: 100). Reliability score is 100 based on historical data with 1 invoice submitted on time and all required compliance certificates attached. However, delivery performance is significantly weaker with a delivery_score of only 35: historical data shows 1 on-time delivery and 1 late delivery across 2 POs, resulting in an average delay of 5 days. This inconsistency in on-time performance, combined with the smallest transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) and lowest total PO value ($1,571), introduces medium risk. While price and quality are competitive, the delivery reliability concern makes this supplier less preferable than FEMSA or Titan for time-sensitive requirements."
+          ],
+          "weaknesses": [],
+          "score": {
+            "cost": 100,
+            "delivery": 35,
+            "quality": 100,
+            "reliability": 100,
+            "overall": 84
+          },
+          "why_best_or_worst": "Eagle Peak Technologies Inc. matches competitors on price at $15.00/unit (price_score: 100) and maintains perfect quality with 100% quantity accuracy and zero rejected items (quality_score: 100). Reliability score is 100 based on historical data with 1 invoice submitted on time and all required compliance certificates attached. However, delivery performance is significantly weaker with a delivery_score of only 35: historical data shows 1 on-time delivery and 1 late delivery across 2 POs, resulting in an average delay of 5 days. This inconsistency in on-time performance, combined with the smallest transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) and lowest total PO value ($1,571), introduces medium risk. While price and quality are competitive, the delivery reliability concern makes this supplier less preferable than FEMSA or Titan for time-sensitive requirements.",
+          "quotation_id": "PUR-SQTN-2026-00257",
+          "supplier_quotation_id": "PUR-SQTN-2026-00257",
+          "supplier_id": "\"Eagle Peak Technologies Inc.\"",
+          "evaluation_run_id": "86ebda3c-27bb-4acf-a908-0cdb30e4ff55",
+          "evaluation_status": "complete",
+          "raw_ai_score": 78,
+          "rfq_id": "PUR-RFQ-2026-00091"
+        }
+      ],
+      "cost_analysis": {
+        "savings_vs_expensive": "",
+        "savings_percentage": 0,
+        "price_range": "$15.00 to $15.00"
+      },
+      "per_item_analysis": [],
+      "risk_flags": [
+        {
+          "type": "cost",
+          "severity": "low",
+          "message": "FEMSA (Low risk): FEMSA delivers the strongest overall performance across all dimensions. Price is identical to competitors at $15.00/unit (price_score: 100). Delivery performance is exceptional with 100% on-time delivery record across 3 POs and 3 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is perfect at 100 with 100% quantity accuracy and zero rejected items across all transactions. Reliability score is 100 based on complete historical data: 3 invoices submitted on time, all required compliance certificates attached (warranty, terms, insurance), and robust transaction history (9 data points from 3 POs, 3 GRNs, 3 invoices). FEMSA has the most extensive verified transaction history among all three suppliers, demonstrating consistent excellence."
+        },
+        {
+          "type": "cost",
+          "severity": "low",
+          "message": "Titan Industrial Products LLC (Low risk): Titan Industrial Products LLC matches FEMSA on price at $15.00/unit (price_score: 100) and demonstrates perfect historical delivery performance with 100% on-time delivery across 2 POs and 2 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is 100 with perfect 100% quantity accuracy and zero rejected items. Reliability score is 100 based on historical data showing 1 invoice submitted on time and all required compliance certificates attached. However, Titan has a smaller transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) compared to FEMSA's 9 data points, providing less extensive verification of sustained performance. Both suppliers are equally qualified, but FEMSA's larger proven track record provides marginally greater confidence."
+        },
+        {
+          "type": "cost",
+          "severity": "medium",
+          "message": "Eagle Peak Technologies Inc. (Medium risk): Eagle Peak Technologies Inc. matches competitors on price at $15.00/unit (price_score: 100) and maintains perfect quality with 100% quantity accuracy and zero rejected items (quality_score: 100). Reliability score is 100 based on historical data with 1 invoice submitted on time and all required compliance certificates attached. However, delivery performance is significantly weaker with a delivery_score of only 35: historical data shows 1 on-time delivery and 1 late delivery across 2 POs, resulting in an average delay of 5 days. This inconsistency in on-time performance, combined with the smallest transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) and lowest total PO value ($1,571), introduces medium risk. While price and quality are competitive, the delivery reliability concern makes this supplier less preferable than FEMSA or Titan for time-sensitive requirements."
+        }
+      ],
+      "negotiation_tips": [],
+      "split_order_option": {
+        "recommended": false,
+        "reason": "",
+        "suggestion": ""
+      },
+      "final_verdict": "FEMSA ranks first among 3 current supplier quotations with a weighted score of 100/100. The configured weights are price 40%, delivery 25%, quality 20%, and reliability 15%. Matching calculated scores are retained; the model's ranking resolves the tie.",
+      "reason": "FEMSA ranks first among 3 current supplier quotations with a weighted score of 100/100. The configured weights are price 40%, delivery 25%, quality 20%, and reliability 15%. Matching calculated scores are retained; the model's ranking resolves the tie.",
+      "cost_savings": "",
+      "risk_factors": [
+        "FEMSA (Low risk): FEMSA delivers the strongest overall performance across all dimensions. Price is identical to competitors at $15.00/unit (price_score: 100). Delivery performance is exceptional with 100% on-time delivery record across 3 POs and 3 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is perfect at 100 with 100% quantity accuracy and zero rejected items across all transactions. Reliability score is 100 based on complete historical data: 3 invoices submitted on time, all required compliance certificates attached (warranty, terms, insurance), and robust transaction history (9 data points from 3 POs, 3 GRNs, 3 invoices). FEMSA has the most extensive verified transaction history among all three suppliers, demonstrating consistent excellence.",
+        "Titan Industrial Products LLC (Low risk): Titan Industrial Products LLC matches FEMSA on price at $15.00/unit (price_score: 100) and demonstrates perfect historical delivery performance with 100% on-time delivery across 2 POs and 2 GRNs (delivery_score: 100, zero late deliveries, avg_delay_days: 0). Quality score is 100 with perfect 100% quantity accuracy and zero rejected items. Reliability score is 100 based on historical data showing 1 invoice submitted on time and all required compliance certificates attached. However, Titan has a smaller transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) compared to FEMSA's 9 data points, providing less extensive verification of sustained performance. Both suppliers are equally qualified, but FEMSA's larger proven track record provides marginally greater confidence.",
+        "Eagle Peak Technologies Inc. (Medium risk): Eagle Peak Technologies Inc. matches competitors on price at $15.00/unit (price_score: 100) and maintains perfect quality with 100% quantity accuracy and zero rejected items (quality_score: 100). Reliability score is 100 based on historical data with 1 invoice submitted on time and all required compliance certificates attached. However, delivery performance is significantly weaker with a delivery_score of only 35: historical data shows 1 on-time delivery and 1 late delivery across 2 POs, resulting in an average delay of 5 days. This inconsistency in on-time performance, combined with the smallest transaction history (5 data points from 2 POs, 2 GRNs, 1 invoice) and lowest total PO value ($1,571), introduces medium risk. While price and quality are competitive, the delivery reliability concern makes this supplier less preferable than FEMSA or Titan for time-sensitive requirements."
+      ],
+      "per_item_recommendation": []
+    },
+    "quotations_snapshot": [
+      {
+        "quotation_id": "PUR-SQTN-2026-00253",
+        "supplier_id": "\"Titan Industrial Products LLC\"",
+        "supplier": "Titan Industrial Products LLC",
+        "grand_total": 15
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00256",
+        "supplier_id": "FEMSA",
+        "supplier": "FEMSA",
+        "grand_total": 15
+      },
+      {
+        "quotation_id": "PUR-SQTN-2026-00257",
+        "supplier_id": "\"Eagle Peak Technologies Inc.\"",
+        "supplier": "Eagle Peak Technologies Inc.",
+        "grand_total": 15
+      }
+    ]
+  }
+}

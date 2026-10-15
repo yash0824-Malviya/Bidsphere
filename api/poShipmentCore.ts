@@ -63,7 +63,7 @@ export interface PoShipmentRecord {
 
 export interface UpsertPoShipmentInput {
   po_name: string;
-  /** Optional hint only — server always prefers Purchase Order.supplier. */
+  /** Ignored for identity resolution — server uses the exact Purchase Order Link. */
   supplier?: string;
   shipment_status: ShipmentStatus;
   supplier_accepted?: boolean;
@@ -442,10 +442,12 @@ async function findByPoName(
     `resource/${encodeURIComponent(PO_SHIPMENT_DOCTYPE)}?${new URLSearchParams({
       filters: JSON.stringify([["po_name", "=", poName]]),
       fields: JSON.stringify([...LIST_FIELDS]),
-      limit_page_length: "1",
+      limit_page_length: "2",
     }).toString()}`,
   );
   const list = Array.isArray(rows) ? rows : [];
+  if (list.length > 1) throw new PoShipmentError("Multiple shipment records exist for this Purchase Order. Contact Procurement Team to reconcile them before retrying.", 409);
+  if (list[0] && list[0].po_name !== poName) throw new PoShipmentError("The saved shipment does not belong to this Purchase Order.", 409);
   return list[0] ?? null;
 }
 
@@ -453,40 +455,22 @@ async function findByPoName(
 async function resolveSupplierFromPo(
   cfg: ErpAdminConfig,
   poName: string,
-  hint?: string,
-): Promise<string | undefined> {
-  try {
-    const po = await erpFetch<{ supplier?: string; supplier_name?: string }>(
-      cfg,
-      `resource/Purchase%20Order/${encodeURIComponent(poName)}?${new URLSearchParams({
-        fields: JSON.stringify(["name", "supplier", "supplier_name"]),
-      }).toString()}`,
-    );
-    // Some legacy PO rows store Supplier.name wrapped in stray quotes.
-    const fromPo = String(po?.supplier || "")
-      .trim()
-      .replace(/^"+|"+$/g, "")
-      .trim();
-    if (fromPo) return fromPo;
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn("[po-shipment] Could not load PO for supplier resolve:", poName, err);
+): Promise<string> {
+  const po = await erpFetch<{ name?: string; supplier?: string }>(
+    cfg,
+    `resource/Purchase%20Order/${encodeURIComponent(poName)}?${new URLSearchParams({
+      fields: JSON.stringify(["name", "supplier"]),
+    }).toString()}`,
+  );
+  // Supplier.name may legitimately contain literal quotes. Display-name
+  // normalization must never change the ERP Link written to another document.
+  const supplierId = typeof po?.supplier === "string" ? po.supplier : "";
+  if (po?.name !== poName || !supplierId.trim()) {
+    throw new PoShipmentError("The Purchase Order's saved Supplier Link could not be verified. Contact Procurement Team.", 409);
   }
-
-  const candidate = String(hint || "").trim();
-  if (!candidate) return undefined;
-
-  try {
-    await erpFetch(cfg, `resource/Supplier/${encodeURIComponent(candidate)}`);
-    return candidate;
-  } catch {
-    // eslint-disable-next-line no-console
-    console.warn(
-      "[po-shipment] Ignoring invalid supplier Link hint (use PO.supplier):",
-      candidate,
-    );
-    return undefined;
-  }
+  const supplier = await erpFetch<{ name?: string }>(cfg, `resource/Supplier/${encodeURIComponent(supplierId)}`);
+  if (supplier?.name !== supplierId) throw new PoShipmentError("The Purchase Order's Supplier Link does not match the ERPNext Supplier record. Contact Procurement Team.", 409);
+  return supplierId;
 }
 
 export async function getPoShipment(poName: string): Promise<PoShipmentRecord | null> {
@@ -585,7 +569,7 @@ export async function upsertPoShipment(
   const warehouseVisible =
     accepted || ready || input.shipment_status === SHIPMENT_STATUS.ACCEPTED;
 
-  const supplierLink = await resolveSupplierFromPo(cfg, poName, input.supplier);
+  const supplierLink = await resolveSupplierFromPo(cfg, poName);
 
   // Convert ISO-8601 → ERPNext MariaDB-safe formats BEFORE any DB write.
   // Datetime: YYYY-MM-DD HH:mm:ss  |  Date: YYYY-MM-DD
@@ -610,7 +594,7 @@ export async function upsertPoShipment(
     ready_for_grn: ready ? 1 : 0,
     warehouse_visible: warehouseVisible ? 1 : 0,
   };
-  if (supplierLink) body.supplier = supplierLink;
+  body.supplier = supplierLink;
   if (dates.supplier_acceptance_date) {
     body.supplier_acceptance_date = dates.supplier_acceptance_date;
   }
@@ -677,38 +661,17 @@ export async function upsertPoShipment(
     );
   };
 
-  try {
-    const saved = await write(body);
-    // eslint-disable-next-line no-console
-    console.log("[po-shipment] upsert OK", {
-      po_name: poName,
-      name: saved?.name ?? existing?.name,
-      shipment_status: input.shipment_status,
-      ready_for_grn: body.ready_for_grn,
-    });
-    return {
-      ...existing,
-      ...saved,
-      ...body,
-      name: saved?.name ?? existing?.name,
-    } as PoShipmentRecord;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    // Retry without supplier Link if validation failed (bad hint / renamed supplier).
-    if (body.supplier && /Could not find Supplier/i.test(message)) {
-      // eslint-disable-next-line no-console
-      console.warn("[po-shipment] Retrying upsert without supplier Link:", message);
-      const { supplier: _drop, ...withoutSupplier } = body;
-      const saved = await write(withoutSupplier);
-      return {
-        ...existing,
-        ...saved,
-        ...withoutSupplier,
-        name: saved?.name ?? existing?.name,
-      } as PoShipmentRecord;
-    }
-    throw err;
-  }
+  // Never retry by dropping the Supplier Link: that would persist an orphaned
+  // acceptance and falsely report success to the supplier.
+  const saved = await write(body);
+  // eslint-disable-next-line no-console
+  console.log("[po-shipment] upsert OK", {
+    po_name: poName,
+    name: saved?.name ?? existing?.name,
+    shipment_status: input.shipment_status,
+    ready_for_grn: body.ready_for_grn,
+  });
+  return { ...existing, ...saved, ...body, name: saved?.name ?? existing?.name } as PoShipmentRecord;
 }
 
 /** Stamp dispatch datetime in ERPNext format when marking In Transit. */

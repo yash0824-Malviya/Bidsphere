@@ -1,0 +1,132 @@
+{
+  "checked_at": "2026-09-21T07:12:37.827Z",
+  "read_only": true,
+  "identity": {
+    "ok": true,
+    "result": "Administrator"
+  },
+  "installed": {
+    "ok": true,
+    "apps": [
+      {
+        "app_name": "frappe",
+        "app_version": "16.20.0"
+      },
+      {
+        "app_name": "erpnext",
+        "app_version": "16.22.0"
+      }
+    ]
+  },
+  "permissions": [
+    {
+      "doctype": "Request for Quotation",
+      "docname": "PUR-RFQ-2026-00093",
+      "permission": "read",
+      "ok": true,
+      "result": {
+        "has_permission": true
+      }
+    },
+    {
+      "doctype": "Request for Quotation",
+      "docname": "PUR-RFQ-2026-00093",
+      "permission": "write",
+      "ok": true,
+      "result": {
+        "has_permission": true
+      }
+    },
+    {
+      "doctype": "Legal Document Review",
+      "docname": "LDC2026-00024",
+      "permission": "read",
+      "ok": true,
+      "result": {
+        "has_permission": true
+      }
+    },
+    {
+      "doctype": "Legal Document Review",
+      "docname": "LDC2026-00024",
+      "permission": "write",
+      "ok": true,
+      "result": {
+        "has_permission": true
+      }
+    },
+    {
+      "doctype": "Contract Request",
+      "docname": null,
+      "permission": "read",
+      "ok": true,
+      "result": {
+        "has_permission": true
+      }
+    },
+    {
+      "doctype": "Contract Request",
+      "docname": null,
+      "permission": "create",
+      "ok": true,
+      "result": {
+        "has_permission": true
+      }
+    },
+    {
+      "doctype": "Contract Request",
+      "docname": null,
+      "permission": "write",
+      "ok": true,
+      "result": {
+        "has_permission": true
+      }
+    },
+    {
+      "doctype": "Contract",
+      "docname": null,
+      "permission": "read",
+      "ok": true,
+      "result": {
+        "has_permission": true
+      }
+    },
+    {
+      "doctype": "Contract",
+      "docname": null,
+      "permission": "create",
+      "ok": true,
+      "result": {
+        "has_permission": true
+      }
+    },
+    {
+      "doctype": "Contract",
+      "docname": null,
+      "permission": "write",
+      "ok": true,
+      "result": {
+        "has_permission": true
+      }
+    },
+    {
+      "doctype": "File",
+      "docname": null,
+      "permission": "read",
+      "ok": true,
+      "result": {
+        "has_permission": true
+      }
+    },
+    {
+      "doctype": "File",
+      "docname": null,
+      "permission": "create",
+      "ok": true,
+      "result": {
+        "has_permission": true
+      }
+    }
+  ],
+  "limits": "Checks the configured ERP service identity only; app actor RBAC remains independently enforced. No records, roles or permissions were changed."
+}

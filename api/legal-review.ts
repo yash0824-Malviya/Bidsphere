@@ -8,6 +8,14 @@ import {
   resubmitFinanceReview,
   updateLegalDocumentFlags,
   LegalReviewError,
+  recordLegalDocumentViewed,
+  saveLegalChecklist,
+  requestLegalChanges,
+  beginLegalSignature,
+  completeLegalSignature,
+  getLegalReview,
+  verifyLegalDocumentIntegrity,
+  getLegalSignatureEligibility,
 } from "./legalReviewCore.js";
 import {
   RbacError,
@@ -25,6 +33,7 @@ const WORKFLOW_READ_ROLES: AppRole[] = [
   "finance",
   "finance_executive",
   "procurement",
+  "procurement_team",
 ];
 
 /**
@@ -57,8 +66,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         requireRoles(principal, WORKFLOW_READ_ROLES);
         const records = await listWorkflowRecords({
           limit: typeof body.limit === "number" ? body.limit : undefined,
+          excludeInitialClmHeld: principal.role === "legal" || principal.role === "finance",
         });
-        res.status(200).json({ success: true, records });
+        res.status(200).json({ success: true, records: principal.role === "procurement_team"
+          ? records.filter(record => record.review_status === "Approved" && record.finance_status === "Approved" && record.workflow_state === "Completed")
+          : records });
+        return;
+      }
+      case "get": {
+        requireRoles(principal, WORKFLOW_READ_ROLES);
+        const record = await getLegalReview(body.name, principal);
+        res.status(200).json({ success: true, record });
+        return;
+      }
+      case "verify-integrity": {
+        requireRoles(principal, WORKFLOW_READ_ROLES);
+        const result = await verifyLegalDocumentIntegrity(body.name, principal);
+        res.status(200).json({ success: true, ...result });
+        return;
+      }
+      case "signature-eligibility": {
+        requireRoles(principal, LEGAL_REVIEW_ROLES);
+        const result = await getLegalSignatureEligibility(body.name, principal);
+        res.status(200).json({ success: true, ...result });
         return;
       }
       case "create": {
@@ -72,9 +102,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         const record = await decideLegalDocumentReview({
           name: body.name,
           status: "Approved",
-          reviewedBy: body.reviewedBy,
           comments: body.comments,
-        });
+        }, principal);
         res.status(200).json({ success: true, record });
         return;
       }
@@ -83,22 +112,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         const record = await decideLegalDocumentReview({
           name: body.name,
           status: "Rejected",
-          reviewedBy: body.reviewedBy,
           comments: body.comments,
           rejectionReason: body.rejectionReason,
-        });
+        }, principal);
         res.status(200).json({ success: true, record });
         return;
       }
       case "update-flags": {
         requireRoles(principal, LEGAL_REVIEW_ROLES);
-        const record = await updateLegalDocumentFlags(body.name, body.updates ?? {});
+        const record = await updateLegalDocumentFlags(body.name, body.updates ?? {}, principal);
         res.status(200).json({ success: true, record });
         return;
       }
       case "resubmit": {
         requireRoles(principal, ["admin", "legal", "procurement"]);
-        const record = await resubmitLegalReview(body.name, body.resubmittedBy, body.note);
+        const record = await resubmitLegalReview(body.name, principal.email || principal.sub, body.note, principal);
         res.status(200).json({ success: true, record });
         return;
       }
@@ -107,9 +135,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         const record = await decideFinanceReview({
           name: body.name,
           status: "Approved",
-          reviewedBy: body.reviewedBy,
           comments: body.comments,
-        });
+        }, principal);
         res.status(200).json({ success: true, record });
         return;
       }
@@ -118,16 +145,45 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         const record = await decideFinanceReview({
           name: body.name,
           status: "Rejected",
-          reviewedBy: body.reviewedBy,
           comments: body.comments,
           rejectionReason: body.rejectionReason,
-        });
+        }, principal);
         res.status(200).json({ success: true, record });
         return;
       }
       case "finance-resubmit": {
         requireRoles(principal, ["admin", "finance", "procurement"]);
-        const record = await resubmitFinanceReview(body.name, body.resubmittedBy, body.note);
+        const record = await resubmitFinanceReview(body.name, principal.email || principal.sub, body.note, principal);
+        res.status(200).json({ success: true, record });
+        return;
+      }
+      case "document-viewed": {
+        requireRoles(principal, LEGAL_REVIEW_ROLES);
+        const record = await recordLegalDocumentViewed(body.name, body.documentKey, body.hash, principal);
+        res.status(200).json({ success: true, record });
+        return;
+      }
+      case "save-checklist": {
+        requireRoles(principal, LEGAL_REVIEW_ROLES);
+        const record = await saveLegalChecklist(body.name, body.items, principal);
+        res.status(200).json({ success: true, record });
+        return;
+      }
+      case "request-changes": {
+        requireRoles(principal, LEGAL_REVIEW_ROLES);
+        const record = await requestLegalChanges(body.name, body.comments, principal);
+        res.status(200).json({ success: true, record });
+        return;
+      }
+      case "begin-signature": {
+        requireRoles(principal, LEGAL_REVIEW_ROLES);
+        const record = await beginLegalSignature(body.name, body.documentKey, principal);
+        res.status(200).json({ success: true, record });
+        return;
+      }
+      case "complete-signature": {
+        requireRoles(principal, LEGAL_REVIEW_ROLES);
+        const record = await completeLegalSignature(body.name, body.documentKey, body.requestId, body.signature, principal);
         res.status(200).json({ success: true, record });
         return;
       }
@@ -140,8 +196,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       res.status(err.status).json({ success: false, error: err.message });
       return;
     }
-    const status = err instanceof LegalReviewError ? err.status : 500;
-    const message = err instanceof Error ? err.message : "Legal review request failed.";
+    const status = err instanceof LegalReviewError ? err.status : Number((err as { status?: number })?.status) || 500;
+    const message = status >= 500 ? "Unable to save or verify the legal review. Refresh and try again." : err instanceof Error ? err.message : "Legal review request failed.";
     // eslint-disable-next-line no-console
     console.error(`[legal-review] action=${action} FAILED:`, message);
     res.status(status >= 400 && status < 600 ? status : 500).json({ success: false, error: message });

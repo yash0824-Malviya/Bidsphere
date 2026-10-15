@@ -29,6 +29,7 @@ export default function SupplierPortalGuard() {
   const [supplierAuth, setSupplierAuth] = useState<
     "checking" | "ready" | "relogin"
   >("checking");
+  const [hasVerifiedSupplierSession, setHasVerifiedSupplierSession] = useState(false);
 
   useEffect(() => {
     if (!hasHydrated) return;
@@ -64,6 +65,7 @@ export default function SupplierPortalGuard() {
     void ensureSupplierAccessToken().then((result) => {
       if (cancelled) return;
       if (result.ok) {
+        setHasVerifiedSupplierSession(true);
         setSupplierAuth("ready");
         return;
       }
@@ -95,7 +97,7 @@ export default function SupplierPortalGuard() {
     );
   }
 
-  if (supplierAuth === "checking") {
+  if (supplierAuth === "checking" && !hasVerifiedSupplierSession) {
     return (
       <div className="flex min-h-screen w-full items-center justify-center bg-slate-50 text-sm text-neutral-600">
         Verifying supplier session…
@@ -132,10 +134,10 @@ export default function SupplierPortalGuard() {
 
   return (
     <>
-      {erpSupplierId ? (
+      {supplierAuth === "ready" && erpSupplierId ? (
         <LiveAuctionStartedNotifier supplierId={erpSupplierId} />
       ) : null}
-      <Outlet />
+      <Outlet context={{ supplierSessionChecking: supplierAuth === "checking" }} />
     </>
   );
 }

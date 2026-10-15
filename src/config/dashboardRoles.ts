@@ -174,6 +174,12 @@ const PROCUREMENT_TEAM_QUICK_ACTIONS: DashboardQuickAction[] = [
 
 const FINANCE_QUICK_ACTIONS: DashboardQuickAction[] = [
   {
+    id: "finance-approvals",
+    label: "Finance Approvals",
+    to: "/intake/business-cases",
+    icon: ClipboardCheck,
+  },
+  {
     id: "review-vouchers",
     label: "Review Vouchers",
     to: "/p2p/vouchers",
@@ -239,8 +245,8 @@ export const DASHBOARD_BY_ROLE: Record<AppRole, RoleDashboardConfig> = {
     statusLabel: "Redevelopment",
   },
   legal: {
-    title: "Legal Reviewer Dashboard",
-    subtitle: "Review and approve RFQs pending legal clearance",
+    title: "Legal Manager Dashboard",
+    subtitle: "Review supplier documentation, RFQ legal requirements, contracts and electronic signatures.",
     roleLabel: ROLE_LABELS.legal,
     statusLabel: "Legal",
   },

@@ -1,0 +1,42 @@
+[
+  {
+    "origin": "http://127.0.0.1:5175",
+    "url": "/node_modules/.vite/bidsphere/deps/@tanstack_react-query.js?v=27ab95fd",
+    "status": 200
+  },
+  {
+    "origin": "http://127.0.0.1:5175",
+    "url": "/node_modules/.vite/bidsphere/deps/react-dom_client.js?v=f830ce91",
+    "status": 200
+  },
+  {
+    "origin": "http://127.0.0.1:5175",
+    "url": "/node_modules/.vite/bidsphere/deps/react-router-dom.js?v=aaaa6cae",
+    "status": 200
+  },
+  {
+    "origin": "http://127.0.0.1:5175",
+    "url": "/node_modules/.vite/bidsphere/deps/react.js?v=4a1464d0",
+    "status": 200
+  },
+  {
+    "origin": "http://localhost:5175",
+    "url": "/node_modules/.vite/bidsphere/deps/@tanstack_react-query.js?v=27ab95fd",
+    "status": 200
+  },
+  {
+    "origin": "http://localhost:5175",
+    "url": "/node_modules/.vite/bidsphere/deps/react-dom_client.js?v=f830ce91",
+    "status": 200
+  },
+  {
+    "origin": "http://localhost:5175",
+    "url": "/node_modules/.vite/bidsphere/deps/react-router-dom.js?v=aaaa6cae",
+    "status": 200
+  },
+  {
+    "origin": "http://localhost:5175",
+    "url": "/node_modules/.vite/bidsphere/deps/react.js?v=4a1464d0",
+    "status": 200
+  }
+]

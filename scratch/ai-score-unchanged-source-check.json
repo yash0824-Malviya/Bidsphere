@@ -1,0 +1,34 @@
+[
+  {
+    "doctype": "Request for Quotation",
+    "name": "PUR-RFQ-2026-00091",
+    "unchanged_modified": true,
+    "unchanged_status": true,
+    "unchanged_docstatus": true,
+    "unchanged_items": true
+  },
+  {
+    "doctype": "Supplier Quotation",
+    "name": "PUR-SQTN-2026-00253",
+    "unchanged_modified": true,
+    "unchanged_status": true,
+    "unchanged_docstatus": true,
+    "unchanged_items": true
+  },
+  {
+    "doctype": "Supplier Quotation",
+    "name": "PUR-SQTN-2026-00256",
+    "unchanged_modified": true,
+    "unchanged_status": true,
+    "unchanged_docstatus": true,
+    "unchanged_items": true
+  },
+  {
+    "doctype": "Supplier Quotation",
+    "name": "PUR-SQTN-2026-00257",
+    "unchanged_modified": true,
+    "unchanged_status": true,
+    "unchanged_docstatus": true,
+    "unchanged_items": true
+  }
+]

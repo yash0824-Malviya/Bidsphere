@@ -67,7 +67,7 @@ const USER_DISPLAY_MAP: Record<string, { name: string; role: string }> = {
   "finance@netlink.com":      { name: "Finance Team",         role: "Finance Manager" },
   "procurement@netlink.com":  { name: "Procurement Manager",  role: "Procurement Manager" },
   "warehouse@netlink.com":    { name: "Warehouse",            role: "Warehouse Manager" },
-  "legal@netlink.com":        { name: "Legal Reviewer",       role: "Legal Reviewer" },
+  "legal@netlink.com":        { name: "Legal Manager",         role: "Legal Manager" },
   "admin@netlink.com":        { name: "Admin",                role: "Administrator" },
   "administrator":            { name: "System",               role: "System" },
 };

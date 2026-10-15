@@ -119,6 +119,78 @@ function memoryDependencies(
 }
 
 describe("createRfqFromEcrCore", () => {
+  it("creates and replays RFQ only after extended Business Case, final ECR approval and Yes decision", async () => {
+    const { deps, getRfqs } = memoryDependencies({
+      ecr_workflow_version: "extended_v1", select_pxfp: "Procurement Decision", status: "Procurement Decision",
+      ecr_business_case: JSON.stringify({ ecr_reference: "ECR-2026-100001", status: "Approved", procurement_status: "Approved", finance_status: "Not Required", quality_status: "Not Required" }),
+      rfq_required: "Yes", rfq_decision_reason: "Competitive sourcing",
+      approval_requirements: [
+        { approval_role: "Program Manager", required: 1, status: "Approved" },
+        { approval_role: "Procurement Manager", required: 1, status: "Pending" },
+      ],
+    });
+    const first = await createRfqFromEcrCore({ ecrName: "ECR-2026-100001", principal: principal() }, deps);
+    expect(first.created).toBe(true);
+    expect(first.approvalRequirements).toEqual(expect.arrayContaining([expect.objectContaining({ comments: expect.stringContaining("[Stage: Procurement Decision]") })]));
+    const second = await createRfqFromEcrCore({ ecrName: "ECR-2026-100001", principal: principal() }, deps);
+    expect(second.replayed).toBe(true);
+    expect(getRfqs()).toHaveLength(1);
+  });
+
+  it.each([
+    { select_pxfp: "RFQ Pending" },
+    { rfq_required: "No" },
+    { ecr_business_case: "" },
+    { approval_requirements: [{ approval_role: "Procurement Manager", required: 1, status: "Pending" }] },
+  ])("blocks extended RFQ bypass before any RFQ mutation: %j", async (override) => {
+    const { deps } = memoryDependencies({
+      ecr_workflow_version: "extended_v1", select_pxfp: "Procurement Decision", status: "Procurement Decision",
+      ecr_business_case: JSON.stringify({ ecr_reference: "ECR-2026-100001", status: "Approved", procurement_status: "Approved" }),
+      rfq_required: "Yes", rfq_decision_reason: "Need sourcing",
+      approval_requirements: [{ approval_role: "Program Manager", status: "Approved" }, { approval_role: "Procurement Manager", required: 1, status: "Pending" }],
+      ...override,
+    });
+    await expect(createRfqFromEcrCore({ ecrName: "ECR-2026-100001", principal: principal() }, deps)).rejects.toMatchObject({ status: 409 });
+    expect(deps.createRfq).not.toHaveBeenCalled();
+    expect(deps.commitEcrRfqTransition).not.toHaveBeenCalled();
+  });
+
+  it("creates and replays RFQ only after extended Business Case, final ECR approval and Yes decision", async () => {
+    const { deps, getRfqs } = memoryDependencies({
+      ecr_workflow_version: "extended_v1", select_pxfp: "Procurement Decision", status: "Procurement Decision",
+      ecr_business_case: JSON.stringify({ ecr_reference: "ECR-2026-100001", status: "Approved", procurement_status: "Approved", finance_status: "Not Required", quality_status: "Not Required" }),
+      rfq_required: "Yes", rfq_decision_reason: "Competitive sourcing",
+      approval_requirements: [
+        { approval_role: "Program Manager", required: 1, status: "Approved" },
+        { approval_role: "Procurement Manager", required: 1, status: "Pending" },
+      ],
+    });
+    const first = await createRfqFromEcrCore({ ecrName: "ECR-2026-100001", principal: principal() }, deps);
+    expect(first.created).toBe(true);
+    expect(first.approvalRequirements).toEqual(expect.arrayContaining([expect.objectContaining({ comments: expect.stringContaining("[Stage: Procurement Decision]") })]));
+    const second = await createRfqFromEcrCore({ ecrName: "ECR-2026-100001", principal: principal() }, deps);
+    expect(second.replayed).toBe(true);
+    expect(getRfqs()).toHaveLength(1);
+  });
+
+  it.each([
+    { select_pxfp: "RFQ Pending" },
+    { rfq_required: "No" },
+    { ecr_business_case: "" },
+    { approval_requirements: [{ approval_role: "Procurement Manager", required: 1, status: "Pending" }] },
+  ])("blocks extended RFQ bypass before any RFQ mutation: %j", async (override) => {
+    const { deps } = memoryDependencies({
+      ecr_workflow_version: "extended_v1", select_pxfp: "Procurement Decision", status: "Procurement Decision",
+      ecr_business_case: JSON.stringify({ ecr_reference: "ECR-2026-100001", status: "Approved", procurement_status: "Approved" }),
+      rfq_required: "Yes", rfq_decision_reason: "Need sourcing",
+      approval_requirements: [{ approval_role: "Program Manager", status: "Approved" }, { approval_role: "Procurement Manager", required: 1, status: "Pending" }],
+      ...override,
+    });
+    await expect(createRfqFromEcrCore({ ecrName: "ECR-2026-100001", principal: principal() }, deps)).rejects.toMatchObject({ status: 409 });
+    expect(deps.createRfq).not.toHaveBeenCalled();
+    expect(deps.commitEcrRfqTransition).not.toHaveBeenCalled();
+  });
+
   it("creates an RFQ from trusted ECR details and atomically completes RFQ Pending", async () => {
     const { deps, getEcr } = memoryDependencies();
 

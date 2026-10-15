@@ -22,6 +22,7 @@ import {
   fetchECRSupplierPurchaseOrders,
   fetchECRSupplierRFQs,
   validateECRProcurementSourceItems,
+  validateECRProcurementSelection,
   type ECRProcurementSourceItem,
 } from "./ecrProcurementReferences";
 import { canonicalizeECRProcurementSelectionInput } from "../utils/ecrProcurementValidation";
@@ -230,5 +231,67 @@ describe("ECR procurement references", () => {
       partitem: "LAT-4401",
       source_item_reference: "rfq-line-1",
     });
+  });
+
+  it.each(["SUP-001", ""])("accepts no procurement reference with supplier '%s' and retains supplier part details", async (supplier) => {
+    const part = {
+      partitem: "LAT-4401",
+      current_supplier: "SUP-001",
+      proposed_supplier: "SUP-002",
+      quantity: 10,
+      uom: "Nos",
+      technical_notes: "Updated material grade",
+    };
+    const result = await validateECRProcurementSelection({
+      supplier,
+      referenceType: "None",
+      parts: [part],
+    });
+    expect(result.errors).toEqual({});
+    expect(result.canonicalParts).toEqual([{ ...part, source_reference_type: "" }]);
+    expect(mocks.getRFQ).not.toHaveBeenCalled();
+    expect(mocks.getPurchaseOrder).not.toHaveBeenCalled();
+  });
+
+  it.each(["RFQ", "Purchase Order"] as const)("accepts an existing unsourced row with the old %s Select default", async (sourceType) => {
+    const part = { partitem: "LAT-4401", source_reference_type: sourceType, quantity: 10, uom: "Nos" };
+    const result = await validateECRProcurementSelection({
+      supplier: "SUP-001",
+      referenceType: "None",
+      parts: [part],
+    });
+    expect(result.errors).toEqual({});
+    expect(result.canonicalParts).toEqual([{ ...part, source_reference_type: "" }]);
+    expect(part.source_reference_type).toBe(sourceType);
+  });
+
+  it.each([
+    ["source_document_reference", "PUR-RFQ-1"],
+    ["source_item_reference", "rfq-line-1"],
+    ["source_rfq", "PUR-RFQ-1"],
+    ["source_purchase_order", "PUR-ORD-1"],
+  ])("rejects a real %s with Reference Type None instead of discarding it", async (field, value) => {
+    const part = { partitem: "LAT-4401", source_reference_type: "RFQ" as const, [field]: value };
+    const result = await validateECRProcurementSelection({ supplier: "SUP-001", referenceType: "None", parts: [part] });
+    expect(result.errors["partitem.0"]).toMatch(/source metadata must be empty/i);
+    expect(result.canonicalParts).toEqual([part]);
+    expect(mocks.getRFQ).not.toHaveBeenCalled();
+  });
+
+  it("rejects parent source links when no reference is selected", async () => {
+    const result = await validateECRProcurementSelection({
+      supplier: "SUP-001", referenceType: "None", rfqId: "PUR-RFQ-1", purchaseOrderId: "PUR-ORD-1", parts: [],
+    });
+    expect(result.errors).toEqual({
+      existing_rfq_reference: "RFQ must be empty when Reference Type is None.",
+      existing_purchase_order_reference: "Purchase Order must be empty when Reference Type is None.",
+    });
+  });
+
+  it.each(["RFQ", "Purchase Order"] as const)("rejects a %s reference with missing document metadata", async (referenceType) => {
+    const result = await validateECRProcurementSelection({ supplier: "SUP-001", referenceType, parts: [{ partitem: "LAT-4401" }] });
+    expect(result.errors[referenceType === "RFQ" ? "existing_rfq_reference" : "existing_purchase_order_reference"]).toMatch(/required/i);
+    expect(mocks.getRFQ).not.toHaveBeenCalled();
+    expect(mocks.getPurchaseOrder).not.toHaveBeenCalled();
   });
 });

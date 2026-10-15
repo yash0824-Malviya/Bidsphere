@@ -1,0 +1,20 @@
+{
+  "mode": "check",
+  "operations": [
+    {
+      "kind": "update-custom-field",
+      "doctype": "Contract",
+      "name": "Contract-custom_contract_status",
+      "modified": "2026-09-16 16:09:01.135227",
+      "patch": {
+        "options": "Draft\nUnder Review\nNegotiation\nPending Approval\nApproved\nPending Signature\nExecuted\nActive\nExpired\nTerminated\nClosed\nPending Legal\nPending Finance\nRejected"
+      }
+    }
+  ],
+  "recordMigration": false,
+  "workflowChanges": false,
+  "permissionChanges": false,
+  "defaultChanges": false,
+  "newDoctypes": [],
+  "newRoles": []
+}

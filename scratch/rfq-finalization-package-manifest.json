@@ -1,0 +1,88 @@
+{
+  "created_at": "2026-09-21T07:13:25.055823+00:00",
+  "purpose": "Atomic RFQ award to real CLM Contract Draft and conditional procurement gate",
+  "live_erp_installed": false,
+  "deployment_instructions": "bidsphere_workflows/README.md",
+  "validation": {
+    "production_build": "passed",
+    "full_application_vitest": {
+      "passed": 2312,
+      "failed_preexisting": 4,
+      "skipped": 3
+    },
+    "preexisting_failure_file": "src/api/approvalWorkflow.test.ts",
+    "python_transaction_lifecycle_tests": {
+      "passed": 60,
+      "failed": 0
+    },
+    "dedicated_schema_and_cross_runtime_hash_tests": {
+      "passed": 11,
+      "failed": 0
+    },
+    "additive_award_lifecycle_schema_tests": {
+      "passed": 13,
+      "failed": 0
+    },
+    "limitation": "Portable transaction fixtures; live Bench/MariaDB and authenticated signing acceptance remains required."
+  },
+  "files": [
+    {
+      "path": "bidsphere_workflows/__init__.py",
+      "sha256": "da7b2c1ff4745a275386558f84ff031f9a187825ffa35fc08d077757af41ac7f"
+    },
+    {
+      "path": "bidsphere_workflows/hooks.py",
+      "sha256": "5c70dee09d982ed3d88531802b0c5fc59c5464c39740714ec88e806ab36d55cf"
+    },
+    {
+      "path": "bidsphere_workflows/modules.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "bidsphere_workflows/patches.txt",
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "bidsphere_workflows/rfq_clm.py",
+      "sha256": "96a82a83caa8299ff2cbbb538edd927acf3a8435893270cdb2e1fad9c1a35eac"
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "cc8e2a554be96f133f3a03ba685c9b343a63db480064d5f9a4a6114e9631d0d5"
+    },
+    {
+      "path": "README.md",
+      "sha256": "783b1369033666af15b67aa18eec7b3e600c0616c5841edbdf8e9ac39266665c"
+    },
+    {
+      "path": "register_on_bench.py",
+      "sha256": "951245462a85fc1afd704f3cdfa9f62717b4971f51e7368b2ffebe76f2584e71"
+    },
+    {
+      "path": "tests/contract-hashes.json",
+      "sha256": "f19ba995614b271f1f12076e06168500fd3c3145e6e4741e1a7174b4059561f1"
+    },
+    {
+      "path": "tests/contract-hashes.test.ts",
+      "sha256": "565ae7c58c7594d64fc07ac162ea9f03e469a2555dcfac499ad1288cb9dcf88d"
+    },
+    {
+      "path": "tests/schema.test.mjs",
+      "sha256": "a83db5463975df041380897ead7155b2b9ebce6bb08cf5a72c961389cdd925ff"
+    },
+    {
+      "path": "tests/test_rfq_clm.py",
+      "sha256": "5baec7545984d4a51aa4165540b8329c7c3f119e144cfdff4981c0569d8d28a3"
+    },
+    {
+      "path": "tests/vitest.config.ts",
+      "sha256": "07de2f7ac69797447d46947e4acee3a931d87944854b5fb871652d514ed2675e"
+    },
+    {
+      "path": "vitest.config.mjs",
+      "sha256": "af8b8d58484ba43e51d265c81677a1a9b86c2d53bddff12abcfc6ac54af4cb96"
+    }
+  ],
+  "package": "bidsphere_workflows-rfq-finalization-2026-09-21.zip",
+  "package_sha256": "4d845f4fa27bd95ef70c93f419436a8e10acf4b66abf8a209d1b340277775d79"
+}

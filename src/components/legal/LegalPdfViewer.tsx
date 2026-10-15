@@ -22,7 +22,6 @@ import pdfjsWorkerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import LegalESignModal from "./LegalESignModal";
 import ConfirmDialog from "../ui/ConfirmDialog";
 import {
-  burnTypedSignatureIntoPdf,
   buildLegalSignature,
   fetchPdfBytes,
   newAuditId,
@@ -30,13 +29,16 @@ import {
   resolveEsignBundle,
   sha256Hex,
 } from "../../api/legalEsign";
-import { getFullFileUrl } from "../../api/legalDocsStorage";
-import type { LegalDocumentSet } from "../../api/legalDocs";
+import { getLegalReviewAttachmentUrl } from "../../api/legalAttachment";
+import { beginLegalSignature, recordLegalDocumentViewed, verifyLegalDocumentIntegrity, type LegalDocumentSet } from "../../api/legalDocs";
 import {
   DEFAULT_SIGNATURE_BOX,
   createEmptyEnvelope,
   getDocEnvelope,
   hasLegalSignature,
+  getRequiredLegalDocumentKeys,
+  isLegalDocumentVerified,
+  type LegalDocumentIntegrityStatus,
   type LegalDocKey,
   type LegalEsignBundle,
   type LegalEsignEnvelope,
@@ -58,7 +60,12 @@ interface Props {
   documentKey: LegalDocKey;
   fileUrl: string;
   canSign: boolean;
+  canReview?: boolean;
   readOnly?: boolean;
+  esignDisabledReason?: string;
+  requiredDocuments?: Array<{ key: LegalDocKey; label: string; verified: boolean }>;
+  eligibilityRefreshing?: boolean;
+  onRefreshEligibility?: () => void;
   reviewerFullName: string;
   reviewerId: string;
   esignBundle: LegalEsignBundle | null;
@@ -77,12 +84,22 @@ export default function LegalPdfViewer({
   documentKey,
   fileUrl,
   canSign,
+  canReview = false,
   readOnly,
+  esignDisabledReason,
+  requiredDocuments: suppliedRequiredDocuments,
+  eligibilityRefreshing = false,
+  onRefreshEligibility,
   reviewerFullName,
   reviewerId,
   esignBundle,
   onBundleChange,
 }: Props) {
+  const requiredDocuments = suppliedRequiredDocuments ?? getRequiredLegalDocumentKeys(review).map(key => ({
+    key,
+    label: key === "terms" ? "Master Terms & Conditions" : key === "warranty" ? "Quality & Compliance Warranty" : "Liability Insurance Certificate",
+    verified: isLegalDocumentVerified(review, key),
+  }));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pageCount, setPageCount] = useState(0);
@@ -93,7 +110,10 @@ export default function LegalPdfViewer({
   const [pendingFontId, setPendingFontId] =
     useState<LegalSignatureFontId | null>(null);
   const [saving, setSaving] = useState(false);
-  const [envelope, setEnvelope] = useState<LegalEsignEnvelope | null>(null);
+  const [loadedEnvelope, setEnvelope] = useState<LegalEsignEnvelope | null>(null);
+  const [loadedIntegrity, setIntegrity] = useState<LegalDocumentIntegrityStatus | "Checking">("Checking");
+  const [actualDocumentHash, setActualDocumentHash] = useState<string>();
+  const [integrityMessage, setIntegrityMessage] = useState<string>();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [hoverSig, setHoverSig] = useState(false);
   const [ghost, setGhost] = useState<{
@@ -108,28 +128,47 @@ export default function LegalPdfViewer({
   const pageWrapRefs = useRef<Array<HTMLDivElement | null>>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const paintGenRef = useRef(0);
-  const bundleRef = useRef(esignBundle);
-  useEffect(() => {
-    bundleRef.current = esignBundle;
-  }, [esignBundle]);
+  const renderedReceiptRef = useRef<string | null>(null);
+  const [rendered, setRendered] = useState(false);
 
   const safeFileUrl = String(fileUrl || "").trim();
   const proxyUrl = useMemo(
-    () => (safeFileUrl ? getFullFileUrl(safeFileUrl) : ""),
-    [safeFileUrl],
+    () => getLegalReviewAttachmentUrl(review.name, documentKey, safeFileUrl),
+    [safeFileUrl, review.name, documentKey],
   );
   const documentName =
     safeFileUrl.split("/").pop()?.split("?")[0] || `${documentKey}.pdf`;
   const documentNumber = review.name || review.sq_name || "—";
+  const envelope = getDocEnvelope(esignBundle, documentKey) ?? loadedEnvelope;
+  const sourceHashChanged = Boolean(actualDocumentHash && envelope &&
+    (envelope.documentHash !== actualDocumentHash || (envelope.approvedHash && envelope.approvedHash !== actualDocumentHash)));
+  const integrity = sourceHashChanged ? "Failed" : loadedIntegrity;
   const signed = hasLegalSignature(envelope);
   const locked = Boolean(
-    envelope?.locked || review.review_status !== "Pending",
+    envelope?.locked || review.review_status === "Rejected",
   );
+  const signatureDisabledReason = readOnly
+    ? "You do not have permission to sign this document."
+    : signed ? "Document has already been signed."
+    : locked ? "This document is locked and cannot be signed."
+    : saving ? "Saving signature…"
+    : eligibilityRefreshing ? "Refreshing signing eligibility from ERPNext…"
+    : !canSign ? esignDisabledReason || "Verify all required supplier documents before signing."
+    : loading ? "Loading the current PDF before signing…"
+    : error ? "The current PDF could not be rendered. Reopen the viewer before signing."
+    : !rendered ? "Rendering every PDF page before signing…"
+    : integrity !== "Verified" ? "Document integrity must be verified before signing."
+    : undefined;
+  const signEnabled = !signatureDisabledReason;
   const activeSig: LegalEsignSignature | null =
     (envelope?.signatures ?? []).find(
       (s) =>
         s.role === "legal" && (s.status === "signed" || s.status === "locked"),
     ) ?? null;
+  const receiptOptionsRef = useRef({ canReview, integrity, signed, reviewName: review.name, documentKey, onBundleChange });
+  useEffect(() => {
+    receiptOptionsRef.current = { canReview, integrity, signed, reviewName: review.name, documentKey, onBundleChange };
+  }, [canReview, integrity, signed, review.name, documentKey, onBundleChange]);
 
   const releasePdfDoc = useCallback(async () => {
     const doc = pdfDocRef.current;
@@ -146,11 +185,21 @@ export default function LegalPdfViewer({
   // Load original PDF only — signatures render as an overlay layer.
   useEffect(() => {
     let cancelled = false;
-    canvasRefs.current = [];
-    pageWrapRefs.current = [];
-
     (async () => {
       await releasePdfDoc();
+      if (cancelled) return;
+      setLoading(true);
+      setError(null);
+      setPageCount(0);
+      setEnvelope(null);
+      setActualDocumentHash(undefined);
+      setIntegrity("Checking");
+      setIntegrityMessage(undefined);
+      setRendered(false);
+      renderedReceiptRef.current = null;
+      sourceBytesRef.current = null;
+      canvasRefs.current = [];
+      pageWrapRefs.current = [];
       try {
         if (!safeFileUrl || !proxyUrl) {
           throw new Error("No PDF URL available for this document.");
@@ -161,20 +210,15 @@ export default function LegalPdfViewer({
           documentName: review.name,
           doctype: "Legal Document Review",
           documentKey,
-          attachmentUrl: safeFileUrl,
-          filePath: safeFileUrl,
           fileName: documentName,
           isPrivate: safeFileUrl.includes("/private/files/"),
-          proxyUrl: String(proxyUrl).replace(
-            /access_token=[^&]+/,
-            "access_token=***",
-          ),
         });
 
         const originalBytes = await fetchPdfBytes(proxyUrl);
         if (cancelled) return;
         sourceBytesRef.current = originalBytes.slice(0);
         const hash = await sha256Hex(sourceBytesRef.current);
+        setActualDocumentHash(hash);
 
         const bundle = resolveEsignBundle(
           review.name,
@@ -182,7 +226,7 @@ export default function LegalPdfViewer({
         );
         const fromProp = getDocEnvelope(esignBundle, documentKey);
         const fromResolved = getDocEnvelope(bundle, documentKey);
-        let env =
+        const env =
           fromProp ??
           fromResolved ??
           createEmptyEnvelope({
@@ -193,35 +237,38 @@ export default function LegalPdfViewer({
             documentVersion: "V1",
           });
 
-        if (!env.documentHash) env = { ...env, documentHash: hash };
-        if (!env.reviewStartedAt) {
-          env = {
-            ...env,
-            reviewStartedAt: new Date().toISOString(),
-            auditTrail: [
-              ...env.auditTrail,
-              {
-                id: newAuditId(),
-                action: "review_started",
-                user: reviewerFullName || reviewerId,
-                userId: reviewerId,
-                at: new Date().toISOString(),
-                detail: `Opened ${documentKey} for review`,
-              },
-              {
-                id: newAuditId(),
-                action: "document_opened",
-                user: reviewerFullName || reviewerId,
-                userId: reviewerId,
-                at: new Date().toISOString(),
-              },
-            ],
-          };
+        if (env.documentHash !== hash || (env.approvedHash && env.approvedHash !== hash)) {
+          // Retain the signed evidence and expose tampering; never silently turn
+          // a signed replacement into an apparently fresh unsigned document.
+          setIntegrity("Failed");
+          setIntegrityMessage("The current PDF differs from the stored SHA-256. Signing and downstream approval are blocked.");
+        } else if (hasLegalSignature(env) && review.name) {
+          try {
+            const verification = await verifyLegalDocumentIntegrity(review.name);
+            if (cancelled) return;
+            const result = verification.documents.find(item => item.documentKey === documentKey);
+            setIntegrity(result?.status || "Unavailable");
+            setIntegrityMessage(result?.message);
+          } catch (integrityError) {
+            if (cancelled) return;
+            setIntegrity("Unavailable");
+            setIntegrityMessage(integrityError instanceof Error ? integrityError.message : "Document integrity could not be verified.");
+          }
+        } else {
+          setIntegrity("Verified");
         }
 
-        const doc = await pdfjs.getDocument({
-          data: bytesForPdfJs(sourceBytesRef.current),
-        }).promise;
+        let doc;
+        try {
+          doc = await pdfjs.getDocument({
+            data: bytesForPdfJs(sourceBytesRef.current),
+          }).promise;
+        } catch (pdfErr) {
+          throw Object.assign(
+            new Error("Document loaded, but the PDF viewer could not display it."),
+            { status: 200, cause: pdfErr },
+          );
+        }
         if (cancelled) {
           void doc.destroy();
           return;
@@ -232,25 +279,22 @@ export default function LegalPdfViewer({
         setPageCount(doc.numPages);
         setLoading(false);
 
-        // Persist review-started audit (and local backup) without blocking paint.
-        if (review.name && !fromProp?.reviewStartedAt && !fromResolved?.reviewStartedAt) {
-          void persistEsignEnvelope(review.name, env, {
-            existingBundle: bundle,
-          })
-            .then((updated) => {
-              if (cancelled) return;
-              const nextBundle = resolveEsignBundle(
-                review.name,
-                updated.esign_envelope,
-              );
-              onBundleChange(nextBundle, updated);
-            })
-            .catch(() => {
-              /* local write inside persist still attempted */
-            });
-        }
       } catch (err) {
-        console.error("[LegalPdfViewer] load failed:", err);
+        const status = Number((err as { status?: number })?.status) || undefined;
+        console.error("[LEGAL PDF ACCESS ERROR]", {
+          fileName: documentName,
+          parentDoctype: "Legal Document Review",
+          parentName: review.name,
+          status,
+          response:
+            status === 403
+              ? "Your account does not have permission to view this document."
+              : status === 404
+                ? "Document file could not be found."
+                : err instanceof Error
+                  ? err.message
+                  : "Unable to load document.",
+        });
         if (!cancelled) {
           setError(
             err instanceof Error ? err.message : "Unable to load document.",
@@ -306,14 +350,31 @@ export default function LegalPdfViewer({
           const page = await activeDoc.getPage(i);
           const viewport = page.getViewport({ scale });
           const canvas = canvasRefs.current[i - 1];
-          if (!canvas) continue;
+          if (!canvas) throw new Error("PDF page canvas is unavailable.");
           const ctx = canvas.getContext("2d", { alpha: false });
-          if (!ctx) continue;
+          if (!ctx) throw new Error("PDF page canvas cannot render.");
           canvas.width = Math.floor(viewport.width);
           canvas.height = Math.floor(viewport.height);
           canvas.style.width = `${Math.floor(viewport.width)}px`;
           canvas.style.height = `${Math.floor(viewport.height)}px`;
           await page.render({ canvasContext: ctx, viewport }).promise;
+        }
+        if (cancelled || gen !== paintGenRef.current) return;
+        setRendered(true);
+        const receipt = receiptOptionsRef.current;
+        if (receipt.canReview && receipt.integrity === "Verified" && !receipt.signed && receipt.reviewName && sourceBytesRef.current && !renderedReceiptRef.current) {
+          const hash = await sha256Hex(sourceBytesRef.current);
+          renderedReceiptRef.current = hash;
+          try {
+            const updated = await recordLegalDocumentViewed(receipt.reviewName, receipt.documentKey, hash);
+            if (cancelled || gen !== paintGenRef.current) return;
+            const bundle = resolveEsignBundle(receipt.reviewName, updated.esign_envelope);
+            setEnvelope(getDocEnvelope(bundle, receipt.documentKey));
+            receipt.onBundleChange(bundle, updated);
+          } catch (receiptError) {
+            renderedReceiptRef.current = null;
+            toast.error(receiptError instanceof Error ? receiptError.message : "PDF rendered, but the review receipt was not saved.");
+          }
         }
       } catch (err) {
         console.error("[LegalPdfViewer] paint failed:", err);
@@ -349,60 +410,43 @@ export default function LegalPdfViewer({
     })();
   }, []);
 
-  const handleEsignClick = () => {
-    if (readOnly || locked) {
-      toast.error("This document is locked and cannot be signed.");
+  const handleEsignClick = async () => {
+    if (!signEnabled) {
+      toast.error(signatureDisabledReason || "Signing prerequisites are incomplete.");
       return;
     }
-    if (!canSign) {
-      toast.error("Only Legal Reviewers can sign this document.");
-      return;
-    }
-    if (signed) {
-      toast.error("A signature already exists. Delete it to place a new one.");
-      return;
-    }
-    setModalOpen(true);
+    if (!review.name) return;
+    setSaving(true);
+    try {
+      const updated = await beginLegalSignature(review.name, documentKey);
+      const bundle = resolveEsignBundle(review.name, updated.esign_envelope);
+      setEnvelope(getDocEnvelope(bundle, documentKey));
+      onBundleChange(bundle, updated);
+      setModalOpen(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unable to start signature.");
+    } finally { setSaving(false); }
   };
 
-  const saveEnvelope = async (
-    next: LegalEsignEnvelope,
-    opts?: { burn?: boolean },
-  ) => {
+  const saveEnvelope = async (next: LegalEsignEnvelope) => {
     if (!review.name) throw new Error("Missing Legal Document Review name");
     setSaving(true);
     try {
-      let signedFile:
-        | { bytes: Uint8Array; fileName: string }
-        | undefined;
-      if (opts?.burn && sourceBytesRef.current && next.signatures[0]) {
-        const sig = next.signatures[0];
-        const burned = await burnTypedSignatureIntoPdf(
-          sourceBytesRef.current.slice(0),
-          sig.typedName,
-          "Legal Reviewer",
-          new Date(sig.signedAt),
-          sig.placement,
-        );
-        signedFile = {
-          bytes: burned,
-          fileName: documentName.replace(/\.pdf$/i, "") + "-signed.pdf",
-        };
-      }
-
-      const updated = await persistEsignEnvelope(review.name, next, {
-        signedFile,
-        existingBundle: resolveEsignBundle(
-          review.name,
-          bundleRef.current ?? review.esign_envelope,
-        ),
-      });
+      const updated = await persistEsignEnvelope(review.name, next);
       const bundle = resolveEsignBundle(review.name, updated.esign_envelope);
-      setEnvelope(next);
+      setEnvelope(getDocEnvelope(bundle, documentKey));
       onBundleChange(bundle, updated);
-    } finally {
-      setSaving(false);
-    }
+      setIntegrity("Checking");
+      try {
+        const verification = await verifyLegalDocumentIntegrity(review.name);
+        const result = verification.documents.find(item => item.documentKey === documentKey);
+        setIntegrity(result?.status || "Unavailable");
+        setIntegrityMessage(result?.message);
+      } catch (integrityError) {
+        setIntegrity("Unavailable");
+        setIntegrityMessage(integrityError instanceof Error ? integrityError.message : "Saved signature integrity could not be verified.");
+      }
+    } finally { setSaving(false); }
   };
 
   const placeSignature = async (
@@ -411,7 +455,7 @@ export default function LegalPdfViewer({
     yNorm: number,
   ) => {
     if (!pendingTyped || !pendingFontId || !envelope || !review.name) return;
-    if (signed || locked || readOnly) return;
+    if (!signEnabled) return;
 
     const placement: LegalEsignPlacement = {
       page,
@@ -451,13 +495,12 @@ export default function LegalPdfViewer({
 
     const previous = envelope;
     try {
-      // Update overlay immediately — do not reload/repaint the PDF.
-      setEnvelope(next);
+      // Show success only after the server verifies the persisted artifact.
       setPendingTyped(null);
       setPendingFontId(null);
       setTool("pointer");
       setGhost(null);
-      await saveEnvelope(next, { burn: true });
+      await saveEnvelope(next);
       toast.success("Signature saved.");
     } catch (err) {
       setEnvelope(previous);
@@ -548,11 +591,17 @@ export default function LegalPdfViewer({
             <span>Version {envelope?.documentVersion ?? "V1"}</span>
             {signed ? (
               <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
-                Signed
+                Signed ✓
               </span>
             ) : (
-              <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
-                Pending Signature
+              <span
+                className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                  canSign
+                    ? "border-blue-200 bg-blue-50 text-blue-800"
+                    : "border-amber-200 bg-amber-50 text-amber-800"
+                }`}
+              >
+                {signEnabled ? "Ready for E-Signature" : requiredDocuments.some(document => !document.verified) ? "Verification Pending" : "Signing Not Ready"}
               </span>
             )}
           </div>
@@ -562,7 +611,49 @@ export default function LegalPdfViewer({
               ? ` · ${formatDate(review.submission_date)}`
               : ""}
           </p>
+          {!loading && envelope ? (
+            <div className="mt-2 space-y-1 text-xs">
+              <p className="break-all text-slate-600">SHA-256: <span className="font-mono">{envelope.documentHash}</span></p>
+              <p role={integrity === "Failed" ? "alert" : "status"} className={integrity === "Failed" ? "font-semibold text-rose-700" : integrity === "Verified" ? "font-semibold text-emerald-700" : "text-amber-700"}>
+                Document Integrity: {integrity}{integrity === "Verified" ? " ✓" : ""}
+              </p>
+              {sourceHashChanged ? <p className="text-rose-700">The current PDF differs from the latest stored SHA-256. Reopen the current document; signing is blocked.</p> : integrityMessage ? <p className="text-slate-600">{integrityMessage}</p> : null}
+              {activeSig ? <p className="text-slate-600">Signed By: {activeSig.reviewerName || activeSig.reviewerId} · Signed On: {activeSig.signedAt}</p> : null}
+              <p className="text-slate-500">Typed PDF electronic signature. SHA-256 verifies integrity; it is not a certificate-based digital signature.</p>
+            </div>
+          ) : null}
         </div>
+        <button
+          type="button"
+          disabled={!signEnabled}
+          title={signatureDisabledReason || "Sign the verified supplier document."}
+          onClick={() => void handleEsignClick()}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary-700 px-3 py-2 text-xs font-semibold text-white hover:bg-primary-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+        >
+          <PenLine className="h-4 w-4" />
+          {signed ? "Signed ✓" : "Sign Document"}
+        </button>
+      </div>
+
+      <div className="space-y-2 border-b border-slate-200 bg-slate-50 px-4 py-3 text-xs sm:px-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="font-semibold text-slate-800">Required documents: {requiredDocuments.filter(document => document.verified).length}/{requiredDocuments.length} verified</p>
+          {onRefreshEligibility ? <button type="button" disabled={eligibilityRefreshing} onClick={onRefreshEligibility}
+            className="rounded-md border border-slate-300 bg-white px-2 py-1 font-semibold text-slate-700 disabled:opacity-50">
+            {eligibilityRefreshing ? "Refreshing…" : "Refresh status"}
+          </button> : null}
+        </div>
+        <ul className="flex flex-wrap gap-2" aria-label="Required supplier document verification">
+          {requiredDocuments.map(document => <li key={document.key} className={`rounded-md border px-2 py-1 ${document.verified ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 font-semibold text-amber-900"}`}>
+            {document.label}: {document.verified ? "Verified ✓" : "Verification Pending"}
+          </li>)}
+        </ul>
+        <p role="status" className={signEnabled ? "font-semibold text-emerald-700" : "text-amber-900"}>
+          {signatureDisabledReason || "Sign the verified supplier document."}
+        </p>
+        {requiredDocuments.some(document => !document.verified) ? <p className="font-semibold text-amber-900">
+          Pending: {requiredDocuments.filter(document => !document.verified).map(document => document.label).join(", ")}.
+        </p> : null}
       </div>
 
       <div className="relative flex min-h-[440px] flex-1">
@@ -597,8 +688,8 @@ export default function LegalPdfViewer({
           <div className="my-0.5 h-px bg-slate-200" />
           <ToolbarBtn
             active={tool === "esign-place" || modalOpen}
-            title="E-Sign"
-            disabled={!canSign || locked || signed || saving || readOnly}
+            title={signatureDisabledReason || "Sign the verified supplier document."}
+            disabled={!signEnabled}
             onClick={handleEsignClick}
           >
             <PenLine className="h-4 w-4" />
@@ -625,7 +716,7 @@ export default function LegalPdfViewer({
               {Array.from({ length: pageCount }, (_, i) => {
                 const pageNum = i + 1;
                 const sigOnPage =
-                  activeSig && activeSig.placement.page === pageNum
+                  integrity === "Verified" && activeSig && activeSig.placement.page === pageNum
                     ? activeSig
                     : null;
                 const showGhost =
@@ -762,7 +853,9 @@ export default function LegalPdfViewer({
 
       <LegalESignModal
         open={modalOpen}
+        workflow="rfq"
         defaultFullName={reviewerFullName}
+        confirmationText="I intend to electronically sign the reviewed PDF whose SHA-256 is displayed. SHA-256 is an integrity check, not a digital signature. Finance approval follows completion of all required signatures."
         onClose={() => setModalOpen(false)}
         onContinue={({ typedName, fontId }) => {
           setModalOpen(false);

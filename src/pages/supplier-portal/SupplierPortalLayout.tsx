@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Link, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, Navigate, Outlet, useLocation, useNavigate, useOutletContext } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
-import { Bell, LogOut, Menu, User, X } from "lucide-react";
+import { Menu, X } from "lucide-react";
 
 import { getNotificationsForViewer } from "../../api/notifications";
 import { APP_SUPPLIER_PORTAL } from "../../config/branding";
@@ -15,11 +15,12 @@ import {
   readSupplierSession,
 } from "../../hooks/useSupplierSession";
 import { countUnread } from "../../utils/notificationAccess";
-import SupplierPortalSidebar, {
-  SupplierPortalMobileNav,
-} from "./SupplierPortalSidebar";
+import SupplierPortalSidebar from "./SupplierPortalSidebar";
+import "./SupplierPortalShell.css";
+import SupplierPortalHeaderActions from "./SupplierPortalHeaderActions";
+import "./SupplierPortalHeader.css";
 
-const SUPPLIER_SIDEBAR_WIDTH = 280;
+const SUPPLIER_SIDEBAR_WIDTH = 240;
 
 interface Props {
   /** Optional override — defaults to the active supplier session display name. */
@@ -46,13 +47,6 @@ const LOCKED_PATH_PREFIXES = [
   "/supplier/po/",
 ];
 
-function badgeClass(status?: string) {
-  const s = (status || "").toLowerCase();
-  if (s.includes("approved")) return "bg-emerald-50 text-emerald-700 ring-emerald-200";
-  if (s.includes("reject")) return "bg-rose-50 text-rose-700 ring-rose-200";
-  return "bg-amber-50 text-amber-800 ring-amber-200";
-}
-
 function isLockedPath(pathname: string) {
   return LOCKED_PATH_PREFIXES.some(
     (p) => pathname === p || pathname.startsWith(`${p}/`) || pathname.startsWith(p),
@@ -71,8 +65,11 @@ export default function SupplierPortalLayout({
 }: Props) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const { supplierSessionChecking = false } = useOutletContext<{ supplierSessionChecking?: boolean }>() ?? {};
   const { t } = useTranslation();
   const mainRef = useRef<HTMLElement>(null);
+  const mobileNavRef = useRef<HTMLDivElement>(null);
+  const mobileNavToggleRef = useRef<HTMLButtonElement>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   useDocumentTitle();
 
@@ -89,6 +86,45 @@ export default function SupplierPortalLayout({
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = prev;
+    };
+  }, [mobileNavOpen]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const drawer = mobileNavRef.current;
+    const toggle = mobileNavToggleRef.current;
+    const focusable = () => Array.from(
+      drawer?.querySelectorAll<HTMLElement>('a[href], button:not([disabled])') ?? [],
+    ).filter((element) => element.getClientRects().length > 0);
+    focusable()[0]?.focus();
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMobileNavOpen(false);
+      }
+      if (event.key === "Tab") {
+        const elements = focusable();
+        const first = elements[0];
+        const last = elements[elements.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+    }
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const closeOnDesktop = () => {
+      if (desktop.matches) setMobileNavOpen(false);
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    desktop.addEventListener("change", closeOnDesktop);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      desktop.removeEventListener("change", closeOnDesktop);
+      toggle?.focus();
     };
   }, [mobileNavOpen]);
 
@@ -130,7 +166,7 @@ export default function SupplierPortalLayout({
         role: "supplier",
         supplierId: erpSupplierId,
       }),
-    enabled: !!erpSupplierId,
+    enabled: !!erpSupplierId && !supplierSessionChecking,
     refetchInterval: 5_000,
     staleTime: 2_000,
   });
@@ -146,10 +182,14 @@ export default function SupplierPortalLayout({
       <Navigate to="/supplier/locked" replace state={{ title: "Module" }} />
     ) : null;
 
-  const content = lockedRedirect ?? children ?? <Outlet />;
+  const content = supplierSessionChecking ? (
+    <div role="status" className="flex min-h-[40vh] items-center justify-center text-sm text-neutral-600">
+      Verifying supplier session…
+    </div>
+  ) : lockedRedirect ?? children ?? <Outlet />;
 
   return (
-    <div className="supplier-portal-layout app-shell min-w-0 bg-[#f8fafb]">
+    <div className="supplier-portal-layout app-shell min-w-0">
       {supplierName ? (
         <SupplierPortalSidebar
           className="hidden lg:flex"
@@ -169,6 +209,11 @@ export default function SupplierPortalLayout({
             onClick={() => setMobileNavOpen(false)}
           />
           <div
+            ref={mobileNavRef}
+            id="supplier-mobile-navigation"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Supplier navigation"
             className={`fixed inset-y-0 left-0 z-50 max-w-[100vw] transform transition-transform duration-300 ease-in-out lg:hidden ${
               mobileNavOpen ? "translate-x-0" : "-translate-x-full"
             }`}
@@ -179,6 +224,7 @@ export default function SupplierPortalLayout({
               statusBadge={statusBadge}
               className="app-drawer-panel shadow-2xl"
               onNavigate={() => setMobileNavOpen(false)}
+              onClose={() => setMobileNavOpen(false)}
             />
           </div>
         </>
@@ -186,22 +232,25 @@ export default function SupplierPortalLayout({
 
       <div
         className={`app-shell-main relative z-[1] transition-[margin,width] duration-300 ease-in-out ${
-          supplierName ? "lg:ml-[280px] lg:w-[calc(100%-280px)]" : "w-full"
+          supplierName
+            ? "lg:ml-[240px] lg:w-[calc(100%-240px)]"
+            : "w-full"
         }`}
       >
-        <header className="relative z-30 shrink-0 bg-white border-b border-neutral-200/80 shadow-sm">
+        <header className="supplier-portal-header relative z-30 shrink-0 bg-white border-b border-neutral-200/80 shadow-sm">
             <div
-              className={`flex min-w-0 items-center justify-between gap-2 px-4 py-3 sm:gap-4 sm:px-5 ${
-                isRfqQuotationPage ? "lg:px-6" : "lg:px-8"
-              }`}
+              className="supplier-portal-header-inner flex min-w-0 items-center justify-between"
             >
-              <div className="flex min-w-0 items-center gap-2">
+              <div className="supplier-portal-header-brand flex min-w-0 items-center gap-2">
                 {supplierName ? (
                   <button
                     type="button"
+                    ref={mobileNavToggleRef}
                     onClick={() => setMobileNavOpen((v) => !v)}
-                    className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50 lg:hidden"
+                    className="supplier-portal-menu-toggle inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50 lg:hidden"
                     aria-label={mobileNavOpen ? "Close navigation" : "Open navigation"}
+                    aria-expanded={mobileNavOpen}
+                    aria-controls="supplier-mobile-navigation"
                   >
                     {mobileNavOpen ? (
                       <X className="h-4 w-4" />
@@ -212,56 +261,23 @@ export default function SupplierPortalLayout({
                 ) : null}
                 <Link
                   to={supplierName ? "/supplier/dashboard" : "/supplier/login"}
-                  className="flex min-w-0 items-center gap-2 lg:hidden"
+                  className="supplier-portal-brand"
                 >
                   <BrandLogo markOnly />
-                  <span className="truncate text-sm font-semibold text-neutral-900">
-                    {APP_SUPPLIER_PORTAL}
+                  <span className="supplier-portal-brand-copy">
+                    <span className="supplier-portal-brand-title">{APP_SUPPLIER_PORTAL}</span>
+                    {supplierName && <span className="supplier-portal-brand-company" title={supplierName}>{supplierName}</span>}
                   </span>
                 </Link>
               </div>
 
               {supplierName ? (
-                <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-3">
-                  <LanguageSwitcher />
-                  <Link
-                    to="/supplier/dashboard"
-                    className="relative rounded-full border border-neutral-200 p-2 text-neutral-500 hover:bg-neutral-50"
-                    aria-label={
-                      unreadCount > 0
-                        ? `Notifications, ${unreadCount} unread`
-                        : "Notifications"
-                    }
-                  >
-                    <Bell className="h-4 w-4" />
-                    {unreadCount > 0 && (
-                      <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary-600 px-1 text-[10px] font-bold leading-none text-white">
-                        {unreadCount > 9 ? "9+" : unreadCount}
-                      </span>
-                    )}
-                  </Link>
-                  {statusBadge && (
-                    <span
-                      className={`hidden rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 ring-inset sm:inline ${badgeClass(statusBadge)}`}
-                    >
-                      {statusBadge}
-                    </span>
-                  )}
-                  <span className="hidden items-center gap-1.5 rounded-full bg-accent-50 px-3 py-1 text-xs font-medium text-accent-700 ring-1 ring-inset ring-accent-200 sm:inline-flex">
-                    <User className="h-3 w-3 shrink-0" />
-                    <span className="max-w-[100px] truncate md:max-w-[140px]">
-                      {supplierName}
-                    </span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleLogout}
-                    className="btn-touch inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-3 py-2 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
-                  >
-                    <LogOut className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">{t("supplierNav.logout")}</span>
-                  </button>
-                </div>
+                <SupplierPortalHeaderActions
+                  supplierName={supplierName}
+                  statusBadge={statusBadge}
+                  unreadCount={unreadCount}
+                  onLogout={handleLogout}
+                />
               ) : (
                 <div className="ml-auto flex items-center gap-2 sm:gap-3">
                   <LanguageSwitcher />
@@ -271,13 +287,11 @@ export default function SupplierPortalLayout({
                 </div>
               )}
             </div>
-            {supplierName ? <SupplierPortalMobileNav unlocked={unlocked} /> : null}
           </header>
 
           <main ref={mainRef} className="app-shell-scroll">
             <PageContainer
               bare={pathname === "/supplier/dashboard" || isRfqQuotationPage}
-              className={isRfqQuotationPage ? "supplier-rfq-page-container" : undefined}
             >
               {content}
             </PageContainer>

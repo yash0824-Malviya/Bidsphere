@@ -66,6 +66,7 @@ export default function SupplierAuctionPage() {
   const queryClient = useQueryClient();
   const [amount, setAmount] = useState("");
   const [itemBids, setItemBids] = useState<Record<string, string>>({});
+  const itemBidSubmittingRef = useRef(false);
   const flashRef = useRef<number | null>(null);
   const [flash, setFlash] = useState(false);
 
@@ -227,20 +228,28 @@ export default function SupplierAuctionPage() {
         },
       });
     },
-    onSuccess: (updated: ReverseBidding) => {
+    onSuccess: async (updated: ReverseBidding) => {
+      // A display poll started before this transaction must not replace its
+      // authoritative response after the bid has been accepted.
+      await queryClient.cancelQueries({ queryKey: ["supplier-auction", name] });
       queryClient.setQueryData(["supplier-auction", name], updated);
       toast.success(t("reverseBidding.itemBidsSubmitted"));
       setItemBids({});
       invalidateAuction();
     },
-    onError: (e: unknown) => {
+    onError: async (e: unknown) => {
       if (e instanceof ReverseBiddingSubmitApiError && e.auction) {
+        await queryClient.cancelQueries({ queryKey: ["supplier-auction", name] });
         queryClient.setQueryData(["supplier-auction", name], e.auction);
       }
       toast.error(
         resolveReverseBidError(e, t("reverseBidding.bidRejected")),
         { id: "reverse-auction-bid-error", duration: 12000 },
       );
+      invalidateAuction();
+    },
+    onSettled: () => {
+      itemBidSubmittingRef.current = false;
     },
   });
 
@@ -550,7 +559,11 @@ export default function SupplierAuctionPage() {
                   anyItemInvalid ||
                   biddingFrozen
                 }
-                onClick={() => itemBid.mutate(enteredItemBids)}
+                onClick={() => {
+                  if (itemBidSubmittingRef.current || itemBid.isPending) return;
+                  itemBidSubmittingRef.current = true;
+                  itemBid.mutate(enteredItemBids);
+                }}
               >
                 <Gavel className="h-4 w-4" />
                 {itemBid.isPending

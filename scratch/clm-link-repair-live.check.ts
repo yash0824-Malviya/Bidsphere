@@ -1,0 +1,47 @@
+import { it, expect } from 'vitest';
+import { readFile, writeFile } from 'node:fs/promises';
+import { createEcrSchemaErpClient } from '../scripts/ecr-schema-erp-client.mjs';
+import { createClmDependencies, clmErpRequest } from '../api/clmErp';
+import { parseClmData } from '../api/clmCore';
+import { verifyPurchaseOrderContractLink, getPurchaseOrderContract } from '../api/clmPurchaseOrderLink';
+import { readClmPdf } from '../api/clmSignature';
+createEcrSchemaErpClient();
+it('repairs only the existing shipment supplier link with authoritative IDs',async()=>{
+ const deps=createClmDependencies();
+ const before=JSON.parse(await readFile('scratch/clm-link-repair-before.json','utf8'));
+ const [contract,po,shipment]=await Promise.all([deps.load('Contract','CON-2026-00001'),deps.load('Purchase Order','PUR-ORD-2026-00028'),deps.load('PO Shipment','gaqipgvp1u')]);
+ await verifyPurchaseOrderContractLink(po,contract,deps);
+ expect(shipment.po_name).toBe(po.name);
+ const supplier=await deps.load('Supplier',String(po.supplier));
+ expect(supplier.name).toBe(po.supplier);
+ const data=parseClmData(contract.custom_clm_data);
+ expect(data.supplier_po_acceptance).toMatchObject({contract:contract.name,purchase_order:po.name,supplier:po.supplier,status:'Accepted'});
+ const signature=data.signatures.find(row=>row.party==='supplier')!;
+ expect(signature.acceptance_id).toBe(data.supplier_po_acceptance?.id);
+ await readClmPdf(contract,signature);
+ await readClmPdf(contract,data.signatures.find(row=>row.party==='inteva')!);
+ expect(Number(shipment.supplier_accepted)).toBe(1);
+ expect(Date.parse(String(shipment.supplier_acceptance_date).replace(' ','T'))).toBeGreaterThanOrEqual(Date.parse(signature.at.replace(' ','T')));
+ let changed=false;
+ if(shipment.supplier!==po.supplier){
+  expect(shipment.supplier==null||shipment.supplier==='').toBe(true);
+  expect(shipment.modified).toBe(before.shipments[0].modified);
+  expect(process.env.CLM_LINK_REPAIR).toBe('1');
+  await clmErpRequest('POST','method/frappe.client.save',{doc:{...shipment,doctype:'PO Shipment',supplier:po.supplier}},{preservePayload:true});
+  changed=true;
+ }
+ const saved=await deps.load('PO Shipment','gaqipgvp1u');
+ expect(saved.supplier).toBe(po.supplier);
+ const empty=(value:unknown)=>value==null||value===''?null:value;
+ for(const key of ['name','po_name','shipment_status','supplier_accepted','supplier_acceptance_date','expected_delivery_date','vehicle_number','tracking_number','shipping_notes','dispatch_date','updated_by','ready_for_grn','warehouse_visible']) expect(empty(saved[key]),key).toEqual(empty(before.shipments[0][key]));
+ const fresh=await deps.load('Contract',String(contract.name));
+ expect(fresh.custom_clm_data).toBe(before.contract.custom_clm_data);
+ const principal={typ:'supplier' as const,supplier:String(po.supplier),sub:String(po.supplier),iat:1,exp:Number.MAX_SAFE_INTEGER};
+ const result=await getPurchaseOrderContract(principal,String(po.name),deps);
+ expect(result.contract?.name).toBe('CON-2026-00001');
+ expect(result.contract?.supplier_workflow).toMatchObject({acceptance_status:'Accepted',signature_status:'Signed',po_acceptance_status:'Accepted',current_stage:'Existing PO Processing'});
+ expect((await deps.list('Contract',[['custom_rfq','=','PUR-RFQ-2026-00104']])).map(row=>row.name)).toEqual(['CON-2026-00001']);
+ expect((await deps.list('Purchase Order',[['custom_clm_contract','=','CON-2026-00001']])).map(row=>row.name)).toEqual(['PUR-ORD-2026-00028']);
+ expect((await deps.list('PO Shipment',[['po_name','=',po.name]])).map(row=>row.name)).toEqual(['gaqipgvp1u']);
+ await writeFile('scratch/clm-link-repair-verified.json',JSON.stringify({changed_since_baseline:before.shipments[0].supplier!==saved.supplier,written_this_run:changed,shipment:saved.name,supplier_id:saved.supplier,supplier_name:supplier.supplier_name,contract:contract.name,purchase_order:po.name,workflow:result.contract?.supplier_workflow,contract_history:'unchanged',signature_files:'hash verified',contracts:1,purchase_orders:1,shipments:1,at:new Date().toISOString()},null,2));
+},120000);

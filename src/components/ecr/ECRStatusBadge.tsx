@@ -3,7 +3,7 @@ import {
   getECRHighLevelStatus,
   type ECRHighLevelStatus,
 } from "../../config/ecrRoles";
-import type { ECRStatus } from "../../types/erpnext";
+import type { ECRStatus, EngineeringChangeRequest } from "../../types/erpnext";
 
 const STYLES: Record<string, string> = {
   Unknown: "border-neutral-300 bg-neutral-50 text-neutral-600",
@@ -12,6 +12,15 @@ const STYLES: Record<string, string> = {
   "Engineering Review": "border-blue-200 bg-blue-50 text-blue-700",
   "Procurement Review": "border-sky-200 bg-sky-50 text-sky-700",
   "RFQ Pending": "border-cyan-200 bg-cyan-50 text-cyan-700",
+  "Technical Approved": "border-emerald-200 bg-emerald-50 text-emerald-700",
+  "Business Case Preparation": "border-amber-200 bg-amber-50 text-amber-700",
+  "Business Case Submitted": "border-blue-200 bg-blue-50 text-blue-700",
+  "Finance Review": "border-indigo-200 bg-indigo-50 text-indigo-700",
+  "Procurement BC Review": "border-sky-200 bg-sky-50 text-sky-700",
+  "Business Case Approved": "border-emerald-200 bg-emerald-50 text-emerald-700",
+  "Final ECR Approval": "border-violet-200 bg-violet-50 text-violet-700",
+  "ECR Approved": "border-emerald-200 bg-emerald-50 text-emerald-700",
+  "Procurement Decision": "border-cyan-200 bg-cyan-50 text-cyan-700",
   "Operations Review": "border-orange-200 bg-orange-50 text-orange-700",
   "Quality Review": "border-violet-200 bg-violet-50 text-violet-700",
   "Program Review": "border-indigo-200 bg-indigo-50 text-indigo-700",
@@ -34,15 +43,17 @@ const STYLES: Record<string, string> = {
 export default function ECRStatusBadge({
   status,
   isHighLevel = false,
+  ecr,
 }: {
   status?: ECRStatus | ECRHighLevelStatus | string | null;
   isHighLevel?: boolean;
+  ecr?: Partial<EngineeringChangeRequest> | null;
 }) {
   const displayValue = isHighLevel
-    ? getECRHighLevelStatus(status)
+    ? getECRHighLevelStatus(status, ecr)
     : status && STYLES[status]
       ? status
-      : canonicalECRStage(status);
+      : canonicalECRStage(status, ecr);
 
   return (
     <span

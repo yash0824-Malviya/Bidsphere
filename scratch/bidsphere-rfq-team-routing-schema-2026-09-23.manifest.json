@@ -1,0 +1,9 @@
+{
+  "created_at": "2026-09-23T07:58:09.232012+00:00",
+  "purpose": "Existing RFQ CLM app: persisted Procurement Team routing, separate Contract creation, idempotency, sequential review",
+  "live_deployment_performed": false,
+  "files": 13,
+  "package": "C:\\Users\\VICTUS\\Desktop\\Netlink @7\\Bidsphere\\scratch\\bidsphere-rfq-team-routing-schema-2026-09-23.zip",
+  "sha256": "a9eb9bc7ebd2956ee7044aaf9f2b4ef8a548b86d9c7aecc9ed809a6f027e60b3",
+  "verified": true
+}

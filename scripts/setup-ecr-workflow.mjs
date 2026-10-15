@@ -851,6 +851,10 @@ async function reconcileExistingEcrs() {
 async function main() {
   const WF_NAME = "ECR Approval Workflow";
   console.log(`\n=== ECR Workflow Setup ===\n`);
+  const installedMeta = await api("GET", `/api/resource/DocType/${encodeURIComponent(ECR_DOCTYPE_NAME)}`);
+  if (installedMeta.fields?.some((field) => field.fieldname === "ecr_workflow_version")) {
+    throw new Error("Extended ECR schema is installed. Use setup-ecr-extended-workflow.mjs; the legacy reconciler must not rewrite extended ECR states or approval history.");
+  }
   // Fail before changing workflow metadata when the canonical ECR schema has
   // not been installed, avoiding a half-applied clean-environment migration.
   const requiredFields = await requireDocFields([

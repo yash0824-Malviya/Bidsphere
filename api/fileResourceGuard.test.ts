@@ -320,6 +320,13 @@ describe("File resource authorization", () => {
       file,
       loadDocument: ecrLoader(),
     })).resolves.toBeUndefined();
+    for (const role of ["finance", "quality", "program_manager"] as const) {
+      await expect(authorizePersistedFileRead({
+        principal: internal(role),
+        file: { ...file, attached_to_field: "supporting_documents" },
+        loadDocument: ecrLoader(),
+      })).resolves.toBeUndefined();
+    }
     await expect(authorizePersistedFileRead({
       principal: internal("engineer", "other@netlink.com"),
       file,

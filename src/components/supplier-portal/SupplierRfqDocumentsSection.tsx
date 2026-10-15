@@ -101,8 +101,8 @@ export function DocumentPreviewModal({
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const downloadHref = useMemo(
-    () => supplierRfqDocumentHref(doc.fileUrl, rfqName, erpSupplierId),
-    [doc.fileUrl, erpSupplierId, rfqName],
+    () => supplierRfqDocumentHref(doc.fileUrl, rfqName, erpSupplierId, doc.id),
+    [doc.fileUrl, doc.id, erpSupplierId, rfqName],
   );
 
   useEffect(() => {
@@ -128,6 +128,7 @@ export function DocumentPreviewModal({
           rfqName,
           erpSupplierId,
           fileName: doc.fileName,
+          fileId: doc.id,
         });
         if (cancelled) return;
 
@@ -172,7 +173,7 @@ export function DocumentPreviewModal({
         objectUrlRef.current = null;
       }
     };
-  }, [doc.fileUrl, doc.fileName, doc.fileType, erpSupplierId, kind, rfqName]);
+  }, [doc.fileUrl, doc.fileName, doc.fileType, doc.id, erpSupplierId, kind, rfqName]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -343,6 +344,7 @@ export default function SupplierRfqDocumentsSection({
                 doc.fileUrl,
                 rfqName,
                 erpSupplierId,
+                doc.id,
               );
               const downloadOnly = isSupplierRfqDownloadOnly(doc.fileName, doc.fileType);
               const canPreview =

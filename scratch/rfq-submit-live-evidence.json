@@ -1,0 +1,63 @@
+{
+  "checked_at": "2026-09-24T17:54:10.285Z",
+  "mode": "Real ERP persistence and actual native RFQ submission; same shared gateway routing hook; actual integration identity. Browser role checks reported separately.",
+  "cases": [
+    {
+      "decision": "Yes",
+      "rfq": "PUR-RFQ-2026-00101",
+      "draft_request_count": 0,
+      "request": "CTRQ-2026-0003",
+      "workflow": {
+        "phase": "procurement_team",
+        "status": "Pending",
+        "stage": "Procurement",
+        "owner": "Procurement Team",
+        "ownerRole": "procurement_team",
+        "assignedRole": "procurement_team",
+        "instruction": "Procurement Team must review this request and create the Contract before Legal Review begins.",
+        "initialRequest": true,
+        "contractRequired": "Yes",
+        "department": "Production - NSGAI",
+        "requester": "Administrator",
+        "supplier": "",
+        "assignedUser": "",
+        "rfq": "PUR-RFQ-2026-00101",
+        "award": "",
+        "createdBy": "Administrator",
+        "createdAt": "2026-09-24 23:24:11",
+        "purchaseOrder": ""
+      },
+      "same_id_on_submit_replay": true,
+      "docstatus": 1,
+      "rfq_status": "Submitted",
+      "request_count": 1,
+      "contract_count": 0,
+      "passed": true
+    },
+    {
+      "decision": "No",
+      "rfq": "PUR-RFQ-2026-00102",
+      "draft_request_count": 0,
+      "docstatus": 1,
+      "rfq_status": "Submitted",
+      "request_count": 0,
+      "contract_count": 0,
+      "passed": true
+    }
+  ],
+  "corrected": {
+    "rfq": "PUR-RFQ-2026-00099",
+    "rfq_status": "Draft",
+    "request": "CTRQ-2026-0002",
+    "native_request_status": "Draft",
+    "workflow": {
+      "version": 1,
+      "phase": "awaiting_rfq_submission",
+      "assigned_role": "procurement_team",
+      "status": "Draft-originated",
+      "current_stage": "Awaiting RFQ Submission"
+    },
+    "terms_and_history_preserved": true,
+    "active_pending": false
+  }
+}

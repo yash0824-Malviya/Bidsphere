@@ -33,6 +33,7 @@ import {
   getFullFileUrl,
   openErpFileInBrowser,
 } from "../../api/legalDocsStorage";
+import { fetchRfpResponseAttachmentBlob, isRfpResponseAttachmentUrl } from "../../api/rfpResponseAttachment";
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorkerSrc;
 
@@ -73,6 +74,7 @@ function detectKind(fileName: string): PreviewKind {
 async function fetchPreviewBlob(fileUrl: string): Promise<Blob> {
   const raw = String(fileUrl || "").trim();
   if (!raw) throw new Error("No file URL available.");
+  if (isRfpResponseAttachmentUrl(raw)) return fetchRfpResponseAttachmentBlob(raw);
 
   if (raw.startsWith("data:")) {
     const res = await fetch(raw);

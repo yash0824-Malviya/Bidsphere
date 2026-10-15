@@ -1,147 +1,59 @@
 import { useEffect, useMemo } from "react";
-import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import type { LucideIcon } from "lucide-react";
-import {
-  AlertTriangle,
-  Ban,
-  CheckCircle2,
-  ClipboardCheck,
-  Clock,
-  DollarSign,
-  FileSearch,
-  FileText,
-  Package,
-  ShoppingCart,
-  Timer,
-  TrendingDown,
-  UserPlus,
-  Users,
-} from "lucide-react";
-
-import {
-  fetchOperationalHealthErpCounts,
-  fetchProcurementDashboardKpis,
-  fetchProcurementSecondaryAnalytics,
-  type DashboardPoLite,
-  type DashboardRfqLite,
-} from "../../api/dashboard";
-import { fetchECRList } from "../../api/ecr";
+import { RefreshCw } from "lucide-react";
+import { fetchProcurementDashboardKpis, fetchProcurementSecondaryAnalytics } from "../../api/dashboard";
 import { dashPerfLog, timedDashApi } from "../../api/dashboardPerf";
-import {
-  fetchProcurementActionCenterCounts,
-  logDashboardWidget,
-} from "../../api/procurementDashboardTruth";
 import { fetchProcurementAnalytics } from "../../api/procurementAnalytics";
-import { getExactCount } from "../../api/erpnext";
+import { fetchECRList } from "../../api/ecr";
+import { fetchRfqListKpis } from "../../api/rfqListKpiData";
+import { getSuppliers } from "../../api/supplier";
+import { getRfiStats } from "../../api/rfi";
+import { getRfpStats } from "../../api/rfp";
+import { getReverseBiddingStats, listReverseBiddingsPaged } from "../../api/reverseBidding";
+import { getOnboardingStats, listOnboardings } from "../../api/supplierOnboarding";
+import { fetchBusinessCases } from "../../api/businessIntake";
+import { getPurchaseOrders } from "../../api/purchasing";
+import { getBudgetDashboard } from "../../api/budgetDashboard";
 import { DASHBOARD_QUERY_OPTIONS } from "../../api/queryPresets";
+import { useProcurementBadges } from "../../hooks/useProcurementBadges";
+import { getECRCurrentStage, isECRActionableForRole, getECRListActionLabel, getECRListActionRoute } from "../../config/ecrQueues";
+import { fetchProcurementQueue, getLinkedRfqName } from "../../api/materialRequestWorkflow";
+import { getRFQsPaged } from "../../api/sourcing";
+import { isMrOverdue, differenceInCalendarDays } from "../../utils/materialRequestProcurementStatus";
+import { normalizeWorkflowStatus } from "../../types/materialRequestWorkflow";
+import { formatDate, formatCurrencyCompact } from "../../utils/format";
 import {
-  getFinancePendingReviews,
-  getLegalDocsByStatus,
-} from "../../api/legalDocs";
-import { getRFQNamesWithPO } from "../../api/purchasing";
-import { getSupplierPerformance } from "../../api/supplierPerformance";
-import { getWorkflowStages } from "../../api/admin";
-import {
-  getQuoteCountsForRFQs,
-  getSupplierCountsForRFQs,
-} from "../../api/sourcing";
-import { PROCUREMENT_DASHBOARD_LINKS } from "../../config/procurementDashboardLinks";
-import { formatRfqOwnerLabel } from "../../config/roles";
-import {
-  buildOperationalHealthCards,
-  buildProcurementInsights,
-  buildSupplierPerformanceBars,
-  computeAverageSupplierScore,
-  computeEnterpriseRfqPipeline,
   computeMonthlyPoSpend,
-  computePoYtdSpend,
-  topSuppliersByPoSpend,
-  type OperationalHealthLevel,
-  type SupplierOverviewMetrics,
+  buildBucketedCategorySpend,
+  PROCUREMENT_SPEND_CATEGORY_COLORS,
 } from "../../utils/procurementExecutiveMetrics";
-import { formatCurrencyCompact, formatDate } from "../../utils/format";
-import { deriveProcurementDashboardEcrMetrics } from "../../utils/procurementDashboardEcrMetrics";
-import DashboardWidgetError from "./DashboardWidgetError";
-import DashboardKpiCard, {
-  DashboardKpiGrid,
-  DashboardKpiSkeleton,
-  type DashboardKpiTrend,
-} from "./DashboardKpiCard";
-import ProcurementExecutiveCharts from "./ProcurementExecutiveCharts";
-import ExecutiveInsightsPanel from "./ExecutiveInsightsPanel";
-import StatusBadge from "../StatusBadge";
-import { Skeleton } from "../Skeleton";
+
+import ProcurementOverviewKpis, { type OverviewKpiCounts } from "./ProcurementOverviewKpis";
+import MyActionsSection from "./MyActionsSection";
+import ProcurementPipelineSection, { type Pipeline6StageCounts } from "./ProcurementPipelineSection";
+import MaterialRequestsSummarySection from "./MaterialRequestsSummarySection";
+import BusinessCasesAndEcrSection from "./BusinessCasesAndEcrSection";
+import RfqManagementSummarySection from "./RfqManagementSummarySection";
+import RfiRfpAndReverseBiddingSection from "./RfiRfpAndReverseBiddingSection";
+import SupplierManagementSummarySection from "./SupplierManagementSummarySection";
+import SpendAndFinanceSection from "./SpendAndFinanceSection";
+import PurchaseOrdersMonitoringSection from "./PurchaseOrdersMonitoringSection";
+import RfqStatusPipelineCard, { type StageData } from "./RfqStatusPipelineCard";
+import UrgentOverdueTable, { type UrgentItem } from "./UrgentOverdueTable";
+import RecentProcurementActivitySection, { type ActivityRow } from "./RecentProcurementActivitySection";
 
 interface Props {
-  greetingName: string;
+  greetingName?: string;
 }
 
-const ICON_TONE: Record<string, string> = {
-  spend: "bg-[#EEF3FA] text-[#1F3A6D]",
-  rfqs: "bg-[#EEF3FA] text-[#1F3A6D]",
-  quotes: "bg-[#FFF7ED] text-[#C2410C]",
-  approvals: "bg-[#FEF2F2] text-[#B91C1C]",
-  suppliers: "bg-[#EEF3FA] text-[#1F3A6D]",
-  pos: "bg-[#ECFDF5] text-[#047857]",
-  cycle: "bg-[#EEF3FA] text-[#1F3A6D]",
-  savings: "bg-[#ECFDF5] text-[#047857]",
-};
-
-const PANEL =
-  "flex h-full min-h-[320px] flex-col overflow-hidden rounded-lg border border-[#E5E7EB] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)]";
-
-const HEALTH_ICON: Record<string, LucideIcon> = {
-  "overdue-rfqs": Clock,
-  "expiring-contracts": FileText,
-  "high-risk": AlertTriangle,
-  onboarding: UserPlus,
-  "late-deliveries": Package,
-  blocked: Ban,
-};
-
-const HEALTH_TONE: Record<
-  OperationalHealthLevel,
-  { icon: string; value: string; caption: string; border: string }
-> = {
-  ok: {
-    icon: "bg-emerald-50 text-emerald-700",
-    value: "text-[#1E293B]",
-    caption: "text-emerald-700",
-    border: "border-l-emerald-500",
-  },
-  warning: {
-    icon: "bg-amber-50 text-amber-700",
-    value: "text-amber-800",
-    caption: "text-amber-700",
-    border: "border-l-amber-500",
-  },
-  critical: {
-    icon: "bg-rose-50 text-rose-700",
-    value: "text-rose-800",
-    caption: "text-rose-700",
-    border: "border-l-rose-500",
-  },
-  unavailable: {
-    icon: "bg-slate-100 text-slate-500",
-    value: "text-slate-400",
-    caption: "text-slate-500",
-    border: "border-l-slate-300",
-  },
-};
-
-function timeGreeting(): string {
-  const h = new Date().getHours();
-  if (h < 12) return "Good Morning";
-  if (h < 17) return "Good Afternoon";
-  return "Good Evening";
-}
-
-export default function ProcurementDashboard({ greetingName }: Props) {
+export default function ProcurementDashboard({ greetingName = "Procurement Manager" }: Props) {
   useEffect(() => {
-    dashPerfLog("Dashboard mounted");
+    dashPerfLog("Procurement Dashboard mounted");
   }, []);
 
+  const badges = useProcurementBadges();
+
+  // 1. KPI & Analytics Queries
   const kpisQuery = useQuery({
     queryKey: ["procurement-dashboard-kpis"],
     queryFn: () =>
@@ -151,36 +63,96 @@ export default function ProcurementDashboard({ greetingName }: Props) {
     ...DASHBOARD_QUERY_OPTIONS,
   });
 
-  const ecrSummaryQuery = useQuery({
-    queryKey: ["ecr-dashboard", "procurement", "all"],
-    queryFn: () => fetchECRList({ limit: 300 }),
-    staleTime: 30_000,
+  const rfqKpisQuery = useQuery({
+    queryKey: ["rfq-list-kpis-dashboard"],
+    queryFn: () => fetchRfqListKpis(),
+    ...DASHBOARD_QUERY_OPTIONS,
   });
 
-  const ecrMetrics = useMemo(
-    () =>
-      ecrSummaryQuery.data
-        ? deriveProcurementDashboardEcrMetrics(ecrSummaryQuery.data)
-        : null,
-    [ecrSummaryQuery.data],
-  );
+  const rfqListQuery = useQuery({
+    queryKey: ["procurement-dashboard-rfq-list"],
+    queryFn: () => getRFQsPaged({ page: 1, pageSize: 50, order_by: "modified desc" }),
+    ...DASHBOARD_QUERY_OPTIONS,
+  });
 
-  useEffect(() => {
-    if (kpisQuery.isSuccess && kpisQuery.data) {
-      dashPerfLog("KPI cards ready (interactive)", {
-        fromCache: kpisQuery.isFetched && !kpisQuery.isFetching,
+  const mrQuery = useQuery({
+    queryKey: ["mr-procurement-queue", { includeWithRfq: true }],
+    queryFn: () => fetchProcurementQueue({ includeWithRfq: true }),
+    ...DASHBOARD_QUERY_OPTIONS,
+  });
+
+  const bcQuery = useQuery({
+    queryKey: ["procurement-dashboard-business-cases"],
+    queryFn: () => fetchBusinessCases(),
+    ...DASHBOARD_QUERY_OPTIONS,
+  });
+
+  const ecrQuery = useQuery({
+    queryKey: ["ecr-urgent-dashboard-list"],
+    queryFn: () => fetchECRList({ limit: 100 }),
+    ...DASHBOARD_QUERY_OPTIONS,
+  });
+
+  const rfiStatsQuery = useQuery({
+    queryKey: ["rfi-stats-dashboard"],
+    queryFn: () => getRfiStats(),
+    ...DASHBOARD_QUERY_OPTIONS,
+  });
+
+  const rfpStatsQuery = useQuery({
+    queryKey: ["rfp-stats-dashboard"],
+    queryFn: () => getRfpStats(),
+    ...DASHBOARD_QUERY_OPTIONS,
+  });
+
+  const rbStatsQuery = useQuery({
+    queryKey: ["reverse-bidding-stats-dashboard"],
+    queryFn: () => getReverseBiddingStats(),
+    ...DASHBOARD_QUERY_OPTIONS,
+  });
+
+  const rbListQuery = useQuery({
+    queryKey: ["reverse-biddings-dashboard-list"],
+    queryFn: () => listReverseBiddingsPaged({ page: 1, pageSize: 10 }),
+    ...DASHBOARD_QUERY_OPTIONS,
+  });
+
+  const suppliersQuery = useQuery({
+    queryKey: ["procurement-dashboard-suppliers-count"],
+    queryFn: async () => {
+      const list = await getSuppliers({
+        filters: [["disabled", "=", 0]],
+        fields: ["name", "disabled"],
+        limit_page_length: 500,
       });
-      logDashboardWidget("Action Center · Pending Quotations", {
-        value: kpisQuery.data.pendingQuotations,
-        source: "procurement-dashboard-kpis (truth)",
-      });
-    }
-  }, [
-    kpisQuery.isSuccess,
-    kpisQuery.data,
-    kpisQuery.isFetched,
-    kpisQuery.isFetching,
-  ]);
+      return list.length;
+    },
+    ...DASHBOARD_QUERY_OPTIONS,
+  });
+
+  const onboardingStatsQuery = useQuery({
+    queryKey: ["onboarding-stats-dashboard"],
+    queryFn: () => getOnboardingStats(),
+    ...DASHBOARD_QUERY_OPTIONS,
+  });
+
+  const onboardingListQuery = useQuery({
+    queryKey: ["onboarding-list-dashboard"],
+    queryFn: () => listOnboardings(),
+    ...DASHBOARD_QUERY_OPTIONS,
+  });
+
+  const poQuery = useQuery({
+    queryKey: ["procurement-dashboard-pos"],
+    queryFn: () => getPurchaseOrders({ limit_page_length: 100 }),
+    ...DASHBOARD_QUERY_OPTIONS,
+  });
+
+  const budgetQuery = useQuery({
+    queryKey: ["procurement-dashboard-budget"],
+    queryFn: () => getBudgetDashboard({ maxBudgets: 8 }),
+    ...DASHBOARD_QUERY_OPTIONS,
+  });
 
   const analyticsQuery = useQuery({
     queryKey: ["procurement-dashboard-charts"],
@@ -200,775 +172,594 @@ export default function ProcurementDashboard({ greetingName }: Props) {
     ...DASHBOARD_QUERY_OPTIONS,
   });
 
-  const approvalCountsQuery = useQuery({
-    queryKey: ["procurement-dashboard-approval-counts"],
-    queryFn: async () => {
-      const [legal, finance] = await Promise.all([
-        getLegalDocsByStatus({ status: "Pending", limit: 200 }),
-        getFinancePendingReviews(200),
-      ]);
-      return {
-        legalPending: legal.length,
-        financePending: finance.length,
-      };
-    },
-    ...DASHBOARD_QUERY_OPTIONS,
+  const currentDate = new Date().toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
   });
 
-  const actionCenterQuery = useQuery({
-    queryKey: ["procurement-dashboard-action-center"],
-    queryFn: () => fetchProcurementActionCenterCounts(),
-    ...DASHBOARD_QUERY_OPTIONS,
-  });
+  // 1. Overview KPIs
+  const ytdSpendVal = kpisQuery.data?.ytdSpend;
+  const totalSpendDisplay =
+    ytdSpendVal != null ? formatCurrencyCompact(ytdSpendVal) : null;
 
-  const totalSuppliersQuery = useQuery({
-    queryKey: ["procurement-dashboard-total-suppliers"],
-    queryFn: () => getExactCount("Supplier"),
-    ...DASHBOARD_QUERY_OPTIONS,
-  });
+  const activeRfqsCount = rfqKpisQuery.data
+    ? rfqKpisQuery.data.total - rfqKpisQuery.data.closed
+    : kpisQuery.data?.openRfqs ?? null;
 
-  const newSuppliersMonthQuery = useQuery({
-    queryKey: ["procurement-dashboard-new-suppliers-month"],
-    queryFn: () => {
-      const start = new Date();
-      start.setDate(1);
-      const from = start.toISOString().slice(0, 10);
-      return getExactCount("Supplier", [["creation", ">=", `${from} 00:00:00`]]);
-    },
-    ...DASHBOARD_QUERY_OPTIONS,
-  });
+  const suppliersCount =
+    suppliersQuery.data ?? kpisQuery.data?.activeSuppliers ?? null;
 
-  const submittedPosQuery = useQuery({
-    queryKey: ["procurement-dashboard-submitted-pos"],
-    queryFn: () => getExactCount("Purchase Order", [["docstatus", "=", 1]]),
-    ...DASHBOARD_QUERY_OPTIONS,
-  });
-
-  const healthErpQuery = useQuery({
-    queryKey: ["procurement-dashboard-operational-health"],
-    queryFn: () =>
-      timedDashApi("Dashboard API (operational health)", () =>
-        fetchOperationalHealthErpCounts(),
-      ),
-    ...DASHBOARD_QUERY_OPTIONS,
-  });
-
-  const kpis = kpisQuery.data;
-  const analytics = analyticsQuery.data;
-  const procAnalytics = procAnalyticsQuery.data;
-  const legalPending = approvalCountsQuery.data?.legalPending ?? 0;
-  const financePending = approvalCountsQuery.data?.financePending ?? 0;
-  const pendingApprovals = legalPending + financePending;
-
-  const poSamples = useMemo(
-    () => analytics?.poSamples ?? [],
-    [analytics?.poSamples],
-  );
-  const recentRfqs = useMemo(
-    () => analytics?.recentRfqs ?? [],
-    [analytics?.recentRfqs],
-  );
-  const recentPos = useMemo(
-    () => analytics?.recentPos ?? [],
-    [analytics?.recentPos],
-  );
-
-  const poSpend = useMemo(() => computePoYtdSpend(poSamples), [poSamples]);
-  const monthlySpend = useMemo(
-    () => computeMonthlyPoSpend(poSamples),
-    [poSamples],
-  );
-  const rfqNames = useMemo(
-    () => recentRfqs.map((r) => r.name).filter(Boolean),
-    [recentRfqs],
-  );
-
-  const quoteCountsQuery = useQuery({
-    queryKey: ["procurement-dashboard-quote-counts", rfqNames],
-    enabled: rfqNames.length > 0,
-    ...DASHBOARD_QUERY_OPTIONS,
-    queryFn: () => getQuoteCountsForRFQs(rfqNames),
-  });
-
-  const supplierCountsQuery = useQuery({
-    queryKey: ["procurement-dashboard-supplier-counts", rfqNames],
-    enabled: rfqNames.length > 0,
-    ...DASHBOARD_QUERY_OPTIONS,
-    queryFn: () => getSupplierCountsForRFQs(rfqNames),
-  });
-
-  const poLinksQuery = useQuery({
-    queryKey: ["procurement-dashboard-po-links", rfqNames],
-    enabled: rfqNames.length > 0,
-    ...DASHBOARD_QUERY_OPTIONS,
-    queryFn: () => getRFQNamesWithPO(rfqNames),
-  });
-
-  // Candidate pool by spend; chart ranks Top 5 by Overall Supplier Score.
-  const topSpendSuppliers = useMemo(
-    () => topSuppliersByPoSpend(poSamples, 25),
-    [poSamples],
-  );
-
-  const supplierPerfQuery = useQuery({
-    queryKey: [
-      "procurement-dashboard-supplier-perf",
-      topSpendSuppliers.map((s) => s.supplier),
-    ],
-    enabled: topSpendSuppliers.length > 0,
-    ...DASHBOARD_QUERY_OPTIONS,
-    queryFn: () =>
-      getSupplierPerformance(topSpendSuppliers.map((s) => s.supplier)),
-  });
-
-  const rankedSuppliers = useMemo(
-    () =>
-      buildSupplierPerformanceBars(
-        topSpendSuppliers,
-        supplierPerfQuery.data ?? {},
-        25,
-      ),
-    [topSpendSuppliers, supplierPerfQuery.data],
-  );
-
-  const highRiskSuppliers = useMemo(
-    () => rankedSuppliers.filter((s) => s.score > 0 && s.score < 60).length,
-    [rankedSuppliers],
-  );
-
-  const supplierOverview: SupplierOverviewMetrics = useMemo(
-    () => ({
-      totalSuppliers: totalSuppliersQuery.data ?? 0,
-      activeSuppliers: kpis?.activeSuppliers ?? 0,
-      newThisMonth: newSuppliersMonthQuery.data ?? 0,
-      highRiskSuppliers,
-      averageScore: computeAverageSupplierScore(rankedSuppliers),
-    }),
-    [
-      totalSuppliersQuery.data,
-      kpis?.activeSuppliers,
-      newSuppliersMonthQuery.data,
-      highRiskSuppliers,
-      rankedSuppliers,
-    ],
-  );
-
-  const supplierOverviewLoading =
-    (totalSuppliersQuery.isPending && totalSuppliersQuery.data == null) ||
-    (kpisQuery.isPending && !kpis) ||
-    (supplierPerfQuery.isPending &&
-      topSpendSuppliers.length > 0 &&
-      !supplierPerfQuery.data);
-
-  const workflowStages = useMemo(() => getWorkflowStages(), []);
-
-  const rfqPipeline = useMemo(
-    () =>
-      computeEnterpriseRfqPipeline({
-        rfqs: recentRfqs,
-        openRfqsCount: kpis?.openRfqs ?? 0,
-        quoteCounts: quoteCountsQuery.data,
-        supplierCounts: supplierCountsQuery.data,
-        rfqsWithPo: poLinksQuery.data,
-        legalPending,
-        financePending,
-        workflowStages,
-      }),
-    [
-      recentRfqs,
-      kpis?.openRfqs,
-      quoteCountsQuery.data,
-      supplierCountsQuery.data,
-      poLinksQuery.data,
-      legalPending,
-      financePending,
-      workflowStages,
-    ],
-  );
-
-  const overdueRfqsCount = healthErpQuery.isError
-    ? null
-    : (healthErpQuery.data?.overdueRfqs ?? null);
-  const lateDeliveriesCount = healthErpQuery.isError
-    ? null
-    : (healthErpQuery.data?.lateDeliveries ?? null);
-  const blockedSuppliersCount = healthErpQuery.isError
-    ? null
-    : (healthErpQuery.data?.blockedSuppliers ?? null);
-
-  const highRiskCount: number | null = supplierPerfQuery.isError
-    ? null
-    : highRiskSuppliers;
-
-  const pendingOnboardingCount: number | null = actionCenterQuery.isError
-    ? null
-    : (actionCenterQuery.data?.suppliersWaitingApproval ?? 0);
-
-  const healthCards = useMemo(
-    () =>
-      buildOperationalHealthCards({
-        overdueRfqs: overdueRfqsCount,
-        // Contracts DocType is not connected — never fake a zero.
-        expiringContracts: null,
-        highRiskSuppliers: highRiskCount,
-        pendingOnboarding: pendingOnboardingCount,
-        lateDeliveries: lateDeliveriesCount,
-        blockedSuppliers: blockedSuppliersCount,
-      }),
-    [
-      overdueRfqsCount,
-      highRiskCount,
-      pendingOnboardingCount,
-      lateDeliveriesCount,
-      blockedSuppliersCount,
-    ],
-  );
-
-  const healthLoading =
-    (healthErpQuery.isPending && !healthErpQuery.data) ||
-    (actionCenterQuery.isPending && actionCenterQuery.data == null) ||
-    (topSpendSuppliers.length > 0 &&
-      supplierPerfQuery.isPending &&
-      !supplierPerfQuery.data);
-
-  const insights = useMemo(
-    () =>
-      buildProcurementInsights({
-        openRfqs: kpis?.openRfqs ?? 0,
-        overdueRfqs: overdueRfqsCount ?? 0,
-        momSpendPct: poSpend.momPct,
-        lateDeliveries: lateDeliveriesCount ?? 0,
-        highRiskSuppliers: highRiskCount ?? 0,
-        costSavings: procAnalytics?.costSavings,
-        budgetUtilisation: procAnalytics?.budgetUtilisation,
-        topRiskSupplier: rankedSuppliers.find((s) => s.score > 0 && s.score < 60)
-          ?.supplier,
-      }),
-    [
-      kpis?.openRfqs,
-      overdueRfqsCount,
-      poSpend.momPct,
-      lateDeliveriesCount,
-      highRiskCount,
-      procAnalytics,
-      rankedSuppliers,
-    ],
-  );
-
-  const spendTrend: DashboardKpiTrend | undefined =
-    poSpend.momPct != null
-      ? { pct: poSpend.momPct, label: "vs last month" }
-      : undefined;
-
-  const savingsValue = procAnalytics?.costSavings?.available
-    ? procAnalytics.costSavings.value
+  const openRfiCount = rfiStatsQuery.data
+    ? rfiStatsQuery.data.published + rfiStatsQuery.data.underReview
     : null;
-  const savingsPct =
-    savingsValue != null && poSpend.ytdSpend > 0
-      ? (savingsValue / poSpend.ytdSpend) * 100
-      : null;
+  const openRfpCount = rfpStatsQuery.data
+    ? rfpStatsQuery.data.published + rfpStatsQuery.data.underReview
+    : null;
 
-  const cycleDays = procAnalytics?.rfqTurnaround?.value;
-  const cycleDisplay = procAnalytics?.rfqTurnaround?.available
-    ? procAnalytics.rfqTurnaround.display
-    : "—";
+  const pendingBcApprovals = useMemo(() => {
+    return (
+      bcQuery.data?.filter((c) => {
+        const st = (c.workflow_status || (c as { status?: string }).status || "").toLowerCase();
+        return st.includes("pending") || st.includes("review") || st.includes("submitted");
+      }).length ?? 0
+    );
+  }, [bcQuery.data]);
 
-  const pendingOnboarding =
-    actionCenterQuery.data?.suppliersWaitingApproval ?? 0;
+  const overviewCounts: OverviewKpiCounts = {
+    materialRequests: mrQuery.data?.length ?? 0,
+    businessCases: bcQuery.data?.length ?? 0,
+    ecrs: ecrQuery.data?.length ?? 0,
+    activeRfqs: activeRfqsCount,
+    openRfi: openRfiCount,
+    openRfp: openRfpCount,
+    reverseBids: rbStatsQuery.data?.live ?? 0,
+    suppliers: suppliersCount,
+    supplierOnboarding: onboardingStatsQuery.data?.pending_review ?? 0,
+    purchaseOrders: poQuery.data?.length ?? 0,
+    totalSpend: totalSpendDisplay,
+    pendingApprovals: (badges.quotesAwaitingEvaluation || 0) + pendingBcApprovals,
+  };
 
-  const executiveKpis: Array<{
-    key: string;
-    label: string;
-    value: string;
-    context: string;
-    icon: LucideIcon;
-    to: string;
-    trend?: DashboardKpiTrend;
-  }> = [
-    {
-      key: "spend",
-      label: "Total Spend",
-      value:
-        analyticsQuery.isPending && !analytics
-          ? "—"
-          : formatCurrencyCompact(poSpend.ytdSpend),
-      context: "Year-to-Date Spend",
-      icon: DollarSign,
-      to: PROCUREMENT_DASHBOARD_LINKS.totalSpend,
-      trend: spendTrend,
-    },
-    {
-      key: "rfqs",
-      label: "Active RFQs",
-      value: kpis ? kpis.openRfqs.toLocaleString() : "—",
-      context:
-        (overdueRfqsCount ?? 0) > 0
-          ? `${overdueRfqsCount} overdue`
-          : "Currently open",
-      icon: FileSearch,
-      to: PROCUREMENT_DASHBOARD_LINKS.activeRfqs,
-    },
-    {
-      key: "quotes",
-      label: "Pending Quotes",
-      value: kpis ? kpis.pendingQuotations.toLocaleString() : "—",
-      context: "Awaiting review",
-      icon: FileText,
-      to: PROCUREMENT_DASHBOARD_LINKS.pendingQuotes,
-    },
-    {
-      key: "approvals",
-      label: "Pending Approvals",
-      value: approvalCountsQuery.isPending
-        ? "—"
-        : pendingApprovals.toLocaleString(),
-      context: pendingApprovals > 0 ? "Legal & Finance" : "Up to date",
-      icon: ClipboardCheck,
-      to: PROCUREMENT_DASHBOARD_LINKS.pendingApprovals,
-    },
-    {
-      key: "suppliers",
-      label: "Suppliers",
-      value: kpis ? kpis.activeSuppliers.toLocaleString() : "—",
-      context:
-        pendingOnboarding > 0
-          ? `${pendingOnboarding} pending onboarding`
-          : "Active suppliers",
-      icon: Users,
-      to: PROCUREMENT_DASHBOARD_LINKS.activeSuppliers,
-    },
-    {
-      key: "pos",
-      label: "Purchase Orders",
-      value: submittedPosQuery.isPending
-        ? "—"
-        : (submittedPosQuery.data ?? 0).toLocaleString(),
-      context:
-        poSpend.releasedToday > 0
-          ? `${poSpend.releasedToday} released today`
-          : "Submitted Purchase Orders",
-      icon: ShoppingCart,
-      to: PROCUREMENT_DASHBOARD_LINKS.purchaseOrders,
-    },
-    {
-      key: "cycle",
-      label: "Avg RFQ Cycle",
-      value:
-        cycleDays != null && Number.isFinite(cycleDays)
-          ? `${Number(cycleDays).toFixed(1)} Days`
-          : cycleDisplay,
-      context: "Target under 7 days",
-      icon: Timer,
-      to: PROCUREMENT_DASHBOARD_LINKS.averageRfqCycle,
-    },
-    {
-      key: "savings",
-      label: "Cost Savings",
-      value:
-        savingsValue != null ? formatCurrencyCompact(savingsValue) : "—",
-      context:
-        savingsPct != null
-          ? `${savingsPct.toFixed(1)}% vs budget`
-          : "vs Budget",
-      icon: TrendingDown,
-      to: PROCUREMENT_DASHBOARD_LINKS.costSavings,
-    },
-  ];
+  // 2. My Actions Counts
+  const mrsAwaitingAction = useMemo(() => {
+    if (!mrQuery.data) return 0;
+    return mrQuery.data.filter((m) => {
+      const wfStatus = normalizeWorkflowStatus(m.custom_bidsphere_status || m.status);
+      const hasRFQ = Boolean(m.custom_linked_rfq) || wfStatus === "RFQ Created";
+      return !hasRFQ && wfStatus !== "Completed" && wfStatus !== "Cancelled";
+    }).length;
+  }, [mrQuery.data]);
 
-  const ecrMetricUnavailable = ecrSummaryQuery.isError && !ecrMetrics;
-  const ecrMetricCards: Array<{
-    key: string;
-    label: string;
-    value: number | string;
-    subtitle: string;
-    icon: LucideIcon;
-    to: string;
-    iconClassName: string;
-  }> = [
-    {
-      key: "rfq-pending-creation",
-      label: "RFQs Pending Creation",
-      value: ecrMetrics?.rfqsPendingCreation ?? "—",
-      subtitle: ecrMetricUnavailable
-        ? "ECR data unavailable"
-        : "Approved ECRs ready for RFQ",
-      icon: FileSearch,
-      to: PROCUREMENT_DASHBOARD_LINKS.rfqsPendingCreation,
-      iconClassName: "bg-[#FFF7ED] text-[#C2410C]",
-    },
-    {
-      key: "approved-ecr-actions",
-      label: "Approved ECRs Awaiting Action",
-      value: ecrMetrics?.approvedEcrsAwaitingAction ?? "—",
-      subtitle: ecrMetricUnavailable
-        ? "ECR data unavailable"
-        : "In procurement review or RFQ handoff",
-      icon: ClipboardCheck,
-      to: PROCUREMENT_DASHBOARD_LINKS.approvedEcrsAwaitingAction,
-      iconClassName: "bg-[#EEF3FA] text-[#1F3A6D]",
-    },
-    {
-      key: "ecr-rfqs-created",
-      label: "ECR RFQs Created",
-      value: ecrMetrics?.ecrRfqsCreated ?? "—",
-      subtitle: ecrMetricUnavailable
-        ? "ECR data unavailable"
-        : "RFQs created from approved ECRs",
-      icon: CheckCircle2,
-      to: PROCUREMENT_DASHBOARD_LINKS.ecrRfqsCreated,
-      iconClassName: "bg-[#ECFDF5] text-[#047857]",
-    },
-  ];
+  // 3. 6-Stage Management Pipeline Counts
+  const pipelineCounts: Pipeline6StageCounts = useMemo(() => {
+    const rfqs = rfqListQuery.data?.data || [];
+    const evaluationCount =
+      badges.quotesAwaitingEvaluation ||
+      rfqs.filter((r) => r.status === "Evaluation" || r.status === "Supplier Response").length;
+    const supplierSelectionCount = rfqs.filter((r) => r.status === "Supplier Selection").length;
+    const legalCount = rfqs.filter((r) => r.status === "Legal Review").length;
+    const financeCount = rfqs.filter((r) => r.status === "Finance Review").length;
 
-  const chartsLoading = analyticsQuery.isPending && !analytics;
+    return {
+      materialRequests: mrQuery.data?.length ?? 0,
+      businessCases: bcQuery.data?.length ?? 0,
+      ecrs: ecrQuery.data?.length ?? 0,
+      rfqs: rfqKpisQuery.data?.total ?? rfqs.length,
+      rfis: rfiStatsQuery.data?.total ?? 0,
+      rfps: rfpStatsQuery.data?.total ?? 0,
+      reverseBids: rbStatsQuery.data?.total ?? rbListQuery.data?.data?.length ?? 0,
+      supplierResponses: badges.supplierResponses || 0,
+      onboardings: onboardingStatsQuery.data?.total ?? onboardingListQuery.data?.length ?? 0,
+      evaluations: evaluationCount,
+      purchaseOrders: poQuery.data?.length ?? 0,
+      legalReviews: legalCount,
+      financeReviews: financeCount,
+      supplierSelections: supplierSelectionCount,
+      completed: rfqKpisQuery.data?.closed ?? 0,
+    };
+  }, [
+    mrQuery.data,
+    bcQuery.data,
+    ecrQuery.data,
+    rfqKpisQuery.data,
+    rfqListQuery.data,
+    rfiStatsQuery.data,
+    rfpStatsQuery.data,
+    rbStatsQuery.data,
+    rbListQuery.data,
+    badges,
+    onboardingStatsQuery.data,
+    onboardingListQuery.data,
+    poQuery.data,
+  ]);
+
+  // 4. Monthly Spend Trend
+  const monthlySpendData = useMemo(() => {
+    const poSamples = analyticsQuery.data?.poSamples || [];
+    if (poSamples.length === 0) return [];
+    return computeMonthlyPoSpend(poSamples);
+  }, [analyticsQuery.data?.poSamples]);
+
+  // 5. Spend by Category
+  const spendByCategoryData = useMemo(() => {
+    const items = analyticsQuery.data?.invoiceItems || [];
+    if (items.length === 0) return [];
+    const bucketed = buildBucketedCategorySpend(items);
+    return bucketed.map((b) => ({
+      name: b.category,
+      value: Math.round(b.pct),
+      amount: formatCurrencyCompact(b.spend),
+      color:
+        PROCUREMENT_SPEND_CATEGORY_COLORS[
+          b.category as keyof typeof PROCUREMENT_SPEND_CATEGORY_COLORS
+        ] || "#64748B",
+    }));
+  }, [analyticsQuery.data?.invoiceItems]);
+
+  // 6. RFQ Status Pipeline Stages
+  const rfqPipelineStages: StageData[] = useMemo(() => {
+    const recentRfqs = analyticsQuery.data?.recentRfqs || [];
+    if (recentRfqs.length === 0 && !badges.rfqsPendingPublication) {
+      return [];
+    }
+
+    const counts: Record<string, number> = {
+      Draft: badges.rfqsPendingPublication || 0,
+      Published: 0,
+      Responses: badges.supplierResponses || 0,
+      Evaluation: badges.quotesAwaitingEvaluation || 0,
+      Awarded: 0,
+      Closed: 0,
+    };
+
+    for (const r of recentRfqs) {
+      const st = (r.status ?? "").toLowerCase();
+      if (st === "draft") counts.Draft += 1;
+      else if (st === "published" || st === "open" || st === "submitted") counts.Published += 1;
+      else if (st === "responses" || st === "response received") counts.Responses += 1;
+      else if (st === "evaluation" || st === "under evaluation") counts.Evaluation += 1;
+      else if (st === "awarded" || st === "ordered") counts.Awarded += 1;
+      else if (st === "closed") counts.Closed += 1;
+    }
+
+    return [
+      { name: "Draft", count: counts.Draft, color: "#94A3B8" },
+      { name: "Published", count: counts.Published, color: "#1554D1" },
+      { name: "Responses", count: counts.Responses, color: "#2563EB" },
+      { name: "Evaluation", count: counts.Evaluation, color: "#D97706" },
+      { name: "Awarded", count: counts.Awarded, color: "#059669" },
+      { name: "Closed", count: counts.Closed, color: "#475569" },
+    ].filter((s) => s.count > 0);
+  }, [
+    analyticsQuery.data?.recentRfqs,
+    badges.rfqsPendingPublication,
+    badges.supplierResponses,
+    badges.quotesAwaitingEvaluation,
+  ]);
+
+  // 7. Urgent & Overdue Items (All entities)
+  const urgentItems: UrgentItem[] = useMemo(() => {
+    const items: UrgentItem[] = [];
+    const today = new Date();
+
+    // Material Requests
+    if (mrQuery.data && Array.isArray(mrQuery.data)) {
+      for (const mr of mrQuery.data) {
+        const wfStatus = normalizeWorkflowStatus(mr.custom_bidsphere_status || mr.status);
+        const hasRFQ = Boolean(mr.custom_linked_rfq || getLinkedRfqName(mr)) || wfStatus === "RFQ Created";
+        if (hasRFQ || wfStatus === "Completed" || wfStatus === "Cancelled") continue;
+
+        const isOverdue = isMrOverdue(mr.schedule_date, wfStatus, hasRFQ, today);
+        const priority = (mr.custom_priority as "High" | "Medium" | "Low") || "Medium";
+        const daysPast = mr.schedule_date ? differenceInCalendarDays(today, new Date(mr.schedule_date)) : 0;
+
+        if (
+          isOverdue ||
+          priority === "High" ||
+          wfStatus === "Forwarded to Procurement" ||
+          wfStatus === "Procurement Required"
+        ) {
+          const firstItem = mr.items?.[0];
+          const title =
+            mr.remarks?.trim() ||
+            (mr as { custom_remarks?: string }).custom_remarks?.trim() ||
+            (firstItem?.item_name
+              ? `${firstItem.item_name}${mr.items && mr.items.length > 1 ? ` (+${mr.items.length - 1} items)` : ""}`
+              : "Material Request");
+
+          items.push({
+            id: mr.name || "mr",
+            type: "MR",
+            code: mr.name || "MR",
+            title,
+            status: "Awaiting RFQ Creation",
+            statusTone: isOverdue ? "rose" : "amber",
+            priority,
+            dueDate: mr.schedule_date ? formatDate(mr.schedule_date) : "—",
+            overdueText: isOverdue ? `${daysPast} days` : "Action required",
+            isOverdue,
+            assignedTo: mr.custom_requested_by || mr.owner || mr.custom_department || "Department User",
+            actionText: "Create RFQ",
+            actionRoute: `/sourcing/rfq/new?mr=${encodeURIComponent(mr.name || "")}`,
+          });
+        }
+      }
+    }
+
+    // Business Cases
+    if (bcQuery.data && Array.isArray(bcQuery.data)) {
+      for (const bc of bcQuery.data) {
+        const st = (bc.workflow_status || (bc as { status?: string }).status || "").toLowerCase();
+        if (st.includes("pending") || st.includes("review") || st.includes("submitted")) {
+          const bcModified = (bc as { modified?: string }).modified;
+          items.push({
+            id: bc.name || "bc",
+            type: "Approval",
+            code: bc.name || "BC",
+            title: bc.title || "Business Case",
+            status: bc.workflow_status || "Pending Approval",
+            statusTone: "amber",
+            priority: "High",
+            dueDate: bcModified ? formatDate(bcModified) : "—",
+            overdueText: "Review required",
+            isOverdue: false,
+            assignedTo: (bc as { owner?: string }).owner || "Finance / Legal",
+            actionText: "Review",
+            actionRoute: `/intake/business-cases/${encodeURIComponent(bc.name || "")}`,
+          });
+        }
+      }
+    }
+
+    // ECRs
+    if (ecrQuery.data && Array.isArray(ecrQuery.data)) {
+      const awaitingRfq = ecrQuery.data.filter((ecr) => isECRActionableForRole("procurement", ecr));
+
+      for (const ecr of awaitingRfq) {
+        const targetDate = ecr.target_implementation_date;
+        const daysPast = targetDate ? differenceInCalendarDays(today, new Date(targetDate)) : 0;
+        const isOverdue = targetDate ? daysPast > 0 : false;
+        const priority = (ecr.priority as "High" | "Medium" | "Low") || "High";
+
+        items.push({
+          id: ecr.name || "ecr",
+          type: "ECR",
+          code: ecr.name || "ECR",
+          title: ecr.ecr_title || ecr.chnage_description || "Engineering Change Request",
+          status: getECRCurrentStage(ecr.select_pxfp, ecr),
+          statusTone: isOverdue ? "rose" : "amber",
+          priority,
+          dueDate: targetDate ? formatDate(targetDate) : (ecr.modified?.slice(0, 10) || "—"),
+          overdueText: isOverdue ? `${daysPast} days` : "Action required",
+          isOverdue,
+          assignedTo: greetingName || "Procurement Manager",
+          actionText: getECRListActionLabel("procurement", ecr) === "Create RFQ" ? "Create RFQ" : "Review",
+          actionRoute: getECRListActionRoute("procurement", ecr),
+        });
+      }
+    }
+
+    // RFQs & Quotes
+    const rfqs = rfqListQuery.data?.data || analyticsQuery.data?.recentRfqs || [];
+    for (const rfq of rfqs) {
+      const st = rfq.status || "Draft";
+      if (st === "Cancelled" || st === "PO Created" || st === "Closed") continue;
+
+      const deadline = (rfq as { custom_submission_deadline?: string; schedule_date?: string; transaction_date?: string }).custom_submission_deadline || (rfq as { schedule_date?: string }).schedule_date || (rfq as { transaction_date?: string }).transaction_date;
+      const daysPast = deadline ? differenceInCalendarDays(today, new Date(deadline)) : 0;
+      const isOverdue = deadline ? daysPast > 0 : false;
+      const isEvaluation = st === "Evaluation" || st === "Supplier Response" || st === "Supplier Selection";
+      const isDraft = st === "Draft" || st === "Supplier Invitation";
+
+      if (isOverdue || isDraft || isEvaluation) {
+        items.push({
+          id: rfq.name || "rfq",
+          type: isEvaluation ? "Quote" : "RFQ",
+          code: rfq.name || "RFQ",
+          title: (rfq as { title?: string }).title || `RFQ ${rfq.name}`,
+          status: isDraft ? "Draft" : isEvaluation ? "Under Evaluation" : st,
+          statusTone: isOverdue ? "rose" : isDraft ? "slate" : "blue",
+          priority: isOverdue ? "High" : "Medium",
+          dueDate: deadline ? formatDate(deadline) : (rfq.modified?.slice(0, 10) || "—"),
+          overdueText: isOverdue ? `${daysPast} days` : isDraft ? "Draft" : "Under review",
+          isOverdue,
+          assignedTo: (rfq as { owner?: string }).owner || greetingName || "Procurement Manager",
+          actionText: isEvaluation ? "Evaluate Quotes" : "View RFQ",
+          actionRoute: `/sourcing/rfq/${encodeURIComponent(rfq.name || "")}`,
+        });
+      }
+    }
+
+    return items.sort((a, b) => {
+      if (a.isOverdue && !b.isOverdue) return -1;
+      if (!a.isOverdue && b.isOverdue) return 1;
+      if (a.priority === "High" && b.priority !== "High") return -1;
+      if (a.priority !== "High" && b.priority === "High") return 1;
+      return 0;
+    });
+  }, [
+    mrQuery.data,
+    bcQuery.data,
+    ecrQuery.data,
+    rfqListQuery.data,
+    analyticsQuery.data?.recentRfqs,
+    greetingName,
+  ]);
+
+  // 8. Recent Procurement Activity Log (derived chronologically)
+  const recentActivities: ActivityRow[] = useMemo(() => {
+    const list: ActivityRow[] = [];
+
+    // MRs
+    for (const mr of (mrQuery.data || []).slice(0, 4)) {
+      list.push({
+        id: `mr-${mr.name || "mr"}`,
+        dateTime: mr.modified ? formatDate(mr.modified) : "Recent",
+        type: "MR",
+        reference: mr.name || "MR",
+        activity: `Material Request updated (${mr.material_request_type || "Purchase"})`,
+        user: mr.custom_requested_by || mr.owner || "Warehouse",
+        status: normalizeWorkflowStatus(mr.custom_bidsphere_status || mr.status) || "Draft",
+        route: `/material-requests/${encodeURIComponent(mr.name || "")}`,
+      });
+    }
+
+    // Business Cases
+    for (const bc of (bcQuery.data || []).slice(0, 3)) {
+      const bcMod = (bc as { modified?: string }).modified;
+      list.push({
+        id: `bc-${bc.name || "bc"}`,
+        dateTime: bcMod ? formatDate(bcMod) : "Recent",
+        type: "Business Case",
+        reference: bc.name || "BC",
+        activity: `Business Case: ${bc.title || bc.name || "Case"}`,
+        user: (bc as { owner?: string }).owner || "Department Lead",
+        status: bc.workflow_status || "Submitted",
+        route: `/intake/business-cases/${encodeURIComponent(bc.name || "")}`,
+      });
+    }
+
+    // ECRs
+    for (const ecr of (ecrQuery.data || []).slice(0, 3)) {
+      list.push({
+        id: `ecr-${ecr.name || "ecr"}`,
+        dateTime: ecr.modified ? formatDate(ecr.modified) : "Recent",
+        type: "ECR",
+        reference: ecr.name || "ECR",
+        activity: `Engineering Change Request: ${ecr.ecr_title || ecr.name || "ECR"}`,
+        user: ecr.owner || "Engineering",
+        status: ecr.select_pxfp || "Active",
+        route: `/ecr/${encodeURIComponent(ecr.name || "")}`,
+      });
+    }
+
+    // RFQs
+    for (const rfq of (rfqListQuery.data?.data || []).slice(0, 4)) {
+      list.push({
+        id: `rfq-${rfq.name || "rfq"}`,
+        dateTime: rfq.modified ? formatDate(rfq.modified) : "Recent",
+        type: "RFQ",
+        reference: rfq.name || "RFQ",
+        activity: `RFQ stage: ${rfq.status || "Draft"}`,
+        user: rfq.owner || "Procurement Manager",
+        status: rfq.status || "Active",
+        route: `/sourcing/rfq/${encodeURIComponent(rfq.name || "")}`,
+      });
+    }
+
+    // Onboardings
+    for (const ob of (onboardingListQuery.data || []).slice(0, 3)) {
+      list.push({
+        id: `ob-${ob.name || "ob"}`,
+        dateTime: ob.creation ? formatDate(ob.creation) : "Recent",
+        type: "Onboarding",
+        reference: ob.name || "Onboarding",
+        activity: `Supplier onboarding for ${ob.company_name || ob.name || "Vendor"}`,
+        user: ob.created_by_user || "Vendor Admin",
+        status: (ob.status as string) || "Pending",
+        route: `/supplier/onboarding/${encodeURIComponent(ob.name || "")}`,
+      });
+    }
+
+    // Reverse Bids
+    for (const rb of (rbListQuery.data?.data || []).slice(0, 2)) {
+      list.push({
+        id: `rb-${rb.name || "rb"}`,
+        dateTime: rb.modified ? formatDate(rb.modified) : "Recent",
+        type: "Reverse Bid",
+        reference: rb.name || "Auction",
+        activity: `Reverse auction ${rb.auction_status || "Event"}`,
+        user: rb.owner || "Procurement",
+        status: rb.auction_status || "Draft",
+        route: `/reverse-bidding/${encodeURIComponent(rb.name || "")}`,
+      });
+    }
+
+    return list.slice(0, 8);
+  }, [
+    mrQuery.data,
+    bcQuery.data,
+    ecrQuery.data,
+    rfqListQuery.data,
+    onboardingListQuery.data,
+    rbListQuery.data,
+  ]);
+
+  const handleRefreshAll = () => {
+    void kpisQuery.refetch();
+    void rfqKpisQuery.refetch();
+    void rfqListQuery.refetch();
+    void mrQuery.refetch();
+    void bcQuery.refetch();
+    void ecrQuery.refetch();
+    void rfiStatsQuery.refetch();
+    void rfpStatsQuery.refetch();
+    void rbStatsQuery.refetch();
+    void rbListQuery.refetch();
+    void suppliersQuery.refetch();
+    void onboardingStatsQuery.refetch();
+    void onboardingListQuery.refetch();
+    void poQuery.refetch();
+    void budgetQuery.refetch();
+    void analyticsQuery.refetch();
+    void procAnalyticsQuery.refetch();
+  };
+
+  const isAnyFetching =
+    kpisQuery.isFetching ||
+    rfqKpisQuery.isFetching ||
+    rfqListQuery.isFetching ||
+    mrQuery.isFetching ||
+    bcQuery.isFetching ||
+    ecrQuery.isFetching ||
+    suppliersQuery.isFetching;
 
   return (
-    <div className="proc-dash flex w-full flex-col gap-5 bg-[#F8FAFC] pb-2 font-[Inter,ui-sans-serif,system-ui,sans-serif]">
-      <header className="proc-dash-hero rounded-lg border border-[#E5E7EB] bg-white px-5 py-4 shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
-        <h1 className="mb-1 text-2xl font-bold leading-tight tracking-tight text-[#1E293B]">
-          Procurement Manager Dashboard
-        </h1>
-        <p className="text-sm leading-snug text-[#64748B]">
-          {timeGreeting()}, {greetingName || "Procurement Manager"} · Manage approved ECRs, RFQ creation, supplier responses and pending procurement actions.
-        </p>
+    <div className="flex w-full min-w-0 max-w-full flex-col gap-6 bg-[#F5F7FA] font-[Inter,-apple-system,BlinkMacSystemFont,sans-serif] pb-12">
+      {/* 1. TOP HEADER */}
+      <header className="flex flex-col gap-3 rounded-[10px] border border-[#E2E8F0] bg-white px-5 py-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-[24px] font-bold tracking-tight text-[#12213F]">
+            Procurement Manager Dashboard
+          </h1>
+          <p className="mt-0.5 text-[13px] text-[#64748B]">
+            Monitor procurement intake, sourcing, suppliers, approvals, spend and procurement activities across the organization.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <div className="hidden text-right text-[12px] sm:block">
+            <span className="font-semibold text-[#12213F]">{currentDate}</span>
+            <p className="text-[11px] text-[#64748B]">Live Control Tower</p>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleRefreshAll}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[#E2E8F0] bg-white px-3 py-1.5 text-[12px] font-semibold text-[#12213F] transition-colors hover:bg-[#F8FAFC]"
+            title="Refresh dashboard data"
+          >
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${
+                isAnyFetching ? "animate-spin text-[#1554D1]" : "text-[#64748B]"
+              }`}
+            />
+            <span>Refresh</span>
+          </button>
+        </div>
       </header>
 
-      <section aria-labelledby="procurement-ecr-summary-title">
-        <div className="mb-2">
-          <h2
-            id="procurement-ecr-summary-title"
-            className="text-sm font-semibold text-[#1E293B]"
-          >
-            ECR Sourcing Summary
-          </h2>
-        </div>
-        <DashboardKpiGrid columns={3}>
-          {ecrMetricCards.map((card) => (
-            <DashboardKpiCard
-              key={card.key}
-              label={card.label}
-              value={card.value}
-              subtitle={card.subtitle}
-              icon={card.icon}
-              iconClassName={card.iconClassName}
-              to={card.to}
-              loading={ecrSummaryQuery.isPending && !ecrSummaryQuery.data}
-            />
-          ))}
-        </DashboardKpiGrid>
-      </section>
-
-      {kpisQuery.isError ? (
-        <DashboardWidgetError
-          title="Unable to load KPI snapshot"
-          error={kpisQuery.error}
-          onRetry={() => void kpisQuery.refetch()}
-        />
-      ) : kpisQuery.isLoading && !kpis ? (
-        <div className="proc-primary-kpis">
-          <DashboardKpiSkeleton count={8} columns={4} />
-        </div>
-      ) : (
-        <div className="proc-primary-kpis">
-          <DashboardKpiGrid columns={4}>
-            {executiveKpis.map((c) => (
-              <DashboardKpiCard
-                key={c.key}
-                label={c.label}
-                value={c.value}
-                subtitle={c.context}
-                icon={c.icon}
-                iconClassName={ICON_TONE[c.key] ?? ICON_TONE.spend}
-                trend={c.trend}
-                to={c.to}
-              />
-            ))}
-          </DashboardKpiGrid>
-        </div>
-      )}
-
-      <ProcurementExecutiveCharts
-        monthlySpend={monthlySpend}
-        rfqPipeline={rfqPipeline}
-        supplierOverview={supplierOverview}
-        loading={chartsLoading}
-        pipelineLoading={chartsLoading}
-        supplierLoading={supplierOverviewLoading}
+      {/* 2. EXECUTIVE KPI OVERVIEW (12 Cards) */}
+      <ProcurementOverviewKpis
+        counts={overviewCounts}
+        loading={kpisQuery.isLoading || mrQuery.isLoading || bcQuery.isLoading}
       />
 
-      <section>
-        <div className="mb-3">
-          <h2 className="text-[16px] font-semibold text-[#1E293B]">
-            Operational Health
+      {/* 3. REQUIRES MY ATTENTION */}
+      <MyActionsSection
+        mrsAwaitingAction={mrsAwaitingAction}
+        businessCasesAwaitingApproval={pendingBcApprovals}
+        ecrsAwaitingAction={badges.rfqsToCreate}
+        rfqsToCreate={badges.rfqsToCreate}
+        rfqsPendingPublication={badges.rfqsPendingPublication}
+        supplierResponses={badges.supplierResponses}
+        quotesAwaitingEvaluation={badges.quotesAwaitingEvaluation}
+        supplierOnboardingAwaitingReview={onboardingStatsQuery.data?.pending_review ?? 0}
+        reverseBidsRequiringAction={rbStatsQuery.data?.live ?? 0}
+        pendingApprovals={badges.quotesAwaitingEvaluation}
+      />
+
+      {/* 4. 6-STAGE PROCUREMENT PIPELINE */}
+      <ProcurementPipelineSection
+        counts={pipelineCounts}
+        loading={mrQuery.isLoading || rfqListQuery.isLoading}
+      />
+
+      {/* 5. MATERIAL REQUESTS INTAKE */}
+      <MaterialRequestsSummarySection
+        mrs={mrQuery.data || []}
+        loading={mrQuery.isLoading}
+      />
+
+      {/* 6. BUSINESS CASES & ECR (Two-Column) */}
+      <BusinessCasesAndEcrSection
+        businessCases={bcQuery.data || []}
+        ecrs={ecrQuery.data || []}
+        loading={bcQuery.isLoading || ecrQuery.isLoading}
+      />
+
+      {/* 7. RFQ MANAGEMENT */}
+      <RfqManagementSummarySection
+        kpis={rfqKpisQuery.data}
+        rfqs={rfqListQuery.data?.data || []}
+        loading={rfqListQuery.isLoading}
+      />
+
+      {/* 8. RFI / RFP & REVERSE BIDDING (Two-Column) */}
+      <RfiRfpAndReverseBiddingSection
+        rfiStats={rfiStatsQuery.data}
+        rfpStats={rfpStatsQuery.data}
+        reverseBids={rbListQuery.data?.data || []}
+        reverseBiddingStats={rbStatsQuery.data}
+        loading={rfiStatsQuery.isLoading || rbStatsQuery.isLoading}
+      />
+
+      {/* 9. SUPPLIER MANAGEMENT & ONBOARDING */}
+      <SupplierManagementSummarySection
+        suppliersCount={suppliersCount}
+        onboardingStats={onboardingStatsQuery.data}
+        onboardings={onboardingListQuery.data || []}
+        loading={suppliersQuery.isLoading || onboardingListQuery.isLoading}
+      />
+
+      {/* 10. SPEND & FINANCE */}
+      <SpendAndFinanceSection
+        totalSpendDisplay={totalSpendDisplay}
+        totalBudget={budgetQuery.data?.kpis?.totalBudget ?? 0}
+        consumedBudget={budgetQuery.data?.kpis?.consumedBudget ?? 0}
+        utilizationPct={budgetQuery.data?.kpis?.utilizationPct ?? 0}
+        purchaseOrders={poQuery.data || []}
+        monthlySpendData={monthlySpendData}
+        spendByCategoryData={spendByCategoryData}
+        loading={budgetQuery.isLoading || analyticsQuery.isLoading}
+      />
+
+      {/* 11. PURCHASE ORDERS MONITORING (Secondary Read-Only) */}
+      <PurchaseOrdersMonitoringSection
+        purchaseOrders={poQuery.data || []}
+        loading={poQuery.isLoading}
+      />
+
+      {/* 12. RFQ STATUS PIPELINE ANALYTICS */}
+      <section aria-labelledby="rfq-pipeline-heading" className="w-full">
+        <div className="mb-2.5 flex items-center justify-between">
+          <h2
+            id="rfq-pipeline-heading"
+            className="text-[15px] font-bold uppercase tracking-tight text-[#12213F]"
+          >
+            RFQ Status Analytics
           </h2>
-          <p className="mt-0.5 text-[13px] text-[#64748B]">
-            Live ERP signals — available cards open the related work queue
-          </p>
         </div>
-        {healthLoading ? (
-          <div className="proc-secondary-kpis grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <Skeleton key={i} className="h-[104px] w-full rounded-lg" />
-            ))}
-          </div>
-        ) : (
-          <div className="proc-secondary-kpis grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-            {healthCards.map((card) => {
-              const tone = HEALTH_TONE[card.level];
-              const Icon =
-                card.level === "ok"
-                  ? CheckCircle2
-                  : (HEALTH_ICON[card.id] ?? AlertTriangle);
-              const displayValue =
-                card.level === "unavailable"
-                  ? "—"
-                  : (card.value ?? 0).toLocaleString();
-              const className = `kpi-card group relative flex w-full flex-col border-l-4 text-left no-underline outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] ${tone.border}`;
-              const content = (
-                <>
-                  <span
-                    className={`kpi-card-icon flex shrink-0 items-center justify-center ${tone.icon}`}
-                    aria-hidden
-                  >
-                    <Icon className="kpi-card-icon-svg h-[18px] w-[18px]" />
-                  </span>
-                  <div className="kpi-card-title-slot">
-                    <p className="kpi-card-label" title={card.label}>
-                      {card.label}
-                    </p>
-                  </div>
-                  <div className="kpi-card-value-slot">
-                    <p
-                      className={`kpi-value ${tone.value}`}
-                      title={
-                        card.level === "unavailable"
-                          ? "Data not available"
-                          : displayValue
-                      }
-                    >
-                      {displayValue}
-                    </p>
-                  </div>
-                  <div className="kpi-card-caption-slot">
-                    <p
-                      className={`kpi-card-caption truncate font-medium ${tone.caption}`}
-                      title={card.caption}
-                    >
-                      {card.caption}
-                    </p>
-                  </div>
-                </>
-              );
-
-              if (!card.to) {
-                return (
-                  <div
-                    key={card.id}
-                    title={card.tooltip}
-                    aria-disabled="true"
-                    className={`${className} cursor-default`}
-                  >
-                    {content}
-                  </div>
-                );
-              }
-
-              return (
-                <Link
-                  key={card.id}
-                  to={card.to}
-                  title={card.tooltip}
-                  className={className}
-                >
-                  {content}
-                </Link>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      <section className="grid grid-cols-1 items-stretch gap-5 xl:grid-cols-2">
-        <RecentRfqsTable
-          rows={recentRfqs}
-          supplierCounts={supplierCountsQuery.data}
-          loading={chartsLoading}
-        />
-        <RecentPosTable rows={recentPos} loading={chartsLoading} />
-      </section>
-
-      <section className="overflow-hidden rounded-lg border border-[#E5E7EB] bg-white shadow-[0_8px_24px_rgba(15,23,42,0.06)]">
-        <div className="border-b border-[#E5E7EB] px-5 py-4">
-          <h2 className="text-[16px] font-semibold text-[#1E293B]">
-            Procurement Insights
-          </h2>
-          <p className="mt-0.5 text-[13px] text-[#64748B]">
-            Rule-based signals from live ERP metrics
-          </p>
-        </div>
-        <div className="px-5 py-4">
-          <ExecutiveInsightsPanel
-            insights={insights}
-            loading={
-              (kpisQuery.isPending && !kpis) ||
-              (analyticsQuery.isPending && !analytics)
-            }
-          />
+        <div className="w-full">
+          <RfqStatusPipelineCard stages={rfqPipelineStages} />
         </div>
       </section>
-    </div>
-  );
-}
 
-function RecentRfqsTable({
-  rows,
-  supplierCounts,
-  loading,
-}: {
-  rows: DashboardRfqLite[];
-  supplierCounts?: Map<string, number>;
-  loading?: boolean;
-}) {
-  if (loading) {
-    return <Skeleton className={`w-full ${PANEL}`} />;
-  }
+      {/* 12. URGENT & OVERDUE ITEMS */}
+      <UrgentOverdueTable
+        items={urgentItems}
+        isLoading={mrQuery.isLoading && ecrQuery.isLoading && rfqListQuery.isLoading}
+        isError={mrQuery.isError && ecrQuery.isError && rfqListQuery.isError}
+        onRetry={handleRefreshAll}
+      />
 
-  return (
-    <div className={PANEL}>
-      <div className="flex items-center justify-between border-b border-[#E5E7EB] px-5 py-4">
-        <h3 className="text-[16px] font-semibold text-[#1E293B]">Recent RFQs</h3>
-        <Link
-          to="/sourcing/rfq"
-          className="text-[13px] font-semibold text-[#1F3A6D] no-underline hover:underline"
-        >
-          View all
-        </Link>
-      </div>
-      {rows.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center px-5 py-10 text-[13px] text-[#64748B]">
-          No recent RFQs
-        </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[520px] border-separate border-spacing-0 text-left">
-            <thead>
-              <tr className="text-[11px] uppercase tracking-wide text-[#64748B]">
-                <th className="px-4 py-2.5 font-semibold">RFQ Number</th>
-                <th className="px-3 py-2.5 font-semibold">Buyer</th>
-                <th className="px-3 py-2.5 font-semibold">Suppliers</th>
-                <th className="px-3 py-2.5 font-semibold">Status</th>
-                <th className="px-4 py-2.5 font-semibold">Created</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.slice(0, 8).map((rfq) => (
-                <tr
-                  key={rfq.name}
-                  className="border-t border-[#F1F5F9] hover:bg-[#F8FAFC]"
-                >
-                  <td className="px-4 py-2.5">
-                    <Link
-                      to={`/sourcing/rfq/${encodeURIComponent(rfq.name)}`}
-                      className="text-[13px] font-semibold text-[#1F3A6D] no-underline hover:underline"
-                    >
-                      {rfq.name}
-                    </Link>
-                  </td>
-                  <td className="px-3 py-2.5 text-[13px] text-[#475569]">
-                    {formatRfqOwnerLabel(rfq.owner) || "—"}
-                  </td>
-                  <td className="px-3 py-2.5 text-[13px] tabular-nums text-[#475569]">
-                    {supplierCounts?.get(rfq.name) ?? "—"}
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <StatusBadge status={rfq.status || "Draft"} />
-                  </td>
-                  <td className="px-4 py-2.5 text-[13px] text-[#64748B]">
-                    {rfq.creation
-                      ? formatDate(rfq.creation)
-                      : rfq.modified
-                        ? formatDate(rfq.modified)
-                        : "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function RecentPosTable({
-  rows,
-  loading,
-}: {
-  rows: DashboardPoLite[];
-  loading?: boolean;
-}) {
-  if (loading) {
-    return <Skeleton className={`w-full ${PANEL}`} />;
-  }
-
-  return (
-    <div className={PANEL}>
-      <div className="flex items-center justify-between border-b border-[#E5E7EB] px-5 py-4">
-        <h3 className="text-[16px] font-semibold text-[#1E293B]">
-          Recent Purchase Orders
-        </h3>
-        <Link
-          to={PROCUREMENT_DASHBOARD_LINKS.recentPurchaseOrders}
-          className="text-[13px] font-semibold text-[#1F3A6D] no-underline hover:underline"
-        >
-          View spend report
-        </Link>
-      </div>
-      {rows.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center px-5 py-10 text-[13px] text-[#64748B]">
-          No recent purchase orders
-        </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[560px] border-separate border-spacing-0 text-left">
-            <thead>
-              <tr className="text-[11px] uppercase tracking-wide text-[#64748B]">
-                <th className="px-4 py-2.5 font-semibold">PO Number</th>
-                <th className="px-3 py-2.5 font-semibold">Supplier</th>
-                <th className="px-3 py-2.5 font-semibold">Amount</th>
-                <th className="px-3 py-2.5 font-semibold">Status</th>
-                <th className="px-4 py-2.5 font-semibold">Delivery</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.slice(0, 8).map((po) => (
-                <tr
-                  key={po.name}
-                  className="border-t border-[#F1F5F9] hover:bg-[#F8FAFC]"
-                >
-                  <td className="px-4 py-2.5">
-                    <span className="text-[13px] font-semibold text-[#1F3A6D]">
-                      {po.name}
-                    </span>
-                  </td>
-                  <td className="max-w-[140px] truncate px-3 py-2.5 text-[13px] text-[#475569]">
-                    {po.supplier || "—"}
-                  </td>
-                  <td className="px-3 py-2.5 text-[13px] tabular-nums text-[#475569]">
-                    {formatCurrencyCompact(Number(po.grand_total ?? 0))}
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <StatusBadge status={po.status || "Draft"} />
-                  </td>
-                  <td className="px-4 py-2.5 text-[13px] text-[#64748B]">
-                    {po.schedule_date ? formatDate(po.schedule_date) : "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* 13. RECENT PROCUREMENT ACTIVITY */}
+      <RecentProcurementActivitySection
+        activities={recentActivities}
+        loading={mrQuery.isLoading || rfqListQuery.isLoading}
+      />
     </div>
   );
 }

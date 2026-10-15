@@ -1,0 +1,966 @@
+{
+  "rfq_id": "PUR-RFQ-2026-00091",
+  "captured_at": "2026-09-17T10:54:58.972Z",
+  "queries": [
+    {
+      "doctype": "Purchase Order",
+      "rows": [
+        {
+          "name": "PUR-ORD-2026-00021",
+          "supplier": "FEMSA",
+          "supplier_name": "FEMSA",
+          "status": "Completed",
+          "grand_total": 8800,
+          "per_received": 100,
+          "schedule_date": "2026-07-30",
+          "transaction_date": "2026-07-23",
+          "modified": "2026-07-23 02:57:12.892949"
+        },
+        {
+          "name": "PUR-ORD-2026-00018",
+          "supplier": "FEMSA",
+          "supplier_name": "FEMSA",
+          "status": "Completed",
+          "grand_total": 13300,
+          "per_received": 100,
+          "schedule_date": "2026-07-20",
+          "transaction_date": "2026-07-20",
+          "modified": "2026-07-20 00:59:52.145236"
+        },
+        {
+          "name": "PUR-ORD-2026-00020",
+          "supplier": "FEMSA",
+          "supplier_name": "FEMSA",
+          "status": "Completed",
+          "grand_total": 18350,
+          "per_received": 100,
+          "schedule_date": "2026-07-20",
+          "transaction_date": "2026-07-20",
+          "modified": "2026-07-20 08:14:49.253655"
+        },
+        {
+          "name": "PUR-ORD-2026-00015",
+          "supplier": "\"Eagle Peak Technologies Inc.\"",
+          "supplier_name": "Eagle Peak Technologies Inc.",
+          "status": "Completed",
+          "grand_total": 493,
+          "per_received": 100,
+          "schedule_date": "2026-07-15",
+          "transaction_date": "2026-07-08",
+          "modified": "2026-07-08 01:05:40.432487"
+        },
+        {
+          "name": "PUR-ORD-2026-00009",
+          "supplier": "\"Titan Industrial Products LLC\"",
+          "supplier_name": "Titan Industrial Products LLC",
+          "status": "Completed",
+          "grand_total": 22300,
+          "per_received": 100,
+          "schedule_date": "2026-06-30",
+          "transaction_date": "2026-06-23",
+          "modified": "2026-06-23 02:39:30.661789"
+        },
+        {
+          "name": "PUR-ORD-2026-00003",
+          "supplier": "\"Eagle Peak Technologies Inc.\"",
+          "supplier_name": "Eagle Peak Technologies Inc.",
+          "status": "To Bill",
+          "grand_total": 1078,
+          "per_received": 100,
+          "schedule_date": "2026-06-29",
+          "transaction_date": "2026-06-22",
+          "modified": "2026-07-04 10:08:05.780126"
+        },
+        {
+          "name": "PUR-ORD-2026-00004",
+          "supplier": "\"Titan Industrial Products LLC\"",
+          "supplier_name": "Titan Industrial Products LLC",
+          "status": "To Bill",
+          "grand_total": 60670,
+          "per_received": 100,
+          "schedule_date": "2026-06-29",
+          "transaction_date": "2026-06-22",
+          "modified": "2026-07-28 22:16:40.772569"
+        }
+      ]
+    },
+    {
+      "doctype": "Purchase Receipt",
+      "rows": [
+        {
+          "name": "MAT-PRE-2026-00023",
+          "supplier": "FEMSA",
+          "supplier_name": "FEMSA",
+          "posting_date": "2026-07-23",
+          "status": "Completed",
+          "per_returned": 0
+        },
+        {
+          "name": "MAT-PRE-2026-00020",
+          "supplier": "FEMSA",
+          "supplier_name": "FEMSA",
+          "posting_date": "2026-07-20",
+          "status": "Completed",
+          "per_returned": 0
+        },
+        {
+          "name": "MAT-PRE-2026-00022",
+          "supplier": "FEMSA",
+          "supplier_name": "FEMSA",
+          "posting_date": "2026-07-20",
+          "status": "Completed",
+          "per_returned": 0
+        },
+        {
+          "name": "MAT-PRE-2026-00013",
+          "supplier": "\"Eagle Peak Technologies Inc.\"",
+          "supplier_name": "Eagle Peak Technologies Inc.",
+          "posting_date": "2026-07-08",
+          "status": "Completed",
+          "per_returned": 0
+        },
+        {
+          "name": "MAT-PRE-2026-00010",
+          "supplier": "\"Eagle Peak Technologies Inc.\"",
+          "supplier_name": "Eagle Peak Technologies Inc.",
+          "posting_date": "2026-07-04",
+          "status": "To Bill",
+          "per_returned": 0
+        },
+        {
+          "name": "MAT-PRE-2026-00005",
+          "supplier": "\"Titan Industrial Products LLC\"",
+          "supplier_name": "Titan Industrial Products LLC",
+          "posting_date": "2026-06-23",
+          "status": "Completed",
+          "per_returned": 0
+        },
+        {
+          "name": "MAT-PRE-2026-00002",
+          "supplier": "\"Titan Industrial Products LLC\"",
+          "supplier_name": "Titan Industrial Products LLC",
+          "posting_date": "2026-06-22",
+          "status": "To Bill",
+          "per_returned": 0
+        }
+      ]
+    },
+    {
+      "doctype": "Purchase Invoice",
+      "rows": [
+        {
+          "name": "ACC-PINV-2026-00018",
+          "supplier": "FEMSA",
+          "supplier_name": "FEMSA",
+          "posting_date": "2026-07-23",
+          "due_date": "2026-07-23",
+          "status": "Paid",
+          "grand_total": 8800
+        },
+        {
+          "name": "ACC-PINV-2026-00015",
+          "supplier": "FEMSA",
+          "supplier_name": "FEMSA",
+          "posting_date": "2026-07-20",
+          "due_date": "2026-07-20",
+          "status": "Paid",
+          "grand_total": 13300
+        },
+        {
+          "name": "ACC-PINV-2026-00017",
+          "supplier": "FEMSA",
+          "supplier_name": "FEMSA",
+          "posting_date": "2026-07-20",
+          "due_date": "2026-07-20",
+          "status": "Paid",
+          "grand_total": 18350
+        },
+        {
+          "name": "ACC-PINV-2026-00011",
+          "supplier": "\"Eagle Peak Technologies Inc.\"",
+          "supplier_name": "Eagle Peak Technologies Inc.",
+          "posting_date": "2026-07-08",
+          "due_date": "2026-07-08",
+          "status": "Paid",
+          "grand_total": 493
+        },
+        {
+          "name": "ACC-PINV-2026-00005",
+          "supplier": "\"Titan Industrial Products LLC\"",
+          "supplier_name": "Titan Industrial Products LLC",
+          "posting_date": "2026-06-23",
+          "due_date": "2026-06-23",
+          "status": "Paid",
+          "grand_total": 22300
+        }
+      ]
+    }
+  ],
+  "suppliers": [
+    {
+      "quotation_id": "PUR-SQTN-2026-00257",
+      "supplier_id": "\"Eagle Peak Technologies Inc.\"",
+      "supplier_name": "Eagle Peak Technologies Inc.",
+      "history": [
+        {
+          "doctype": "Purchase Order",
+          "rows": [
+            {
+              "name": "PUR-ORD-2026-00015",
+              "supplier": "\"Eagle Peak Technologies Inc.\"",
+              "supplier_name": "Eagle Peak Technologies Inc.",
+              "status": "Completed",
+              "grand_total": 493,
+              "per_received": 100,
+              "schedule_date": "2026-07-15",
+              "transaction_date": "2026-07-08",
+              "modified": "2026-07-08 01:05:40.432487"
+            },
+            {
+              "name": "PUR-ORD-2026-00003",
+              "supplier": "\"Eagle Peak Technologies Inc.\"",
+              "supplier_name": "Eagle Peak Technologies Inc.",
+              "status": "To Bill",
+              "grand_total": 1078,
+              "per_received": 100,
+              "schedule_date": "2026-06-29",
+              "transaction_date": "2026-06-22",
+              "modified": "2026-07-04 10:08:05.780126"
+            }
+          ]
+        },
+        {
+          "doctype": "Purchase Receipt",
+          "rows": [
+            {
+              "name": "MAT-PRE-2026-00013",
+              "supplier": "\"Eagle Peak Technologies Inc.\"",
+              "supplier_name": "Eagle Peak Technologies Inc.",
+              "posting_date": "2026-07-08",
+              "status": "Completed",
+              "per_returned": 0
+            },
+            {
+              "name": "MAT-PRE-2026-00010",
+              "supplier": "\"Eagle Peak Technologies Inc.\"",
+              "supplier_name": "Eagle Peak Technologies Inc.",
+              "posting_date": "2026-07-04",
+              "status": "To Bill",
+              "per_returned": 0
+            }
+          ]
+        },
+        {
+          "doctype": "Purchase Invoice",
+          "rows": [
+            {
+              "name": "ACC-PINV-2026-00011",
+              "supplier": "\"Eagle Peak Technologies Inc.\"",
+              "supplier_name": "Eagle Peak Technologies Inc.",
+              "posting_date": "2026-07-08",
+              "due_date": "2026-07-08",
+              "status": "Paid",
+              "grand_total": 493
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "quotation_id": "PUR-SQTN-2026-00256",
+      "supplier_id": "FEMSA",
+      "supplier_name": "FEMSA",
+      "history": [
+        {
+          "doctype": "Purchase Order",
+          "rows": [
+            {
+              "name": "PUR-ORD-2026-00021",
+              "supplier": "FEMSA",
+              "supplier_name": "FEMSA",
+              "status": "Completed",
+              "grand_total": 8800,
+              "per_received": 100,
+              "schedule_date": "2026-07-30",
+              "transaction_date": "2026-07-23",
+              "modified": "2026-07-23 02:57:12.892949"
+            },
+            {
+              "name": "PUR-ORD-2026-00018",
+              "supplier": "FEMSA",
+              "supplier_name": "FEMSA",
+              "status": "Completed",
+              "grand_total": 13300,
+              "per_received": 100,
+              "schedule_date": "2026-07-20",
+              "transaction_date": "2026-07-20",
+              "modified": "2026-07-20 00:59:52.145236"
+            },
+            {
+              "name": "PUR-ORD-2026-00020",
+              "supplier": "FEMSA",
+              "supplier_name": "FEMSA",
+              "status": "Completed",
+              "grand_total": 18350,
+              "per_received": 100,
+              "schedule_date": "2026-07-20",
+              "transaction_date": "2026-07-20",
+              "modified": "2026-07-20 08:14:49.253655"
+            }
+          ]
+        },
+        {
+          "doctype": "Purchase Receipt",
+          "rows": [
+            {
+              "name": "MAT-PRE-2026-00023",
+              "supplier": "FEMSA",
+              "supplier_name": "FEMSA",
+              "posting_date": "2026-07-23",
+              "status": "Completed",
+              "per_returned": 0
+            },
+            {
+              "name": "MAT-PRE-2026-00020",
+              "supplier": "FEMSA",
+              "supplier_name": "FEMSA",
+              "posting_date": "2026-07-20",
+              "status": "Completed",
+              "per_returned": 0
+            },
+            {
+              "name": "MAT-PRE-2026-00022",
+              "supplier": "FEMSA",
+              "supplier_name": "FEMSA",
+              "posting_date": "2026-07-20",
+              "status": "Completed",
+              "per_returned": 0
+            }
+          ]
+        },
+        {
+          "doctype": "Purchase Invoice",
+          "rows": [
+            {
+              "name": "ACC-PINV-2026-00018",
+              "supplier": "FEMSA",
+              "supplier_name": "FEMSA",
+              "posting_date": "2026-07-23",
+              "due_date": "2026-07-23",
+              "status": "Paid",
+              "grand_total": 8800
+            },
+            {
+              "name": "ACC-PINV-2026-00015",
+              "supplier": "FEMSA",
+              "supplier_name": "FEMSA",
+              "posting_date": "2026-07-20",
+              "due_date": "2026-07-20",
+              "status": "Paid",
+              "grand_total": 13300
+            },
+            {
+              "name": "ACC-PINV-2026-00017",
+              "supplier": "FEMSA",
+              "supplier_name": "FEMSA",
+              "posting_date": "2026-07-20",
+              "due_date": "2026-07-20",
+              "status": "Paid",
+              "grand_total": 18350
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "quotation_id": "PUR-SQTN-2026-00253",
+      "supplier_id": "\"Titan Industrial Products LLC\"",
+      "supplier_name": "Titan Industrial Products LLC",
+      "history": [
+        {
+          "doctype": "Purchase Order",
+          "rows": [
+            {
+              "name": "PUR-ORD-2026-00009",
+              "supplier": "\"Titan Industrial Products LLC\"",
+              "supplier_name": "Titan Industrial Products LLC",
+              "status": "Completed",
+              "grand_total": 22300,
+              "per_received": 100,
+              "schedule_date": "2026-06-30",
+              "transaction_date": "2026-06-23",
+              "modified": "2026-06-23 02:39:30.661789"
+            },
+            {
+              "name": "PUR-ORD-2026-00004",
+              "supplier": "\"Titan Industrial Products LLC\"",
+              "supplier_name": "Titan Industrial Products LLC",
+              "status": "To Bill",
+              "grand_total": 60670,
+              "per_received": 100,
+              "schedule_date": "2026-06-29",
+              "transaction_date": "2026-06-22",
+              "modified": "2026-07-28 22:16:40.772569"
+            }
+          ]
+        },
+        {
+          "doctype": "Purchase Receipt",
+          "rows": [
+            {
+              "name": "MAT-PRE-2026-00005",
+              "supplier": "\"Titan Industrial Products LLC\"",
+              "supplier_name": "Titan Industrial Products LLC",
+              "posting_date": "2026-06-23",
+              "status": "Completed",
+              "per_returned": 0
+            },
+            {
+              "name": "MAT-PRE-2026-00002",
+              "supplier": "\"Titan Industrial Products LLC\"",
+              "supplier_name": "Titan Industrial Products LLC",
+              "posting_date": "2026-06-22",
+              "status": "To Bill",
+              "per_returned": 0
+            }
+          ]
+        },
+        {
+          "doctype": "Purchase Invoice",
+          "rows": [
+            {
+              "name": "ACC-PINV-2026-00005",
+              "supplier": "\"Titan Industrial Products LLC\"",
+              "supplier_name": "Titan Industrial Products LLC",
+              "posting_date": "2026-06-23",
+              "due_date": "2026-06-23",
+              "status": "Paid",
+              "grand_total": 22300
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "document_details": [
+    {
+      "doctype": "Purchase Order",
+      "name": "PUR-ORD-2026-00021",
+      "supplier": "FEMSA",
+      "status": "Completed",
+      "schedule_date": "2026-07-30",
+      "items": [
+        {
+          "item_code": "BRK001",
+          "qty": 50,
+          "received_qty": 50,
+          "schedule_date": "2026-07-30"
+        },
+        {
+          "item_code": "ENG002",
+          "qty": 50,
+          "received_qty": 50,
+          "schedule_date": "2026-07-30"
+        },
+        {
+          "item_code": "RME002",
+          "qty": 40,
+          "received_qty": 40,
+          "schedule_date": "2026-07-30"
+        }
+      ]
+    },
+    {
+      "doctype": "Purchase Order",
+      "name": "PUR-ORD-2026-00018",
+      "supplier": "FEMSA",
+      "status": "Completed",
+      "schedule_date": "2026-07-20",
+      "items": [
+        {
+          "item_code": "RME001",
+          "qty": 100,
+          "received_qty": 100,
+          "schedule_date": "2026-07-20"
+        },
+        {
+          "item_code": "SI-201",
+          "qty": 100,
+          "received_qty": 100,
+          "schedule_date": "2026-07-20"
+        }
+      ]
+    },
+    {
+      "doctype": "Purchase Order",
+      "name": "PUR-ORD-2026-00020",
+      "supplier": "FEMSA",
+      "status": "Completed",
+      "schedule_date": "2026-07-20",
+      "items": [
+        {
+          "item_code": "RME002",
+          "qty": 70,
+          "received_qty": 70,
+          "schedule_date": "2026-07-20"
+        },
+        {
+          "item_code": "RME001",
+          "qty": 80,
+          "received_qty": 80,
+          "schedule_date": "2026-07-20"
+        },
+        {
+          "item_code": "ENGF013",
+          "qty": 75,
+          "received_qty": 75,
+          "schedule_date": "2026-07-20"
+        }
+      ]
+    },
+    {
+      "doctype": "Purchase Order",
+      "name": "PUR-ORD-2026-00015",
+      "supplier": "\"Eagle Peak Technologies Inc.\"",
+      "status": "Completed",
+      "schedule_date": "2026-07-15",
+      "items": [
+        {
+          "item_code": "ENG003",
+          "qty": 3,
+          "received_qty": 3,
+          "schedule_date": "2026-07-15"
+        },
+        {
+          "item_code": "SAB003",
+          "qty": 4,
+          "received_qty": 4,
+          "schedule_date": "2026-07-15"
+        }
+      ]
+    },
+    {
+      "doctype": "Purchase Order",
+      "name": "PUR-ORD-2026-00009",
+      "supplier": "\"Titan Industrial Products LLC\"",
+      "status": "Completed",
+      "schedule_date": "2026-06-30",
+      "items": [
+        {
+          "item_code": "SRM005",
+          "qty": 100,
+          "received_qty": 100,
+          "schedule_date": "2026-06-30"
+        },
+        {
+          "item_code": "SRM004",
+          "qty": 100,
+          "received_qty": 100,
+          "schedule_date": "2026-06-30"
+        },
+        {
+          "item_code": "SRM003",
+          "qty": 100,
+          "received_qty": 100,
+          "schedule_date": "2026-06-30"
+        }
+      ]
+    },
+    {
+      "doctype": "Purchase Order",
+      "name": "PUR-ORD-2026-00003",
+      "supplier": "\"Eagle Peak Technologies Inc.\"",
+      "status": "To Bill",
+      "schedule_date": "2026-06-29",
+      "items": [
+        {
+          "item_code": "AC001",
+          "qty": 1,
+          "received_qty": 1,
+          "schedule_date": "2026-06-29"
+        },
+        {
+          "item_code": "BRK001",
+          "qty": 1,
+          "received_qty": 1,
+          "schedule_date": "2026-06-29"
+        },
+        {
+          "item_code": "AC001",
+          "qty": 1,
+          "received_qty": 1,
+          "schedule_date": "2026-06-29"
+        }
+      ]
+    },
+    {
+      "doctype": "Purchase Order",
+      "name": "PUR-ORD-2026-00004",
+      "supplier": "\"Titan Industrial Products LLC\"",
+      "status": "To Bill",
+      "schedule_date": "2026-06-29",
+      "items": [
+        {
+          "item_code": "RMM001",
+          "qty": 150,
+          "received_qty": 150,
+          "schedule_date": "2026-06-29"
+        },
+        {
+          "item_code": "BP001",
+          "qty": 220,
+          "received_qty": 220,
+          "schedule_date": "2026-06-29"
+        },
+        {
+          "item_code": "ENG002",
+          "qty": 350,
+          "received_qty": 350,
+          "schedule_date": "2026-06-29"
+        },
+        {
+          "item_code": "SAB003",
+          "qty": 180,
+          "received_qty": 180,
+          "schedule_date": "2026-06-29"
+        },
+        {
+          "item_code": "SRI001",
+          "qty": 120,
+          "received_qty": 120,
+          "schedule_date": "2026-06-29"
+        }
+      ]
+    },
+    {
+      "doctype": "Purchase Receipt",
+      "name": "MAT-PRE-2026-00023",
+      "supplier": "FEMSA",
+      "status": "Completed",
+      "posting_date": "2026-07-23",
+      "items": [
+        {
+          "item_code": "BRK001",
+          "qty": 50,
+          "received_qty": 50,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00021",
+          "purchase_order_item": "k0dlgd050s"
+        },
+        {
+          "item_code": "ENG002",
+          "qty": 50,
+          "received_qty": 50,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00021",
+          "purchase_order_item": "k0deagi86n"
+        },
+        {
+          "item_code": "RME002",
+          "qty": 40,
+          "received_qty": 40,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00021",
+          "purchase_order_item": "k0d9hka7sd"
+        }
+      ]
+    },
+    {
+      "doctype": "Purchase Receipt",
+      "name": "MAT-PRE-2026-00020",
+      "supplier": "FEMSA",
+      "status": "Completed",
+      "posting_date": "2026-07-20",
+      "items": [
+        {
+          "item_code": "RME001",
+          "qty": 100,
+          "received_qty": 100,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00018",
+          "purchase_order_item": "v9sefmgasg"
+        },
+        {
+          "item_code": "SI-201",
+          "qty": 100,
+          "received_qty": 100,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00018",
+          "purchase_order_item": "v9s51roq8f"
+        }
+      ]
+    },
+    {
+      "doctype": "Purchase Receipt",
+      "name": "MAT-PRE-2026-00022",
+      "supplier": "FEMSA",
+      "status": "Completed",
+      "posting_date": "2026-07-20",
+      "items": [
+        {
+          "item_code": "RME002",
+          "qty": 70,
+          "received_qty": 70,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00020",
+          "purchase_order_item": "ngmso8nnq7"
+        },
+        {
+          "item_code": "RME001",
+          "qty": 80,
+          "received_qty": 80,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00020",
+          "purchase_order_item": "ngmc6cupud"
+        },
+        {
+          "item_code": "ENGF013",
+          "qty": 75,
+          "received_qty": 75,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00020",
+          "purchase_order_item": "ngmo1kj3d9"
+        }
+      ]
+    },
+    {
+      "doctype": "Purchase Receipt",
+      "name": "MAT-PRE-2026-00013",
+      "supplier": "\"Eagle Peak Technologies Inc.\"",
+      "status": "Completed",
+      "posting_date": "2026-07-08",
+      "items": [
+        {
+          "item_code": "ENG003",
+          "qty": 3,
+          "received_qty": 3,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00015",
+          "purchase_order_item": "fisd1oag40"
+        },
+        {
+          "item_code": "SAB003",
+          "qty": 4,
+          "received_qty": 4,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00015",
+          "purchase_order_item": "fisppon58l"
+        }
+      ]
+    },
+    {
+      "doctype": "Purchase Receipt",
+      "name": "MAT-PRE-2026-00010",
+      "supplier": "\"Eagle Peak Technologies Inc.\"",
+      "status": "To Bill",
+      "posting_date": "2026-07-04",
+      "items": [
+        {
+          "item_code": "AC001",
+          "qty": 1,
+          "received_qty": 1,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00003",
+          "purchase_order_item": "r9q2gj3e2e"
+        },
+        {
+          "item_code": "BRK001",
+          "qty": 1,
+          "received_qty": 1,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00003",
+          "purchase_order_item": "r9qvbtr8lo"
+        },
+        {
+          "item_code": "AC001",
+          "qty": 1,
+          "received_qty": 1,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00003",
+          "purchase_order_item": "r9qfo42990"
+        }
+      ]
+    },
+    {
+      "doctype": "Purchase Receipt",
+      "name": "MAT-PRE-2026-00005",
+      "supplier": "\"Titan Industrial Products LLC\"",
+      "status": "Completed",
+      "posting_date": "2026-06-23",
+      "items": [
+        {
+          "item_code": "SRM005",
+          "qty": 100,
+          "received_qty": 100,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00009",
+          "purchase_order_item": "6cbq1j5615"
+        },
+        {
+          "item_code": "SRM004",
+          "qty": 100,
+          "received_qty": 100,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00009",
+          "purchase_order_item": "6cbk1pj8t4"
+        },
+        {
+          "item_code": "SRM003",
+          "qty": 100,
+          "received_qty": 100,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00009",
+          "purchase_order_item": "6cb6dqddm7"
+        }
+      ]
+    },
+    {
+      "doctype": "Purchase Receipt",
+      "name": "MAT-PRE-2026-00002",
+      "supplier": "\"Titan Industrial Products LLC\"",
+      "status": "To Bill",
+      "posting_date": "2026-06-22",
+      "items": [
+        {
+          "item_code": "RMM001",
+          "qty": 150,
+          "received_qty": 150,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00004",
+          "purchase_order_item": "rfpi8mpuap"
+        },
+        {
+          "item_code": "BP001",
+          "qty": 220,
+          "received_qty": 220,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00004",
+          "purchase_order_item": "rfp04bovtr"
+        },
+        {
+          "item_code": "ENG002",
+          "qty": 350,
+          "received_qty": 350,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00004",
+          "purchase_order_item": "rfpaf6p1st"
+        },
+        {
+          "item_code": "SAB003",
+          "qty": 180,
+          "received_qty": 180,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00004",
+          "purchase_order_item": "rfpbtl9t64"
+        },
+        {
+          "item_code": "SRI001",
+          "qty": 120,
+          "received_qty": 120,
+          "rejected_qty": 0,
+          "purchase_order": "PUR-ORD-2026-00004",
+          "purchase_order_item": "rfpgj6stq6"
+        }
+      ]
+    }
+  ],
+  "computed_performance": {
+    "\"Eagle Peak Technologies Inc.\"": {
+      "supplier_name": "\"Eagle Peak Technologies Inc.\"",
+      "total_pos": 2,
+      "completed_pos": 2,
+      "cancelled_pos": 0,
+      "total_po_value": 1571,
+      "total_grns": 2,
+      "on_time_deliveries": 1,
+      "late_deliveries": 1,
+      "avg_delay_days": 5,
+      "total_ordered_qty": 10,
+      "total_received_qty": 10,
+      "total_rejected_qty": 0,
+      "qty_accuracy_pct": 100,
+      "total_invoices": 1,
+      "invoices_on_time": 1,
+      "delivery_score": 35,
+      "quality_score": 100,
+      "reliability_score": 100,
+      "has_sufficient_data": true,
+      "has_delivery_data": true,
+      "has_quality_data": true,
+      "has_reliability_data": true,
+      "unavailable_metrics": [],
+      "invoice_timeliness_basis": "Invoice posting date compared with its due date; actual payment history is unavailable.",
+      "data_sources": [
+        "2 Purchase Orders",
+        "2 GRNs",
+        "1 Invoices"
+      ],
+      "data_points_count": 5
+    },
+    "FEMSA": {
+      "supplier_name": "FEMSA",
+      "total_pos": 3,
+      "completed_pos": 3,
+      "cancelled_pos": 0,
+      "total_po_value": 40450,
+      "total_grns": 3,
+      "on_time_deliveries": 3,
+      "late_deliveries": 0,
+      "avg_delay_days": 0,
+      "total_ordered_qty": 565,
+      "total_received_qty": 565,
+      "total_rejected_qty": 0,
+      "qty_accuracy_pct": 100,
+      "total_invoices": 3,
+      "invoices_on_time": 3,
+      "delivery_score": 100,
+      "quality_score": 100,
+      "reliability_score": 100,
+      "has_sufficient_data": true,
+      "has_delivery_data": true,
+      "has_quality_data": true,
+      "has_reliability_data": true,
+      "unavailable_metrics": [],
+      "invoice_timeliness_basis": "Invoice posting date compared with its due date; actual payment history is unavailable.",
+      "data_sources": [
+        "3 Purchase Orders",
+        "3 GRNs",
+        "3 Invoices"
+      ],
+      "data_points_count": 9
+    },
+    "\"Titan Industrial Products LLC\"": {
+      "supplier_name": "\"Titan Industrial Products LLC\"",
+      "total_pos": 2,
+      "completed_pos": 2,
+      "cancelled_pos": 0,
+      "total_po_value": 82970,
+      "total_grns": 2,
+      "on_time_deliveries": 2,
+      "late_deliveries": 0,
+      "avg_delay_days": 0,
+      "total_ordered_qty": 1320,
+      "total_received_qty": 1320,
+      "total_rejected_qty": 0,
+      "qty_accuracy_pct": 100,
+      "total_invoices": 1,
+      "invoices_on_time": 1,
+      "delivery_score": 100,
+      "quality_score": 100,
+      "reliability_score": 100,
+      "has_sufficient_data": true,
+      "has_delivery_data": true,
+      "has_quality_data": true,
+      "has_reliability_data": true,
+      "unavailable_metrics": [],
+      "invoice_timeliness_basis": "Invoice posting date compared with its due date; actual payment history is unavailable.",
+      "data_sources": [
+        "2 Purchase Orders",
+        "2 GRNs",
+        "1 Invoices"
+      ],
+      "data_points_count": 5
+    }
+  },
+  "computed_at": "2026-09-17T10:58:42.248Z"
+}

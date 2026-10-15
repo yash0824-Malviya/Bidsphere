@@ -1,28 +1,28 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Bell,
+  Briefcase,
   CheckCircle2,
-  ClipboardList,
-  Eye,
+  Clock,
   FileText,
+  Layers,
+  Lightbulb,
   PackageCheck,
   Plus,
+  PlusCircle,
   RefreshCw,
   Send,
-  TrendingUp,
   Truck,
+  UploadCloud,
   Warehouse,
 } from "lucide-react";
 import {
   CartesianGrid,
-  Cell,
   Line,
   LineChart,
-  Pie,
-  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -35,84 +35,76 @@ import {
   listMaterialRequestsWorkflow,
   type MaterialRequestWorkflowRecord,
 } from "../../api/materialRequestWorkflow";
-import { getUploadedBomHistory } from "../../api/uploadedBom";
 import {
   countDepartmentPendingAcceptance,
   listDepartmentPendingAcceptanceLocal,
 } from "../../api/departmentIssuedItems";
-import { getDashboardConfig } from "../../config/dashboardRoles";
+import { fetchBusinessCases } from "../../api/businessIntake";
+import { getAllNotifications } from "../../api/notifications";
 import type { MaterialRequestWorkflowStatus } from "../../types/materialRequestWorkflow";
-import { formatDate, formatDateTime } from "../../utils/format";
+import { formatDate } from "../../utils/format";
 import { toEnterpriseUserMessage } from "../../utils/enterpriseUserMessage";
 import StatusBadge from "../StatusBadge";
 import ProcurementTypeBadge from "../ProcurementTypeBadge";
 import { Skeleton } from "../Skeleton";
-import DashboardHeader from "./DashboardHeader";
-import DashboardKpiCard, {
-  DashboardKpiGrid,
-  DashboardKpiSkeleton,
-} from "./DashboardKpiCard";
-import DepartmentPerformanceKpis from "./DepartmentPerformanceKpis";
 
 interface Props {
-  greetingName: string;
+  greetingName?: string;
 }
 
 const EMPTY_ROWS: MaterialRequestWorkflowRecord[] = [];
 
-const CHART_TOOLTIP = {
-  backgroundColor: "#fff",
-  border: "1px solid #E2E8F0",
-  borderRadius: 8,
-  fontSize: 12,
-};
+type StageKey = "draft" | "submitted" | "warehouse" | "procurement" | "completed";
 
-const CHART_AXIS = {
-  tick: { fill: "#64748B", fontSize: 11 },
-  axisLine: false as const,
-  tickLine: false as const,
-};
-
-const PIE_COLORS = {
-  Direct: "#1993FF",
-  Indirect: "#64748B",
-};
-
-type StageKey =
-  | "draft"
-  | "submitted"
-  | "warehouse"
-  | "procurement"
-  | "completed";
-
-const STAGE_META: {
+interface StageMeta {
   key: StageKey;
   label: string;
   color: string;
-}[] = [
-  { key: "draft", label: "Draft", color: "#94A3B8" },
-  { key: "submitted", label: "Submitted", color: "#F59E0B" },
-  { key: "warehouse", label: "Warehouse", color: "#0EA5E9" },
-  { key: "procurement", label: "Procurement", color: "#3B82F6" },
-  { key: "completed", label: "Completed", color: "#10B981" },
+  bgTone: string;
+  textColor: string;
+}
+
+const STAGE_CONFIG: StageMeta[] = [
+  {
+    key: "draft",
+    label: "Draft",
+    color: "#94A3B8",
+    bgTone: "bg-slate-100",
+    textColor: "text-slate-700",
+  },
+  {
+    key: "submitted",
+    label: "Submitted",
+    color: "#F59E0B",
+    bgTone: "bg-amber-50",
+    textColor: "text-amber-700",
+  },
+  {
+    key: "warehouse",
+    label: "Warehouse",
+    color: "#0EA5E9",
+    bgTone: "bg-sky-50",
+    textColor: "text-sky-700",
+  },
+  {
+    key: "procurement",
+    label: "Procurement",
+    color: "#3B82F6",
+    bgTone: "bg-blue-50",
+    textColor: "text-blue-700",
+  },
+  {
+    key: "completed",
+    label: "Completed",
+    color: "#10B981",
+    bgTone: "bg-emerald-50",
+    textColor: "text-emerald-700",
+  },
 ];
 
-function PriorityBadge({ priority }: { priority: string }) {
-  const classes =
-    priority === "Urgent" || priority === "High"
-      ? "border-amber-200 bg-amber-50 text-amber-700"
-      : priority === "Medium"
-        ? "border-sky-200 bg-sky-50 text-sky-700"
-        : "border-neutral-200 bg-neutral-50 text-neutral-600";
-
-  return (
-    <span
-      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${classes}`}
-    >
-      {priority}
-    </span>
-  );
-}
+/* ────────────────────────────────────────────────────────────────────────── */
+/*  Centralized Workflow Classification & Progress Calculation                */
+/* ────────────────────────────────────────────────────────────────────────── */
 
 function isDraftRequest(status: string, workflow: string, docstatus: number) {
   return docstatus === 0 || workflow === "Draft" || status === "Draft";
@@ -122,19 +114,10 @@ function isCompletedRequest(status: string, workflow: string) {
   return workflow === "Completed" || status === "Completed";
 }
 
-/** KPI: actively under warehouse review (not yet issued / procurement). */
-function isUnderWarehouseReview(workflow: string) {
+function isWarehouseStage(workflow: string) {
   return (
     workflow === "Under Warehouse Review" ||
     workflow === "Stock Available" ||
-    workflow === "Admin Review"
-  );
-}
-
-/** Status overview bucket: warehouse-owned fulfillment path. */
-function isWarehouseStage(workflow: string) {
-  return (
-    isUnderWarehouseReview(workflow) ||
     workflow === "Admin Review" ||
     workflow === "Material Issued" ||
     workflow === "Pending Department Acceptance" ||
@@ -142,7 +125,7 @@ function isWarehouseStage(workflow: string) {
   );
 }
 
-function isSentToProcurement(workflow: string) {
+function isProcurementStage(workflow: string) {
   return (
     workflow === "Procurement Required" ||
     workflow === "Forwarded to Procurement" ||
@@ -150,69 +133,59 @@ function isSentToProcurement(workflow: string) {
   );
 }
 
-function isSubmittedBucket(
-  status: string,
-  workflow: string,
-  docstatus: number,
-) {
-  if (isDraftRequest(status, workflow, docstatus)) return false;
-  if (isCompletedRequest(status, workflow)) return false;
-  if (isWarehouseStage(workflow) || isSentToProcurement(workflow)) return false;
-  if (
+function isRejectedOrCancelled(status: string, workflow: string) {
+  return (
     workflow === "Cancelled" ||
     status === "Cancelled" ||
-    status === "Stopped"
-  ) {
-    return false;
-  }
-  return (
-    docstatus === 1 ||
-    status === "Pending" ||
-    status === "Submitted" ||
-    workflow === "Submitted"
+    status === "Stopped" ||
+    status === "Rejected"
   );
 }
 
-function classifyStage(
+/**
+ * Single source of truth for workflow classification.
+ * Every request belongs to exactly one category.
+ */
+function classifyWorkflowStage(
   status: string,
   workflow: MaterialRequestWorkflowStatus,
   docstatus: number,
-): StageKey {
+): StageKey | "cancelled" {
   if (isDraftRequest(status, workflow, docstatus)) return "draft";
   if (isCompletedRequest(status, workflow)) return "completed";
-  if (isSentToProcurement(workflow)) return "procurement";
+  if (isProcurementStage(workflow)) return "procurement";
   if (isWarehouseStage(workflow)) return "warehouse";
+  if (isRejectedOrCancelled(status, workflow)) return "cancelled";
   return "submitted";
 }
 
-/** Approximate workflow progress from status alone (fast, no per-row fetch). */
 function workflowProgressPct(
   workflow: MaterialRequestWorkflowStatus,
   docstatus: number,
 ): number {
-  if (docstatus === 0 || workflow === "Draft") return 8;
+  if (docstatus === 0 || workflow === "Draft") return 10;
   if (workflow === "Cancelled") return 0;
-  if (workflow === "Submitted") return 20;
+  if (workflow === "Submitted") return 25;
   if (
     workflow === "Under Warehouse Review" ||
     workflow === "Stock Available" ||
     workflow === "Admin Review"
   ) {
-    return 35;
+    return 45;
   }
   if (
     workflow === "Procurement Required" ||
     workflow === "Forwarded to Procurement"
   ) {
-    return 50;
+    return 65;
   }
-  if (workflow === "RFQ Created") return 60;
-  if (workflow === "Partially Issued") return 70;
+  if (workflow === "RFQ Created") return 75;
+  if (workflow === "Partially Issued") return 80;
   if (
     workflow === "Material Issued" ||
     workflow === "Pending Department Acceptance"
   ) {
-    return 85;
+    return 90;
   }
   if (workflow === "Completed") return 100;
   return 25;
@@ -245,53 +218,54 @@ function monthLabel(key: string): string {
   return new Date(y, m - 1, 1).toLocaleString(undefined, { month: "short" });
 }
 
-function normalizePriority(raw?: string | null): "High" | "Medium" | "Low" {
+function normalizePriority(raw?: string | null): "Critical" | "High" | "Medium" | "Low" {
   const p = (raw ?? "").trim().toLowerCase();
-  if (p === "urgent" || p === "high") return "High";
+  if (p === "urgent" || p === "critical") return "Critical";
+  if (p === "high") return "High";
   if (p === "low") return "Low";
   return "Medium";
 }
 
-function Panel({
-  title,
-  action,
-  children,
-  className = "",
-  bodyClassName = "",
-}: {
-  title: string;
-  action?: ReactNode;
-  children: ReactNode;
-  className?: string;
-  bodyClassName?: string;
-}) {
+function PriorityBadge({ priority }: { priority: string }) {
+  const norm = normalizePriority(priority);
+  const styles: Record<string, string> = {
+    Critical: "bg-red-50 text-red-700 border-red-200/70",
+    High: "bg-amber-50 text-amber-700 border-amber-200/70",
+    Medium: "bg-sky-50 text-sky-700 border-sky-200/70",
+    Low: "bg-slate-50 text-slate-600 border-slate-200/70",
+  };
+
   return (
-    <div className={`dashboard-panel ${className}`.trim()}>
-      <div className="dashboard-panel-header justify-between">
-        <h3 className="text-sm font-bold text-neutral-900">{title}</h3>
-        {action}
-      </div>
-      <div className={`dashboard-panel-body ${bodyClassName}`.trim()}>
-        {children}
-      </div>
-    </div>
+    <span
+      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${styles[norm] || styles.Medium}`}
+    >
+      {norm}
+    </span>
   );
 }
 
-export default function DepartmentUserDashboard({ greetingName }: Props) {
-  const config = getDashboardConfig("department");
+/* ────────────────────────────────────────────────────────────────────────── */
+/*  Main Component                                                            */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+export default function DepartmentUserDashboard({ greetingName: _greetingName = "Department User" }: Props) {
+  const [statusDateFilter, setStatusDateFilter] = useState<"30d" | "90d" | "year" | "all">("all");
+  const [trendRange, setTrendRange] = useState<"30d" | "6m" | "12m">("6m");
+
+  /* ─────────────── Data Fetching ─────────────── */
 
   const rowsQuery = useQuery({
     queryKey: ["mr-dashboard-rows", "department"],
     queryFn: async () => {
-      const rows = await listMaterialRequestsWorkflow();
-      return [...rows].sort((a, b) =>
+      const records = await listMaterialRequestsWorkflow();
+      return [...records].sort((a, b) =>
         (b.modified ?? b.creation ?? "").localeCompare(
           a.modified ?? a.creation ?? "",
         ),
       );
     },
     retry: 1,
+    staleTime: 30_000,
   });
 
   const rows = rowsQuery.data ?? EMPTY_ROWS;
@@ -306,779 +280,1313 @@ export default function DepartmentUserDashboard({ greetingName }: Props) {
     queryKey: ["department-issued-items", "kpi", "pending"],
     queryFn: () => countDepartmentPendingAcceptance(),
     staleTime: 30_000,
-    refetchOnMount: "always",
-    refetchOnWindowFocus: true,
   });
   const pendingAcceptance = pendingAcceptanceQuery.data ?? 0;
   const pendingReceipts = listDepartmentPendingAcceptanceLocal();
 
-  const bomHistoryQuery = useQuery({
-    queryKey: ["uploaded-bom-history", "department-dashboard"],
-    queryFn: getUploadedBomHistory,
-    staleTime: 60_000,
+  const businessCasesQuery = useQuery({
+    queryKey: ["business-cases", "department-dashboard"],
+    queryFn: () => fetchBusinessCases(),
+    staleTime: 30_000,
   });
+  const businessCases = businessCasesQuery.data ?? [];
+
+  const notifications = useMemo(() => {
+    return getAllNotifications().slice(0, 4);
+  }, []);
+
+  /* ─────────────── Filtered Data By Selected Date Range ─────────────── */
+
+  const now = useMemo(() => new Date(), []);
+  const nowMs = now.getTime();
+
+  const dateFilterThresholdMs = useMemo(() => {
+    if (statusDateFilter === "30d") return nowMs - 30 * 86_400_000;
+    if (statusDateFilter === "90d") return nowMs - 90 * 86_400_000;
+    if (statusDateFilter === "year") return new Date(now.getFullYear(), 0, 1).getTime();
+    return 0;
+  }, [statusDateFilter, nowMs, now]);
+
+  const activeRows = useMemo(() => {
+    if (dateFilterThresholdMs === 0) return rows;
+    return rows.filter((mr) => {
+      const createdMs = parseDateMs(mr.creation) ?? parseDateMs(mr.transaction_date);
+      return createdMs != null && createdMs >= dateFilterThresholdMs;
+    });
+  }, [rows, dateFilterThresholdMs]);
+
+  /* ─────────────── Centralized Analytics Calculations ─────────────── */
 
   const analytics = useMemo(() => {
-    const now = new Date();
-    const thisMonth = monthKey(now);
+    const thirtyDaysAgoMs = nowMs - 30 * 86_400_000;
+    const sixtyDaysAgoMs = nowMs - 60 * 86_400_000;
 
-    const stageCounts: Record<StageKey, number> = {
-      draft: 0,
-      submitted: 0,
-      warehouse: 0,
-      procurement: 0,
-      completed: 0,
-    };
-
-    let warehouseReview = 0;
-    let sentToProcurement = 0;
     let draftCount = 0;
     let submittedCount = 0;
+    let warehouseCount = 0;
+    let procurementCount = 0;
     let completedCount = 0;
-    let direct = 0;
-    let indirect = 0;
-    let high = 0;
-    let medium = 0;
-    let low = 0;
-    let thisMonthCount = 0;
-    let todayCount = 0;
-    let clarification = 0;
-    let rejected = 0;
+    let cancelledCount = 0;
 
-    const approvalDays: number[] = [];
-    const issueDays: number[] = [];
+    let last30DaysCreated = 0;
+    let prior30DaysCreated = 0;
+    let completedThisMonth = 0;
 
-    const monthBuckets: { key: string; label: string; count: number }[] = [];
-    for (let i = 11; i >= 0; i -= 1) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const key = monthKey(d);
-      monthBuckets.push({ key, label: monthLabel(key), count: 0 });
-    }
-    const monthIndex = new Map(monthBuckets.map((m, i) => [m.key, i]));
+    let clarificationCount = 0;
+    let returnedCount = 0;
 
-    const todayStart = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-    ).getTime();
+    const warehouseProcessingDays: number[] = [];
+    const procurementProcessingDays: number[] = [];
+    const totalCycleDays: number[] = [];
 
-    for (const mr of rows) {
+    const currentMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+    for (const mr of activeRows) {
       const workflow = getMaterialRequestWorkflowStatus(mr);
       const status = (mr.status ?? "").trim();
       const docstatus = mr.docstatus ?? 0;
-      const stage = classifyStage(status, workflow, docstatus);
-      stageCounts[stage] += 1;
+      const stage = classifyWorkflowStage(status, workflow, docstatus);
 
-      if (isDraftRequest(status, workflow, docstatus)) draftCount += 1;
-      if (isSubmittedBucket(status, workflow, docstatus)) submittedCount += 1;
-      if (isUnderWarehouseReview(workflow)) {
-        warehouseReview += 1;
-      }
-      if (isSentToProcurement(workflow)) sentToProcurement += 1;
-      if (isCompletedRequest(status, workflow)) completedCount += 1;
+      // Reconciled KPI counts
+      if (stage === "draft") draftCount += 1;
+      else if (stage === "submitted") submittedCount += 1;
+      else if (stage === "warehouse") warehouseCount += 1;
+      else if (stage === "procurement") procurementCount += 1;
+      else if (stage === "completed") completedCount += 1;
+      else if (stage === "cancelled") cancelledCount += 1;
 
-      if (getMaterialRequestProcurementType(mr) === "Indirect") indirect += 1;
-      else direct += 1;
-
-      const pri = normalizePriority(mr.custom_priority);
-      if (pri === "High") high += 1;
-      else if (pri === "Low") low += 1;
-      else medium += 1;
-
-      const created =
-        parseDateMs(mr.creation) ?? parseDateMs(mr.transaction_date);
-      if (created != null) {
-        const key = monthKey(new Date(created));
-        const idx = monthIndex.get(key);
-        if (idx != null) monthBuckets[idx].count += 1;
-        if (key === thisMonth) thisMonthCount += 1;
-        if (created >= todayStart) todayCount += 1;
+      // Created time tracking
+      const createdMs = parseDateMs(mr.creation) ?? parseDateMs(mr.transaction_date);
+      if (createdMs != null) {
+        if (createdMs >= thirtyDaysAgoMs) last30DaysCreated += 1;
+        else if (createdMs >= sixtyDaysAgoMs) prior30DaysCreated += 1;
       }
 
+      // Attention indicators for pending actions
       const remarks = `${mr.custom_warehouse_remarks ?? ""} ${mr.remarks ?? ""} ${mr.custom_purpose ?? ""}`.toLowerCase();
-      if (remarks.includes("clarification")) clarification += 1;
-
-      if (
-        workflow === "Cancelled" ||
-        status === "Cancelled" ||
-        status === "Stopped" ||
-        status === "Rejected"
-      ) {
-        rejected += 1;
+      if (remarks.includes("clarification") || remarks.includes("info required") || remarks.includes("details needed")) {
+        clarificationCount += 1;
+      }
+      if (remarks.includes("returned") || status === "Returned" || workflow === "Cancelled") {
+        returnedCount += 1;
       }
 
-      if (!isDraftRequest(status, workflow, docstatus)) {
+      // Turnaround metrics
+      if (isWarehouseStage(workflow) || isProcurementStage(workflow) || isCompletedRequest(status, workflow)) {
         const d = daysBetween(mr.creation ?? mr.transaction_date, mr.modified);
-        if (d != null) approvalDays.push(d);
+        if (d != null && d >= 0) warehouseProcessingDays.push(d);
+      }
+      if (isProcurementStage(workflow) || isCompletedRequest(status, workflow)) {
+        const d = daysBetween(mr.creation ?? mr.transaction_date, mr.modified);
+        if (d != null && d >= 0) procurementProcessingDays.push(d);
       }
       if (isCompletedRequest(status, workflow)) {
-        const d = daysBetween(mr.transaction_date ?? mr.creation, mr.modified);
-        if (d != null) issueDays.push(d);
+        const d = daysBetween(mr.creation ?? mr.transaction_date, mr.modified);
+        if (d != null && d >= 0) totalCycleDays.push(d);
+
+        const modStr = String(mr.modified ?? mr.creation ?? "");
+        if (modStr.startsWith(currentMonthPrefix)) {
+          completedThisMonth += 1;
+        }
       }
     }
 
-    const total = rows.length;
-    const completionRate = total === 0 ? 0 : (completedCount / total) * 100;
+    const total = activeRows.length;
+
+    // Trend series generation using actual Material Request dates
+    const monthsBack = trendRange === "12m" ? 12 : trendRange === "6m" ? 6 : 1;
+    const trendBuckets: { label: string; count: number; date: string }[] = [];
+
+    if (trendRange === "30d") {
+      // Daily breakdown for last 30 days
+      for (let i = 29; i >= 0; i -= 1) {
+        const d = new Date(nowMs - i * 86_400_000);
+        const dayStr = d.toISOString().slice(0, 10);
+        const displayLabel = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+        trendBuckets.push({ label: displayLabel, count: 0, date: dayStr });
+      }
+      const dayMap = new Map(trendBuckets.map((b, idx) => [b.date, idx]));
+      for (const mr of activeRows) {
+        const createdMs = parseDateMs(mr.creation) ?? parseDateMs(mr.transaction_date);
+        if (createdMs != null) {
+          const dateStr = new Date(createdMs).toISOString().slice(0, 10);
+          const idx = dayMap.get(dateStr);
+          if (idx != null) trendBuckets[idx].count += 1;
+        }
+      }
+    } else {
+      // Monthly breakdown
+      for (let i = monthsBack - 1; i >= 0; i -= 1) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const key = monthKey(d);
+        trendBuckets.push({ label: monthLabel(key), count: 0, date: key });
+      }
+      const monthMap = new Map(trendBuckets.map((b, idx) => [b.date, idx]));
+      for (const mr of activeRows) {
+        const createdMs = parseDateMs(mr.creation) ?? parseDateMs(mr.transaction_date);
+        if (createdMs != null) {
+          const key = monthKey(new Date(createdMs));
+          const idx = monthMap.get(key);
+          if (idx != null) trendBuckets[idx].count += 1;
+        }
+      }
+    }
+
+    const hasTrendActivity = trendBuckets.some((b) => b.count > 0);
 
     return {
       total,
       draftCount,
       submittedCount,
-      warehouseReview,
-      sentToProcurement,
+      warehouseCount,
+      procurementCount,
       completedCount,
-      stageCounts,
-      direct,
-      indirect,
-      high,
-      medium,
-      low,
-      thisMonthCount,
-      todayCount,
-      clarification,
-      rejected,
-      monthBuckets,
-      avgApproval: avg(approvalDays),
-      avgIssue: avg(issueDays),
-      completionRate,
+      cancelledCount,
+      clarificationCount,
+      returnedCount,
+      trendBuckets,
+      hasTrendActivity,
+      avgWarehouseTime: avg(warehouseProcessingDays),
+      avgProcurementTime: avg(procurementProcessingDays),
+      avgTotalCycleTime: avg(totalCycleDays),
+      completedThisMonth,
     };
-  }, [rows]);
+  }, [activeRows, nowMs, now, trendRange]);
 
-  const performanceMetrics = useMemo(() => {
-    const now = new Date();
-    const thisMonth = monthKey(now);
-    const bomRows = bomHistoryQuery.data ?? [];
-    const bomUploadedMonth = bomRows.filter((row) => {
-      const d = row.upload_date?.slice(0, 7);
-      return d === thisMonth;
-    }).length;
+  /* ─────────────── Business Cases Analytics ─────────────── */
+  const businessCasesStats = useMemo(() => {
+    let draft = 0;
+    let inReview = 0;
+    let readyForRfq = 0;
+    let returned = 0;
+
+    for (const bc of businessCases) {
+      const st = bc.workflow_status || "";
+      if (st === "Draft") draft += 1;
+      else if (
+        [
+          "Submitted",
+          "Pending Engineering",
+          "Pending Engineering Manager",
+          "Pending Finance",
+          "Pending Finance Review",
+          "Pending Legal",
+          "Pending Legal Review",
+          "Pending Procurement",
+        ].includes(st)
+      ) {
+        inReview += 1;
+      } else if (["Approved", "Ready for RFQ", "Procurement Ready"].includes(st)) {
+        readyForRfq += 1;
+      } else if (st === "Returned" || st.startsWith("Revision Required")) {
+        returned += 1;
+      } else {
+        inReview += 1;
+      }
+    }
 
     return {
-      pendingRequests:
-        analytics.draftCount + analytics.submittedCount + analytics.warehouseReview,
-      pendingToday: analytics.todayCount,
-      bomUploadedMonth,
-      approvalRate: analytics.completionRate,
-      materialRequestsTotal: analytics.total,
+      total: businessCases.length,
+      draft,
+      inReview,
+      readyForRfq,
+      returned,
     };
-  }, [analytics, bomHistoryQuery.data]);
+  }, [businessCases]);
 
-  const recentRows = useMemo(() => rows.slice(0, 6), [rows]);
+  /* ─────────────── Issued Items Analytics ─────────────── */
+
+  const issuedItemsStats = useMemo(() => {
+    const total = pendingReceipts.length + pendingAcceptance;
+    let accepted = 0;
+    let returned = 0;
+
+    for (const r of pendingReceipts) {
+      const st = (r.status ?? "").toLowerCase();
+      if (st.includes("accept") || st.includes("complete")) accepted += 1;
+      else if (st.includes("return") || st.includes("reject")) returned += 1;
+    }
+
+    return {
+      total: Math.max(total, pendingAcceptance > 0 ? pendingAcceptance : 0),
+      pending: pendingAcceptance,
+      accepted,
+      returned,
+    };
+  }, [pendingReceipts, pendingAcceptance]);
+
+  /* ─────────────── Recent Requests (Top 5) ─────────────── */
+
+  const recentRows = useMemo(() => {
+    return activeRows.slice(0, 5);
+  }, [activeRows]);
+
+  /* ─────────────── Department User Pending Actions ─────────────── */
 
   const pendingActions = useMemo(() => {
     const actions: {
       id: string;
-      label: string;
-      detail: string;
+      title: string;
+      count: number;
+      description: string;
       to: string;
+      icon: typeof FileText;
       tone: string;
+      badgeColor: string;
     }[] = [];
 
     if (analytics.draftCount > 0) {
       actions.push({
         id: "drafts",
-        label: "Draft waiting to submit",
-        detail: `${analytics.draftCount} request${analytics.draftCount === 1 ? "" : "s"}`,
+        title: "Draft Requests",
+        count: analytics.draftCount,
+        description: `${analytics.draftCount} request${analytics.draftCount === 1 ? "" : "s"} waiting for submission`,
         to: "/material-requests/list?status=Draft",
-        tone: "border-neutral-200 bg-neutral-50 text-neutral-800",
+        icon: FileText,
+        tone: "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/70",
+        badgeColor: "bg-slate-100 text-slate-700",
+      });
+    }
+
+    if (analytics.returnedCount > 0) {
+      actions.push({
+        id: "returned-requests",
+        title: "Returned Requests",
+        count: analytics.returnedCount,
+        description: `${analytics.returnedCount} request${analytics.returnedCount === 1 ? "" : "s"} need correction`,
+        to: "/material-requests/list",
+        icon: AlertTriangle,
+        tone: "border-red-200 bg-red-50/30 hover:border-red-300 hover:bg-red-50/60",
+        badgeColor: "bg-red-100 text-red-800",
       });
     }
 
     if (pendingAcceptance > 0) {
       const first = pendingReceipts[0];
       actions.push({
-        id: "acceptance",
-        label: "Pending acceptance",
-        detail: `${pendingAcceptance} receipt${pendingAcceptance === 1 ? "" : "s"} awaiting signature`,
+        id: "pending-acceptance",
+        title: "Pending Acceptance",
+        count: pendingAcceptance,
+        description: `${pendingAcceptance} issued item${pendingAcceptance === 1 ? "" : "s"} awaiting acceptance`,
         to: first
           ? `/department/issued-items/receipts/${encodeURIComponent(first.issue_number)}`
           : "/department/issued-items/pending-acceptance",
-        tone: "border-amber-200 bg-amber-50 text-amber-900",
+        icon: PackageCheck,
+        tone: "border-amber-200 bg-amber-50/40 hover:border-amber-300 hover:bg-amber-50/70",
+        badgeColor: "bg-amber-100 text-amber-800",
       });
     }
 
-    if (analytics.clarification > 0) {
+    if (businessCasesStats.draft > 0 || analytics.clarificationCount > 0) {
+      const count = (businessCasesStats.draft || 0) + (analytics.clarificationCount || 0);
       actions.push({
-        id: "clarification",
-        label: "Clarification requested",
-        detail: `${analytics.clarification} request${analytics.clarification === 1 ? "" : "s"} need a response`,
-        to: "/material-requests/list",
-        tone: "border-sky-200 bg-sky-50 text-sky-900",
-      });
-    }
-
-    if (analytics.rejected > 0) {
-      actions.push({
-        id: "rejected",
-        label: "Rejected — needs updates",
-        detail: `${analytics.rejected} request${analytics.rejected === 1 ? "" : "s"}`,
-        to: "/material-requests/list",
-        tone: "border-red-200 bg-red-50 text-red-800",
+        id: "business-cases-action",
+        title: "Business Cases",
+        count,
+        description: `${count} business case${count === 1 ? "" : "s"} require draft review / submission`,
+        to: "/intake/business-cases",
+        icon: Briefcase,
+        tone: "border-sky-200 bg-sky-50/40 hover:border-sky-300 hover:bg-sky-50/70",
+        badgeColor: "bg-sky-100 text-sky-800",
       });
     }
 
     return actions;
   }, [
     analytics.draftCount,
-    analytics.clarification,
-    analytics.rejected,
+    analytics.returnedCount,
+    analytics.clarificationCount,
     pendingAcceptance,
     pendingReceipts,
+    businessCasesStats.draft,
   ]);
 
-  const activityItems = useMemo(() => {
-    return rows.slice(0, 8).map((mr) => {
-      const workflow = getMaterialRequestWorkflowStatus(mr);
-      return {
-        id: mr.name,
-        title: mr.name,
-        subtitle: workflow,
-        when: mr.modified ?? mr.creation ?? mr.transaction_date,
-        to: `/material-requests/${encodeURIComponent(mr.name)}`,
-      };
-    });
-  }, [rows]);
+  /* ─────────────── Status Overview Calculations ─────────────── */
 
-  const stageTotal = Math.max(
+  const stageCounts: Record<StageKey, number> = {
+    draft: analytics.draftCount,
+    submitted: analytics.submittedCount,
+    warehouse: analytics.warehouseCount,
+    procurement: analytics.procurementCount,
+    completed: analytics.completedCount,
+  };
+
+  const totalWorkflowSum = Math.max(
     1,
-    STAGE_META.reduce((s, m) => s + analytics.stageCounts[m.key], 0),
+    STAGE_CONFIG.reduce((sum, s) => sum + (stageCounts[s.key] || 0), 0),
   );
 
-  const distributionData = [
-    { name: "Direct", value: analytics.direct },
-    { name: "Indirect", value: analytics.indirect },
-  ].filter((d) => d.value > 0);
-
-  const priorityMax = Math.max(analytics.high, analytics.medium, analytics.low, 1);
-
-  const quickAccess = [
-    {
-      label: "New Request",
-      to: "/material-requests/new",
-      icon: Plus,
-      tone: "bg-primary-50 text-primary-700",
-    },
-    {
-      label: "My Requests",
-      to: "/material-requests/list",
-      icon: ClipboardList,
-      tone: "bg-sky-50 text-sky-700",
-    },
-    {
-      label: "Track Request",
-      to: "/material-requests/list",
-      icon: Eye,
-      tone: "bg-indigo-50 text-indigo-700",
-    },
-    {
-      label: "Issued Items",
-      to: "/department/issued-items/pending-acceptance",
-      icon: PackageCheck,
-      tone: "bg-amber-50 text-amber-700",
-    },
-    {
-      label: "Notifications",
-      to: "/notifications",
-      icon: Bell,
-      tone: "bg-neutral-100 text-neutral-700",
-    },
-  ] as const;
-
   return (
-    <div className="dashboard-stack px-6 py-1 gap-5">
-      {/* 1. Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 pb-1">
-        <DashboardHeader config={config} greetingName={greetingName} />
-        <div className="flex flex-wrap gap-2">
-          <Link
-            to="/material-requests/new"
-            className="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white no-underline hover:bg-primary-700"
-          >
-            <Plus className="h-4 w-4" />
-            New Material Request
-          </Link>
+    <div className="department-dashboard w-full box-border p-4 sm:p-6 md:p-8 2xl:p-10 space-y-6">
+      {/* ================================================================ */}
+      {/* 1. Header Banner                                                 */}
+      {/* ================================================================ */}
+      <div className="flex flex-col justify-between gap-4 border-b border-slate-200/80 pb-5 sm:flex-row sm:items-center">
+        <div>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-[30px] leading-tight">
+              Welcome back, Department User
+            </h1>
+            <span className="inline-flex items-center rounded-full border border-primary-200 bg-primary-50 px-2.5 py-0.5 text-xs font-semibold text-primary-700">
+              Department User
+            </span>
+          </div>
+          <p className="mt-1 text-[15px] text-slate-500 leading-normal">
+            Track your material requests, approvals, warehouse processing and procurement progress.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
           <Link
             to="/material-requests/list"
-            className="inline-flex items-center gap-2 rounded-lg border border-neutral-300 bg-white px-4 py-2.5 text-sm font-semibold text-neutral-800 no-underline hover:bg-neutral-50"
+            className="inline-flex h-10 sm:h-11 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-xs transition hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
           >
-            <ClipboardList className="h-4 w-4" />
+            <FileText className="h-4 w-4 text-slate-500" />
             View All Requests
+          </Link>
+          <Link
+            to="/material-requests/new"
+            className="inline-flex h-10 sm:h-11 items-center justify-center gap-1.5 rounded-lg bg-primary-600 px-5 text-sm font-semibold text-white shadow-xs transition hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+          >
+            <Plus className="h-4 w-4" />
+            + New Material Request
           </Link>
         </div>
       </div>
 
-      {/* 2. KPI Cards */}
-      {rowsQuery.isLoading ? (
-        <DashboardKpiSkeleton count={6} columns={6} />
-      ) : rowsQuery.isError ? (
-        <div className="flex flex-wrap items-start justify-between gap-3 rounded-card border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          <div className="flex min-w-0 items-start gap-2">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-            <div className="min-w-0">
-              <p className="font-semibold">Unable to load Material Requests</p>
-              <p className="mt-0.5 text-amber-800/90">{rowsErrorMessage}</p>
-            </div>
+      {/* Error state if API fails */}
+      {rowsQuery.isError && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50/80 p-4 text-sm text-red-900">
+          <div className="flex items-center gap-2.5">
+            <AlertTriangle className="h-5 w-5 text-red-600 shrink-0" />
+            <span>{rowsErrorMessage || "Unable to load dashboard data."}</span>
           </div>
           <button
             type="button"
             onClick={() => void rowsQuery.refetch()}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-800 shadow-xs hover:bg-red-50"
           >
             <RefreshCw className="h-3.5 w-3.5" />
-            Retry
+            Try again
           </button>
         </div>
-      ) : (
-        <DashboardKpiGrid columns={6}>
-          <DashboardKpiCard
-            label="Total Requests"
-            value={analytics.total}
-            to="/material-requests/list"
-            icon={TrendingUp}
-            iconClassName="bg-neutral-50 text-neutral-500"
-          />
-          <DashboardKpiCard
-            label="Draft"
-            value={analytics.draftCount}
-            to="/material-requests/list?status=Draft"
-            icon={FileText}
-            iconClassName="bg-neutral-50 text-neutral-700"
-            valueClassName="text-neutral-700"
-          />
-          <DashboardKpiCard
-            label="Submitted"
-            value={analytics.submittedCount}
-            to="/material-requests/list?status=Submitted"
-            icon={Send}
-            iconClassName="bg-amber-50 text-amber-700"
-            valueClassName="text-amber-700"
-          />
-          <DashboardKpiCard
-            label="Under Warehouse Review"
-            value={analytics.warehouseReview}
-            to="/material-requests/list?f=pending"
-            icon={Warehouse}
-            iconClassName="bg-sky-50 text-sky-700"
-            valueClassName="text-sky-700"
-          />
-          <DashboardKpiCard
-            label="Sent to Procurement"
-            value={analytics.sentToProcurement}
-            to="/material-requests/list?f=procurement"
-            icon={Truck}
-            iconClassName="bg-blue-50 text-blue-700"
-            valueClassName="text-blue-700"
-          />
-          <DashboardKpiCard
-            label="Completed"
-            value={analytics.completedCount}
-            to="/material-requests/list?status=Completed"
-            icon={CheckCircle2}
-            iconClassName="bg-emerald-50 text-emerald-700"
-            valueClassName="text-emerald-700"
-          />
-        </DashboardKpiGrid>
       )}
 
-      {/* 3. Request Status Overview */}
-      <Panel title="Request Status Overview" bodyClassName="py-4">
-        {rowsQuery.isLoading ? (
-          <Skeleton className="h-16 w-full" />
-        ) : rowsQuery.isError ? (
-          <p className="text-sm text-neutral-500">
-            Charts will appear once Material Requests load successfully.
-          </p>
-        ) : analytics.total === 0 ? (
-          <p className="text-sm text-neutral-500">No requests to visualize yet.</p>
-        ) : (
-          <div className="space-y-3">
-            <div className="flex h-3 w-full overflow-hidden rounded-full bg-neutral-100">
-              {STAGE_META.map((stage) => {
-                const count = analytics.stageCounts[stage.key];
-                if (count === 0) return null;
-                return (
-                  <div
-                    key={stage.key}
-                    className="h-full"
-                    style={{
-                      width: `${(count / stageTotal) * 100}%`,
-                      backgroundColor: stage.color,
-                    }}
-                    title={`${stage.label}: ${count}`}
-                  />
-                );
-              })}
+      {/* ================================================================ */}
+      {/* 2. KPI Summary Cards (6-Column Grid, Equal Height)               */}
+      {/* ================================================================ */}
+      {rowsQuery.isLoading ? (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div
+              key={i}
+              className="flex min-h-[136px] h-[138px] flex-col justify-between rounded-xl border border-slate-200 bg-white p-4 shadow-xs"
+            >
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="my-2 h-8 w-14" />
+              <Skeleton className="h-3 w-32" />
             </div>
-            <div className="flex flex-wrap gap-x-5 gap-y-2">
-              {STAGE_META.map((stage) => (
-                <div key={stage.key} className="flex items-center gap-2 text-xs">
-                  <span
-                    className="h-2.5 w-2.5 rounded-full"
-                    style={{ backgroundColor: stage.color }}
-                  />
-                  <span className="font-medium text-neutral-600">
-                    {stage.label}
-                  </span>
-                  <span className="tabular-nums font-semibold text-neutral-900">
-                    {analytics.stageCounts[stage.key]}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </Panel>
-
-      {/* 4 + 5. Recent Requests + Pending Actions */}
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[2fr_1fr]">
-        <div>
-          <Panel
-            title="Recent Requests"
-            action={
-              <Link
-                to="/material-requests/list"
-                className="text-xs font-semibold text-primary-600 no-underline"
-              >
-                View all
-              </Link>
-            }
-            bodyClassName="p-0"
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
+          {/* 1. TOTAL REQUESTS */}
+          <Link
+            to="/material-requests/list"
+            className="group flex min-h-[136px] h-[138px] flex-col justify-between rounded-xl border border-slate-200/90 bg-white p-4 shadow-xs transition hover:-translate-y-0.5 hover:border-primary-300 hover:shadow-sm"
           >
-            {rowsQuery.isLoading ? (
-              <div className="space-y-2 p-4">
-                {[1, 2, 3, 4].map((i) => (
-                  <Skeleton key={i} className="h-10 w-full" />
-                ))}
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-[12px] font-bold uppercase tracking-wider text-slate-500 leading-tight max-w-[calc(100%-44px)]">
+                TOTAL REQUESTS
+              </span>
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition group-hover:bg-primary-50 group-hover:text-primary-600">
+                <Layers className="h-4 w-4" />
+              </span>
+            </div>
+            <div className="mt-2">
+              <div className="text-[30px] font-bold tabular-nums text-slate-900 leading-none">
+                {analytics.total}
               </div>
-            ) : rowsQuery.isError ? (
-              <div className="flex flex-col items-center gap-3 px-5 py-10 text-center">
-                <p className="text-sm text-neutral-600">{rowsErrorMessage}</p>
+              <div className="mt-1.5 text-[13px] text-slate-500 truncate">
+                All material requests
+              </div>
+            </div>
+          </Link>
+
+          {/* 2. DRAFT */}
+          <Link
+            to="/material-requests/list?status=Draft"
+            className="group flex min-h-[136px] h-[138px] flex-col justify-between rounded-xl border border-slate-200/90 bg-white p-4 shadow-xs transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-sm"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-[12px] font-bold uppercase tracking-wider text-slate-500 leading-tight max-w-[calc(100%-44px)]">
+                DRAFT
+              </span>
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition group-hover:bg-slate-200">
+                <FileText className="h-4 w-4" />
+              </span>
+            </div>
+            <div className="mt-2">
+              <div className="text-[30px] font-bold tabular-nums text-slate-800 leading-none">
+                {analytics.draftCount}
+              </div>
+              <div className="mt-1.5 text-[13px] text-slate-500 truncate">
+                Waiting to be submitted
+              </div>
+            </div>
+          </Link>
+
+          {/* 3. SUBMITTED */}
+          <Link
+            to="/material-requests/list?status=Submitted"
+            className="group flex min-h-[136px] h-[138px] flex-col justify-between rounded-xl border border-slate-200/90 bg-white p-4 shadow-xs transition hover:-translate-y-0.5 hover:border-amber-300 hover:shadow-sm"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-[12px] font-bold uppercase tracking-wider text-slate-500 leading-tight max-w-[calc(100%-44px)]">
+                SUBMITTED
+              </span>
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600 transition group-hover:bg-amber-100">
+                <Send className="h-4 w-4" />
+              </span>
+            </div>
+            <div className="mt-2">
+              <div className="text-[30px] font-bold tabular-nums text-amber-700 leading-none">
+                {analytics.submittedCount}
+              </div>
+              <div className="mt-1.5 text-[13px] text-slate-500 truncate">
+                Awaiting warehouse processing
+              </div>
+            </div>
+          </Link>
+
+          {/* 4. UNDER WAREHOUSE */}
+          <Link
+            to="/material-requests/list?f=pending"
+            className="group flex min-h-[136px] h-[138px] flex-col justify-between rounded-xl border border-slate-200/90 bg-white p-4 shadow-xs transition hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-sm"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-[12px] font-bold uppercase tracking-wider text-slate-500 leading-tight max-w-[calc(100%-44px)]">
+                UNDER WAREHOUSE
+              </span>
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-600 transition group-hover:bg-sky-100">
+                <Warehouse className="h-4 w-4" />
+              </span>
+            </div>
+            <div className="mt-2">
+              <div className="text-[30px] font-bold tabular-nums text-sky-700 leading-none">
+                {analytics.warehouseCount}
+              </div>
+              <div className="mt-1.5 text-[13px] text-slate-500 truncate">
+                Currently being processed
+              </div>
+            </div>
+          </Link>
+
+          {/* 5. SENT TO PROCUREMENT */}
+          <Link
+            to="/material-requests/list?f=procurement"
+            className="group flex min-h-[136px] h-[138px] flex-col justify-between rounded-xl border border-slate-200/90 bg-white p-4 shadow-xs transition hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-sm"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-[12px] font-bold uppercase tracking-wider text-slate-500 leading-tight max-w-[calc(100%-44px)]">
+                SENT TO PROCUREMENT
+              </span>
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600 transition group-hover:bg-blue-100">
+                <Truck className="h-4 w-4" />
+              </span>
+            </div>
+            <div className="mt-2">
+              <div className="text-[30px] font-bold tabular-nums text-blue-700 leading-none">
+                {analytics.procurementCount}
+              </div>
+              <div className="mt-1.5 text-[13px] text-slate-500 truncate">
+                Procurement processing
+              </div>
+            </div>
+          </Link>
+
+          {/* 6. COMPLETED */}
+          <Link
+            to="/material-requests/list?status=Completed"
+            className="group flex min-h-[136px] h-[138px] flex-col justify-between rounded-xl border border-slate-200/90 bg-white p-4 shadow-xs transition hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-sm"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-[12px] font-bold uppercase tracking-wider text-slate-500 leading-tight max-w-[calc(100%-44px)]">
+                COMPLETED
+              </span>
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 transition group-hover:bg-emerald-100">
+                <CheckCircle2 className="h-4 w-4" />
+              </span>
+            </div>
+            <div className="mt-2">
+              <div className="text-[30px] font-bold tabular-nums text-emerald-700 leading-none">
+                {analytics.completedCount}
+              </div>
+              <div className="mt-1.5 text-[13px] text-slate-500 truncate">
+                Successfully completed
+              </div>
+            </div>
+          </Link>
+        </div>
+      )}
+
+      {/* ================================================================ */}
+      {/* 3. REQUEST STATUS OVERVIEW + REQUEST TREND (Analytical Row)      */}
+      {/* ================================================================ */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-stretch">
+        {/* Left: Request Status Overview Card (5 Cols) */}
+        <div className="flex min-h-[350px] flex-col justify-between rounded-xl border border-slate-200/90 bg-white p-6 shadow-xs lg:col-span-5">
+          <div>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">
+                  Request Status Overview
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Current distribution across procurement stages
+                </p>
+              </div>
+
+              {/* Status Date Filter */}
+              <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-medium text-slate-600">
                 <button
                   type="button"
-                  onClick={() => void rowsQuery.refetch()}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs font-semibold text-neutral-800 hover:bg-neutral-50"
+                  onClick={() => setStatusDateFilter("30d")}
+                  className={`rounded-md px-2 py-1 transition ${
+                    statusDateFilter === "30d"
+                      ? "bg-primary-600 font-semibold text-white shadow-xs"
+                      : "hover:text-slate-900"
+                  }`}
                 >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  Retry
+                  Last 30 Days
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStatusDateFilter("90d")}
+                  className={`rounded-md px-2 py-1 transition ${
+                    statusDateFilter === "90d"
+                      ? "bg-primary-600 font-semibold text-white shadow-xs"
+                      : "hover:text-slate-900"
+                  }`}
+                >
+                  Last 90 Days
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStatusDateFilter("year")}
+                  className={`rounded-md px-2 py-1 transition ${
+                    statusDateFilter === "year"
+                      ? "bg-primary-600 font-semibold text-white shadow-xs"
+                      : "hover:text-slate-900"
+                  }`}
+                >
+                  This Year
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStatusDateFilter("all")}
+                  className={`rounded-md px-2 py-1 transition ${
+                    statusDateFilter === "all"
+                      ? "bg-primary-600 font-semibold text-white shadow-xs"
+                      : "hover:text-slate-900"
+                  }`}
+                >
+                  All Time
                 </button>
               </div>
-            ) : recentRows.length === 0 ? (
-              <div className="px-5 py-10 text-center text-sm text-neutral-500">
-                No Material Requests found.
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[720px] text-left text-sm">
-                  <thead className="bg-neutral-50 text-[11px] font-semibold uppercase tracking-wide text-neutral-500">
-                    <tr>
-                      <th className="px-4 py-2.5">MR Number</th>
-                      <th className="px-4 py-2.5">Created Date</th>
-                      <th className="px-4 py-2.5">Request Type</th>
-                      <th className="px-4 py-2.5">Priority</th>
-                      <th className="px-4 py-2.5">Current Status</th>
-                      <th className="px-4 py-2.5">Workflow Progress</th>
-                      <th className="px-4 py-2.5 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-neutral-100">
-                    {recentRows.map((mr) => {
-                      const workflow = getMaterialRequestWorkflowStatus(mr);
-                      const pct = workflowProgressPct(
-                        workflow,
-                        mr.docstatus ?? 0,
-                      );
+            </div>
+
+            <div className="pt-4">
+              {rowsQuery.isLoading ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-4 w-full rounded-full" />
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    {[1, 2, 3, 4, 5].map((i) => (
+                      <Skeleton key={i} className="h-14 w-full rounded-lg" />
+                    ))}
+                  </div>
+                </div>
+              ) : analytics.total === 0 ? (
+                <div className="py-8 text-center text-sm text-slate-500">
+                  No request status data available for this filter.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {/* Horizontal Stacked Status Bar */}
+                  <div className="flex h-3 w-full overflow-hidden rounded-full bg-slate-100">
+                    {STAGE_CONFIG.map((stage) => {
+                      const count = stageCounts[stage.key] || 0;
+                      if (count === 0) return null;
+                      const pct = (count / totalWorkflowSum) * 100;
                       return (
-                        <tr key={mr.name} className="hover:bg-neutral-50/80">
-                          <td className="px-4 py-2.5">
-                            <Link
-                              to={`/material-requests/${encodeURIComponent(mr.name)}`}
-                              className="font-semibold text-primary-600 no-underline"
-                            >
-                              {mr.name}
-                            </Link>
-                          </td>
-                          <td className="px-4 py-2.5 text-neutral-600">
-                            {formatDate(mr.creation ?? mr.transaction_date)}
-                          </td>
-                          <td className="px-4 py-2.5">
-                            <ProcurementTypeBadge
-                              type={getMaterialRequestProcurementType(mr)}
-                              withIcon={false}
-                            />
-                          </td>
-                          <td className="px-4 py-2.5">
-                            {mr.custom_priority ? (
-                              <PriorityBadge priority={mr.custom_priority} />
-                            ) : (
-                              <span className="text-neutral-400">—</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-2.5">
-                            <StatusBadge status={workflow} />
-                          </td>
-                          <td className="px-4 py-2.5">
-                            <div className="flex min-w-[100px] items-center gap-2">
-                              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-neutral-100">
-                                <div
-                                  className="h-full rounded-full bg-primary-500"
-                                  style={{ width: `${pct}%` }}
-                                />
-                              </div>
-                              <span className="w-8 text-right text-[11px] tabular-nums text-neutral-500">
-                                {pct}%
-                              </span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-2.5 text-right">
-                            <Link
-                              to={`/material-requests/${encodeURIComponent(mr.name)}`}
-                              className="inline-flex items-center gap-1 text-xs font-semibold text-primary-700 no-underline hover:underline"
-                            >
-                              <Eye className="h-3.5 w-3.5" />
-                              View
-                            </Link>
-                          </td>
-                        </tr>
+                        <div
+                          key={stage.key}
+                          className="h-full transition-all duration-300 first:rounded-l-full last:rounded-r-full hover:opacity-90"
+                          style={{
+                            width: `${pct}%`,
+                            backgroundColor: stage.color,
+                          }}
+                          title={`${stage.label}: ${count} (${Math.round(pct)}%)`}
+                        />
                       );
                     })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </Panel>
-        </div>
-
-        <div>
-          <Panel title="Pending Actions" bodyClassName="space-y-2">
-            {pendingActions.length === 0 ? (
-              <div className="rounded-lg border border-emerald-100 bg-emerald-50/60 px-3 py-6 text-center">
-                <p className="text-sm font-semibold text-emerald-800">
-                  No pending actions
-                </p>
-                <p className="mt-1 text-xs text-emerald-700">
-                  You’re all caught up.
-                </p>
-              </div>
-            ) : (
-              pendingActions.map((action) => (
-                <Link
-                  key={action.id}
-                  to={action.to}
-                  className={`flex items-start justify-between gap-3 rounded-lg border px-3 py-2.5 no-underline ${action.tone}`}
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold">{action.label}</p>
-                    <p className="mt-0.5 text-xs opacity-80">{action.detail}</p>
                   </div>
-                  <span className="shrink-0 text-xs font-semibold">Open</span>
-                </Link>
-              ))
-            )}
-          </Panel>
-        </div>
-      </div>
 
-      {/* 6 + 7 + 8. Charts row */}
-      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-12">
-        <div className="md:col-span-2 xl:col-span-5">
-          <Panel title="Monthly Request Trend" bodyClassName="pt-2">
-            <div className="h-[200px] w-full">
+                  {/* Status breakdown mini-cards */}
+                  <div className="grid grid-cols-3 gap-2.5">
+                    {STAGE_CONFIG.map((stage) => {
+                      const count = stageCounts[stage.key] || 0;
+                      const pct = Math.round((count / totalWorkflowSum) * 100);
+                      return (
+                        <div
+                          key={stage.key}
+                          className="flex h-[74px] flex-col justify-between rounded-lg border border-slate-100 bg-slate-50/60 p-3"
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className="h-2 w-2 rounded-full"
+                              style={{ backgroundColor: stage.color }}
+                            />
+                            <span className="text-[13px] font-medium text-slate-600">
+                              {stage.label}
+                            </span>
+                          </div>
+                          <div className="mt-1 flex items-baseline justify-between">
+                            <span className="text-[20px] font-bold tabular-nums text-slate-900">
+                              {count}
+                            </span>
+                            <span className="text-[12px] font-semibold text-slate-500">
+                              {pct}%
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Right: Requests Trend Chart (7 Cols) */}
+        <div className="flex min-h-[350px] flex-col justify-between rounded-xl border border-slate-200/90 bg-white p-6 shadow-xs lg:col-span-7">
+          <div>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">
+                  Requests Trend
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Requisition volume over time
+                </p>
+              </div>
+
+              <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-medium text-slate-600">
+                <button
+                  type="button"
+                  onClick={() => setTrendRange("30d")}
+                  className={`rounded-md px-2.5 py-1 transition ${
+                    trendRange === "30d"
+                      ? "bg-primary-600 font-semibold text-white shadow-xs"
+                      : "hover:text-slate-900"
+                  }`}
+                >
+                  Last 30 Days
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTrendRange("6m")}
+                  className={`rounded-md px-2.5 py-1 transition ${
+                    trendRange === "6m"
+                      ? "bg-primary-600 font-semibold text-white shadow-xs"
+                      : "hover:text-slate-900"
+                  }`}
+                >
+                  Last 6 Months
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTrendRange("12m")}
+                  className={`rounded-md px-2.5 py-1 transition ${
+                    trendRange === "12m"
+                      ? "bg-primary-600 font-semibold text-white shadow-xs"
+                      : "hover:text-slate-900"
+                  }`}
+                >
+                  Last 12 Months
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-3 h-[230px] w-full">
               {rowsQuery.isLoading ? (
-                <Skeleton className="h-full w-full" />
+                <Skeleton className="h-full w-full rounded-lg" />
+              ) : !analytics.hasTrendActivity ? (
+                <div className="flex h-full items-center justify-center text-sm text-slate-400">
+                  No request activity available for this period.
+                </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={analytics.monthBuckets}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
-                    <XAxis dataKey="label" {...CHART_AXIS} />
-                    <YAxis {...CHART_AXIS} allowDecimals={false} width={28} />
-                    <Tooltip contentStyle={CHART_TOOLTIP} />
+                  <LineChart data={analytics.trendBuckets} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
+                    <XAxis
+                      dataKey="label"
+                      tick={{ fill: "#64748B", fontSize: 11 }}
+                      axisLine={{ stroke: "#E2E8F0" }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tick={{ fill: "#64748B", fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                      allowDecimals={false}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "#FFFFFF",
+                        border: "1px solid #E2E8F0",
+                        borderRadius: 8,
+                        boxShadow: "0 4px 12px rgba(15,23,42,0.08)",
+                        fontSize: 12,
+                      }}
+                      formatter={(value: any) => [`${value ?? 0} requests`, "Requests"]}
+                    />
                     <Line
                       type="monotone"
                       dataKey="count"
-                      name="Requests"
                       stroke="#1993FF"
-                      strokeWidth={2}
-                      dot={false}
+                      strokeWidth={2.5}
+                      dot={{ fill: "#1993FF", strokeWidth: 2, r: 3 }}
+                      activeDot={{ r: 5, stroke: "#1554D1", strokeWidth: 2 }}
                       isAnimationActive={false}
                     />
                   </LineChart>
                 </ResponsiveContainer>
               )}
             </div>
-          </Panel>
-        </div>
-
-        <div className="xl:col-span-3">
-          <Panel title="Request Distribution" bodyClassName="pt-1">
-            <div className="flex h-[200px] flex-col items-center justify-center">
-              {rowsQuery.isLoading ? (
-                <Skeleton className="h-36 w-36 rounded-full" />
-              ) : distributionData.length === 0 ? (
-                <p className="text-sm text-neutral-500">No data</p>
-              ) : (
-                <>
-                  <div className="h-[140px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={distributionData}
-                          dataKey="value"
-                          nameKey="name"
-                          innerRadius={42}
-                          outerRadius={62}
-                          paddingAngle={2}
-                          isAnimationActive={false}
-                        >
-                          {distributionData.map((entry) => (
-                            <Cell
-                              key={entry.name}
-                              fill={
-                                PIE_COLORS[entry.name as keyof typeof PIE_COLORS]
-                              }
-                            />
-                          ))}
-                        </Pie>
-                        <Tooltip contentStyle={CHART_TOOLTIP} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <div className="mt-1 flex gap-4 text-xs">
-                    <span className="inline-flex items-center gap-1.5 text-neutral-600">
-                      <span className="h-2 w-2 rounded-full bg-[#1993FF]" />
-                      Direct {analytics.direct}
-                    </span>
-                    <span className="inline-flex items-center gap-1.5 text-neutral-600">
-                      <span className="h-2 w-2 rounded-full bg-[#64748B]" />
-                      Indirect {analytics.indirect}
-                    </span>
-                  </div>
-                </>
-              )}
-            </div>
-          </Panel>
-        </div>
-
-        <div className="xl:col-span-4">
-          <Panel title="Priority Breakdown" bodyClassName="space-y-3 py-4">
-            {(
-              [
-                {
-                  label: "High",
-                  value: analytics.high,
-                  bar: "bg-amber-500",
-                  chip: "bg-amber-50 text-amber-800",
-                },
-                {
-                  label: "Medium",
-                  value: analytics.medium,
-                  bar: "bg-sky-500",
-                  chip: "bg-sky-50 text-sky-800",
-                },
-                {
-                  label: "Low",
-                  value: analytics.low,
-                  bar: "bg-neutral-400",
-                  chip: "bg-neutral-100 text-neutral-700",
-                },
-              ] as const
-            ).map((row) => (
-              <div key={row.label} className="space-y-1.5">
-                <div className="flex items-center justify-between text-xs">
-                  <span
-                    className={`rounded-full px-2 py-0.5 font-semibold ${row.chip}`}
-                  >
-                    {row.label}
-                  </span>
-                  <span className="tabular-nums font-semibold text-neutral-900">
-                    {row.value}
-                  </span>
-                </div>
-                <div className="h-2 overflow-hidden rounded-full bg-neutral-100">
-                  <div
-                    className={`h-full rounded-full ${row.bar}`}
-                    style={{
-                      width: `${(row.value / priorityMax) * 100}%`,
-                    }}
-                  />
-                </div>
-              </div>
-            ))}
-          </Panel>
+          </div>
         </div>
       </div>
 
-      {/* Department Performance — compact executive KPIs (full width) */}
-      <Panel title="Department Performance" bodyClassName="!py-5 !pb-5">
-        <DepartmentPerformanceKpis
-          loading={rowsQuery.isLoading || bomHistoryQuery.isLoading}
-          metrics={performanceMetrics}
-        />
-      </Panel>
+      {/* ================================================================ */}
+      {/* 4. RECENT MATERIAL REQUESTS + PENDING ACTIONS                    */}
+      {/* ================================================================ */}
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
+        {/* Left: Recent Material Requests (8 Cols / ~65%) */}
+        <div className="flex flex-col rounded-xl border border-slate-200/90 bg-white p-5 shadow-xs xl:col-span-8">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3.5">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">
+                RECENT MATERIAL REQUESTS
+              </h2>
+              <p className="text-xs text-slate-500">
+                Latest procurement requisitions from your department
+              </p>
+            </div>
+            <Link
+              to="/material-requests/list"
+              className="text-xs font-semibold text-primary-600 hover:text-primary-700"
+            >
+              View All →
+            </Link>
+          </div>
 
-      {/* Activity + Quick Access */}
-      <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-        <div>
-          <Panel title="Activity Timeline" bodyClassName="max-h-[260px] space-y-0 overflow-y-auto p-0">
+          <div className="flex-1 overflow-x-auto pt-2">
             {rowsQuery.isLoading ? (
-              <div className="space-y-2 p-4">
-                {[1, 2, 3].map((i) => (
-                  <Skeleton key={i} className="h-12 w-full" />
+              <div className="space-y-3 p-2">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <Skeleton key={i} className="h-10 w-full rounded" />
                 ))}
               </div>
-            ) : activityItems.length === 0 ? (
-              <p className="px-4 py-8 text-center text-sm text-neutral-500">
-                No recent updates.
-              </p>
+            ) : recentRows.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <FileText className="h-10 w-10 text-slate-300" />
+                <p className="mt-2 text-sm font-semibold text-slate-700">No Recent Requests</p>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Create your first Material Request to get started.
+                </p>
+                <Link
+                  to="/material-requests/new"
+                  className="mt-3 inline-flex items-center gap-1 rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-primary-700"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  New Request
+                </Link>
+              </div>
             ) : (
-              <ul className="divide-y divide-neutral-100">
-                {activityItems.map((item) => (
-                  <li key={item.id}>
-                    <Link
-                      to={item.to}
-                      className="flex items-start gap-3 px-4 py-3 no-underline hover:bg-neutral-50"
-                    >
-                      <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-primary-500" />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-neutral-900">
-                          {item.title}
-                        </p>
-                        <p className="truncate text-xs text-neutral-500">
-                          {item.subtitle}
-                        </p>
-                      </div>
-                      <time className="shrink-0 text-[11px] text-neutral-400">
-                        {item.when ? formatDateTime(item.when) : "—"}
-                      </time>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
+              <table className="w-full min-w-[680px] text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-100 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                    <th className="py-2.5 pr-3 pl-1">MR Number</th>
+                    <th className="px-3 py-2.5">Created Date</th>
+                    <th className="px-3 py-2.5">Type</th>
+                    <th className="px-3 py-2.5">Priority</th>
+                    <th className="px-3 py-2.5">Current Status</th>
+                    <th className="px-3 py-2.5">Workflow</th>
+                    <th className="py-2.5 pr-1 pl-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {recentRows.map((mr) => {
+                    const workflow = getMaterialRequestWorkflowStatus(mr);
+                    const progress = workflowProgressPct(workflow, mr.docstatus ?? 0);
+                    return (
+                      <tr
+                        key={mr.name}
+                        className="transition hover:bg-slate-50/80 h-14"
+                      >
+                        <td className="py-3 pr-3 pl-1">
+                          <Link
+                            to={`/material-requests/${encodeURIComponent(mr.name)}`}
+                            className="font-bold text-primary-600 hover:text-primary-800"
+                          >
+                            {mr.name}
+                          </Link>
+                        </td>
+                        <td className="px-3 py-3 text-slate-600">
+                          {formatDate(mr.creation ?? mr.transaction_date)}
+                        </td>
+                        <td className="px-3 py-3">
+                          <ProcurementTypeBadge
+                            type={getMaterialRequestProcurementType(mr)}
+                            withIcon={false}
+                          />
+                        </td>
+                        <td className="px-3 py-3">
+                          <PriorityBadge priority={mr.custom_priority || "Medium"} />
+                        </td>
+                        <td className="px-3 py-3">
+                          <StatusBadge status={workflow} />
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="flex min-w-[90px] items-center gap-2">
+                            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
+                              <div
+                                className="h-full rounded-full bg-primary-500 transition-all"
+                                style={{ width: `${progress}%` }}
+                              />
+                            </div>
+                            <span className="w-7 text-right text-[11px] font-semibold tabular-nums text-slate-500">
+                              {progress}%
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-3 pr-1 pl-3 text-right">
+                          <Link
+                            to={`/material-requests/${encodeURIComponent(mr.name)}`}
+                            className="inline-flex items-center gap-1 rounded px-2 py-1 font-semibold text-primary-700 transition hover:bg-primary-50 hover:text-primary-900"
+                          >
+                            View →
+                          </Link>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             )}
-          </Panel>
+          </div>
         </div>
 
-        <div>
-          <Panel title="Quick Access" bodyClassName="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-2">
-            {quickAccess.map((item) => {
-              const Icon = item.icon;
-              return (
-                <Link
-                  key={item.label}
-                  to={item.to}
-                  className="flex items-center gap-2.5 rounded-lg border border-neutral-200 bg-white px-3 py-2.5 no-underline transition-colors hover:border-primary-200 hover:bg-primary-50/40"
-                >
-                  <span
-                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${item.tone}`}
+        {/* Right: Pending Actions (4 Cols / ~35%) */}
+        <div className="flex flex-col rounded-xl border border-slate-200/90 bg-white p-5 shadow-xs xl:col-span-4">
+          <div className="border-b border-slate-100 pb-3">
+            <h2 className="text-sm font-bold text-slate-900">PENDING ACTIONS</h2>
+            <p className="text-xs text-slate-500">
+              Department user tasks requiring action
+            </p>
+          </div>
+
+          <div className="mt-3 flex-1 space-y-2.5">
+            {rowsQuery.isLoading ? (
+              <div className="space-y-2">
+                <Skeleton className="h-16 w-full rounded-lg" />
+                <Skeleton className="h-16 w-full rounded-lg" />
+              </div>
+            ) : pendingActions.length === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center rounded-lg border border-emerald-100 bg-emerald-50/40 p-6 text-center">
+                <CheckCircle2 className="h-8 w-8 text-emerald-600" />
+                <p className="mt-2 text-sm font-bold text-emerald-900">
+                  You&apos;re all caught up.
+                </p>
+                <p className="mt-0.5 text-xs text-emerald-700">
+                  No pending department actions.
+                </p>
+              </div>
+            ) : (
+              pendingActions.map((action) => {
+                const Icon = action.icon;
+                return (
+                  <Link
+                    key={action.id}
+                    to={action.to}
+                    className={`group flex items-center justify-between rounded-xl border p-3 transition ${action.tone}`}
                   >
-                    <Icon className="h-4 w-4" />
-                  </span>
-                  <span className="text-xs font-semibold text-neutral-800">
-                    {item.label}
-                  </span>
-                </Link>
-              );
-            })}
-          </Panel>
+                    <div className="flex min-w-0 items-start gap-3">
+                      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white shadow-xs">
+                        <Icon className="h-3.5 w-3.5" />
+                      </span>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <p className="truncate text-xs font-bold text-slate-900">
+                            {action.title}
+                          </p>
+                          <span
+                            className={`rounded-full px-1.5 py-0.2 text-[10px] font-bold ${action.badgeColor}`}
+                          >
+                            {action.count}
+                          </span>
+                        </div>
+                        <p className="truncate text-[11px] text-slate-500">
+                          {action.description}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="shrink-0 text-xs font-bold text-primary-600 transition group-hover:translate-x-0.5">
+                      Open →
+                    </span>
+                  </Link>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ================================================================ */}
+      {/* 5. ISSUED ITEMS + BUSINESS NEEDS (Two-Column Section)            */}
+      {/* ================================================================ */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        {/* Left: Issued Items Summary (6 Cols) */}
+        <div className="flex flex-col justify-between rounded-xl border border-slate-200/90 bg-white p-5 shadow-xs lg:col-span-6">
+          <div>
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-50 text-sky-600">
+                  <PackageCheck className="h-4 w-4" />
+                </span>
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">Issued Items</h2>
+                  <p className="text-xs text-slate-500">Material issue receipts & acceptances</p>
+                </div>
+              </div>
+              <span className="text-sm font-bold tabular-nums text-slate-800">
+                {issuedItemsStats.total} Total
+              </span>
+            </div>
+
+            <div className="mt-4 grid grid-cols-3 gap-2.5">
+              <div className="rounded-lg border border-amber-100 bg-amber-50/50 p-2.5 text-center">
+                <div className="text-xs font-medium text-amber-800">Pending Acceptance</div>
+                <div className="mt-1 text-lg font-bold tabular-nums text-amber-900">
+                  {issuedItemsStats.pending}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-emerald-100 bg-emerald-50/50 p-2.5 text-center">
+                <div className="text-xs font-medium text-emerald-800">Accepted</div>
+                <div className="mt-1 text-lg font-bold tabular-nums text-emerald-900">
+                  {issuedItemsStats.accepted}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-2.5 text-center">
+                <div className="text-xs font-medium text-slate-600">Returned</div>
+                <div className="mt-1 text-lg font-bold tabular-nums text-slate-800">
+                  {issuedItemsStats.returned}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 border-t border-slate-100 pt-3 text-right">
+            <Link
+              to="/department/issued-items/pending-acceptance"
+              className="text-xs font-semibold text-primary-600 hover:text-primary-800"
+            >
+              View Issued Items →
+            </Link>
+          </div>
+        </div>
+
+        {/* Right: Business Cases Summary (6 Cols) */}
+        <div className="flex flex-col justify-between rounded-xl border border-slate-200/90 bg-white p-5 shadow-xs lg:col-span-6">
+          <div>
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-50 text-sky-600">
+                  <Briefcase className="h-4 w-4" />
+                </span>
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">Business Cases</h2>
+                  <p className="text-xs text-slate-500">Authoritative intake justification & workflow records</p>
+                </div>
+              </div>
+              <span className="text-sm font-bold tabular-nums text-slate-800">
+                {businessCasesStats.total} Total
+              </span>
+            </div>
+
+            <div className="mt-4 grid grid-cols-4 gap-2">
+              <Link
+                to="/intake/business-cases?tab=drafts"
+                className="rounded-lg border border-slate-200/80 bg-slate-50/60 p-2 text-center transition hover:border-slate-300 hover:bg-slate-100/70"
+              >
+                <div className="text-[11px] font-medium text-slate-600">Draft</div>
+                <div className="mt-1 text-base font-bold tabular-nums text-slate-800">
+                  {businessCasesStats.draft}
+                </div>
+              </Link>
+
+              <Link
+                to="/intake/business-cases?tab=submitted"
+                className="rounded-lg border border-amber-200/80 bg-amber-50/50 p-2 text-center transition hover:border-amber-300 hover:bg-amber-100/60"
+              >
+                <div className="text-[11px] font-medium text-amber-800">In Review</div>
+                <div className="mt-1 text-base font-bold tabular-nums text-amber-900">
+                  {businessCasesStats.inReview}
+                </div>
+              </Link>
+
+              <Link
+                to="/intake/business-cases?tab=completed"
+                className="rounded-lg border border-emerald-200/80 bg-emerald-50/50 p-2 text-center transition hover:border-emerald-300 hover:bg-emerald-100/60"
+              >
+                <div className="text-[11px] font-medium text-emerald-800">Ready for RFQ</div>
+                <div className="mt-1 text-base font-bold tabular-nums text-emerald-900">
+                  {businessCasesStats.readyForRfq}
+                </div>
+              </Link>
+
+              <Link
+                to="/intake/business-cases?tab=returned"
+                className="rounded-lg border border-orange-200/80 bg-orange-50/50 p-2 text-center transition hover:border-orange-300 hover:bg-orange-100/60"
+              >
+                <div className="text-[11px] font-medium text-orange-800">Returned</div>
+                <div className="mt-1 text-base font-bold tabular-nums text-orange-900">
+                  {businessCasesStats.returned}
+                </div>
+              </Link>
+            </div>
+          </div>
+
+          <div className="mt-4 border-t border-slate-100 pt-3 text-right">
+            <Link
+              to="/intake/business-cases"
+              className="text-xs font-semibold text-primary-600 hover:text-primary-800"
+            >
+              View Business Cases →
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* ================================================================ */}
+      {/* 6. REQUEST PROCESSING PERFORMANCE                                */}
+      {/* ================================================================ */}
+      <div className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-xs">
+        <div className="border-b border-slate-100 pb-3">
+          <h2 className="text-sm font-bold text-slate-900">
+            REQUEST PROCESSING PERFORMANCE
+          </h2>
+          <p className="text-xs text-slate-500">
+            Turnaround times and fulfillment efficiency from real Material Request lifecycle data
+          </p>
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {/* 1. Warehouse Processing Time */}
+          <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+            <div className="flex items-center gap-1.5 text-xs text-slate-500">
+              <Warehouse className="h-3.5 w-3.5 text-sky-600" />
+              <span>Warehouse Processing</span>
+            </div>
+            <div className="mt-2 text-xl font-bold tabular-nums text-slate-900">
+              {analytics.avgWarehouseTime != null
+                ? `${analytics.avgWarehouseTime.toFixed(1)} days`
+                : "Not enough historical data"}
+            </div>
+            <p className="mt-0.5 text-xs text-slate-400">Creation to warehouse action</p>
+          </div>
+
+          {/* 2. Procurement Processing Time */}
+          <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+            <div className="flex items-center gap-1.5 text-xs text-slate-500">
+              <Truck className="h-3.5 w-3.5 text-blue-600" />
+              <span>Procurement Processing</span>
+            </div>
+            <div className="mt-2 text-xl font-bold tabular-nums text-slate-900">
+              {analytics.avgProcurementTime != null
+                ? `${analytics.avgProcurementTime.toFixed(1)} days`
+                : "Not enough historical data"}
+            </div>
+            <p className="mt-0.5 text-xs text-slate-400">Forward to procurement action</p>
+          </div>
+
+          {/* 3. Total Request Cycle Time */}
+          <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+            <div className="flex items-center gap-1.5 text-xs text-slate-500">
+              <Clock className="h-3.5 w-3.5 text-indigo-600" />
+              <span>Total Cycle Time</span>
+            </div>
+            <div className="mt-2 text-xl font-bold tabular-nums text-slate-900">
+              {analytics.avgTotalCycleTime != null
+                ? `${analytics.avgTotalCycleTime.toFixed(1)} days`
+                : "Not enough historical data"}
+            </div>
+            <p className="mt-0.5 text-xs text-slate-400">Requisition to completion</p>
+          </div>
+
+          {/* 4. Requests Completed This Month */}
+          <div className="rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+            <div className="flex items-center gap-1.5 text-xs text-slate-500">
+              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+              <span>Completed This Month</span>
+            </div>
+            <div className="mt-2 text-xl font-bold tabular-nums text-emerald-700">
+              {analytics.completedThisMonth}
+            </div>
+            <p className="mt-0.5 text-xs text-slate-400">Fulfilled requests this month</p>
+          </div>
+        </div>
+      </div>
+
+      {/* ================================================================ */}
+      {/* 7. QUICK ACTIONS                                                 */}
+      {/* ================================================================ */}
+      <div className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-xs">
+        <div className="mb-3.5 border-b border-slate-100 pb-2.5">
+          <h2 className="text-sm font-bold text-slate-900">QUICK ACTIONS</h2>
+          <p className="text-xs text-slate-500">Common department procurement shortcuts</p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
+          <Link
+            to="/material-requests/new"
+            className="group flex items-center gap-3.5 rounded-xl border border-slate-200/80 bg-slate-50/50 p-3.5 transition hover:border-primary-300 hover:bg-primary-50/30 hover:shadow-xs"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary-100 text-primary-700 transition group-hover:scale-105">
+              <PlusCircle className="h-5 w-5" />
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold text-slate-900 group-hover:text-primary-700">
+                + New Material Request
+              </p>
+              <p className="truncate text-xs text-slate-500">
+                Create a new material requirement
+              </p>
+            </div>
+          </Link>
+
+          <Link
+            to="/department/upload-bom"
+            className="group flex items-center gap-3.5 rounded-xl border border-slate-200/80 bg-slate-50/50 p-3.5 transition hover:border-indigo-300 hover:bg-indigo-50/30 hover:shadow-xs"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-700 transition group-hover:scale-105">
+              <UploadCloud className="h-5 w-5" />
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold text-slate-900 group-hover:text-indigo-700">
+                Upload BOM
+              </p>
+              <p className="truncate text-xs text-slate-500">
+                Upload bulk material requirements
+              </p>
+            </div>
+          </Link>
+
+          <Link
+            to="/material-requests/list"
+            className="group flex items-center gap-3.5 rounded-xl border border-slate-200/80 bg-slate-50/50 p-3.5 transition hover:border-sky-300 hover:bg-sky-50/30 hover:shadow-xs"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-sky-100 text-sky-700 transition group-hover:scale-105">
+              <FileText className="h-5 w-5" />
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold text-slate-900 group-hover:text-sky-700">
+                My Requests
+              </p>
+              <p className="truncate text-xs text-slate-500">
+                Track your submitted requests
+              </p>
+            </div>
+          </Link>
+
+          <Link
+            to="/intake/business-needs"
+            className="group flex items-center gap-3.5 rounded-xl border border-slate-200/80 bg-slate-50/50 p-3.5 transition hover:border-amber-300 hover:bg-amber-50/30 hover:shadow-xs"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700 transition group-hover:scale-105">
+              <Lightbulb className="h-5 w-5" />
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-bold text-slate-900 group-hover:text-amber-700">
+                Business Needs
+              </p>
+              <p className="truncate text-xs text-slate-500">
+                Create and track business requirements
+              </p>
+            </div>
+          </Link>
+        </div>
+      </div>
+
+      {/* ================================================================ */}
+      {/* 8. RECENT NOTIFICATIONS                                          */}
+      {/* ================================================================ */}
+      <div className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-xs">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="flex items-center gap-2">
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+              <Bell className="h-4 w-4" />
+            </span>
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">Recent Notifications</h2>
+              <p className="text-xs text-slate-500">Activity updates and alerts</p>
+            </div>
+          </div>
+          <Link
+            to="/notifications"
+            className="text-xs font-semibold text-primary-600 hover:text-primary-800"
+          >
+            View all notifications →
+          </Link>
+        </div>
+
+        <div className="mt-3 divide-y divide-slate-100">
+          {notifications.length === 0 ? (
+            <div className="py-6 text-center text-xs text-slate-400">
+              No recent notifications.
+            </div>
+          ) : (
+            notifications.map((notif) => (
+              <Link
+                key={notif.id}
+                to={notif.route_path || "/notifications"}
+                className="flex items-center justify-between py-2.5 px-2 transition hover:bg-slate-50 rounded-lg"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <span
+                    className={`h-2 w-2 rounded-full shrink-0 ${
+                      !notif.read_status ? "bg-primary-600" : "bg-transparent"
+                    }`}
+                  />
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-bold text-slate-900">
+                      {notif.title}
+                    </p>
+                    <p className="truncate text-[11px] text-slate-500">
+                      {notif.description || notif.document_name}
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[11px] text-slate-400 shrink-0 ml-3">
+                  {formatDate(notif.created_at)}
+                </span>
+              </Link>
+            ))
+          )}
         </div>
       </div>
     </div>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, Link, useParams } from "react-router-dom";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import {
   ArrowDown,
@@ -48,6 +48,7 @@ import type {
 } from "../../types/erpnext";
 import { canCreateECR, canEditECR, canonicalECRStage, formatECRNumber } from "../../config/ecrRoles";
 import { formatERPNextDate } from "../../utils/erpNextDate";
+import { recoverECRWorkflowState, refreshECRQueries } from "../../utils/ecrQueryCache";
 import {
   canonicalizeECRProcurementSelectionInput,
 } from "../../utils/ecrProcurementValidation";
@@ -341,6 +342,7 @@ function StepNavigation({
 
 export default function NewECRPage() {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const { name } = useParams<{ name: string }>();
   const isEditing = Boolean(name);
   const user = useAuthStore((s) => s.user);
@@ -439,12 +441,14 @@ export default function NewECRPage() {
 
   const supplierId = form.suggested_supplier?.trim() || "";
   const procurementReferenceType: ECRProcurementReferenceType =
-    form.procurement_reference_type === "RFQ" ? "RFQ" : "None";
+    form.procurement_reference_type || "None";
   const isProcurementSourced =
     form.supplier_response_required === "Yes" && procurementReferenceType !== "None";
   const selectedSourceDocument = procurementReferenceType === "RFQ"
     ? form.existing_rfq_reference?.trim() || ""
-    : "";
+    : procurementReferenceType === "Purchase Order"
+      ? form.existing_purchase_order_reference?.trim() || ""
+      : "";
 
   const supplierRfqsQuery = useQuery({
     queryKey: ["ecr-procurement-rfqs", supplierId],
@@ -508,13 +512,29 @@ export default function NewECRPage() {
         }
       }
 
+      if (ecr.ecr_workflow_version === "extended_v1" && Object.values(pendingDocuments).some(Boolean)) {
+        // Uploads update the parent revision used by trusted workflow actions.
+        ecr = { ...await fetchECR(ecr.name), create_replayed: ecr.create_replayed };
+      }
       const workflowAction = getECRPostSaveWorkflowAction(ecr, {
         submitImmediately: payload.submitImmediately,
         isEditing,
       });
       if (workflowAction) {
-        const result = await submitECR(ecr.name);
-        if (!result.success) throw new Error(result.message || "Unable to submit ECR.");
+        try {
+          const result = await submitECR(ecr.name, ecr);
+          if (!result.success) throw new Error(result.message || "Unable to submit ECR.");
+        } catch (error) {
+          const persisted = await recoverECRWorkflowState(
+            qc,
+            [name, ecr.name, formatECRNumber(ecr)],
+            () => fetchECR(ecr.name),
+          );
+          if (persisted && canonicalECRStage(persisted.select_pxfp, persisted) !== "Draft") {
+            navigate(`/ecr/${encodeURIComponent(formatECRNumber(persisted))}`);
+          }
+          throw error;
+        }
       }
       return ecr;
     },
@@ -536,7 +556,8 @@ export default function NewECRPage() {
       const msg = extractECRErrorMessage(error);
       toast.error(msg);
     },
-    onSuccess: (ecr, variables) => {
+    onSuccess: async (ecr, variables) => {
+      await refreshECRQueries(qc, [name, ecr.name, formatECRNumber(ecr)]);
       createIdempotencyKeyRef.current = null;
       const businessNumber = formatECRNumber(ecr);
       toast.success(
@@ -573,7 +594,7 @@ export default function NewECRPage() {
         ecr.supplier_response_required === "Yes" || ecr.supplier_impact === 1 ? "Yes" : "No",
       supplier_response_type: ecr.supplier_response_type || "Quotation",
       suggested_supplier: ecr.suggested_supplier || "",
-      procurement_reference_type: ecr.procurement_reference_type === "RFQ" ? "RFQ" : "None",
+      procurement_reference_type: ecr.procurement_reference_type || "None",
       existing_rfq_reference: ecr.existing_rfq_reference || "",
       existing_purchase_order_reference: ecr.existing_purchase_order_reference || "",
       required_quantity: ecr.required_quantity || 1,
@@ -1059,7 +1080,7 @@ export default function NewECRPage() {
 
     const cleanParts = canonicalParts
       .filter((p) => p.partitem?.trim())
-      .map((p) => ({
+      .map((p): Partial<ECRAffectedPart> => ({
         partitem: p.partitem?.trim(),
         part_description: p.part_description?.trim() || undefined,
         current_revision: p.current_revision?.trim() || undefined,
@@ -1073,9 +1094,12 @@ export default function NewECRPage() {
         current_supplier: p.current_supplier?.trim() || undefined,
         proposed_supplier: p.proposed_supplier?.trim() || undefined,
         plant: p.plant?.trim() || undefined,
-        source_reference_type: p.source_reference_type || undefined,
+        // An explicit blank prevents older ERP Select defaults from inventing RFQ provenance.
+        source_reference_type: p.source_reference_type || "",
         source_document_reference: p.source_document_reference?.trim() || undefined,
         source_item_reference: p.source_item_reference?.trim() || undefined,
+        source_rfq: p.source_rfq?.trim() || undefined,
+        source_purchase_order: p.source_purchase_order?.trim() || undefined,
       }));
 
     const payload: CreateECRPayload = {
@@ -1126,7 +1150,7 @@ export default function NewECRPage() {
   const saveDraftLabel = isEditing ? "Save Changes" : "Save Draft";
   const isReturnedDraft =
     isEditing &&
-    canonicalECRStage(editQuery.data?.select_pxfp) === "Draft" &&
+    canonicalECRStage(editQuery.data?.select_pxfp, editQuery.data) === "Draft" &&
     Boolean(editQuery.data?.approval_requirements?.some((row) => row.status === "Sent Back"));
   const submitLabel = isReturnedDraft ? "Resubmit ECR" : "Submit ECR";
   const isSavingDraft = isBusy && !isSubmittingWorkflow;
@@ -1164,7 +1188,7 @@ export default function NewECRPage() {
         <div className="flex items-center gap-2">
           <h1 className="text-lg font-bold text-neutral-900">{isEditing ? "Edit Engineering Change Request" : "Create Engineering Change Request"}</h1>
           <span className="rounded-full bg-neutral-100 border border-neutral-200 px-2.5 py-0.5 text-xs font-semibold text-neutral-700">
-            {isEditing && existingECR ? canonicalECRStage(existingECR.select_pxfp) : "Draft"}
+            {isEditing && existingECR ? canonicalECRStage(existingECR.select_pxfp, existingECR) : "Draft"}
           </span>
         </div>
         <p className="mt-1 max-w-2xl text-xs leading-5 text-neutral-500">
@@ -1175,7 +1199,7 @@ export default function NewECRPage() {
       </div>
 
       {/* ── Read-Only Lock Banner for Submitted ECRs ── */}
-      {isEditing && existingECR && canonicalECRStage(existingECR.select_pxfp) !== "Draft" && canonicalECRStage(existingECR.select_pxfp) !== "Sent Back" && (
+      {isEditing && existingECR && canonicalECRStage(existingECR.select_pxfp, existingECR) !== "Draft" && canonicalECRStage(existingECR.select_pxfp, existingECR) !== "Sent Back" && (
         <div className="rounded-xl border border-amber-300 bg-white p-6 shadow-sm space-y-4">
           <div className="flex items-start gap-3">
             <div className="rounded-lg bg-amber-100 p-2 text-amber-800 flex-shrink-0">
@@ -1186,7 +1210,7 @@ export default function NewECRPage() {
                 This ECR has already been submitted and cannot be changed.
               </h2>
               <p className="text-xs text-neutral-600 leading-relaxed">
-                Original ECR information is locked while under active review ({canonicalECRStage(existingECR.select_pxfp)}).
+                Original ECR information is locked while under active review ({canonicalECRStage(existingECR.select_pxfp, existingECR)}).
                 Assigned reviewers can enter their evaluations and approval decisions directly on the ECR details page.
               </p>
             </div>
@@ -1213,7 +1237,7 @@ export default function NewECRPage() {
       )}
 
       {/* ── Form Sections ── */}
-      {(!isEditing || !existingECR || canonicalECRStage(existingECR.select_pxfp) === "Draft" || canonicalECRStage(existingECR.select_pxfp) === "Sent Back") && (
+      {(!isEditing || !existingECR || canonicalECRStage(existingECR.select_pxfp, existingECR) === "Draft" || canonicalECRStage(existingECR.select_pxfp, existingECR) === "Sent Back") && (
       <form onSubmit={(e) => { e.preventDefault(); void handleSave(false); }} className="space-y-5 pb-4">
         {/* 1. Basic Information */}
         <section id="basic-information" className={`${SECTION_CARD} ${currentStep === 0 ? "" : "hidden"}`}>
@@ -1853,6 +1877,9 @@ export default function NewECRPage() {
                       >
                         <option value="None">None</option>
                         <option value="RFQ">RFQ</option>
+                        {existingECR?.procurement_reference_type === "Purchase Order" ? (
+                          <option value="Purchase Order">Purchase Order</option>
+                        ) : null}
                       </select>
                     </div>
 
@@ -1874,6 +1901,21 @@ export default function NewECRPage() {
                           inputClassName={INPUT}
                           inputId="ecr-existing-rfq"
                         />
+                      </div>
+                    ) : null}
+
+                    {procurementReferenceType === "Purchase Order" ? (
+                      <div className={`${FIELD_CONTAINER} sm:col-span-2`}>
+                        <label htmlFor="ecr-existing-purchase-order" className={LABEL}>Purchase Order *</label>
+                        <input
+                          id="ecr-existing-purchase-order"
+                          value={form.existing_purchase_order_reference || ""}
+                          readOnly
+                          className={INPUT}
+                        />
+                        {errors.existing_purchase_order_reference ? (
+                          <span className={ERROR}>{errors.existing_purchase_order_reference}</span>
+                        ) : null}
                       </div>
                     ) : null}
 

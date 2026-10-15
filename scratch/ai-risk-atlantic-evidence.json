@@ -1,0 +1,350 @@
+{
+  "checked_at": "2026-09-23T06:12:10.602Z",
+  "read_only": true,
+  "supplier": "\"Atlantic Precision Manufacturing.\"",
+  "sources": {
+    "Purchase Order": [
+      {
+        "name": "PUR-ORD-2026-00002",
+        "supplier": "\"Atlantic Precision Manufacturing.\"",
+        "status": "Completed",
+        "docstatus": 1,
+        "creation": "2026-06-20 02:39:27.172253",
+        "modified": "2026-06-20 02:43:28.559703",
+        "transaction_date": "2026-06-20",
+        "schedule_date": "2026-06-27",
+        "per_received": 100,
+        "grand_total": 3927,
+        "items": [
+          {
+            "name": "lqnihjob9t",
+            "item_code": "RMP001",
+            "qty": 15,
+            "received_qty": 15,
+            "schedule_date": "2026-06-27"
+          },
+          {
+            "name": "lqnhl25c23",
+            "item_code": "CL001",
+            "qty": 45,
+            "received_qty": 45,
+            "schedule_date": "2026-06-27"
+          },
+          {
+            "name": "lqnfdtmnn1",
+            "item_code": "SRL005",
+            "qty": 46,
+            "received_qty": 46,
+            "schedule_date": "2026-06-27"
+          }
+        ]
+      },
+      {
+        "name": "PUR-ORD-2026-00016",
+        "supplier": "\"Atlantic Precision Manufacturing.\"",
+        "status": "Completed",
+        "docstatus": 1,
+        "creation": "2026-07-16 01:29:45.793135",
+        "modified": "2026-07-16 03:18:43.194835",
+        "transaction_date": "2026-07-16",
+        "schedule_date": "2026-07-16",
+        "per_received": 100,
+        "grand_total": 1594,
+        "items": [
+          {
+            "name": "ug2k0ia0h4",
+            "item_code": "AC001",
+            "qty": 10,
+            "received_qty": 10,
+            "schedule_date": "2026-07-16"
+          },
+          {
+            "name": "ug2nrc99vg",
+            "item_code": "SAB002",
+            "qty": 8,
+            "received_qty": 8,
+            "schedule_date": "2026-07-16"
+          }
+        ]
+      },
+      {
+        "name": "PUR-ORD-2026-00017",
+        "supplier": "\"Atlantic Precision Manufacturing.\"",
+        "status": "Completed",
+        "docstatus": 1,
+        "creation": "2026-07-16 09:09:03.932124",
+        "modified": "2026-07-16 11:17:56.755547",
+        "transaction_date": "2026-07-16",
+        "schedule_date": "2026-07-16",
+        "per_received": 100,
+        "grand_total": 1436,
+        "items": [
+          {
+            "name": "bjv6o3pv6q",
+            "item_code": "AC001",
+            "qty": 10,
+            "received_qty": 10,
+            "schedule_date": "2026-07-16"
+          },
+          {
+            "name": "bjvrkgl6ao",
+            "item_code": "SAB002",
+            "qty": 8,
+            "received_qty": 8,
+            "schedule_date": "2026-07-16"
+          }
+        ]
+      },
+      {
+        "name": "PUR-ORD-2026-00027",
+        "supplier": "\"Atlantic Precision Manufacturing.\"",
+        "status": "To Receive and Bill",
+        "docstatus": 1,
+        "creation": "2026-09-11 14:16:38.056615",
+        "modified": "2026-09-11 14:16:44.842090",
+        "transaction_date": "2026-09-11",
+        "schedule_date": "2026-09-11",
+        "per_received": 0,
+        "grand_total": 2500,
+        "items": [
+          {
+            "name": "vqckk6j73r",
+            "item_code": "APSU005",
+            "qty": 100,
+            "received_qty": 0,
+            "schedule_date": "2026-09-11"
+          }
+        ]
+      }
+    ],
+    "Purchase Receipt": [
+      {
+        "name": "MAT-PRE-2026-00001",
+        "supplier": "\"Atlantic Precision Manufacturing.\"",
+        "status": "Completed",
+        "docstatus": 1,
+        "creation": "2026-06-20 02:41:24.366642",
+        "modified": "2026-06-20 02:43:28.609810",
+        "posting_date": "2026-06-20",
+        "is_return": 0,
+        "grand_total": 3927,
+        "items": [
+          {
+            "name": "mvbh59if29",
+            "item_code": "RMP001",
+            "qty": 15,
+            "received_qty": 15,
+            "rejected_qty": 0,
+            "purchase_order": "PUR-ORD-2026-00002",
+            "purchase_order_item": "lqnihjob9t"
+          },
+          {
+            "name": "mvb5ajqtk7",
+            "item_code": "CL001",
+            "qty": 45,
+            "received_qty": 45,
+            "rejected_qty": 0,
+            "purchase_order": "PUR-ORD-2026-00002",
+            "purchase_order_item": "lqnhl25c23"
+          },
+          {
+            "name": "mvbo9qk3j4",
+            "item_code": "SRL005",
+            "qty": 46,
+            "received_qty": 46,
+            "rejected_qty": 0,
+            "purchase_order": "PUR-ORD-2026-00002",
+            "purchase_order_item": "lqnfdtmnn1"
+          }
+        ]
+      },
+      {
+        "name": "MAT-PRE-2026-00014",
+        "supplier": "\"Atlantic Precision Manufacturing.\"",
+        "status": "Completed",
+        "docstatus": 1,
+        "creation": "2026-07-16 03:14:40.468168",
+        "modified": "2026-07-16 03:18:43.233795",
+        "posting_date": "2026-07-16",
+        "is_return": 0,
+        "grand_total": 1594,
+        "items": [
+          {
+            "name": "rv5ihvqv1h",
+            "item_code": "AC001",
+            "qty": 10,
+            "received_qty": 10,
+            "rejected_qty": 0,
+            "purchase_order": "PUR-ORD-2026-00016",
+            "purchase_order_item": "ug2k0ia0h4"
+          },
+          {
+            "name": "rv599k0ebv",
+            "item_code": "SAB002",
+            "qty": 8,
+            "received_qty": 8,
+            "rejected_qty": 0,
+            "purchase_order": "PUR-ORD-2026-00016",
+            "purchase_order_item": "ug2nrc99vg"
+          }
+        ]
+      },
+      {
+        "name": "MAT-PRE-2026-00016",
+        "supplier": "\"Atlantic Precision Manufacturing.\"",
+        "status": "Completed",
+        "docstatus": 1,
+        "creation": "2026-07-16 09:18:52.928452",
+        "modified": "2026-07-16 11:17:56.805605",
+        "posting_date": "2026-07-16",
+        "is_return": 0,
+        "grand_total": 1436,
+        "items": [
+          {
+            "name": "hc1joh13gg",
+            "item_code": "AC001",
+            "qty": 10,
+            "received_qty": 10,
+            "rejected_qty": 0,
+            "purchase_order": "PUR-ORD-2026-00017",
+            "purchase_order_item": "bjv6o3pv6q"
+          },
+          {
+            "name": "hc1o4gpf4g",
+            "item_code": "SAB002",
+            "qty": 8,
+            "received_qty": 8,
+            "rejected_qty": 0,
+            "purchase_order": "PUR-ORD-2026-00017",
+            "purchase_order_item": "bjvrkgl6ao"
+          }
+        ]
+      }
+    ],
+    "Purchase Invoice": [
+      {
+        "name": "ACC-PINV-2026-00001",
+        "supplier": "\"Atlantic Precision Manufacturing.\"",
+        "status": "Paid",
+        "docstatus": 1,
+        "creation": "2026-06-20 02:43:22.324725",
+        "modified": "2026-06-20 02:43:30.889820",
+        "posting_date": "2026-06-20",
+        "due_date": "2026-06-20",
+        "per_received": 0,
+        "is_return": 0,
+        "grand_total": 3927,
+        "items": [
+          {
+            "name": "o478sgisbd",
+            "item_code": "RMP001",
+            "qty": 15,
+            "received_qty": 0,
+            "rejected_qty": 0,
+            "purchase_order": "PUR-ORD-2026-00002"
+          },
+          {
+            "name": "o47je562hd",
+            "item_code": "CL001",
+            "qty": 45,
+            "received_qty": 0,
+            "rejected_qty": 0,
+            "purchase_order": "PUR-ORD-2026-00002"
+          },
+          {
+            "name": "o478r1lf8f",
+            "item_code": "SRL005",
+            "qty": 46,
+            "received_qty": 0,
+            "rejected_qty": 0,
+            "purchase_order": "PUR-ORD-2026-00002"
+          }
+        ]
+      },
+      {
+        "name": "ACC-PINV-2026-00012",
+        "supplier": "\"Atlantic Precision Manufacturing.\"",
+        "status": "Paid",
+        "docstatus": 1,
+        "creation": "2026-07-16 03:18:40.556385",
+        "modified": "2026-07-16 03:18:45.072960",
+        "posting_date": "2026-07-16",
+        "due_date": "2026-07-16",
+        "per_received": 100,
+        "is_return": 0,
+        "grand_total": 1594,
+        "items": [
+          {
+            "name": "ua5u49d35e",
+            "item_code": "AC001",
+            "qty": 10,
+            "received_qty": 10,
+            "rejected_qty": 0,
+            "purchase_order": "PUR-ORD-2026-00016",
+            "purchase_receipt": "MAT-PRE-2026-00014"
+          },
+          {
+            "name": "ua588p8dc3",
+            "item_code": "SAB002",
+            "qty": 8,
+            "received_qty": 8,
+            "rejected_qty": 0,
+            "purchase_order": "PUR-ORD-2026-00016",
+            "purchase_receipt": "MAT-PRE-2026-00014"
+          }
+        ]
+      },
+      {
+        "name": "ACC-PINV-2026-00013",
+        "supplier": "\"Atlantic Precision Manufacturing.\"",
+        "status": "Paid",
+        "docstatus": 1,
+        "creation": "2026-07-16 11:05:36.089909",
+        "modified": "2026-07-16 11:18:00.262215",
+        "posting_date": "2026-07-17",
+        "due_date": "2026-07-17",
+        "per_received": 100,
+        "is_return": 0,
+        "grand_total": 1436,
+        "items": [
+          {
+            "name": "ft1tq50aba",
+            "item_code": "AC001",
+            "qty": 10,
+            "received_qty": 10,
+            "rejected_qty": 0,
+            "purchase_order": "PUR-ORD-2026-00017",
+            "purchase_receipt": "MAT-PRE-2026-00016"
+          },
+          {
+            "name": "ft1651pl88",
+            "item_code": "SAB002",
+            "qty": 8,
+            "received_qty": 8,
+            "rejected_qty": 0,
+            "purchase_order": "PUR-ORD-2026-00017",
+            "purchase_receipt": "MAT-PRE-2026-00016"
+          }
+        ]
+      }
+    ]
+  },
+  "quotation": {
+    "name": "PUR-SQTN-2026-00265",
+    "supplier": "\"Atlantic Precision Manufacturing.\"",
+    "supplier_name": "Atlantic Precision Manufacturing.",
+    "modified": "2026-09-21 16:16:37.860310",
+    "status": "Submitted",
+    "docstatus": 1,
+    "grand_total": 2500,
+    "items": [
+      {
+        "item_code": "ENG002",
+        "qty": 100,
+        "rate": 25,
+        "amount": 2500,
+        "request_for_quotation": "PUR-RFQ-2026-00094"
+      }
+    ]
+  }
+}

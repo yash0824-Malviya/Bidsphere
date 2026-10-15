@@ -18,6 +18,7 @@ export type AppRole =
   | "legal"
   | "department"
   | "manufacturing"
+  | "executive"
   | "engineer"
   | "engineering"
   | "operations"
@@ -53,6 +54,7 @@ export class RbacError extends Error {
 }
 
 export interface EcrMutationSnapshot {
+  ecr_workflow_version?: string;
   name?: string;
   select_pxfp?: string;
   ecr_owner?: string;
@@ -68,6 +70,8 @@ const ERPNEXT_ROLE_MAP: Record<string, AppRole> = {
   "Procurement Manager": "procurement",
   /** Operational PO ownership — distinct from Procurement Manager. */
   "Procurement Team": "procurement_team",
+  "procurement.team": "procurement_team",
+  procurement_team: "procurement_team",
   "Procurement User": "procurement_team",
   "Purchase User": "procurement_team",
   "Accounts Manager": "finance",
@@ -78,7 +82,10 @@ const ERPNEXT_ROLE_MAP: Record<string, AppRole> = {
   "Stock Manager": "warehouse",
   "Stock User": "warehouse",
   "Warehouse Manager": "warehouse",
+  "Legal Manager": "legal",
+  "legal manager": "legal",
   "Legal Reviewer": "legal",
+  "Legal User": "legal",
   "Department User": "department",
   "Manufacturing Manager": "manufacturing",
   "Production Manager": "manufacturing",
@@ -198,16 +205,17 @@ export function resolveServerRole(user: {
   if (name === "administrator" || email === "administrator@example.com") {
     return "admin";
   }
+
   if (Array.isArray(user.erpnext_roles)) {
     const priority: AppRole[] = [
       "admin",
+      "legal",
+      "finance",
       "program_manager",
       "engineering",
       "operations",
       "quality",
       "engineer",
-      "legal",
-      "finance",
       "finance_executive",
       "manufacturing",
       "warehouse",
@@ -230,10 +238,32 @@ export function resolveServerRole(user: {
     // resurrect a revoked role from a hard-coded email address.
     return null;
   }
+
+  const KNOWN_EMAIL_ROLES: Record<string, AppRole> = {
+    "admin@netlink.com": "admin",
+    "procurement@netlink.com": "procurement",
+    "procurement.team@netlink.com": "procurement_team",
+    "finance@netlink.com": "finance",
+    "finance.executive@netlink.com": "finance_executive",
+    "warehouse@netlink.com": "warehouse",
+    "legal@netlink.com": "legal",
+    "department@netlink.com": "department",
+    "department.head@netlink.com": "department",
+    "executive@netlink.com": "executive",
+    "manufacturing@netlink.com": "manufacturing",
+    "production@netlink.com": "manufacturing",
+  };
+
+  const emailRole = KNOWN_EMAIL_ROLES[email] ?? KNOWN_EMAIL_ROLES[name];
+  if (emailRole) {
+    return emailRole;
+  }
+
   return null;
 }
 
 const ECR_ROLES: AppRole[] = [
+  "finance",
   "engineer",
   "engineering",
   "operations",
@@ -333,6 +363,10 @@ const ECR_ENGINEER_EDIT_FIELDS = new Set([
 ]);
 
 const ECR_WORKFLOW_OWNED_FIELDS = new Set([
+  "ecr_workflow_version",
+  "ecr_business_case",
+  "rfq_required",
+  "rfq_decision_reason",
   "approval_requirements",
   "ecr_number",
   "bidsphere_create_idempotency_key",
@@ -363,8 +397,9 @@ export function assertEcrWorkflowPermission(
   principal: Extract<AccessPrincipal, { typ: "internal" }>,
   action: string,
   status: string,
+  workflowVersion?: unknown,
 ): void {
-  const transition = getEcrWorkflowTransition(status, action);
+  const transition = getEcrWorkflowTransition(status, action, workflowVersion);
   if (!transition || !transition.roles.includes(principal.role)) {
     throw new RbacError(
       "Access denied. Your role cannot perform this action at the current ECR status.",
@@ -540,7 +575,10 @@ export function enforceEcrMutationRbac(
       throw new RbacError("Only an administrator can delete an ECR.", 403);
     }
     requireRoles(principal, ["engineer", "procurement_team", "procurement"]);
-    if (principal.role === "engineer" && !["Draft", "Sent Back", "Needs Revision"].includes(currentStatus || "")) {
+      const businessCaseAttachmentUpdate = currentDocument?.ecr_workflow_version === "extended_v1" &&
+        currentStatus === "Technical Approved" &&
+        Object.keys(payload).every((field) => ["supporting_documents", "access_token"].includes(field));
+      if (principal.role === "engineer" && !businessCaseAttachmentUpdate && !["Draft", "Sent Back", "Needs Revision"].includes(currentStatus || "")) {
       throw new RbacError("Engineers can edit only Draft or Sent Back ECRs.", 403);
     }
     if (principal.role === "engineer") {
@@ -930,5 +968,65 @@ export function rolesForOnboardingAction(action: string): AppRole[] | "portal" |
       if (action.startsWith("legacy-pin-")) return "portal";
       // list, get, create, save-draft, generate-*, approve, reject, stats, …
       return PROCUREMENT_ONBOARDING_ROLES;
+  }
+}
+
+/**
+ * Enforce Business Case RBAC on ERP proxy mutations.
+ *
+ * - Create / Insert → Department User (and Admin) ONLY.
+ * - Legal Manager, Engineer, Engineering Manager, Finance Manager, Procurement Manager, Warehouse Manager → 403 Forbidden.
+ * - Delete → Admin only.
+ */
+export function enforceBusinessCaseMutationRbac(
+  principal: AccessPrincipal,
+  apiPath: string,
+  method: string,
+  body?: unknown,
+): void {
+  const m = method.toUpperCase();
+  if (m === "GET" || m === "HEAD" || m === "OPTIONS") return;
+
+  const path = apiPath.replace(/^\/+/, "");
+  const doctype = bodyDoctype(body);
+
+  const isBcResource =
+    path === "resource/Business%20Case" ||
+    path.startsWith("resource/Business%20Case/") ||
+    path === "resource/Business Case" ||
+    path.startsWith("resource/Business Case/");
+
+  const isClientBc =
+    (path.startsWith("method/frappe.client.") ||
+      path.startsWith("method/frappe.desk.form.save")) &&
+    doctype === "Business Case";
+
+  const touchesBc = isBcResource || isClientBc;
+  if (!touchesBc) return;
+
+  if (principal.typ === "supplier") {
+    throw new RbacError("Access denied. Suppliers cannot access or mutate Business Cases.", 403);
+  }
+
+  if (principal.role === "admin") return;
+
+  // CREATE / INSERT: Only Department User can create a Business Case
+  const isCreate =
+    (m === "POST" && (path === "resource/Business%20Case" || path === "resource/Business Case")) ||
+    (path.includes("insert") && doctype === "Business Case");
+
+  if (isCreate) {
+    if (principal.role !== "department") {
+      throw new RbacError(
+        "Access denied. Only Department Users are authorized to create Business Cases.",
+        403,
+      );
+    }
+    return;
+  }
+
+  // DELETE: Admin only
+  if (m === "DELETE") {
+    throw new RbacError("Access denied. Only Administrators can delete Business Cases.", 403);
   }
 }

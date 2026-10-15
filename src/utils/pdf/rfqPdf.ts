@@ -483,15 +483,15 @@ export async function buildRfqPdf(data: RfqPdfData): Promise<jsPDF> {
 
   y = (doc.lastAutoTable?.finalY ?? y) + 10;
 
-  // ── Section 4: AI Recommendation (only if data exists) ───────────────────
+  // ── Section 4: AI Evaluation (only if data exists) ───────────────────────
   if (hasAiContent(data.ai)) {
     const ai = data.ai!;
     y = ensureSpace(doc, y, 36);
-    y = drawBlueSectionTitle(doc, y, "4. AI Recommendation");
+    y = drawBlueSectionTitle(doc, y, "4. AI Evaluation");
 
     const aiFields: Array<[string, string]> = [];
     if (hasText(ai.recommended_supplier)) {
-      aiFields.push(["Recommended Supplier", ai.recommended_supplier!]);
+      aiFields.push(["AI Top-Ranked Supplier", ai.recommended_supplier!]);
     }
     if (hasNumber(ai.confidence)) {
       aiFields.push(["Confidence", `${Math.round(Number(ai.confidence))}%`]);

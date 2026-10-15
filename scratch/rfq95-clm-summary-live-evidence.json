@@ -1,0 +1,74 @@
+{
+  "checked_at": "2026-09-23T10:34:31.934Z",
+  "read_only": true,
+  "mutation_performed": false,
+  "mode": "local server role-policy evaluation over live ERP reads",
+  "procurement_team": {
+    "rfq": {
+      "name": "PUR-RFQ-2026-00095",
+      "modified": "2026-09-23 14:22:43.964913"
+    },
+    "decision": "Pending",
+    "contract_required": "Yes",
+    "status": "Contract Decision Required",
+    "can_request": true,
+    "can_create": false,
+    "reason": "Record whether this supplier award requires CLM before continuing.",
+    "request": null,
+    "contract": null,
+    "blocks_procurement": true,
+    "source": {
+      "award": "LDC2026-00026",
+      "quotation": "PUR-SQTN-2026-00270",
+      "supplier": "\"Blue Ridge Manufacturing Inc\"",
+      "company": "Netlink",
+      "department": "Production - NSGAI",
+      "amount": 30,
+      "currency": "USD"
+    },
+    "required_fields": [
+      "contract_type",
+      "contract_start_date",
+      "contract_end_date"
+    ],
+    "prefill": {
+      "custom_rfq": "PUR-RFQ-2026-00095",
+      "custom_supplier_quotation": "PUR-SQTN-2026-00270",
+      "supplier": "\"Blue Ridge Manufacturing Inc\"",
+      "company": "Netlink",
+      "contract_value": 30,
+      "estimated_contract_value": 30,
+      "currency": "USD",
+      "department": "Production - NSGAI",
+      "contract_purpose": "Procurement of goods/services from Blue Ridge Manufacturing Inc under RFQ PUR-RFQ-2026-00095.",
+      "description": "Procurement of goods/services from Blue Ridge Manufacturing Inc under RFQ PUR-RFQ-2026-00095.\n\nAward: LDC2026-00026\nWinning Quotation: PUR-SQTN-2026-00270\nAward Value: USD 30\nCompany: Netlink\nDepartment: Production - NSGAI\n\nRFQ scope:\nTitle: Procurement RFQ – Production\nValid Till: 2026-09-30\n\nThis Request for Quotation covers the items listed below. Please submit your best pricing and lead times.\nPurpose: Purchase\n\nAwarded items:\nBrake Disc — 1 Nos",
+      "legal_review_required": 1
+    }
+  },
+  "procurement_manager": {
+    "rfq": {
+      "name": "PUR-RFQ-2026-00095",
+      "modified": "2026-09-23 14:22:43.964913"
+    },
+    "decision": "Pending",
+    "contract_required": "Yes",
+    "status": "Contract Decision Required",
+    "can_request": false,
+    "can_create": false,
+    "reason": "Record whether this supplier award requires CLM before continuing.",
+    "request": null,
+    "contract": null,
+    "blocks_procurement": true,
+    "source": {
+      "award": "LDC2026-00026",
+      "quotation": "PUR-SQTN-2026-00270",
+      "supplier": "\"Blue Ridge Manufacturing Inc\"",
+      "company": "Netlink",
+      "department": "Production - NSGAI",
+      "amount": 30,
+      "currency": "USD"
+    },
+    "required_fields": [],
+    "prefill": {}
+  }
+}

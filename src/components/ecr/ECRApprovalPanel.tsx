@@ -9,13 +9,13 @@ import {
 } from "lucide-react";
 
 import {
-  ECR_STAGE_WORKFLOW_MAP,
+  getECRStageConfig,
   canonicalECRStage,
   getECRWorkflowActions,
 } from "../../config/ecrRoles";
 import { getCurrentECRApprovalTask } from "./ecrDetailModel";
 import type { AppRole } from "../../config/roles";
-import type { ECRApprovalRequirement, ECRStatus } from "../../types/erpnext";
+import type { ECRApprovalRequirement, ECRStatus, EngineeringChangeRequest } from "../../types/erpnext";
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
   "Technical Feasibility": "Assess whether the proposed change is technically feasible...",
@@ -32,6 +32,7 @@ const PROCUREMENT_REVIEW_OPTIONS: Partial<Record<string, readonly string[]>> = {
 export default function ECRApprovalPanel({
   role,
   status,
+  ecr,
   approvalRequirements = [],
   pending = false,
   error,
@@ -39,6 +40,7 @@ export default function ECRApprovalPanel({
 }: {
   role?: AppRole | null;
   status?: ECRStatus | string | null;
+  ecr?: Partial<EngineeringChangeRequest> | null;
   approvalRequirements?: ECRApprovalRequirement[];
   pending?: boolean;
   error?: string | null;
@@ -49,21 +51,22 @@ export default function ECRApprovalPanel({
   ) => void;
 }) {
   const actions = useMemo(
-    () => getECRWorkflowActions(role, status).filter((action) =>
-      ["Send Back", "Reject", "Approve"].includes(action.action),
+    () => getECRWorkflowActions(role, status, ecr).filter((action) =>
+      ["Send Back", "Reject", "Approve", "Approve ECR", "Start Final Review", "Request Sourcing Revision"].includes(action.action),
     ),
-    [role, status],
+    [role, status, ecr],
   );
-  const canonicalStage = canonicalECRStage(status);
-  const stageConfig = ECR_STAGE_WORKFLOW_MAP[canonicalStage];
+  const canonicalStage = canonicalECRStage(status, ecr);
+  const stageConfig = getECRStageConfig(status, ecr);
   const isReviewStage =
-    canonicalStage === "Engineering Review" || canonicalStage === "Procurement Review";
+    ["Engineering Review", "Procurement Review", "Business Case Approved", "Final ECR Approval", "ECR Approved"].includes(canonicalStage);
   const assessmentFields = stageConfig?.assessmentFields || [];
   const requiredFields = stageConfig?.requiredAssessmentFields ?? [];
   const currentTask = getCurrentECRApprovalTask(
     status,
     role,
     approvalRequirements,
+    ecr,
   );
 
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -73,19 +76,21 @@ export default function ECRApprovalPanel({
   if (actions.length === 0 || !isReviewStage || !stageConfig || !currentTask) return null;
 
   const commentLabel = stageConfig.commentsLabel ?? "Review Comments";
-  const title = stageConfig.decisionTitle;
+  const title = canonicalStage === "ECR Approved" ? "Sourcing Revision (if required)" : stageConfig.decisionTitle;
   const isAssessmentComplete = requiredFields.every((field) => Boolean(notes[field]?.trim()));
+  const requiresAssessment = (action: string) => action === "Approve" || action === "Approve ECR" ||
+    (canonicalStage === "Final ECR Approval" && action === "Reject");
 
   function validate(action: string): string | null {
-    if (!["Send Back", "Reject", "Approve"].includes(action)) {
-      return "This action is not available in the simplified ECR workflow.";
+    if (!actions.some((item) => item.action === action)) {
+      return "This action is not available at the current ECR stage.";
     }
-    if (action === "Approve") {
+    if (requiresAssessment(action)) {
       for (const field of requiredFields) {
-        if (!notes[field]?.trim()) return `${field} is required before approving this ECR.`;
+        if (!notes[field]?.trim()) return `${field} is required before ${action === "Reject" ? "rejecting" : "approving"} this ECR.`;
       }
     }
-    if ((action === "Send Back" || action === "Reject") && !comments.trim()) {
+    if ((action === "Send Back" || action === "Reject" || action === "Request Sourcing Revision") && !comments.trim()) {
       return `${commentLabel} are required when you ${action.toLowerCase()} this ECR.`;
     }
     return null;
@@ -118,13 +123,13 @@ export default function ECRApprovalPanel({
           </span>
           <div className="min-w-0">
             <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-primary-700">
-              {stageConfig.label.toUpperCase()} — ACTION REQUIRED
+              {stageConfig.label.toUpperCase()} — {canonicalStage === "ECR Approved" ? "SOURCING CORRECTION" : "ACTION REQUIRED"}
             </p>
             <h2 id="ecr-current-action-title" className="mt-0.5 text-sm font-bold text-neutral-900">
               {title}
             </h2>
             <p className="mt-0.5 text-xs leading-relaxed text-neutral-600">
-              {stageConfig.decisionSubtitle}
+              {canonicalStage === "ECR Approved" ? "Return the ECR to its Engineer if supplier or sourcing details need correction. The revised ECR will go through approval again." : stageConfig.decisionSubtitle}
             </p>
           </div>
         </div>
@@ -165,6 +170,8 @@ export default function ECRApprovalPanel({
                       id={fieldId}
                       rows={3}
                       required={isRequired}
+                      maxLength={field === "Final Decision Rationale" ? 2000 : undefined}
+                      aria-describedby={field === "Final Decision Rationale" ? `${fieldId}-help` : undefined}
                       value={notes[field] ?? ""}
                       onChange={(event) => {
                         setNotes((current) => ({ ...current, [field]: event.target.value }));
@@ -174,6 +181,7 @@ export default function ECRApprovalPanel({
                       placeholder={FIELD_PLACEHOLDERS[field] || `Enter ${field.toLowerCase()}...`}
                     />
                   )}
+                  {field === "Final Decision Rationale" && <p id={`${fieldId}-help`} className="text-xs text-neutral-500">Explain the basis for the final ECR decision using the approved Business Case and technical assessment.</p>}
                 </div>
               );
             })}
@@ -185,11 +193,12 @@ export default function ECRApprovalPanel({
             <label htmlFor="ecr-review-comments" className="text-xs font-semibold text-neutral-700">
               {commentLabel}
             </label>
-            <span className="text-[11px] text-neutral-400">Required for Send Back or Reject</span>
+            <span className="text-[11px] text-neutral-400">{canonicalStage === "ECR Approved" ? "A reason is required for sourcing revision" : "Required for Send Back or Reject"}</span>
           </div>
           <textarea
             id="ecr-review-comments"
             rows={3}
+            maxLength={canonicalStage === "Final ECR Approval" ? 4000 : undefined}
             value={comments}
             onChange={(event) => {
               setComments(event.target.value);
@@ -212,7 +221,7 @@ export default function ECRApprovalPanel({
 
         <div className="flex flex-wrap items-center justify-end gap-2 border-t border-neutral-100 pt-3">
           {actions.map((item) => {
-            const disabled = pending || (item.action === "Approve" && !isAssessmentComplete);
+            const disabled = pending || (requiresAssessment(item.action) && !isAssessmentComplete);
             const buttonClass =
               item.tone === "danger"
                 ? "border border-rose-300 bg-white text-rose-700 hover:bg-rose-50"
@@ -231,7 +240,7 @@ export default function ECRApprovalPanel({
                 type="button"
                 onClick={() => submit(item.action)}
                 disabled={disabled}
-                title={item.action === "Approve" && !isAssessmentComplete ? "Complete the required review fields first." : undefined}
+                title={requiresAssessment(item.action) && !isAssessmentComplete ? "Complete the required review fields first." : undefined}
                 className={`inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${buttonClass}`}
               >
                 {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ActionIcon className="h-3.5 w-3.5" />}

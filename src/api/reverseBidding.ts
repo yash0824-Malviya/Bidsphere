@@ -27,6 +27,7 @@ import { scoreSuppliers } from "./supplierScoringEngine";
 import type { AIQuotation } from "./ai";
 import { getSupplierPerformance } from "./supplierPerformance";
 import { getLatestScoringResult } from "./supplierScoringResults";
+import { assertQuotationsAwardEligible, assertSuppliersAwardEligible } from "./supplierAwardEligibility";
 import { submitForReview } from "./rfqApprovalWorkflow";
 import {
   ensureLegalDocumentReviewForSelection,
@@ -40,9 +41,10 @@ import {
   toBidRate,
   validateItemBidCore,
 } from "../utils/reverseBiddingBidValidation";
-import type { PurchaseOrder } from "../types/erpnext";
+import type { PurchaseOrder, SupplierQuotation } from "../types/erpnext";
 import { readSupplierSession } from "../hooks/useSupplierSession";
 import type { ClientBidSnapshot } from "../utils/reverseBiddingSubmitHelpers";
+import { getSupplierQuoteTotal } from "../utils/quotePrice";
 import {
   isSupplierPortalBidSession,
   submitItemBidsViaServer,
@@ -55,6 +57,7 @@ import type {
   ReverseBidItem,
   ReverseBidding,
   ReverseBiddingSupplier,
+  ReverseBiddingQuotationSelection,
 } from "../types/reverseBidding";
 
 const RB_DOCTYPE = "Reverse Bidding";
@@ -814,9 +817,9 @@ async function patchReverseBidding(
     });
     return saved;
   } catch (err) {
-    // The 5s live-refresh can bump `modified` between our read and write,
-    // producing a TimestampMismatchError. Re-read the freshest stamp and
-    // retry once so a legitimate write is never silently dropped.
+    // A competing mutation can change this document after the caller built
+    // its patch. Never attach a newer timestamp to the old child arrays:
+    // doing so could overwrite another supplier's rates or bid history.
     if (!isTimestampConflict(err)) {
       // eslint-disable-next-line no-console
       console.error("[ReverseBidding] PATCH failed", {
@@ -831,11 +834,9 @@ async function patchReverseBidding(
       });
       throw err;
     }
-    const fresh = await apiGet<ReverseBidding>(url);
-    return apiPut<ReverseBidding>(
-      url,
-      { ...body, modified: fresh.modified },
-      cfg,
+    throw new Error(
+      "The auction has been updated by another action. Refresh the latest auction state, review the changes, and try again.",
+      { cause: err },
     );
   }
 }
@@ -906,10 +907,13 @@ async function ensureSupplierBidSheet(
 
 export interface CreateReverseBiddingInput {
   rfqName: string;
+  /** Exact current quotation identities selected in Recommendation Results. */
+  selectedQuotations?: ReverseBiddingQuotationSelection[];
+  activeRoundName?: string | null;
   /**
-   * AI-shortlisted / approved supplier ids. Only these (intersected with
-   * suppliers that actually submitted a quotation) are invited. When omitted
-   * or empty, every quoting supplier is invited.
+   * Legacy caller contract: exact ERP Supplier document IDs, never display
+   * names or quotation IDs. Every requested supplier must have a valid quote.
+   * When omitted or empty, every current quoting supplier is invited.
    */
   approvedSuppliers?: string[];
   procurementManager?: string;
@@ -927,6 +931,66 @@ function quotationTotal(items: { rate?: number; amount?: number; qty?: number }[
   }, 0);
 }
 
+/** Resolve the shortlist against current ERP documents, never display-name aliases. */
+export function resolveReverseBiddingQuotations(
+  input: CreateReverseBiddingInput,
+  quotations: SupplierQuotation[],
+): SupplierQuotation[] {
+  const currentBySupplier = new Map<string, SupplierQuotation>();
+  // The child-table RFQ filter can return the same parent once per item.
+  const unique = new Map(quotations.map((q) => [q.name, q]));
+  for (const q of unique.values()) {
+    if (!q.name || !q.supplier || q.docstatus !== 1 || q.status === "Cancelled") continue;
+    if (!(q.items ?? []).some((item) => item.request_for_quotation === input.rfqName)) continue;
+    if (input.activeRoundName && q.custom_rfq_round && q.custom_rfq_round !== input.activeRoundName) continue;
+    const total = getSupplierQuoteTotal(q);
+    if (total == null || !Number.isFinite(total) || total <= 0) continue;
+    const prior = currentBySupplier.get(q.supplier);
+    // Match the RFQ page's current submitted-revision preference.
+    if (!prior || q.name.localeCompare(prior.name) > 0) currentBySupplier.set(q.supplier, q);
+  }
+
+  const failure = "None of the shortlisted suppliers submitted a quotation for this RFQ.";
+  let selected: SupplierQuotation[];
+  if (input.selectedQuotations !== undefined) {
+    if (input.selectedQuotations.length === 0) throw new Error(failure);
+    const quotationIds = new Set<string>();
+    const supplierIds = new Set<string>();
+    selected = input.selectedQuotations.map((selection) => {
+      if (quotationIds.has(selection.quotation_id) || supplierIds.has(selection.supplier_id)) {
+        throw new Error("Duplicate supplier or quotation in the reverse bidding selection.");
+      }
+      quotationIds.add(selection.quotation_id);
+      supplierIds.add(selection.supplier_id);
+      const q = currentBySupplier.get(selection.supplier_id);
+      if (selection.rfq_id !== input.rfqName || !q || q.name !== selection.quotation_id) {
+        throw new Error(`${failure} A selected quotation is missing, stale, or does not match its supplier and RFQ. Refresh the recommendations and select again.`);
+      }
+      return q;
+    });
+    if (input.approvedSuppliers?.length && (
+      input.approvedSuppliers.length !== supplierIds.size ||
+      new Set(input.approvedSuppliers).size !== supplierIds.size ||
+      input.approvedSuppliers.some((id) => !supplierIds.has(id))
+    )) throw new Error("The shortlisted supplier IDs do not match the selected quotations.");
+  } else if (input.approvedSuppliers?.length) {
+    const ids = [...new Set(input.approvedSuppliers)];
+    selected = ids.map((id) => {
+      const q = currentBySupplier.get(id);
+      if (!q) throw new Error(`${failure} Every selected supplier must have a current submitted quotation.`);
+      return q;
+    });
+  } else {
+    selected = [...currentBySupplier.values()];
+  }
+  if (selected.length === 0) throw new Error(failure);
+  if (import.meta.env.DEV) console.log("[Reverse Bidding Debug] Validated quotations", {
+    rfq_id: input.rfqName,
+    selected_quotations: selected.map((q) => ({ quotation_id: q.name, supplier_id: q.supplier, supplier_name: q.supplier_name, rfq_id: input.rfqName, docstatus: q.docstatus })),
+  });
+  return selected;
+}
+
 export async function createReverseBiddingFromRFQ(
   input: CreateReverseBiddingInput
 ): Promise<ReverseBidding> {
@@ -938,83 +1002,28 @@ export async function createReverseBiddingFromRFQ(
     throw new Error("Reverse Bidding Naming Series is not configured.");
   }
 
-  // Idempotent: if an auction already exists for this RFQ, return it instead
-  // of creating a duplicate.
-  const existing = await getReverseBiddingForRFQ(rfqName);
-  if (existing) {
-    // eslint-disable-next-line no-console
-    console.log(
-      "[ReverseBidding] Auction already exists for RFQ",
-      rfqName,
-      "→",
-      existing.name
-    );
-    return existing;
-  }
-
   const rfq = await getRFQ(rfqName);
   const company = rfq.company ?? COMPANY;
 
-  const quotations = await getSupplierQuotations(rfqName);
+  const activeRoundName = input.activeRoundName ?? rfq.custom_active_rfq_round ?? null;
+  const quotations = await getSupplierQuotations(rfqName, { activeRoundName });
   if (quotations.length === 0) {
     throw new Error(
       "No supplier quotations found for this RFQ. Reverse bidding can only start after quotations and AI evaluation."
     );
   }
 
-  // Suppliers who actually submitted a quotation (+ their quoted totals).
-  // Keyed by canonical supplier id; `aliases` lets us match the AI shortlist
-  // whether it carries supplier ids or display names.
-  const bySupplier = new Map<
-    string,
-    { total: number; aliases: Set<string> }
-  >();
-  for (const q of quotations) {
-    const id = (q.supplier ?? q.supplier_name ?? "").trim();
-    if (!id) continue;
-    const total =
-      typeof q.grand_total === "number" && q.grand_total > 0
-        ? q.grand_total
-        : typeof q.total === "number" && q.total > 0
-          ? q.total
-          : quotationTotal(q.items ?? []);
-    const aliases = new Set<string>([id.toLowerCase()]);
-    if (q.supplier_name) aliases.add(q.supplier_name.trim().toLowerCase());
-    const prev = bySupplier.get(id);
-    if (!prev) {
-      bySupplier.set(id, { total, aliases });
-    } else {
-      // Keep the best (lowest) quote if a supplier quoted more than once.
-      prev.total = Math.min(prev.total, total);
-      for (const a of aliases) prev.aliases.add(a);
-    }
-  }
-
-  // Restrict to AI-approved suppliers when a shortlist is provided (match on
-  // supplier id OR display name).
-  const approved = (input.approvedSuppliers ?? [])
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const approvedSet = new Set(approved.map((s) => s.toLowerCase()));
-
-  const invitedEntries: [string, number][] = [...bySupplier.entries()]
-    .filter(([, v]) =>
-      approvedSet.size === 0
-        ? true
-        : [...v.aliases].some((a) => approvedSet.has(a))
-    )
-    .map(([id, v]) => [id, v.total]);
-
-  if (invitedEntries.length === 0) {
-    throw new Error(
-      "None of the shortlisted suppliers submitted a quotation for this RFQ."
-    );
-  }
+  const selectedQuotations = resolveReverseBiddingQuotations({ ...input, activeRoundName }, quotations);
+  await assertQuotationsAwardEligible(rfqName, selectedQuotations);
+  // Preserve one-auction-per-RFQ behavior after validating the current selection.
+  const existing = await getReverseBiddingForRFQ(rfqName);
+  if (existing) return existing;
+  const invitedEntries: [string, number][] = selectedQuotations.map((q) => [q.supplier, getSupplierQuoteTotal(q)!]);
 
   // Seed item-wise bid rows from live RFQ items + supplier quotation rates.
   const bidItems = buildBidItemsFromQuotations(
     rfq.items ?? [],
-    quotations,
+    selectedQuotations,
     invitedEntries.map(([supplier]) => supplier)
   );
 
@@ -1136,6 +1145,7 @@ export async function sendInvitations(name: string): Promise<ReverseBidding> {
   if (invited.length === 0) {
     throw new Error("Cannot send invitations — no suppliers are invited.");
   }
+  await assertSuppliersAwardEligible(doc.rfq, invited.map(row => row.supplier));
 
   const sentAt = formatERPNextDatetime(new Date()) ?? undefined;
   const updated: ReverseBiddingSupplier[] = promotePendingInvitations(invited, sentAt);
@@ -1211,6 +1221,7 @@ export async function scheduleAuction(
   if (invited.length === 0) {
     throw new Error("Cannot schedule an auction without invited suppliers.");
   }
+  await assertSuppliersAwardEligible(doc.rfq, invited.map(row => row.supplier));
 
   // 2. Persist to ERPNext (retry-safe on timestamp conflicts). Scheduling an
   // auction must never leave an invited supplier stuck at "Pending" — promote
@@ -1255,6 +1266,7 @@ export async function startAuctionNow(name: string): Promise<ReverseBidding> {
   if (invited.length === 0) {
     throw new Error("Cannot start an auction without invited suppliers.");
   }
+  await assertSuppliersAwardEligible(doc.rfq, invited.map(row => row.supplier));
   const now = new Date();
   const startIso = formatERPNextDatetime(now);
   const end =
@@ -2059,6 +2071,7 @@ export async function acceptAuctionWinner(
   if (!winnerRow) {
     throw new Error("The selected supplier is not part of this auction.");
   }
+  await assertSuppliersAwardEligible(doc.rfq, [winnerRow.supplier]);
   const winnerPrice =
     winnerRow.current_bid ?? winnerRow.initial_quotation_amount ?? 0;
 
@@ -2132,6 +2145,7 @@ export async function approveAuction(name: string): Promise<ReverseBidding> {
   if (!doc.winning_supplier) {
     throw new Error("No winning supplier to approve.");
   }
+  await assertSuppliersAwardEligible(doc.rfq, [doc.winning_supplier]);
   const remarks = `${(doc.remarks ?? "").replace(REJECTED_TAG, "").trim()}\n${APPROVED_TAG} ${formatERPNextDatetime(new Date())}`.trim();
   return patchReverseBidding(name, { remarks }, doc.modified);
 }
@@ -2156,6 +2170,7 @@ export async function reopenAuction(
   }
   const doc = await getReverseBidding(name);
   const remarks = `${(doc.remarks ?? "").replace(APPROVED_TAG, "").replace(REJECTED_TAG, "").trim()}\n[RB:Reopened] ${formatERPNextDatetime(new Date())}`.trim();
+  await assertSuppliersAwardEligible(doc.rfq, (doc.invited_suppliers ?? []).map(row => row.supplier));
   return patchReverseBidding(
     name,
     {
@@ -2310,9 +2325,7 @@ export async function createPurchaseOrderFromAuction(
 
   const rfq = await getRFQ(doc.rfq);
   const quotations = await getSupplierQuotations(doc.rfq);
-  const winningSq = quotations.find((q) =>
-    sameSupplier(q.supplier ?? q.supplier_name, supplier)
-  );
+  const [winningSq] = await assertSuppliersAwardEligible(doc.rfq, [supplier], quotations);
 
   const sqTotal = winningSq
     ? typeof winningSq.grand_total === "number" && winningSq.grand_total > 0
@@ -2594,9 +2607,7 @@ export async function sendAuctionWinnerToReview(
 
   const rfq = await getRFQ(doc.rfq);
   const quotations = await getSupplierQuotations(doc.rfq);
-  const sq = quotations.find(
-    (q) => sameSupplier(q.supplier, supplier) || sameSupplier(q.supplier_name, supplier)
-  );
+  const [sq] = await assertSuppliersAwardEligible(doc.rfq, [supplier], quotations);
 
   const pm = submittedBy || doc.procurement_manager || "procurement@netlink.com";
 

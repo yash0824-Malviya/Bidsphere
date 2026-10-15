@@ -1,0 +1,100 @@
+{
+  "request_id": "CTRQ-2026-0002",
+  "rfq_id": "PUR-RFQ-2026-00099",
+  "rfq_fingerprint": "6bc29d73291675121b5b7f172b4417960e82f7a2e3a81c7fe3c96812c05a349a",
+  "protected_request_fingerprint": "8f88e63f9655baa8c625515c853705023984cd1b32a87621245358797248857f",
+  "protected_metadata_fingerprint": "a09b59a1f41102956c5f9810cc5fc51a9d3da095909a3e75c285f217a5f58921",
+  "requests": [
+    {
+      "name": "CTRQ-2026-0001",
+      "custom_rfq": "PUR-RFQ-2026-00098"
+    },
+    {
+      "name": "CTRQ-2026-0002",
+      "custom_rfq": "PUR-RFQ-2026-00099"
+    }
+  ],
+  "contracts": [],
+  "assignment": {
+    "version": 1,
+    "phase": "procurement_team",
+    "assigned_role": "procurement_team",
+    "status": "Pending",
+    "current_stage": "Procurement"
+  },
+  "terms": {
+    "contract_type": "",
+    "contract_purpose": "Contract request for RFQ PUR-RFQ-2026-00099",
+    "description": "Internal CLM routing acceptance draft. Do not submit or send to suppliers.",
+    "contract_start_date": null,
+    "contract_end_date": null,
+    "contract_value": 0,
+    "currency": "",
+    "estimated_contract_value": 0
+  },
+  "draft": {
+    "version": 1,
+    "values": {
+      "contract_type": "",
+      "contract_purpose": "Contract request for RFQ PUR-RFQ-2026-00099",
+      "description": "Internal CLM routing acceptance draft. Do not submit or send to suppliers.",
+      "contract_start_date": "",
+      "contract_end_date": "",
+      "contract_value": 0,
+      "currency": "",
+      "estimated_contract_value": 0
+    },
+    "by": "procurement.team@netlink.com",
+    "role": "procurement_team",
+    "at": "2026-09-24 15:16:02"
+  },
+  "audit": [
+    {
+      "id": "d38d056c-54a3-44bc-9aba-b68929df3c70",
+      "action": "create",
+      "by": "Administrator",
+      "role": "admin",
+      "at": "2026-09-24 13:20:03",
+      "previous_status": "",
+      "new_status": "Pending",
+      "comment": "Contract Request from RFQ PUR-RFQ-2026-00099.",
+      "reference_id": "PUR-RFQ-2026-00099"
+    },
+    {
+      "id": "78f86953-b5dc-4cd1-be21-3f6207f9427e",
+      "action": "procurement_team_assigned",
+      "by": "Administrator",
+      "role": "admin",
+      "at": "2026-09-24 13:20:03",
+      "previous_status": "Draft",
+      "new_status": "Pending",
+      "comment": "Assigned to Procurement Team; supplier award and contract details may follow.",
+      "reference_id": "PUR-RFQ-2026-00099"
+    },
+    {
+      "id": "eb53ac86-c3e8-4d4c-bb22-9ba1309d3c23",
+      "action": "save_rfq_request_draft",
+      "by": "procurement.team@netlink.com",
+      "role": "procurement_team",
+      "at": "2026-09-24 15:15:16",
+      "previous_status": "Pending",
+      "new_status": "Pending",
+      "comment": "Procurement Team saved Contract Request details. No Contract was created and the Request remains at Procurement.",
+      "reference_id": "CTRQ-2026-0002"
+    },
+    {
+      "id": "f138c9e5-a62b-400e-83ce-f6a81579d71e",
+      "action": "save_rfq_request_draft",
+      "by": "procurement.team@netlink.com",
+      "role": "procurement_team",
+      "at": "2026-09-24 15:16:02",
+      "previous_status": "Pending",
+      "new_status": "Pending",
+      "comment": "Procurement Team saved Contract Request details. No Contract was created and the Request remains at Procurement.",
+      "reference_id": "CTRQ-2026-0002"
+    }
+  ],
+  "request_modified": "2026-09-24 15:16:02.014979",
+  "verified_at": "2026-09-24T09:49:05.530Z",
+  "source_and_routing_preserved": true
+}

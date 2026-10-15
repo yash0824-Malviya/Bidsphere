@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
   ArrowLeft,
@@ -529,6 +529,15 @@ export default function SupplierPortalProfilePage() {
         <div className="p-8 text-sm text-slate-600">
           Profile onboarding is available for account-based portal users. Your company PIN
           session does not include an onboarding draft.
+          <div className="mt-3">
+            <Link
+              to="/supplier/security"
+              className="inline-flex items-center gap-1.5 text-sm font-semibold text-[#1F3A6D] hover:underline"
+            >
+              <Lock className="h-4 w-4" aria-hidden="true" />
+              Account Security
+            </Link>
+          </div>
         </div>
       </>
     );
@@ -540,6 +549,15 @@ export default function SupplierPortalProfilePage() {
         className="min-h-[calc(100vh-4rem)]"
         style={{ backgroundColor: ONB.bg }}
       >
+        <div className="mb-3 flex justify-end">
+          <Link
+            to="/supplier/security"
+            className="inline-flex items-center gap-1.5 text-sm font-semibold text-[#1F3A6D] hover:underline"
+          >
+            <Lock className="h-4 w-4" aria-hidden="true" />
+            Account Security
+          </Link>
+        </div>
         {loading ? (
           <div className="flex min-h-[50vh] flex-col items-center justify-center gap-3 text-slate-500">
             <Loader2 className="h-8 w-8 animate-spin" style={{ color: ONB.primary }} />

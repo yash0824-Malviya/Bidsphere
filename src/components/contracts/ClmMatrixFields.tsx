@@ -1,0 +1,25 @@
+import { CLM_BUTTON, CLM_INPUT, ClmLinkInput } from "./ClmFields";
+import { ROLE_LABELS } from "../../config/roles";
+import type { ClmApprovalStage, ClmMatrixConditions } from "../../types/clm";
+
+function parse<T>(value: unknown, fallback: T): T { try { return typeof value === "string" ? JSON.parse(value) as T : value ? value as T : fallback; } catch { return fallback; } }
+const roles = ["procurement", "finance", "legal", "engineering", "quality", "program_manager"] as const;
+export default function ClmMatrixFields({ values, onChange }: { values: Record<string, unknown>; onChange: (v: Record<string, unknown>) => void }) {
+  const conditions = parse<ClmMatrixConditions>(values.custom_conditions, {});
+  const stages = parse<ClmApprovalStage[]>(values.custom_approval_stages, []);
+  const setCondition = (key: keyof ClmMatrixConditions, value: unknown) => {
+    const next = { ...conditions }; if (value === "" || value === undefined) delete next[key]; else Object.assign(next, { [key]: value });
+    onChange({ ...values, custom_conditions: JSON.stringify(next) });
+  };
+  const setStages = (next: ClmApprovalStage[]) => onChange({ ...values, custom_approval_stages: JSON.stringify(next) });
+  return <div className="space-y-5 border-t border-slate-200 pt-5"><section><h3 className="mb-2 font-semibold text-slate-900">Additional rule conditions</h3><p className="mb-3 text-xs text-slate-500">Leave a condition empty to match any value. Financial thresholds come from this rule's minimum and maximum contract value.</p><div className="grid gap-3 sm:grid-cols-2">
+    <label className="text-xs font-semibold text-slate-700">Business unit<input className={`${CLM_INPUT} mt-1`} value={conditions.business_unit || ""} onChange={e => setCondition("business_unit", e.target.value)} /></label>
+    <label className="text-xs font-semibold text-slate-700">Threshold currency<ClmLinkInput doctype="Currency" value={conditions.currency || ""} onChange={value => setCondition("currency", value)} /><span className="mt-1 block font-normal text-slate-500">Required when a minimum or maximum value is configured. Values are evaluated in this currency.</span></label>
+    <label className="text-xs font-semibold text-slate-700">Supplier status<input className={`${CLM_INPUT} mt-1`} value={conditions.supplier_status || ""} onChange={e => setCondition("supplier_status", e.target.value)} /></label>
+    <label className="text-xs font-semibold text-slate-700">Applies to<select className={`${CLM_INPUT} mt-1`} value={conditions.purpose || ""} onChange={e => setCondition("purpose", e.target.value)}><option value="">Any lifecycle decision</option>{["contract", "amendment", "renewal", "termination"].map(value => <option key={value} value={value}>{value[0].toUpperCase() + value.slice(1)}</option>)}</select></label>
+    {([ ["non_standard_clause", "Non-standard clause"], ["new_supplier", "New supplier"] ] as const).map(([key, label]) => <label key={key} className="text-xs font-semibold text-slate-700">{label}<select className={`${CLM_INPUT} mt-1`} value={conditions[key] === undefined ? "" : String(conditions[key])} onChange={e => setCondition(key, e.target.value === "" ? undefined : e.target.value === "true")}><option value="">Any</option><option value="true">Yes</option><option value="false">No</option></select></label>)}
+  </div></section><section><h3 className="font-semibold text-slate-900">Approval stages</h3><p className="mb-3 mt-1 text-xs text-slate-500">Approvers with the same stage number act in parallel. Higher stages wait for all earlier approvals. Required role selections above remain mandatory.</p>
+    <div className="space-y-2">{stages.map((stage, index) => <div className="grid gap-2 rounded-lg bg-slate-50 p-3 sm:grid-cols-[80px_1fr_1fr_auto]" key={index}><label className="text-xs text-slate-600">Stage<input aria-label={`Stage ${index + 1} order`} type="number" min="1" step="1" className={CLM_INPUT} value={stage.stage} onChange={e => setStages(stages.map((row, i) => i === index ? { ...row, stage: Number(e.target.value) } : row))} /></label><label className="text-xs text-slate-600">Role<select aria-label={`Stage ${index + 1} role`} className={CLM_INPUT} value={stage.role} onChange={e => setStages(stages.map((row, i) => i === index ? { ...row, role: e.target.value } : row))}>{roles.map(role => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}</select></label><label className="text-xs text-slate-600">Specific approver (optional)<input aria-label={`Stage ${index + 1} approver`} className={CLM_INPUT} value={stage.user || ""} placeholder="User ID" onChange={e => setStages(stages.map((row, i) => i === index ? { ...row, user: e.target.value } : row))} /></label><button type="button" className={`${CLM_BUTTON} self-end`} onClick={() => setStages(stages.filter((_, i) => i !== index))}>Remove</button></div>)}</div>
+    <button type="button" className={`${CLM_BUTTON} mt-3`} onClick={() => setStages([...stages, { role: "procurement", stage: stages.length ? Math.max(...stages.map(row => row.stage)) + 1 : 1 }])}>Add approver</button>
+  </section></div>;
+}

@@ -34,36 +34,45 @@ describe("ECR application role integration", () => {
         .find((item) => item.label === "Engineering Changes")
         ?.children?.map((child) => child.label);
 
-    expect(labels("engineer")).toEqual(["My ECRs", "New ECR"]);
-    expect(labels("engineering")).toEqual(["Engineering Review", "All ECRs"]);
+    expect(labels("engineer")).toEqual(["My ECRs", "New ECR", "Business Cases"]);
+    expect(labels("engineering")).toEqual(["Engineering Review", "All ECRs", "Business Cases"]);
     expect(labels("operations")).toEqual(["All ECRs"]);
-    expect(labels("quality")).toEqual(["All ECRs"]);
-    expect(labels("program_manager")).toEqual(["All ECRs"]);
+    expect(labels("quality")).toEqual(["Quality Reviews", "ECR Quality Impact", "All ECRs"]);
+    expect(labels("program_manager")).toEqual(["Pending ECR Approvals", "Business Cases", "All ECRs"]);
     expect(labels("procurement_team")).toEqual(["Procurement Review", "All ECRs"]);
-    expect(labels("procurement")).toEqual(["RFQ Pending", "All ECRs"]);
+
+    // Procurement Manager has ECR Reference under ENGINEERING section
+    const procurementEcrItem = getNavGroupsForRole("procurement")
+      .flatMap((group) => group.items)
+      .find((item) => item.label === "ECR Reference");
+    expect(procurementEcrItem?.to).toBe("/ecr");
   });
 
-  it("puts Dashboard first and Engineering Changes second for every ECR role", () => {
-    const roles = [
+  it("puts Dashboard first and preserves Engineering Changes for ECR review roles", () => {
+    const ecrReviewRoles = [
       "engineer",
       "engineering",
       "operations",
       "quality",
       "program_manager",
       "procurement_team",
-      "procurement",
     ] as const;
 
-    for (const role of roles) {
+    for (const role of ecrReviewRoles) {
       const primaryItems = getNavGroupsForRole(role).flatMap(
         (group) => group.items,
       );
       expect(primaryItems[0]?.label).toBe("Dashboard");
       expect(primaryItems[0]?.to).toBe("/dashboard");
-      expect(primaryItems[1]?.label).toBe("Engineering Changes");
+      expect(primaryItems.some((item) => item.label === "Engineering Changes")).toBe(true);
       expect(getRoleHome(role)).toBe("/dashboard");
       expect(canAccessPath(role, "/dashboard")).toBe(true);
     }
+
+    const procurementPrimaryItems = getNavGroupsForRole("procurement")[0]?.items ?? [];
+    expect(procurementPrimaryItems[0]?.label).toBe("Dashboard");
+    expect(getRoleHome("procurement")).toBe("/dashboard");
+    expect(canAccessPath("procurement", "/dashboard")).toBe(true);
   });
 
   it("keeps the requested role-specific Engineering Changes children", () => {
@@ -73,12 +82,11 @@ describe("ECR application role integration", () => {
         .find((item) => item.label === "Engineering Changes")
         ?.children?.map((child) => child.label);
 
-    expect(children("engineer")).toEqual(["My ECRs", "New ECR"]);
-    expect(children("engineering")).toEqual(["Engineering Review", "All ECRs"]);
+    expect(children("engineer")).toEqual(["My ECRs", "New ECR", "Business Cases"]);
+    expect(children("engineering")).toEqual(["Engineering Review", "All ECRs", "Business Cases"]);
     expect(children("operations")).toEqual(["All ECRs"]);
-    expect(children("quality")).toEqual(["All ECRs"]);
-    expect(children("program_manager")).toEqual(["All ECRs"]);
+    expect(children("quality")).toEqual(["Quality Reviews", "ECR Quality Impact", "All ECRs"]);
+    expect(children("program_manager")).toEqual(["Pending ECR Approvals", "Business Cases", "All ECRs"]);
     expect(children("procurement_team")).toEqual(["Procurement Review", "All ECRs"]);
-    expect(children("procurement")).toEqual(["RFQ Pending", "All ECRs"]);
   });
 });

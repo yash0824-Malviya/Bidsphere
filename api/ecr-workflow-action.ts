@@ -42,6 +42,7 @@ export default async function handler(
       name: ecrIdentifier,
       action: body.action,
       comment: body.comment,
+      expected_modified: body.expected_modified,
       reviewFields:
         body.reviewFields && typeof body.reviewFields === "object" && !Array.isArray(body.reviewFields)
           ? body.reviewFields as Record<string, unknown>

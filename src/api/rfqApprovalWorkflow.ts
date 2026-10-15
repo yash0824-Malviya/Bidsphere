@@ -12,8 +12,9 @@
  * are resolved via rfqSchema.ts at runtime.
  */
 
-import { updateRFQ } from "./sourcing";
+import { getRFQ, updateRFQ } from "./sourcing";
 import { getRFQSchema } from "./rfqSchema";
+import { assertSuppliersAwardEligible } from "./supplierAwardEligibility";
 import type {
   RFQ,
   RFQApprovalState,
@@ -246,9 +247,25 @@ async function syncStateToErpNext(state: RFQApprovalState): Promise<void> {
     updates.custom_insurance_approved = state.insurance_approved ? 1 : 0;
 
   if (fieldSet.has("custom_approval_data")) {
-    try {
-      updates.custom_approval_data = JSON.stringify(state);
-    } catch { /* ignore */ }
+    // Contract decisions and request recovery state belong to the server. Preserve the
+    // latest persisted evidence, never a cached/browser-supplied copy, and echo
+    // its exact lock stamp so a concurrent decision causes a conflict.
+    const current = await getRFQ(state.rfq);
+    if (!current.modified) throw new Error("Refresh the RFQ before updating its approval state.");
+    const raw = (current as unknown as Record<string, unknown>).custom_approval_data;
+    let persisted: Record<string, unknown> = {};
+    if (raw != null && raw !== "") {
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("The saved RFQ approval data is invalid. Refresh the RFQ before saving.");
+      persisted = parsed as Record<string, unknown>;
+    }
+    const incoming = { ...state } as unknown as Record<string, unknown>;
+    delete incoming.contract_decision;
+    delete incoming.clm_initial_request;
+    delete incoming.clm_award_intent;
+    delete incoming.clm_rest_operation;
+    updates.custom_approval_data = JSON.stringify({ ...persisted, ...incoming });
+    updates.modified = current.modified;
   }
 
   if (Object.keys(updates).length === 0) return;
@@ -260,6 +277,7 @@ async function syncStateToErpNext(state: RFQApprovalState): Promise<void> {
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn("[Workflow] ERPNext full sync failed:", err);
+    throw err;
   }
 }
 
@@ -275,7 +293,10 @@ export async function submitForReview(params: {
   selectedSupplierTotal: number;
   rfqValue?: number;
   submittedBy: string;
+  contractRequired?: boolean | "Yes" | "No";
 }): Promise<RFQApprovalState> {
+  await assertSuppliersAwardEligible(params.rfqName, [params.selectedSupplier]);
+  const isContractRequired = params.contractRequired === true || params.contractRequired === "Yes";
   // eslint-disable-next-line no-console
   console.log("[Workflow] submitForReview called:", {
     rfqName: params.rfqName,
@@ -283,6 +304,7 @@ export async function submitForReview(params: {
     total: params.selectedSupplierTotal,
     company: params.company,
     submittedBy: params.submittedBy,
+    contractRequired: isContractRequired,
   });
 
   const now = nowERPDateTime();
@@ -293,7 +315,7 @@ export async function submitForReview(params: {
     company: params.company,
     selected_supplier: params.selectedSupplier,
     selected_supplier_total: params.selectedSupplierTotal,
-    workflow_step: "Pending Legal Review",
+    workflow_step: isContractRequired ? "Pending Procurement Team" : "Pending Legal Review",
     legal_status: "Pending Legal Review",
     finance_status: "Pending Finance Review",
     submitted_by: params.submittedBy,

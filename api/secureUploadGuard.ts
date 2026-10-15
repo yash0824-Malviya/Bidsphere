@@ -57,7 +57,7 @@ export async function parseSecureUpload(
     form = await new Request("http://bidsphere.local/upload", {
       method: "POST",
       headers: { "content-type": contentType },
-      body: rawBody,
+      body: new Uint8Array(rawBody).buffer,
     }).formData();
   } catch {
     throw new SecureUploadError("The multipart upload could not be parsed.");

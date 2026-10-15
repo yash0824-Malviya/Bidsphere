@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PackagePlus, Plus } from "lucide-react";
 import toast from "react-hot-toast";
@@ -82,9 +82,16 @@ const STATUS_OPTIONS: Array<"" | PurchaseReceiptStatus> = [
 export default function GRNPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const preset = (searchParams.get("preset") ?? "").toLowerCase();
+  const statusParam = (searchParams.get("status") ?? "") as PurchaseReceiptStatus | "";
   const role = useAuthStore((s) => s.user?.role);
   const canCreate = canCreateGRN(role);
-  const [status, setStatus] = useState<"" | PurchaseReceiptStatus>("");
+  const [status, setStatus] = useState<"" | PurchaseReceiptStatus>(() => {
+    if (statusParam && STATUS_OPTIONS.includes(statusParam)) return statusParam;
+    if (preset === "pending") return "Draft";
+    return "";
+  });
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
 

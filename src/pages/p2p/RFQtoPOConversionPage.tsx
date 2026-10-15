@@ -34,7 +34,8 @@ import {
 import type { LinkedPORow } from "../../api/purchasing";
 import { getLegalDocsByRfq, type LegalDocumentSet } from "../../api/legalDocs";
 import { deriveRfqProcurementWorkflow } from "../../api/rfqProcurementWorkflow";
-import { invalidateApprovalWorkflow } from "../../api/approvalWorkflow";
+import { invalidateApprovalWorkflow, isRfqReadyForPurchaseOrder } from "../../api/approvalWorkflow";
+import { isLegalReviewExecuted } from "../../types/legalEsign";
 import POStatusTimeline from "../../components/p2p/POStatusTimeline";
 import { Skeleton } from "../../components/Skeleton";
 import {
@@ -122,6 +123,7 @@ export default function RFQtoPOConversionPage() {
     hasAnalysis: true,
     selectedSupplier,
     legalStatus: legalDoc?.review_status ?? "",
+    legalSigned: isLegalReviewExecuted(legalDoc),
     financeStatus: legalDoc?.finance_status ?? "",
     poExists: !!linkedPO,
     poName: linkedPO?.name ?? null,
@@ -130,7 +132,7 @@ export default function RFQtoPOConversionPage() {
     procurementWorkflow.canCreatePO ||
     procurementWorkflow.purchaseOrderStatus === "Created";
   const canCreatePO =
-    procurementWorkflow.canCreatePO && canManagePurchaseOrders(role);
+    procurementWorkflow.canCreatePO && isRfqReadyForPurchaseOrder(legalDoc) && canManagePurchaseOrders(role);
 
   /* ── Adapter fields used by the audit / status UI below ── */
   const legalStatusLabel = legalDoc?.review_status ?? "Pending";

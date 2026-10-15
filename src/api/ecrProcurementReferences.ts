@@ -152,7 +152,7 @@ export async function validateECRProcurementSelection(
   input: ECRProcurementSelectionInput,
 ): Promise<ECRProcurementSelectionResult> {
   if (input.referenceType === "None") {
-    return { errors: {}, canonicalParts: input.parts, sourceItems: [] };
+    return validateECRProcurementSourceItems(input, []);
   }
 
   const documentId = input.referenceType === "RFQ"

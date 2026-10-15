@@ -19,6 +19,7 @@ import {
   updateRfpResponseInternalNotes,
 } from "../../api/rfp";
 import { openErpFileInBrowser } from "../../api/legalDocsStorage";
+import { getRfpResponseAttachmentUrl } from "../../api/rfpResponseAttachment";
 import { queryClient } from "../../queryClient";
 import ConnectionError from "../../components/ConnectionError";
 import PageHeader from "../../components/PageHeader";
@@ -139,13 +140,13 @@ export default function RFPResponseDetailPage() {
         id: d.document_id,
         label: d.doc_type,
         fileName: d.file.file_name || "document",
-        fileUrl: d.file.file_url,
+        fileUrl: getRfpResponseAttachmentUrl(rfpName, respId, d),
       }));
-  }, [responseQuery.data?.documents]);
+  }, [responseQuery.data?.documents, rfpName, respId]);
 
   const handleDownload = async (doc: {
     document_id: string;
-    file: { file_url: string; file_name: string };
+    file: { file_url: string; file_name: string; file_id?: string };
   }) => {
     if (!doc.file?.file_url) {
       toast.error("Download failed: no file URL available.");
@@ -153,7 +154,7 @@ export default function RFPResponseDetailPage() {
     }
     setDownloadingId(doc.document_id);
     try {
-      await openErpFileInBrowser(doc.file.file_url, {
+      await openErpFileInBrowser(getRfpResponseAttachmentUrl(rfpName, respId, doc), {
         mode: "download",
         fileName: doc.file.file_name || "document",
       });

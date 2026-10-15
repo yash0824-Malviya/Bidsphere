@@ -1,0 +1,79 @@
+{
+  "mode": "apply",
+  "operations": [
+    {
+      "kind": "update-existing-custom-doctype",
+      "doctype": "Contract Request",
+      "name": "Contract Request",
+      "modified": "2026-09-21 11:52:58.753892",
+      "fieldPatches": [
+        {
+          "fieldname": "contract_type",
+          "patch": {
+            "reqd": 0,
+            "mandatory_depends_on": "eval:(function(){try{var d=JSON.parse(doc.custom_clm_data||'{}'),s=d.rfq_source,w=d.rfq_request_workflow,a=d.approvals;return !(doc.custom_rfq&&!doc.custom_supplier_quotation&&s&&s.rfq===doc.custom_rfq&&s.stage==='rfq_created'&&s.prepared!==true&&s.contract_required===true&&!s.award&&!s.quotation&&!s.legal_review&&w&&w.version===1&&w.phase==='procurement_team'&&w.assigned_role==='procurement_team'&&w.status==='Pending'&&w.current_stage==='Procurement'&&!d.contract&&Array.isArray(a)&&a.length===1&&a[0].role==='procurement_team'&&a[0].stage===0&&a[0].status==='Pending'&&!a[0].user);}catch(e){return true;}})()"
+          }
+        },
+        {
+          "fieldname": "supplier",
+          "patch": {
+            "reqd": 0,
+            "mandatory_depends_on": "eval:(function(){try{var d=JSON.parse(doc.custom_clm_data||'{}'),s=d.rfq_source,w=d.rfq_request_workflow,a=d.approvals;return !(doc.custom_rfq&&!doc.custom_supplier_quotation&&s&&s.rfq===doc.custom_rfq&&s.stage==='rfq_created'&&s.prepared!==true&&s.contract_required===true&&!s.award&&!s.quotation&&!s.legal_review&&w&&w.version===1&&w.phase==='procurement_team'&&w.assigned_role==='procurement_team'&&w.status==='Pending'&&w.current_stage==='Procurement'&&!d.contract&&Array.isArray(a)&&a.length===1&&a[0].role==='procurement_team'&&a[0].stage===0&&a[0].status==='Pending'&&!a[0].user);}catch(e){return true;}})()"
+          }
+        },
+        {
+          "fieldname": "contract_start_date",
+          "patch": {
+            "reqd": 0,
+            "mandatory_depends_on": "eval:(function(){try{var d=JSON.parse(doc.custom_clm_data||'{}'),s=d.rfq_source,w=d.rfq_request_workflow,a=d.approvals;return !(doc.custom_rfq&&!doc.custom_supplier_quotation&&s&&s.rfq===doc.custom_rfq&&s.stage==='rfq_created'&&s.prepared!==true&&s.contract_required===true&&!s.award&&!s.quotation&&!s.legal_review&&w&&w.version===1&&w.phase==='procurement_team'&&w.assigned_role==='procurement_team'&&w.status==='Pending'&&w.current_stage==='Procurement'&&!d.contract&&Array.isArray(a)&&a.length===1&&a[0].role==='procurement_team'&&a[0].stage===0&&a[0].status==='Pending'&&!a[0].user);}catch(e){return true;}})()"
+          }
+        },
+        {
+          "fieldname": "contract_end_date",
+          "patch": {
+            "reqd": 0,
+            "mandatory_depends_on": "eval:(function(){try{var d=JSON.parse(doc.custom_clm_data||'{}'),s=d.rfq_source,w=d.rfq_request_workflow,a=d.approvals;return !(doc.custom_rfq&&!doc.custom_supplier_quotation&&s&&s.rfq===doc.custom_rfq&&s.stage==='rfq_created'&&s.prepared!==true&&s.contract_required===true&&!s.award&&!s.quotation&&!s.legal_review&&w&&w.version===1&&w.phase==='procurement_team'&&w.assigned_role==='procurement_team'&&w.status==='Pending'&&w.current_stage==='Procurement'&&!d.contract&&Array.isArray(a)&&a.length===1&&a[0].role==='procurement_team'&&a[0].stage===0&&a[0].status==='Pending'&&!a[0].user);}catch(e){return true;}})()"
+          }
+        },
+        {
+          "fieldname": "contract_value",
+          "patch": {
+            "reqd": 0,
+            "mandatory_depends_on": "eval:(function(){try{var d=JSON.parse(doc.custom_clm_data||'{}'),s=d.rfq_source,w=d.rfq_request_workflow,a=d.approvals;return !(doc.custom_rfq&&!doc.custom_supplier_quotation&&s&&s.rfq===doc.custom_rfq&&s.stage==='rfq_created'&&s.prepared!==true&&s.contract_required===true&&!s.award&&!s.quotation&&!s.legal_review&&w&&w.version===1&&w.phase==='procurement_team'&&w.assigned_role==='procurement_team'&&w.status==='Pending'&&w.current_stage==='Procurement'&&!d.contract&&Array.isArray(a)&&a.length===1&&a[0].role==='procurement_team'&&a[0].stage===0&&a[0].status==='Pending'&&!a[0].user);}catch(e){return true;}})()"
+          }
+        },
+        {
+          "fieldname": "estimated_contract_value",
+          "patch": {
+            "reqd": 0,
+            "mandatory_depends_on": "eval:(function(){try{var d=JSON.parse(doc.custom_clm_data||'{}'),s=d.rfq_source,w=d.rfq_request_workflow,a=d.approvals;return !(doc.custom_rfq&&!doc.custom_supplier_quotation&&s&&s.rfq===doc.custom_rfq&&s.stage==='rfq_created'&&s.prepared!==true&&s.contract_required===true&&!s.award&&!s.quotation&&!s.legal_review&&w&&w.version===1&&w.phase==='procurement_team'&&w.assigned_role==='procurement_team'&&w.status==='Pending'&&w.current_stage==='Procurement'&&!d.contract&&Array.isArray(a)&&a.length===1&&a[0].role==='procurement_team'&&a[0].stage===0&&a[0].status==='Pending'&&!a[0].user);}catch(e){return true;}})()"
+          }
+        },
+        {
+          "fieldname": "currency",
+          "patch": {
+            "reqd": 0,
+            "mandatory_depends_on": "eval:(function(){try{var d=JSON.parse(doc.custom_clm_data||'{}'),s=d.rfq_source,w=d.rfq_request_workflow,a=d.approvals;return !(doc.custom_rfq&&!doc.custom_supplier_quotation&&s&&s.rfq===doc.custom_rfq&&s.stage==='rfq_created'&&s.prepared!==true&&s.contract_required===true&&!s.award&&!s.quotation&&!s.legal_review&&w&&w.version===1&&w.phase==='procurement_team'&&w.assigned_role==='procurement_team'&&w.status==='Pending'&&w.current_stage==='Procurement'&&!d.contract&&Array.isArray(a)&&a.length===1&&a[0].role==='procurement_team'&&a[0].stage===0&&a[0].status==='Pending'&&!a[0].user);}catch(e){return true;}})()"
+          }
+        }
+      ]
+    }
+  ],
+  "validationNotice": "Frappe 16 evaluates mandatory_depends_on only in Desk. The deferred fields become optional to direct ERP REST callers. Deploy the BidSphere gateway validation that keeps full standalone save/submit and award-to-Contract requirements before applying this change. This metadata does not provide conditional server validation.",
+  "conditionalServerValidation": false,
+  "gatewayValidationRequired": true,
+  "recordMigration": false,
+  "workflowChanges": false,
+  "permissionChanges": false,
+  "standardContractChanges": false,
+  "newFields": [],
+  "newDoctypes": [],
+  "newRoles": [],
+  "verified": true,
+  "fieldsChanged": 7,
+  "recordsPreserved": true,
+  "workflowsPreserved": true,
+  "permissionsPreserved": true,
+  "standardContractPreserved": true,
+  "applied": true
+}

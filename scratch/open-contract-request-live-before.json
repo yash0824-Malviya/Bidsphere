@@ -1,0 +1,25 @@
+{
+  "request_id": "CTRQ-2026-0002",
+  "rfq_id": "PUR-RFQ-2026-00099",
+  "request_fingerprint": "25f327e0dbd8b0f3ab39e2226e46f5d013c59d505935923e125b9cc43e7ebb26",
+  "rfq_fingerprint": "6bc29d73291675121b5b7f172b4417960e82f7a2e3a81c7fe3c96812c05a349a",
+  "requests": [
+    {
+      "name": "CTRQ-2026-0001",
+      "custom_rfq": "PUR-RFQ-2026-00098"
+    },
+    {
+      "name": "CTRQ-2026-0002",
+      "custom_rfq": "PUR-RFQ-2026-00099"
+    }
+  ],
+  "contracts": [],
+  "request_status": "Pending Review",
+  "assignment": {
+    "version": 1,
+    "phase": "procurement_team",
+    "assigned_role": "procurement_team",
+    "status": "Pending",
+    "current_stage": "Procurement"
+  }
+}

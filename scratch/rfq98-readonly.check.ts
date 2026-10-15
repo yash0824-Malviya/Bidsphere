@@ -1,0 +1,21 @@
+import { expect, test } from 'vitest';
+import { writeFileSync } from 'node:fs';
+import { createEcrSchemaErpClient } from '../scripts/ecr-schema-erp-client.mjs';
+import { createClmDependencies, getClmFields } from '../api/clmErp';
+import { getRfqClmSummary } from '../api/rfqClmCore';
+import { resolveInitialRequestDepartment } from '../api/rfqRequestDepartment';
+import type { AccessPrincipal } from '../api/rbacAuth';
+createEcrSchemaErpClient();
+const denied = async () => { throw new Error('Read-only diagnostic: writes are forbidden.'); };
+const deps = { ...createClmDependencies(), fields: getClmFields, create: denied, save: denied, notify: denied, decide: denied };
+test('reads RFQ98 Department and no-award Request state from ERP without writes', async () => {
+  const principal = { typ: 'internal', sub: 'read-only-policy-probe', role: 'procurement_team' } as AccessPrincipal;
+  const rfq = await deps.load('Request for Quotation', 'PUR-RFQ-2026-00098');
+  const department = await resolveInitialRequestDepartment(rfq, deps);
+  expect(department).toBe('Production - NSGAI');
+  const summary = await getRfqClmSummary(principal, String(rfq.name), deps);
+  expect(summary).toMatchObject({ initial_request_required: true, can_create: false, contract_required: 'Yes' });
+  expect(summary.reason).toContain('supplier award is not required at this stage');
+  expect(summary.request).toBeUndefined(); expect(summary.contract).toBeUndefined();
+  writeFileSync('scratch/rfq98-readonly-server-evidence.json', JSON.stringify({ checked_at: new Date().toISOString(), mode: 'local server policy over live ERP reads, no authenticated browser or writes', department, summary }, null, 2));
+}, 60_000);

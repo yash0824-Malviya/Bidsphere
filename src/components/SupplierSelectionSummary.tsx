@@ -8,7 +8,6 @@ import {
   FileText,
   Hash,
   Shield,
-  ShoppingCart,
   Sparkles,
   Target,
   TrendingDown,
@@ -19,14 +18,21 @@ import {
 } from "lucide-react";
 import type { AIRecommendation, SupplierAnalysisRow } from "../types/erpnext";
 import { formatCurrency } from "../utils/format";
+import {
+  formatQuoteTotal,
+  isSubmittedQuoteAmount,
+} from "../utils/quotePrice";
 import DashboardKpiCard, {
   DashboardKpiGrid,
 } from "./dashboard/DashboardKpiCard";
 
-type RiskLevel = "Low" | "Medium" | "High";
+import { buildEvaluationSummary, getEvaluationRisk, projectSupplierDecision, type EvaluationRisk } from "../utils/aiEvaluationDecision";
+import { findRecommendationWinner, normalizeSupplierKey } from "../utils/aiRecommendationNormalization";
+type RiskLevel = EvaluationRisk;
 
 interface SelectionAudit {
   selected_supplier: string;
+  supplier_quotation?: string;
   supplier_display_name?: string;
   ai_rank?: number;
   risk_level?: string;
@@ -54,22 +60,13 @@ interface Props {
   selectedAt: string;
   selectedTotal: number;
   analysis: AIRecommendation | null;
-  quoteAmount: number;
+  quoteAmount: number | null;
   workflowStep?: string;
   onClose: () => void;
 }
 
-function clampScore(n: number): number {
-  return Math.max(0, Math.min(100, Math.round(n)));
-}
-
-function supplierRiskLevel(s: SupplierAnalysisRow): RiskLevel {
-  if (s.verdict === "AVOID") return "High";
-  if (s.verdict === "EXPENSIVE") return "Medium";
-  const rel = s.score?.reliability ?? 50;
-  if (rel < 40 || (s.weaknesses ?? []).length >= 3) return "High";
-  if (rel < 65 || s.verdict === "GOOD OPTION") return "Medium";
-  return "Low";
+function formatScore(n: unknown): string {
+  return typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 100 ? `${n}/100` : "Unavailable";
 }
 
 function riskBadgeClasses(level: RiskLevel) {
@@ -80,6 +77,8 @@ function riskBadgeClasses(level: RiskLevel) {
       return "bg-amber-50 text-amber-700 ring-amber-200";
     case "High":
       return "bg-danger-50 text-danger-700 ring-danger-200";
+    default:
+      return "bg-neutral-50 text-neutral-600 ring-neutral-200";
   }
 }
 
@@ -87,109 +86,41 @@ function sortRanked(rows: SupplierAnalysisRow[]): SupplierAnalysisRow[] {
   return [...rows].sort((a, b) => a.rank - b.rank);
 }
 
-/* ── Decision-point builder ─────────────────────────────────────────────── */
-
-function buildDecisionPoints(
-  row: SupplierAnalysisRow,
-  allSuppliers: SupplierAnalysisRow[],
-  analysis: AIRecommendation
-): { label: string; icon: typeof CheckCircle2 }[] {
-  const pts: { label: string; icon: typeof CheckCircle2 }[] = [];
-  const score = row.score;
-
-  const isLowestCost =
-    allSuppliers.length > 0 &&
-    row.grand_total <= Math.min(...allSuppliers.map((s) => s.grand_total));
-  const isBestDelivery =
-    allSuppliers.length > 0 &&
-    (score?.delivery ?? 0) >=
-      Math.max(...allSuppliers.map((s) => s.score?.delivery ?? 0));
-  const isHighestScore =
-    allSuppliers.length > 0 &&
-    (score?.overall ?? 0) >=
-      Math.max(...allSuppliers.map((s) => s.score?.overall ?? 0));
-
-  if (isLowestCost) {
-    pts.push({ label: "Lowest evaluated procurement cost", icon: DollarSign });
-  } else if ((score?.cost ?? 0) >= 65) {
-    pts.push({ label: "Competitive pricing among all bidders", icon: DollarSign });
+/** Prefer exact stored IDs; display-name fallback must identify one row only. */
+export function resolveSelectedEvaluation(
+  rows: SupplierAnalysisRow[], selectedSupplier: string, audit?: SelectionAudit | null,
+): SupplierAnalysisRow | undefined {
+  const key = selectedSupplier.trim();
+  const sameSelection = audit && (audit.selected_supplier === key ||
+    normalizeSupplierKey(audit.supplier_display_name ?? "") === normalizeSupplierKey(key));
+  if (sameSelection && audit.supplier_quotation) {
+    const matches = rows.filter((row) => (row.quotation_id || row.supplier_quotation_id) === audit.supplier_quotation &&
+      row.supplier_id === audit.selected_supplier);
+    if (matches.length === 1 && (matches[0].supplier_id === key ||
+        normalizeSupplierKey(matches[0].name) === normalizeSupplierKey(key))) return matches[0];
+    return undefined;
   }
-
-  if (isBestDelivery) {
-    pts.push({ label: "Best delivery commitment among all suppliers", icon: Truck });
-  } else if ((score?.delivery ?? 0) >= 60) {
-    pts.push({ label: "Strong delivery schedule compliance", icon: Truck });
-  }
-
-  if (isHighestScore) {
-    pts.push({ label: "Highest AI confidence score", icon: Target });
-  }
-
-  if (row.rank === 1) {
-    pts.push({ label: "Top-ranked supplier by AI evaluation", icon: Award });
-  }
-
-  const hasCompleteQuote = (row.strengths ?? []).some(
-    (s) => /complete|quotation|all items/i.test(s)
-  );
-  if (hasCompleteQuote) {
-    pts.push({ label: "Complete quotation submission", icon: ShoppingCart });
-  }
-
-  if ((score?.reliability ?? 0) >= 65) {
-    pts.push({ label: "Strong supplier reliability rating", icon: Shield });
-  }
-
-  const highRisks = (analysis.risk_flags ?? []).filter(
-    (f) => f.severity === "high"
-  ).length;
-  if (highRisks === 0) {
-    pts.push({ label: "Lowest procurement risk", icon: TrendingDown });
-  }
-
-  if (pts.length < 4) {
-    if ((score?.overall ?? 0) >= 60 && !pts.some((p) => p.label.includes("confidence"))) {
-      pts.push({ label: "Meets all technical evaluation requirements", icon: FileText });
-    }
-  }
-
-  if (pts.length === 0) {
-    pts.push({ label: "Selected based on comprehensive procurement criteria", icon: CheckCircle2 });
-  }
-
-  return pts.slice(0, 6);
+  const identities = rows.filter((row) => row.supplier_id === key ||
+    (row.quotation_id || row.supplier_quotation_id) === key);
+  if (identities.length) return identities.length === 1 ? identities[0] : undefined;
+  const names = rows.filter((row) => normalizeSupplierKey(row.name) === normalizeSupplierKey(key));
+  return names.length === 1 ? names[0] : undefined;
 }
 
-/* ── AI recommendation narrative builder ────────────────────────────────── */
-
-function buildRecommendationNarrative(
-  supplierName: string,
-  row: SupplierAnalysisRow | undefined,
-  analysis: AIRecommendation | null
-): string {
-  if (analysis?.recommendation_summary) {
-    return analysis.recommendation_summary;
+function buildDecisionPoints(row: SupplierAnalysisRow, allSuppliers: SupplierAnalysisRow[]): { label: string; icon: typeof CheckCircle2 }[] {
+  const points: { label: string; icon: typeof CheckCircle2 }[] = [];
+  const totals = allSuppliers.map((supplier) => supplier.grand_total).filter(isSubmittedQuoteAmount);
+  if (isSubmittedQuoteAmount(row.grand_total) && totals.length && row.grand_total === Math.min(...totals)) {
+    points.push({ label: "Lowest submitted quotation total (including ties)", icon: DollarSign });
   }
-
-  const factors: string[] = [];
-  if (row) {
-    if ((row.score?.cost ?? 0) >= 50) factors.push("price competitiveness");
-    if ((row.score?.delivery ?? 0) >= 50) factors.push("delivery capability");
-    if ((row.score?.reliability ?? 0) >= 50) factors.push("supplier reliability");
-    const risk = supplierRiskLevel(row);
-    if (risk !== "High") factors.push("risk assessment");
+  if (row.score.delivery >= 0 && row.score.delivery === Math.max(...allSuppliers.map((supplier) => supplier.score.delivery))) {
+    points.push({ label: "Highest delivery evaluation score (including ties)", icon: Truck });
   }
-
-  if (factors.length === 0) {
-    factors.push("overall procurement evaluation criteria");
-  }
-
-  const joined =
-    factors.length <= 2
-      ? factors.join(" and ")
-      : factors.slice(0, -1).join(", ") + " and " + factors[factors.length - 1];
-
-  return `Based on ${joined}, ${supplierName} achieved the highest overall evaluation score and was recommended for award.`;
+  points.push({ label: `Weighted-score rank #${row.rank}`, icon: Award });
+  points.push({ label: `Risk assessment: ${getEvaluationRisk(row)}`, icon: Shield });
+  points.push({ label: `Evaluation verdict: ${row.verdict}`, icon: FileText });
+  if (row.recommendation_reason) points.push({ label: row.recommendation_reason, icon: Target });
+  return points;
 }
 
 function formatDisplayDate(iso: string | null | undefined): string {
@@ -214,58 +145,48 @@ export default function SupplierSelectionSummary({
   selectedAt,
   selectedTotal,
   analysis,
-  quoteAmount,
   workflowStep,
   onClose,
 }: Props) {
   const audit = useMemo(() => readSelectionAudit(rfqName), [rfqName]);
 
-  const ranked = useMemo(
-    () => sortRanked(analysis?.supplier_analysis ?? []),
-    [analysis]
-  );
-
+  const ranked = useMemo(() => {
+    const winner = analysis ? findRecommendationWinner(analysis) : undefined;
+    return sortRanked((analysis?.supplier_analysis ?? []).map((row) => projectSupplierDecision(row, row === winner)));
+  }, [analysis]);
   const supplierRow = useMemo(
-    () =>
-      ranked.find(
-        (s) => s.name.toLowerCase() === (selectedSupplier ?? "").toLowerCase()
-      ),
-    [ranked, selectedSupplier]
+    () => resolveSelectedEvaluation(ranked, selectedSupplier, audit),
+    [ranked, selectedSupplier, audit],
   );
-
+  const selectionAudit = audit && (audit.selected_supplier === selectedSupplier ||
+    (supplierRow && audit.selected_supplier === supplierRow.supplier_id)) ? audit : null;
   const decisionPoints = useMemo(
-    () =>
-      supplierRow && analysis
-        ? buildDecisionPoints(supplierRow, ranked, analysis)
-        : audit?.selection_reason
-          ? [{ label: audit.selection_reason, icon: CheckCircle2 as typeof CheckCircle2 }]
-          : [],
-    [supplierRow, analysis, ranked, audit]
+    () => supplierRow ? buildDecisionPoints(supplierRow, ranked) : [],
+    [supplierRow, ranked],
   );
-
-  const narrative = useMemo(
-    () => buildRecommendationNarrative(selectedSupplier, supplierRow, analysis),
-    [selectedSupplier, supplierRow, analysis]
-  );
-
+  const narrative = supplierRow ? buildEvaluationSummary([supplierRow])
+    : "The selected supplier has no unambiguous evaluation in this analysis. Its score, risk and verdict are unavailable.";
   if (!open) return null;
-
-  const confidence = analysis ? clampScore(analysis.confidence_score) : null;
-  const rank = supplierRow?.rank ?? audit?.ai_rank ?? null;
-  const risk = supplierRow
-    ? supplierRiskLevel(supplierRow)
-    : (audit?.risk_level as RiskLevel | undefined) ?? null;
-  const displayAmount =
-    quoteAmount > 0
-      ? quoteAmount
-      : supplierRow?.grand_total ?? audit?.grand_total ?? selectedTotal ?? 0;
+  const score = supplierRow?.score.overall;
+  const confidence = typeof score === "number" && Number.isFinite(score) && score >= 0 && score <= 100 ? score : null;
+  const rank = supplierRow?.rank ?? null;
+  const risk = supplierRow ? getEvaluationRisk(supplierRow) : "Unavailable";
+  const displayAmount = supplierRow ? (isSubmittedQuoteAmount(supplierRow.grand_total) ? supplierRow.grand_total : null)
+    : isSubmittedQuoteAmount(selectionAudit?.grand_total) ? selectionAudit.grand_total
+      : isSubmittedQuoteAmount(selectedTotal) ? selectedTotal : null;
 
   const highestQuote =
-    ranked.length > 0
-      ? Math.max(...ranked.map((s) => s.grand_total))
+    ranked.some((supplier) => isSubmittedQuoteAmount(supplier.grand_total))
+      ? Math.max(
+          ...ranked
+            .map((supplier) => supplier.grand_total)
+            .filter(isSubmittedQuoteAmount),
+        )
       : 0;
   const estimatedSavings =
-    highestQuote > displayAmount ? highestQuote - displayAmount : 0;
+    displayAmount !== null && highestQuote > displayAmount
+      ? highestQuote - displayAmount
+      : 0;
 
   return (
     <div
@@ -333,7 +254,7 @@ export default function SupplierSelectionSummary({
                 </div>
                 <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-success-600 px-2.5 py-1 text-[10px] font-bold uppercase text-white">
                   <CheckCircle2 className="h-3 w-3" />
-                  Awarded
+                  Selected
                 </span>
               </div>
               <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm text-neutral-600">
@@ -345,10 +266,10 @@ export default function SupplierSelectionSummary({
                   <FileText className="h-3.5 w-3.5 text-neutral-400" />
                   {rfqName}
                 </span>
-                {audit?.selected_by && (
+                {selectionAudit?.selected_by && (
                   <span className="inline-flex items-center gap-1.5">
                     <User className="h-3.5 w-3.5 text-neutral-400" />
-                    {audit.selected_by}
+                    {selectionAudit.selected_by}
                   </span>
                 )}
               </div>
@@ -381,15 +302,18 @@ export default function SupplierSelectionSummary({
                 )}
                 {confidence !== null && (
                   <DashboardKpiCard
-                    label="Confidence Score"
-                    value={`${confidence}%`}
+                    label="Weighted Score"
+                    value={`${confidence}/100`}
                     icon={Target}
                     iconClassName="bg-violet-50 text-violet-600"
                   />
                 )}
                 <DashboardKpiCard
                   label="Quoted Value"
-                  value={formatCurrency(displayAmount)}
+                  value={formatQuoteTotal(
+                    displayAmount,
+                    supplierRow?.quote_price_status,
+                  )}
                   icon={DollarSign}
                   iconClassName="bg-blue-50 text-blue-600"
                 />
@@ -415,10 +339,16 @@ export default function SupplierSelectionSummary({
               </DashboardKpiGrid>
             </div>
 
-            {/* ═══ SECTION 1 — Why This Supplier Was Selected ═══ */}
+            {selectionAudit?.selection_reason && (
+              <div>
+                <SectionTitle icon={FileText} title="Recorded Selection Reason" />
+                <p className="mt-3 text-sm text-neutral-700">{selectionAudit.selection_reason}</p>
+              </div>
+            )}
+            {/* Selected supplier evaluation facts */}
             {decisionPoints.length > 0 && (
               <div>
-                <SectionTitle icon={Target} title="Why This Supplier Was Selected" />
+                <SectionTitle icon={Target} title="Selected Supplier Evaluation" />
                 <div className="mt-3 grid gap-2">
                   {decisionPoints.map(({ label, icon: Icon }) => (
                     <div
@@ -487,12 +417,11 @@ export default function SupplierSelectionSummary({
                 <SectionTitle icon={Users} title="Participating Suppliers" />
                 <div className="mt-3 space-y-2">
                   {ranked.map((s) => {
-                    const sRisk = supplierRiskLevel(s);
-                    const isSelected =
-                      s.name.toLowerCase() === selectedSupplier.toLowerCase();
+                    const sRisk = getEvaluationRisk(s);
+                    const isSelected = s === supplierRow;
                     return (
                       <div
-                        key={s.name}
+                        key={s.quotation_id || s.supplier_id || s.name}
                         className={`flex flex-wrap items-center gap-3 rounded-xl border p-4 transition sm:flex-nowrap ${
                           isSelected
                             ? "border-success-300 bg-success-50/60 ring-1 ring-success-200"
@@ -520,13 +449,16 @@ export default function SupplierSelectionSummary({
                             {s.name}
                           </p>
                           <p className="text-xs text-neutral-500">
-                            {formatCurrency(s.grand_total)}
+                            {formatQuoteTotal(
+                              s.grand_total,
+                              s.quote_price_status,
+                            )}
                           </p>
                         </div>
 
                         {/* Score */}
                         <span className="text-xs font-medium text-neutral-500">
-                          {clampScore(s.score?.overall ?? 0)}/100
+                          {formatScore(s.score?.overall)}
                         </span>
 
                         {/* Risk */}
@@ -552,32 +484,34 @@ export default function SupplierSelectionSummary({
 
             {/* ═══ SECTION 4 — AI Recommendation Snapshot ═══ */}
             <div>
-              <SectionTitle icon={Sparkles} title="AI Recommendation Snapshot" />
+              <SectionTitle icon={Sparkles} title="Selected Supplier Evaluation Snapshot" />
               <div className="mt-3 rounded-xl border border-primary-100 bg-gradient-to-br from-primary-50/60 to-white p-5">
                 <p className="text-sm leading-relaxed text-neutral-700">
                   {narrative}
                 </p>
                 {supplierRow && (
                   <div className="mt-4 flex flex-wrap gap-3">
+                    <MiniStat icon={Shield} label="Verdict" value={supplierRow.verdict} />
+                    <MiniStat icon={Target} label="Decision interpretation" value={supplierRow.recommendation_status === "REQUIRES_REVIEW" ? "Requires review" : supplierRow.recommendation_status === "NOT_EVALUATED" ? "Evaluation incomplete" : supplierRow.is_top_ranked ? "AI top-ranked" : "Ranked alternative"} />
                     <MiniStat
                       icon={Hash}
                       label="Price Score"
-                      value={`${clampScore(supplierRow.score?.cost ?? 0)}/100`}
+                      value={formatScore(supplierRow.score?.cost)}
                     />
                     <MiniStat
                       icon={Truck}
                       label="Delivery Score"
-                      value={`${clampScore(supplierRow.score?.delivery ?? 0)}/100`}
+                      value={formatScore(supplierRow.score?.delivery)}
                     />
                     <MiniStat
                       icon={Shield}
                       label="Reliability"
-                      value={`${clampScore(supplierRow.score?.reliability ?? 0)}/100`}
+                      value={formatScore(supplierRow.score?.reliability)}
                     />
                     <MiniStat
                       icon={BarChart3}
                       label="Overall"
-                      value={`${clampScore(supplierRow.score?.overall ?? 0)}/100`}
+                      value={formatScore(supplierRow.score?.overall)}
                     />
                   </div>
                 )}

@@ -1,0 +1,25 @@
+{
+  "created_at": "2026-09-22T08:11:54.470657+00:00",
+  "purpose": "RFQ-linked CLM: atomic Legal handoff, persisted Contract list, signatures, Finance and verified PO completion",
+  "validation": {
+    "production_build": "passed",
+    "application_tests": {
+      "passed": 2509,
+      "failed_preexisting": 4,
+      "skipped": 3
+    },
+    "failure_file": "src/api/approvalWorkflow.test.ts",
+    "python_transaction_tests_passed": 80,
+    "sequential_workflow_schema_tests_passed": 22,
+    "dedicated_schema_hash_tests_passed": 11,
+    "separate_erp_schema_tests_passed": 4,
+    "live_deployed": false,
+    "live_acceptance": "Blocked: bidsphere_workflows missing and no SSH/hosting access supplied",
+    "final_creation_notification_focused_tests_passed": 174,
+    "application_suite_note": "Full run followed by focused tests for the final creation-notification change."
+  },
+  "files": 14,
+  "package": "C:\\Users\\VICTUS\\Desktop\\Netlink @7\\Bidsphere\\scratch\\bidsphere_workflows-rfq-lifecycle-2026-09-22.zip",
+  "sha256": "291fe32aff30f0b07ee35688323b51df6ebc9583a944847b87d687ea53056bd0",
+  "verified": true
+}

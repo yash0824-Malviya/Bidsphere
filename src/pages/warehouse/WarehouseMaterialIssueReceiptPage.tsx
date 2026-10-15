@@ -11,7 +11,6 @@ import {
   downloadMaterialIssueReceiptPdf,
   printMaterialIssueReceiptPdf,
 } from "../../utils/pdf/materialIssueReceiptPdf";
-import PageHeader from "../../components/PageHeader";
 import MaterialIssueReceiptSignPanel from "../../components/warehouse/receipt/MaterialIssueReceiptSignPanel";
 import MaterialIssueReceiptView from "../../components/warehouse/receipt/MaterialIssueReceiptView";
 import { useAuthStore } from "../../store/authStore";
@@ -89,40 +88,38 @@ export default function WarehouseMaterialIssueReceiptPage() {
   const canSign = receipt.status === "Waiting Warehouse Signature";
 
   return (
-    <div className="space-y-5">
-      <PageHeader
-        title="Material Issue Receipt"
-        description={receipt.issue_number}
+    <div className="space-y-6">
+      <MaterialIssueReceiptView
+        receipt={receipt}
+        audience="warehouse"
         actions={
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Link
               to="/warehouse/issue-items/receipts"
-              className="inline-flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700 hover:bg-neutral-50"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50"
             >
-              <ArrowLeft className="h-4 w-4" />
+              <ArrowLeft className="h-3.5 w-3.5" />
               Issue Receipts
             </Link>
             <button
               type="button"
               onClick={() => void downloadMaterialIssueReceiptPdf(receipt)}
-              className="inline-flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-neutral-800 hover:bg-neutral-50"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50"
             >
-              <Download className="h-4 w-4" />
+              <Download className="h-3.5 w-3.5" />
               Download PDF
             </button>
             <button
               type="button"
               onClick={() => void printMaterialIssueReceiptPdf(receipt)}
-              className="inline-flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-neutral-800 hover:bg-neutral-50"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50"
             >
-              <Printer className="h-4 w-4" />
+              <Printer className="h-3.5 w-3.5" />
               Print
             </button>
           </div>
         }
-      />
-
-      <MaterialIssueReceiptView receipt={receipt} audience="warehouse">
+      >
         {canSign ? (
           <MaterialIssueReceiptSignPanel
             title="Warehouse Manager Digital Signature"
