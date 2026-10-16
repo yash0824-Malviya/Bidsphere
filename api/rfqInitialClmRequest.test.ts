@@ -112,7 +112,7 @@ describe("RFQ-awarded Contract Request persisted through existing ERP documents"
     expect(m.get(REQUEST, String(initial.name))?.request_status).toBe("Draft");
     expect(await m.call(team)).toMatchObject({ created: false, request: { name: initial.name, request_status: "Pending Review", description: "Saved Procurement terms" } });
     const released = m.get(REQUEST, String(initial.name))!;
-    expect(rfqClmRequestWorkflowView(released)).toMatchObject({ assignedRole: "procurement_team", status: "Pending", stage: "Procurement" });
+    expect(rfqClmRequestWorkflowView(released)).toMatchObject({ assignedRole: "procurement_team", status: "Pending Procurement Team", stage: "Pending Procurement Team" });
     expect(parseClmData(released.custom_clm_data).rfq_request_draft).toMatchObject(data.rfq_request_draft!);
     expect(parseClmData(released.custom_clm_data).audit.at(-1)?.action).toBe("procurement_team_assigned");
     await m.call(team);
@@ -180,7 +180,7 @@ describe("RFQ-awarded Contract Request persisted through existing ERP documents"
     expect(request).toMatchObject({ custom_rfq: RFQ, request_status: "Pending Review", approval_status: "Pending", department: "Procurement", supplier: "SUP-1", custom_supplier_quotation: "SQ-95", contract_value: 48500, currency: "USD" });
     for (const key of ["contract_type", "contract_start_date", "contract_end_date", "custom_contract"]) expect([undefined, null, ""]).toContain(request[key]);
     expect(isInitialRfqRequest(request)).toBe(true);
-    expect(rfqClmRequestWorkflowView(request)).toMatchObject({ rfq: RFQ, award: "AWARD-95", status: "Pending", stage: "Procurement", assignedRole: "procurement_team" });
+    expect(rfqClmRequestWorkflowView(request)).toMatchObject({ rfq: RFQ, award: "AWARD-95", status: "Pending Procurement Team", stage: "Pending Procurement Team", assignedRole: "procurement_team" });
     const data = parseClmData(request.custom_clm_data);
     expect(data.rfq_source).toMatchObject({ stage: "rfq_awarded", rfq: RFQ, contract_required: true, award: "AWARD-95", quotation: "SQ-95", amount: 48500 });
     expect((data.rfq_request_draft as ClmRecord).values).toMatchObject({ estimated_contract_value: "" });
@@ -325,5 +325,28 @@ describe("RFQ Contract Request lifecycle diagnostics", () => {
     expect(events()).toContainEqual({ event: "routing_skipped", rfq_id: RFQ, contract_required: "No" });
     expect(events().some(row => row.event === "request_payload" || row.event === "request_create_attempt")).toBe(false);
     expect(m.deps.create).not.toHaveBeenCalled();
+  });
+  it("persists resolved department to RFQ custom_department when missing, without overwriting existing", async () => {
+    const m = fixture();
+    m.put("Material Request", { name: "MR-100", docstatus: 1, department: "Procurement", company: "Netlink" });
+    m.put(RFQ_TYPE, { ...m.get(RFQ_TYPE, RFQ), department: "", custom_department: "", material_request: "MR-100" });
+    const result = await m.call();
+    expect(result.created).toBe(true);
+    expect(m.get(RFQ_TYPE, RFQ)?.custom_department).toBe("Procurement");
+
+    // Retry safely reuses without creating duplicate
+    const retry = await m.call();
+    expect(retry.created).toBe(false);
+    expect(retry.request?.name).toBe(result.request?.name);
+    expect(m.deps.create).toHaveBeenCalledOnce();
+  });
+  it("throws actionable 422 error when both RFQ and linked MR departments are missing, preserving saved award", async () => {
+    const m = fixture();
+    m.put(RFQ_TYPE, { ...m.get(RFQ_TYPE, RFQ), department: "", custom_department: "" });
+    await expect(m.call()).rejects.toThrow("A single requesting Department is required for the initial Contract Request");
+    expect(m.deps.create).not.toHaveBeenCalled();
+    // Saved award remains intact
+    const rfq = m.get(RFQ_TYPE, RFQ);
+    expect(JSON.parse(String(rfq?.custom_approval_data)).clm_award_intent?.award).toBe("AWARD-95");
   });
 });

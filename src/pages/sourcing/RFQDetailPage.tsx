@@ -10,6 +10,8 @@ import toast from "react-hot-toast";
 import {
   Activity,
   Ban,
+  Loader2,
+  RotateCcw,
   Sparkles,
 } from "lucide-react";
 
@@ -535,6 +537,8 @@ export default function RFQDetailPage() {
   );
   const [submittingForReview, setSubmittingForReview] = useState(false);
   const [pendingAwardDecision, setPendingAwardDecision] = useState<{ award: string; supplier: string; quotation: string } | null>(null);
+  const [clmErrorMessage, setClmErrorMessage] = useState<string | null>(null);
+  const [retryingClm, setRetryingClm] = useState(false);
   const [submittingRFQ, setSubmittingRFQ] = useState(false);
   const [localQuotes, setLocalQuotes] = useState<Map<string, SubmittedQuote>>(
     new Map()
@@ -1853,8 +1857,12 @@ export default function RFQDetailPage() {
   }
 
   async function handleSelectAnySupplier(payload: SupplierSelectionPayload) {
-    if (!rfq) return;
-    let awardPersisted = !!pendingAwardDecision;
+    if (!rfq || submittingForReview) return;
+    let awardPersisted = Boolean(
+      pendingAwardDecision ||
+      (legalDoc?.name && legalDoc.supplier === payload.supplierName) ||
+      (rfqClmQuery.data?.can_decide && rfqClmQuery.data.source?.award)
+    );
 
     // eslint-disable-next-line no-console
     console.log("[RFQ] Supplier selection:", {
@@ -1873,16 +1881,44 @@ export default function RFQDetailPage() {
       assertEvaluatedSupplierEligible(payload);
       if (!isSubmittedQuoteAmount(quote.total)) throw new Error("Cannot select this supplier until quotation pricing is provided.");
       const supplierForApproval = quote.supplier;
-      const state = pendingAwardDecision ? approvalState : await submitForReview({
-        rfqName: rfq.name,
-        rfqTitle: parsedMessage.title || rfq.name,
-        company: rfq.company ?? "",
-        selectedSupplier: supplierForApproval,
-        selectedSupplierTotal: quote.total,
-        rfqValue: quote.total,
-        submittedBy: user?.email ?? "procurement@netlink.com",
-        contractRequired: rfq.contract_required === "Yes",
-      });
+
+      if (pendingAwardDecision && (pendingAwardDecision.supplier !== supplierForApproval || pendingAwardDecision.quotation !== quote.sqName)) {
+        throw new Error("Finish the saved supplier award Contract decision before selecting another supplier.");
+      }
+
+      // Check if award already exists for this supplier and quotation
+      const existingAward =
+        pendingAwardDecision ||
+        (legalDoc && legalDoc.name && legalDoc.supplier === supplierForApproval && legalDoc.sq_name === quote.sqName
+          ? { award: legalDoc.name, supplier: legalDoc.supplier, quotation: legalDoc.sq_name }
+          : rfqClmQuery.data?.can_decide && rfqClmQuery.data.source?.award && rfqClmQuery.data.source.supplier === supplierForApproval && rfqClmQuery.data.source.quotation === quote.sqName
+          ? { award: rfqClmQuery.data.source.award, supplier: rfqClmQuery.data.source.supplier, quotation: rfqClmQuery.data.source.quotation }
+          : null);
+
+      let award = existingAward;
+      let state = approvalState;
+
+      if (!award) {
+        state = await submitForReview({
+          rfqName: rfq.name,
+          rfqTitle: parsedMessage.title || rfq.name,
+          company: rfq.company ?? "",
+          selectedSupplier: supplierForApproval,
+          selectedSupplierTotal: quote.total,
+          rfqValue: quote.total,
+          submittedBy: user?.email ?? "procurement@netlink.com",
+          contractRequired: rfq.contract_required === "Yes",
+        });
+        if (state) setApprovalState(state);
+
+        const record = await ensureLegalReviewForWinningSupplier(rfq, supplierForApproval, quote.sqName);
+        award = { award: record.name!, supplier: record.supplier, quotation: record.sq_name };
+      }
+
+      if (!award?.award) throw new Error("The persisted supplier award is unavailable. The Contract decision was not recorded.");
+      awardPersisted = true;
+      setPendingAwardDecision(award);
+      if (state) setApprovalState(state);
 
       // Persist audit trail for the selection decision
       const auditKey = `rfq_selection_audit_${rfq.name}`;
@@ -1905,32 +1941,95 @@ export default function RFQDetailPage() {
       // eslint-disable-next-line no-console
       console.log("[RFQ] Selection audit saved:", audit);
 
-      if (pendingAwardDecision && (pendingAwardDecision.supplier !== supplierForApproval || pendingAwardDecision.quotation !== quote.sqName)) throw new Error("Finish the saved supplier award Contract decision before selecting another supplier.");
-      const award = pendingAwardDecision || await ensureLegalReviewForWinningSupplier(rfq, supplierForApproval, quote.sqName).then(record => ({ award: record.name!, supplier: record.supplier, quotation: record.sq_name }));
-      if (!award?.award) throw new Error("The persisted supplier award is unavailable. The Contract decision was not recorded.");
-      awardPersisted = true;
-      const handoff = await recordRfqAwardDecision({
-        rfq: rfq.name,
-        award_id: award.award,
-        quotation_id: award.quotation,
-        supplier_id: award.supplier,
-        decision: (rfq.contract_required === "Yes" || rfq.contract_required === "No") ? rfq.contract_required : undefined,
-      });
-      setPendingAwardDecision(null);
-      if (state) setApprovalState(state);
       void queryClient.invalidateQueries({ queryKey: ["clm"] });
       invalidateApprovalWorkflow(queryClient);
       void legalDocQuery.refetch();
-      toast.success(handoff.summary.decision === "Yes" ? `${payload.supplierName} awarded. Contract Request ${handoff.request!.record.name} is pending with Procurement.` : `${payload.supplierName} awarded. No Contract required; the existing procurement workflow continues.`);
-      setAiModalOpen(false);
+
+      // Hand off to CLM Contract Request
+      try {
+        const handoff = await recordRfqAwardDecision({
+          rfq: rfq.name,
+          award_id: award.award,
+          quotation_id: award.quotation,
+          supplier_id: award.supplier,
+          decision: (rfq.contract_required === "Yes" || rfq.contract_required === "No") ? rfq.contract_required : undefined,
+        });
+        setPendingAwardDecision(null);
+        setClmErrorMessage(null);
+        toast.dismiss("rfq-clm-decision-error");
+        toast.dismiss("rfq-submit-for-review");
+        void queryClient.invalidateQueries({ queryKey: ["clm"] });
+        invalidateApprovalWorkflow(queryClient);
+        void legalDocQuery.refetch();
+        toast.success(
+          handoff.summary.decision === "Yes"
+            ? `${payload.supplierName} awarded. Contract Request ${handoff.request!.record.name} is pending with Procurement.`
+            : `${payload.supplierName} awarded. No Contract required; the existing procurement workflow continues.`,
+          { id: "rfq-award-success" }
+        );
+        setAiModalOpen(false);
+      } catch (clmErr) {
+        // Award was successfully persisted; CLM initial request handoff requires department verification
+        const clmMsg = resolveApiErrorMessage(
+          clmErr,
+          "A single requesting Department is required for the initial Contract Request. Set the RFQ Department or verify its linked Material Request Department, then retry this saved RFQ."
+        );
+        setClmErrorMessage(clmMsg);
+        toast.error(
+          `Supplier award is saved, but its Contract decision could not be confirmed: ${clmMsg}`,
+          { id: "rfq-clm-decision-error", duration: 8000 }
+        );
+        setAiModalOpen(false);
+        // Do not re-throw clmErr here: the award succeeded, and closing the modal cleanly prevents stuck/stale UI.
+      }
     } catch (err) {
       toast.error(
-        `${awardPersisted ? "Supplier award is saved, but its Contract decision could not be confirmed. " : ""}${resolveApiErrorMessage(err, "The award Contract decision could not be recorded. Keep this form open and retry.")}`,
+        `${awardPersisted ? "Supplier award is saved, but its Contract decision could not be confirmed. " : ""}${resolveApiErrorMessage(err, "The supplier award could not be saved. Keep this form open and retry.")}`,
         { id: "rfq-submit-for-review" },
       );
       throw err;
     } finally {
       setSubmittingForReview(false);
+    }
+  }
+
+  async function handleRetryClmHandoff() {
+    if (!rfq || !activeAwardDecision || retryingClm) return;
+    setRetryingClm(true);
+    try {
+      const handoff = await recordRfqAwardDecision({
+        rfq: rfq.name,
+        award_id: activeAwardDecision.award,
+        quotation_id: activeAwardDecision.quotation,
+        supplier_id: activeAwardDecision.supplier,
+        decision: (rfq.contract_required === "Yes" || rfq.contract_required === "No") ? rfq.contract_required : undefined,
+      });
+      setClmErrorMessage(null);
+      setPendingAwardDecision(null);
+      toast.dismiss("rfq-clm-decision-error");
+      toast.dismiss("rfq-submit-for-review");
+      void queryClient.invalidateQueries({ queryKey: ["clm"] });
+      invalidateApprovalWorkflow(queryClient);
+      void legalDocQuery.refetch();
+      void rfqQuery.refetch();
+      toast.success(
+        handoff.summary.decision === "Yes"
+          ? `${activeAwardDecision.supplier} awarded. Contract Request ${handoff.request!.record.name} is pending with Procurement.`
+          : `${activeAwardDecision.supplier} awarded. No Contract required; the existing procurement workflow continues.`,
+        { id: "rfq-award-success" }
+      );
+    } catch (err) {
+      const msg = resolveApiErrorMessage(
+        err,
+        "A single requesting Department is required for the initial Contract Request. Set the RFQ Department or verify its linked Material Request Department, then retry this saved RFQ."
+      );
+      setClmErrorMessage(msg);
+      toast.error(
+        `Contract decision could not be confirmed: ${msg}`,
+        { id: "rfq-clm-decision-error", duration: 8000 }
+      );
+    } finally {
+      setRetryingClm(false);
     }
   }
 
@@ -2220,6 +2319,30 @@ export default function RFQDetailPage() {
     "";
   const hasSelectedSupplier = resolvedSelectedSupplier.length > 0;
 
+  const activeAwardDecision: { award: string; supplier: string; quotation: string } | null =
+    pendingAwardDecision ||
+    (rfqClmQuery.data?.can_decide &&
+    rfqClmQuery.data?.source?.award &&
+    typeof rfqClmQuery.data.source.supplier === "string" &&
+    typeof rfqClmQuery.data.source.quotation === "string"
+      ? {
+          award: String(rfqClmQuery.data.source.award),
+          supplier: rfqClmQuery.data.source.supplier,
+          quotation: rfqClmQuery.data.source.quotation,
+        }
+      : legalDoc?.name &&
+        legalDoc.supplier &&
+        legalDoc.sq_name &&
+        (!rfqClmQuery.data?.decision || rfqClmQuery.data?.decision === "Pending") &&
+        rfq?.contract_required === "Yes" &&
+        !rfqClmQuery.data?.request
+      ? {
+          award: legalDoc.name,
+          supplier: legalDoc.supplier,
+          quotation: legalDoc.sq_name,
+        }
+      : null);
+
   const aiModals = (
     <>
       <AIInsightsErrorBoundary
@@ -2238,14 +2361,14 @@ export default function RFQDetailPage() {
           quotationCount={submittedQuoteCount}
           creatingPO={creatingPO || submittingForReview}
           hasApiKey={HAS_ANTHROPIC_KEY}
-          poAlreadyExists={poExists || hasSelectedSupplier}
-          chosenSupplier={hasSelectedSupplier ? resolvedSelectedSupplier : null}
+          poAlreadyExists={poExists || (hasSelectedSupplier && !activeAwardDecision)}
+          chosenSupplier={hasSelectedSupplier && !activeAwardDecision ? resolvedSelectedSupplier : null}
           ctaLabel="Create Purchase Order"
           ctaLoadingLabel="Submitting for Review…"
           ctaDoneMessage={
             poExists
               ? "A purchase order has already been created for this RFQ."
-              : hasSelectedSupplier
+              : hasSelectedSupplier && !activeAwardDecision
                 ? `${resolvedSelectedSupplier} has been awarded this RFQ.`
                 : undefined
           }
@@ -2255,7 +2378,7 @@ export default function RFQDetailPage() {
             isReadOnly || aiNeedsRerun ? () => {} : createPOFromRecommendation
           }
           onSelectSupplier={
-            isReadOnly || (hasSelectedSupplier && !pendingAwardDecision) || aiNeedsRerun
+            isReadOnly || (hasSelectedSupplier && !activeAwardDecision) || aiNeedsRerun
               ? undefined
               : handleSelectAnySupplier
           }
@@ -3047,6 +3170,32 @@ export default function RFQDetailPage() {
                 />
               </div>
             )}
+          {!isReadOnly && activeAwardDecision && rfq?.contract_required === "Yes" && !rfqClmQuery.data?.request && (
+            <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50/60 px-4 py-3">
+              <p className="mb-1 text-sm font-semibold text-amber-900">
+                Supplier Award Saved — Contract Request Pending
+              </p>
+              <p className="mb-3 text-xs text-amber-800">
+                {clmErrorMessage ||
+                  "A single requesting Department is required for the initial Contract Request. Set the RFQ Department or verify its linked Material Request Department, then retry this saved RFQ."}
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={retryingClm}
+                  onClick={handleRetryClmHandoff}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
+                >
+                  {retryingClm ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  )}
+                  Retry Contract Request
+                </button>
+              </div>
+            </div>
+          )}
         </>
       }
       reverseBiddingSlot={

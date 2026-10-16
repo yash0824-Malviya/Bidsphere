@@ -134,7 +134,7 @@ async function ensureAwardRequest(principal: AccessPrincipal, rfqName: string, d
   }
   const actor = principal.sub, at = deps.now();
   if (!actor) throw new ClmError("The Procurement user identity is missing.", 401);
-  const department = text(award.prefill.department) || await resolveInitialRequestDepartment(rfq, deps);
+  const department = text(award.prefill.department) || await resolveInitialRequestDepartment(rfq, deps, { quotation: award.quotation, review: award.review });
   const nextData = data || parseClmData(null);
   nextData.rfq_source = { ...award.source, stage: "rfq_awarded", rfq: rfqName, contract_required: true, company: rfq.company, prepared: false, available_award: award.source };
   nextData.rfq_request_workflow = { version: 1, phase: "procurement_team", assigned_role: "procurement_team", status: "Pending", current_stage: "Procurement" };
@@ -162,7 +162,11 @@ async function ensureAwardRequest(principal: AccessPrincipal, rfqName: string, d
       return undefined;
     }
     runtime.clm_initial_request = { version: 1, phase: "saving", trigger: "award_confirmation", award: award.source.award, quotation: award.source.quotation, supplier: award.source.supplier, requested_by: actor, requested_at: at, ...(request ? { request: request.name } : {}), pending_document: payload };
-    return { ...current, custom_approval_data: JSON.stringify(runtime) };
+    const patch: ClmRecord = { ...current, custom_approval_data: JSON.stringify(runtime) };
+    if (!text(current.department) && !text(current.custom_department) && department) {
+      patch.custom_department = department;
+    }
+    return patch;
   });
   const state = rfqRestData(rfqRestData(reserved.custom_approval_data).clm_initial_request);
   if (!sameAward(award, (await currentAward(rfqName, deps)).award)) throw new ClmError("The supplier award changed before Contract Request persistence. Refresh its source before retrying.", 409);
@@ -213,9 +217,13 @@ async function ensureAwardRequest(principal: AccessPrincipal, rfqName: string, d
     assertAwardIntent(current, award);
     const runtime = rfqRestData(current.custom_approval_data), latest = rfqRestData(runtime.clm_initial_request);
     if (latest.pending_document || latest.request && latest.request !== request!.name) throw new ClmError("The Contract Request has not passed persistence verification.", 409);
-    if (latest.phase === "complete") return undefined;
+    if (latest.phase === "complete" && (text(current.department) || text(current.custom_department) || !department)) return undefined;
     runtime.clm_initial_request = { ...latest, phase: "complete", request: request!.name, assigned_role: "procurement_team", status: "Pending", current_stage: "Procurement" };
-    return { ...current, custom_approval_data: JSON.stringify(runtime) };
+    const patch: ClmRecord = { ...current, custom_approval_data: JSON.stringify(runtime) };
+    if (!text(current.department) && !text(current.custom_department) && department) {
+      patch.custom_department = department;
+    }
+    return patch;
   });
   return { created, request: await deps.load(REQUEST, text(request.name)) };
 }
