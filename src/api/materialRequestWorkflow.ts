@@ -1198,11 +1198,28 @@ async function performMaterialRequestSubmission(
   });
 
   if (docstatus === 0) {
+    const hasMissingWarehouse = (fresh.items || []).some(
+      (item) => !item.warehouse?.trim(),
+    );
+    const resolvedCompany = fresh.company || COMPANY;
+    const defaultWarehouse = hasMissingWarehouse
+      ? await lookupDefaultWarehouse(resolvedCompany)
+      : "";
+
+    const validatedItems = (fresh.items || []).map((item) => {
+      const warehouse = (item.warehouse?.trim() || defaultWarehouse).trim();
+      return {
+        ...item,
+        warehouse: warehouse || undefined,
+      };
+    });
+
     // This site's Frappe Workflow is inactive. BidSphere's warehouse queue and
     // stock issue require native submission; submit the full ERP document and
     // business field in ONE Frappe transaction, preserving all existing items.
     await submitMaterialRequestDocument({
       ...fresh,
+      items: validatedItems,
       [MR_WORKFLOW_FIELD]: toErpBidsphereStatus(targetStatus),
     });
   } else {

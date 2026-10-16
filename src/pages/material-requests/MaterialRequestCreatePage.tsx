@@ -26,6 +26,7 @@ import {
   fetchMaterialRequestWorkflow,
   submitMaterialRequestWorkflow,
 } from "../../api/materialRequestWorkflow";
+import { lookupDefaultWarehouse } from "../../api/sourcing";
 import {
   MR_PROCUREMENT_TYPE_FIELD,
   MR_PROCUREMENT_CATEGORY_FIELD,
@@ -222,6 +223,8 @@ export default function MaterialRequestCreatePage() {
       schedule_date:
         it.schedule_date || doc.schedule_date || todayIso(),
       remarks: "",
+      warehouse: it.warehouse || undefined,
+      is_stock_item: (it as { is_stock_item?: 0 | 1 }).is_stock_item,
       part_name: it.custom_part_name ?? "",
       attachments: resolveEngineeringAttachments(it),
       drawing_2d_url: it.custom_2d_drawing || undefined,
@@ -355,6 +358,26 @@ export default function MaterialRequestCreatePage() {
         }
       }
 
+      // Resolve company warehouse for items to ensure stock items pass ERPNext validation
+      const resolvedCompany = (COMPANY || "Netlink").trim();
+      const defaultCompanyWarehouse = await lookupDefaultWarehouse(resolvedCompany);
+
+      const itemsWithWarehouse = validItems.map((item, index) => {
+        const itemWh = (item.warehouse?.trim() || defaultCompanyWarehouse).trim();
+        const isStock =
+          item.is_stock_item === 1 ||
+          (item.is_stock_item === undefined && resolvedProcurementType === "Direct");
+        if (submit && isStock && !itemWh) {
+          throw new Error(
+            `Row #${index + 1}: Warehouse is mandatory for stock Item ${item.item_code} (${item.item_name || item.item_code}). No warehouse is configured for company "${resolvedCompany}". Please configure a warehouse in ERPNext before submitting.`,
+          );
+        }
+        return {
+          ...item,
+          warehouse: itemWh || undefined,
+        };
+      });
+
       // Handle Save Draft (docstatus = 0)
       if (!submit) {
         const draftPayload = {
@@ -372,7 +395,7 @@ export default function MaterialRequestCreatePage() {
           remarks: notes.trim() || purpose,
           docstatus: 0,
           [MR_WORKFLOW_FIELD]: "Draft",
-          items: validItems.map((item, index) => ({
+          items: itemsWithWarehouse.map((item, index) => ({
             doctype: "Material Request Item",
             idx: index + 1,
             item_code: item.item_code,
@@ -389,7 +412,7 @@ export default function MaterialRequestCreatePage() {
             conversion_factor: 1,
             schedule_date:
               (item as any).required_by || item.schedule_date || today,
-            warehouse: (item as any).warehouse || undefined,
+            warehouse: item.warehouse || undefined,
           })),
         };
 
@@ -452,7 +475,7 @@ export default function MaterialRequestCreatePage() {
         custom_purpose: purpose,
         remarks: notes.trim() || purpose,
 
-        items: validItems.map((item, index) => ({
+        items: itemsWithWarehouse.map((item, index) => ({
           doctype: "Material Request Item",
           idx: index + 1,
           item_code: item.item_code,
@@ -469,7 +492,7 @@ export default function MaterialRequestCreatePage() {
           conversion_factor: 1,
           schedule_date:
             (item as any).required_by || item.schedule_date || today,
-          warehouse: (item as any).warehouse || undefined,
+          warehouse: item.warehouse || undefined,
         })),
       };
 

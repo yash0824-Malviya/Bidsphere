@@ -54,6 +54,7 @@ export default function ViewQuotationModal({
   const deliveryDays = items.find((it) => it.delivery_days)?.delivery_days;
   const warrantyNote = (sq as { custom_warranty_note?: string } | undefined)
     ?.custom_warranty_note;
+  const linkedRfq = rfqName || sq?.rfq_no || sq?.items?.[0]?.request_for_quotation;
 
   return (
     <div
@@ -72,7 +73,8 @@ export default function ViewQuotationModal({
               Quotation Details
             </h2>
             <p className="truncate text-xs text-neutral-500">
-              {sq?.supplier_name ?? sq?.supplier ?? sqName} · RFQ {rfqName}
+              {sq?.supplier_name ?? sq?.supplier ?? sqName}
+              {linkedRfq ? ` · RFQ ${linkedRfq}` : ""}
             </p>
           </div>
           <button
@@ -108,7 +110,7 @@ export default function ViewQuotationModal({
                   {sq.supplier_name ?? sq.supplier}
                 </Field>
                 <Field label="RFQ Number" icon={Hash}>
-                  {sq.rfq_no || rfqName}
+                  {linkedRfq || "—"}
                 </Field>
                 <Field label="Submitted Date" icon={Calendar}>
                   {sq.transaction_date ? formatDate(sq.transaction_date) : "—"}

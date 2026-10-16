@@ -166,4 +166,46 @@ describe("Material Request persisted submission", () => {
     expect(erp.apiPost).not.toHaveBeenCalled();
     expect(erp.apiPut).not.toHaveBeenCalled();
   });
+
+  it("resolves default company warehouse when item row lacks warehouse and submits", async () => {
+    const draftWithoutWh: MaterialRequestWorkflowRecord = {
+      ...draft("MR-missing-wh"),
+      items: [
+        { name: "row-1", item_code: "201", item_name: "Bonnet", qty: 1, uom: "Nos" },
+      ],
+    };
+    const submittedWithWh: MaterialRequestWorkflowRecord = {
+      ...submitted("MR-missing-wh"),
+      items: [
+        { name: "row-1", item_code: "201", item_name: "Bonnet", qty: 1, uom: "Nos", warehouse: "Stores - NSGAI" },
+      ],
+    };
+
+    vi.mocked(erp.apiGet)
+      .mockResolvedValueOnce(draftWithoutWh)
+      .mockResolvedValueOnce([{ name: "Stores - NSGAI" }])
+      .mockResolvedValueOnce(submittedWithWh);
+
+    vi.mocked(erp.apiPost).mockResolvedValueOnce({ data: submittedWithWh });
+
+    const result = await submitMaterialRequestWorkflow("MR-missing-wh");
+    expect(result.docstatus).toBe(1);
+
+    expect(erp.apiPost).toHaveBeenCalledWith(
+      "/api/method/frappe.client.submit",
+      expect.objectContaining({
+        doc: expect.objectContaining({
+          name: "MR-missing-wh",
+          items: [
+            expect.objectContaining({
+              item_code: "201",
+              warehouse: "Stores - NSGAI",
+            }),
+          ],
+        }),
+      }),
+      expect.anything(),
+    );
+  });
 });
+

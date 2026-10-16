@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Download, Eye, FileText, Link2 } from "lucide-react";
+import { Download, ExternalLink, Eye, FileText, Link2 } from "lucide-react";
 import toast from "react-hot-toast";
 
 import { fetchPagedList } from "../../api/erpnext";
@@ -15,6 +15,7 @@ import { usePagination } from "../../hooks/usePagination";
 import { useDebounce } from "../../hooks/useDebounce";
 import { formatDate } from "../../utils/format";
 import type { ExportColumn } from "../../utils/export";
+import ViewQuotationModal from "../../components/sourcing/ViewQuotationModal";
 
 interface SupplierQuotationRow {
   name: string;
@@ -29,10 +30,12 @@ const SQ_FIELDS = ["name", "supplier", "supplier_name", "transaction_date", "sta
 const SQ_STATUS_OPTIONS = ["", "Draft", "Submitted", "Ordered", "Expired", "Lost", "Cancelled"];
 
 export default function SupplierQuotationsListPage() {
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const preset = (searchParams.get("preset") ?? "").toLowerCase();
   const initialStatus = searchParams.get("status") ?? "";
 
+  const [viewingSq, setViewingSq] = useState<string | null>(null);
   const [status, setStatus] = useState(initialStatus);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
@@ -171,20 +174,19 @@ export default function SupplierQuotationsListPage() {
                     <td className="col-actions">
                       <TableRowActions
                         label={sq.name}
-                        onView={() =>
-                          toast(`Open related RFQ to review ${sq.name}`, {
-                            icon: "ℹ️",
-                          })
-                        }
+                        onView={() => setViewingSq(sq.name)}
                         items={[
                           {
                             id: "view",
                             label: "View",
                             icon: Eye,
-                            onClick: () =>
-                              toast(`Open related RFQ to review ${sq.name}`, {
-                                icon: "ℹ️",
-                              }),
+                            onClick: () => setViewingSq(sq.name),
+                          },
+                          {
+                            id: "rfq",
+                            label: "Open Related RFQ",
+                            icon: ExternalLink,
+                            onClick: () => navigate(detailPath),
                           },
                           {
                             id: "pdf",
@@ -238,6 +240,14 @@ export default function SupplierQuotationsListPage() {
           />
         )}
       </div>
+
+      {viewingSq && (
+        <ViewQuotationModal
+          sqName={viewingSq}
+          rfqName=""
+          onClose={() => setViewingSq(null)}
+        />
+      )}
     </div>
   );
 }

@@ -45,6 +45,10 @@ export interface MaterialRequestDraftLine {
   uom: string;
   schedule_date: string;
   remarks: string;
+  /** Target Warehouse in ERPNext. Mandatory for stock items. */
+  warehouse?: string;
+  /** Whether item is stock item (1) or non-stock (0). */
+  is_stock_item?: 0 | 1;
   /** True when the row was auto-generated from a BOM explosion. */
   generated?: boolean;
   /** Source BOM document name (present only for generated rows). */
@@ -307,11 +311,20 @@ export default function MaterialRequestItemLineRow({
       description: item.description ?? item.item_name,
       uom: item.uom,
       item_group: item.item_group || row.item_group,
+      warehouse: item.default_warehouse || row.warehouse || undefined,
+      is_stock_item: item.is_stock_item,
     });
   }
 
   function handleItemClear() {
-    onChange({ item_code: "", item_name: "", description: "", uom: "Nos" });
+    onChange({
+      item_code: "",
+      item_name: "",
+      description: "",
+      uom: "Nos",
+      warehouse: undefined,
+      is_stock_item: undefined,
+    });
   }
 
   return (

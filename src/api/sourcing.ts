@@ -1979,6 +1979,8 @@ export interface ItemSearchResult {
   procurement_type?: string;
   procurement_category?: string;
   lifecycle_status?: string;
+  is_stock_item?: 0 | 1;
+  default_warehouse?: string;
 }
 
 /** Full Item Master snapshot used when populating an RFQ line. */
@@ -2038,6 +2040,8 @@ interface RawItem {
   custom_procurement_type?: string;
   custom_procurement_category?: string;
   custom_bidsphere_item_status?: string;
+  is_stock_item?: 0 | 1 | number;
+  default_warehouse?: string;
 }
 
 const ITEM_SEARCH_LOG = "[ItemSearch]";
@@ -2051,6 +2055,7 @@ const ITEM_SEARCH_CORE_FIELDS = [
   "description",
   "item_group",
   "disabled",
+  "is_stock_item",
 ] as const;
 
 /**
@@ -2058,6 +2063,7 @@ const ITEM_SEARCH_CORE_FIELDS = [
  * Never hard-fail the picker if any of these are missing or not queryable.
  */
 const ITEM_SEARCH_OPTIONAL_FIELDS = [
+  "default_warehouse",
   "custom_part_name",
   "custom_procurement_type",
   "custom_procurement_category",
@@ -2232,6 +2238,8 @@ function mapRawItemToSearchResult(item: RawItem): ItemSearchResult {
     procurement_type: resolved.procurement_type || undefined,
     procurement_category: resolved.procurement_category || undefined,
     lifecycle_status: item.custom_bidsphere_item_status?.trim() || undefined,
+    is_stock_item: item.is_stock_item !== undefined ? (Number(item.is_stock_item) ? 1 : 0) : undefined,
+    default_warehouse: item.default_warehouse?.trim() || undefined,
   };
 }
 
