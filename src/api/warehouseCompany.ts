@@ -22,9 +22,7 @@ import { nonNegativeQty } from "../utils/inventoryStock";
 export const WAREHOUSE_MODULE_COMPANY = COMPANY;
 
 /** Companies whose warehouses must never be used in Warehouse workflows. */
-const BLOCKED_WAREHOUSE_COMPANIES = new Set(
-  ["bidsphere"].map((s) => s.toLowerCase()),
-);
+const BLOCKED_WAREHOUSE_COMPANIES = new Set<string>();
 
 function isBlockedCompany(company: string | null | undefined): boolean {
   return BLOCKED_WAREHOUSE_COMPANIES.has((company || "").trim().toLowerCase());
@@ -35,9 +33,9 @@ function looksLike(name: string, needle: string): boolean {
 }
 
 export type WarehouseStockCompanyContext = {
-  /** ERP Material Request.company (may be Bidsphere). */
+  /** ERP Material Request.company (e.g. Bidsphere or Netlink). */
   mrCompany: string;
-  /** Company used for Bin / Warehouse / Stock Entry (never Bidsphere). */
+  /** Company used for Bin / Warehouse / Stock Entry. */
   stockCompany: string;
   /** True when MR.company differs from stockCompany. */
   companyDiffer: boolean;
@@ -48,14 +46,9 @@ export type WarehouseStockCompanyContext = {
 /**
  * Resolve which company to use for Warehouse stock / issue.
  *
- * Regression fix: many Material Requests still have ERP company "Bidsphere"
- * (site default). Warehouse Review previously worked by reading stock from
- * Netlink warehouses anyway. Hard-blocking those MRs broke Review.
- *
  * Rules:
- * - Never use Bidsphere *warehouses* for stock/issue.
- * - If MR.company is Bidsphere (or empty), use WAREHOUSE_MODULE_COMPANY (Netlink).
- * - If MR.company is another non-blocked ERP company, use that for stock filters.
+ * - If MR.company is provided, use that company for warehouse stock filters.
+ * - If empty, fall back to WAREHOUSE_MODULE_COMPANY.
  */
 export function resolveWarehouseStockCompany(
   mrCompany: string | null | undefined,
@@ -66,7 +59,7 @@ export function resolveWarehouseStockCompany(
   if (isBlockedCompany(mr)) {
     const notice =
       `Material Request company is "${mr}", but Warehouse stock is read from ` +
-      `Company ${WAREHOUSE_MODULE_COMPANY} warehouses (Bidsphere warehouses are never used).`;
+      `Company ${WAREHOUSE_MODULE_COMPANY} warehouses.`;
     // eslint-disable-next-line no-console
     console.warn("[WarehouseCompany] " + notice, {
       mrCompany: mr,
@@ -80,9 +73,10 @@ export function resolveWarehouseStockCompany(
     };
   }
 
-  if (mr !== WAREHOUSE_MODULE_COMPANY) {
+  const differ = mr.toLowerCase() !== WAREHOUSE_MODULE_COMPANY.toLowerCase();
+  if (differ) {
     // eslint-disable-next-line no-console
-    console.warn(
+    console.log(
       "[WarehouseCompany] MR company differs from VITE_COMPANY — using MR company for stock",
       { mrCompany: mr, configured: WAREHOUSE_MODULE_COMPANY },
     );
@@ -91,11 +85,10 @@ export function resolveWarehouseStockCompany(
   return {
     mrCompany: mr,
     stockCompany: mr,
-    companyDiffer: mr !== WAREHOUSE_MODULE_COMPANY,
-    notice:
-      mr !== WAREHOUSE_MODULE_COMPANY
-        ? `Using Material Request company "${mr}" for stock (app default is ${WAREHOUSE_MODULE_COMPANY}).`
-        : undefined,
+    companyDiffer: differ,
+    notice: differ
+      ? `Using Material Request company "${mr}" for stock (app default is ${WAREHOUSE_MODULE_COMPANY}).`
+      : undefined,
   };
 }
 
@@ -227,7 +220,7 @@ export async function resolveNetlinkWarehouses(
 
   if (
     warehouseCache &&
-    warehouseCache.company === requested &&
+    warehouseCache.company.toLowerCase() === requested.toLowerCase() &&
     Date.now() - warehouseCache.at < WAREHOUSE_CACHE_MS
   ) {
     return warehouseCache.names;
@@ -251,7 +244,7 @@ export async function resolveNetlinkWarehouses(
         { company },
       );
       const discovered = await discoverCompanyFromStoresWarehouse();
-      if (discovered && discovered !== company) {
+      if (discovered && discovered.toLowerCase() !== company.toLowerCase()) {
         company = discovered;
         names = await fetchLeafWarehousesForCompany(company);
         // eslint-disable-next-line no-console
@@ -267,7 +260,7 @@ export async function resolveNetlinkWarehouses(
     if (names.length === 0) {
       throw new Error(
         `No warehouses found for Company ${requested}. ` +
-          `Configure a Stores warehouse (e.g. Stores - NSGAI) under the Warehouse company.`,
+          `Configure a Stores or Finished Goods warehouse under Company ${requested}.`,
       );
     }
     warehouseCache = { company: requested, names, at: Date.now() };
@@ -291,6 +284,7 @@ export function clearNetlinkWarehouseCache(): void {
 /**
  * Prefer Stores among company warehouses (target / local default).
  * Prefers "Stores - NSGAI" when present — still dynamic from ERP list.
+ * If no Stores exists, prefers Finished Goods, else first leaf.
  */
 export async function resolveNetlinkStoresWarehouse(
   forCompany?: string,
@@ -299,7 +293,10 @@ export async function resolveNetlinkStoresWarehouse(
   const nsgai = names.find((w) => looksLike(w, "NSGAI") && looksLike(w, "stores"));
   if (nsgai) return nsgai;
   const stores = names.find((w) => looksLike(w, "stores"));
-  return stores ?? names[0] ?? "";
+  if (stores) return stores;
+  const fg = names.find((w) => looksLike(w, "finished goods"));
+  if (fg) return fg;
+  return names[0] ?? "";
 }
 
 export type PurchaseWarehouseResolution = {
@@ -350,7 +347,11 @@ export async function resolvePurchaseWarehouseForCompany(input: {
       warehouseCompany: candidateCompany,
       expectedCompany: company,
     });
-    if (candidateCompany === company && !isBlockedCompany(candidateCompany)) {
+    if (
+      candidateCompany &&
+      candidateCompany.trim().toLowerCase() === company.trim().toLowerCase() &&
+      !isBlockedCompany(candidateCompany)
+    ) {
       const result: PurchaseWarehouseResolution = {
         warehouse: candidate,
         warehouseCompany: candidateCompany,
@@ -388,7 +389,11 @@ export async function resolvePurchaseWarehouseForCompany(input: {
         warehouseCompany: whCompany,
         expectedCompany: company,
       });
-      if (whCompany === company && !isBlockedCompany(whCompany)) {
+      if (
+        whCompany &&
+        whCompany.trim().toLowerCase() === company.trim().toLowerCase() &&
+        !isBlockedCompany(whCompany)
+      ) {
         const result: PurchaseWarehouseResolution = {
           warehouse: companyDefault,
           warehouseCompany: whCompany,
@@ -441,25 +446,29 @@ export async function resolvePurchaseWarehouseForCompany(input: {
 }
 
 /**
- * Prefer Finished Goods among Netlink warehouses when present.
- * Dynamic — no hardcoded "Finished Goods - NSGAI".
+ * Prefer Finished Goods among company warehouses when present.
+ * Dynamic — no hardcoded names.
  */
-export async function resolveNetlinkFinishedGoodsWarehouse(): Promise<string> {
-  const names = await resolveNetlinkWarehouses();
+export async function resolveNetlinkFinishedGoodsWarehouse(
+  forCompany?: string,
+): Promise<string> {
+  const names = await resolveNetlinkWarehouses(forCompany);
   const fg = names.find((w) => looksLike(w, "finished goods"));
-  return fg ?? (await resolveNetlinkStoresWarehouse());
+  return fg ?? (await resolveNetlinkStoresWarehouse(forCompany));
 }
 
 /**
- * Reject Bidsphere (or any non-Netlink) warehouse with a clear UI error.
+ * Validate that a warehouse belongs to the expected company.
  */
 export async function assertNetlinkWarehouse(
   warehouseName: string,
   role: "Source" | "Target" | "Warehouse" = "Warehouse",
+  expectedCompany?: string,
 ): Promise<void> {
+  const targetCompany = expectedCompany || WAREHOUSE_MODULE_COMPANY;
   await assertWarehouseBelongsToCompany(
     warehouseName,
-    WAREHOUSE_MODULE_COMPANY,
+    targetCompany,
     role,
   );
   const actual = await getWarehouseCompany(warehouseName);
@@ -468,25 +477,25 @@ export async function assertNetlinkWarehouse(
       warehouseCompanyMismatchMessage(
         warehouseName,
         actual,
-        WAREHOUSE_MODULE_COMPANY,
+        targetCompany,
       ),
     );
   }
 }
 
 /**
- * Pick the best Netlink source warehouse for an item (Stock Entry s_warehouse).
- * Preference among Netlink bins with stock:
+ * Pick the best source warehouse for an item (Stock Entry s_warehouse).
+ * Preference among company bins with stock:
  *   1) Finished Goods…
  *   2) Stores…
  *   3) Highest available qty
- * Never returns a Bidsphere warehouse.
  */
 export async function resolveNetlinkIssueSourceWarehouse(
   itemCode: string,
   requiredQty = 0,
+  forCompany?: string,
 ): Promise<string> {
-  const company = WAREHOUSE_MODULE_COMPANY;
+  const company = forCompany || WAREHOUSE_MODULE_COMPANY;
   const across = await getItemStockAcrossWarehouses(itemCode, {
     company,
     forIssue: true,
@@ -512,20 +521,19 @@ export async function resolveNetlinkIssueSourceWarehouse(
 
   let chosen = pickFrom(enough.length ? enough : withStock);
   if (!chosen) {
-    // No bin qty — still bind to a Netlink warehouse (never Bidsphere default).
     chosen =
-      (await resolveNetlinkFinishedGoodsWarehouse()) ||
-      (await resolveNetlinkStoresWarehouse());
+      (await resolveNetlinkFinishedGoodsWarehouse(company)) ||
+      (await resolveNetlinkStoresWarehouse(company));
   }
 
   if (!chosen) {
     throw new Error(
-      `No Netlink warehouse available for item ${itemCode}. ` +
+      `No warehouse available for item ${itemCode}. ` +
         `Configure warehouses under Company ${company}.`,
     );
   }
 
-  await assertNetlinkWarehouse(chosen, "Source");
+  await assertNetlinkWarehouse(chosen, "Source", company);
 
   // eslint-disable-next-line no-console
   console.log("[WarehouseCompany] resolveNetlinkIssueSourceWarehouse", {
@@ -545,9 +553,6 @@ export async function resolveNetlinkIssueSourceWarehouse(
 /**
  * Rewrite a Stock Entry draft so every s_warehouse / from_warehouse uses the
  * user-selected (or auto-selected) company warehouse.
- *
- * ERPNext make_stock_entry may default Item warehouses to Company Bidsphere
- * (e.g. "Finished Goods - B") — those are always overwritten.
  *
  * @param forcedWarehouse Required UI-selected From Warehouse for the MR company.
  */
@@ -569,7 +574,7 @@ export async function remapStockEntryDraftToNetlink(
   let sourceWarehouse = (forcedWarehouse || "").trim();
   if (!sourceWarehouse) {
     // Fallback only when caller did not pass a selection (should not happen from UI).
-    sourceWarehouse = await resolveNetlinkStoresWarehouse();
+    sourceWarehouse = await resolveNetlinkStoresWarehouse(company);
   }
   if (!sourceWarehouse) {
     throw new Error(
@@ -577,9 +582,9 @@ export async function remapStockEntryDraftToNetlink(
     );
   }
 
-  await assertNetlinkWarehouse(sourceWarehouse, "Source");
+  await assertNetlinkWarehouse(sourceWarehouse, "Source", company);
   const sourceCompany = await getWarehouseCompany(sourceWarehouse);
-  if (sourceCompany !== company) {
+  if (sourceCompany?.trim().toLowerCase() !== company.trim().toLowerCase()) {
     throw new Error(
       warehouseCompanyMismatchMessage(sourceWarehouse, sourceCompany, company),
     );
@@ -599,7 +604,7 @@ export async function remapStockEntryDraftToNetlink(
           item.transfer_qty = q;
         }
       }
-      await assertNetlinkWarehouse(String(item.s_warehouse), "Source");
+      await assertNetlinkWarehouse(String(item.s_warehouse), "Source", company);
     }
   }
 
@@ -635,24 +640,25 @@ export async function resolveMaterialIssueWarehouses(mrCompany?: string): Promis
   const company = assertMaterialRequestIsWarehouseCompany(
     mrCompany || WAREHOUSE_MODULE_COMPANY,
   );
-  const warehouses = await resolveNetlinkWarehouses();
+  const warehouses = await resolveNetlinkWarehouses(company);
   const autoSelected =
     warehouses.length === 1
       ? warehouses[0]!
-      : (await resolveNetlinkStoresWarehouse()) || warehouses[0] || "";
+      : (await resolveNetlinkStoresWarehouse(company)) || warehouses[0] || "";
   return { company, warehouses, autoSelected };
 }
 
-/** Filter a warehouse name list to Netlink only (drop Bidsphere). */
+/** Filter a warehouse name list to company only. */
 export async function filterToNetlinkWarehouses(
   warehouseNames: string[],
+  forCompany?: string,
 ): Promise<string[]> {
-  const allowed = new Set(await resolveNetlinkWarehouses());
+  const allowed = new Set(await resolveNetlinkWarehouses(forCompany));
   return warehouseNames.filter((w) => allowed.has(w));
 }
 
-/** Debug helper — bins for an item limited to Netlink warehouses. */
-export async function fetchNetlinkBinsForItem(itemCode: string) {
-  const warehouses = await resolveNetlinkWarehouses();
+/** Debug helper — bins for an item limited to company warehouses. */
+export async function fetchNetlinkBinsForItem(itemCode: string, forCompany?: string) {
+  const warehouses = await resolveNetlinkWarehouses(forCompany);
   return fetchInventoryBins({ itemCode, warehouses });
 }

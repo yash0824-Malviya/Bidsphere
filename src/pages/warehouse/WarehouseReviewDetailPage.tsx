@@ -642,12 +642,15 @@ export default function WarehouseReviewDetailPage() {
         "Warehouse";
 
       try {
-        // Stock company = Netlink when MR.company is Bidsphere (common ERP default).
-        // Do not hard-block Review — that was the regression.
+        // Stock company and leaf warehouses for the Material Request company.
         const companyCtx = resolveWarehouseStockCompany(mr?.company);
         const stockCompany = companyCtx.stockCompany;
         const companyWarehouses = await resolveNetlinkWarehouses(stockCompany);
+        const mrItemWh = mrItems.find(
+          (i) => i.warehouse && companyWarehouses.includes(i.warehouse),
+        )?.warehouse;
         const preferredWarehouse =
+          mrItemWh ||
           (await resolveNetlinkStoresWarehouse(stockCompany)) ||
           companyWarehouses.find((w) => /stores\s*-\s*nsgai/i.test(w)) ||
           companyWarehouses[0] ||
@@ -655,7 +658,7 @@ export default function WarehouseReviewDetailPage() {
 
         if (!preferredWarehouse) {
           throw new StockCheckApiError(
-            "Warehouse Stores - NSGAI not found.",
+            `No warehouse found for Company ${stockCompany}.`,
             404,
             "warehouse_not_found",
           );
@@ -1214,11 +1217,14 @@ export default function WarehouseReviewDetailPage() {
       forward: forwardLines.map((i) => i.item_code),
     });
 
-    try {
-      // Netlink only — never Company Bidsphere warehouses.
+      // Material Request company warehouses
       const mrCompany = assertMaterialRequestIsWarehouseCompany(mr.company);
       const companyWarehouses = await resolveNetlinkWarehouses(mrCompany);
+      const mrItemWh = [...localIssue, ...transferIssue].find(
+        (i) => i.warehouse && companyWarehouses.includes(i.warehouse),
+      )?.warehouse;
       const preferredWarehouse =
+        mrItemWh ||
         (await resolveNetlinkStoresWarehouse(mrCompany)) ||
         companyWarehouses[0] ||
         "";
@@ -1230,7 +1236,7 @@ export default function WarehouseReviewDetailPage() {
         );
       }
 
-      // Pre-resolve Netlink source warehouses (Finished Goods preferred when stocked).
+      // Pre-resolve source warehouses (Finished Goods preferred when stocked).
       // Use planned issue qty (not full requested) so partial stock can resolve.
       const sourceByItem = new Map<string, string>();
       for (const item of [...localIssue, ...transferIssue]) {
@@ -1239,9 +1245,10 @@ export default function WarehouseReviewDetailPage() {
           const sourceWh = await resolveNetlinkIssueSourceWarehouse(
             item.item_code,
             issueQty,
+            mrCompany,
           );
           sourceByItem.set(item.item_code, sourceWh);
-          await assertNetlinkWarehouse(sourceWh, "Source");
+          await assertNetlinkWarehouse(sourceWh, "Source", mrCompany);
         } catch (srcErr) {
           const reason =
             srcErr instanceof Error
@@ -1259,7 +1266,7 @@ export default function WarehouseReviewDetailPage() {
       );
 
       if (transferIssueReady.length > 0) {
-        await assertNetlinkWarehouse(preferredWarehouse, "Target");
+        await assertNetlinkWarehouse(preferredWarehouse, "Target", mrCompany);
       }
 
       // ─── Branch A: Issue from Netlink warehouse (dynamic, never Bidsphere) ───
@@ -1475,7 +1482,10 @@ export default function WarehouseReviewDetailPage() {
               purchaseWh.rejectedCandidateCompany || null,
           });
 
-          if (purchaseWh.warehouseCompany !== mrCompany) {
+          if (
+            purchaseWh.warehouseCompany.trim().toLowerCase() !==
+            mrCompany.trim().toLowerCase()
+          ) {
             throw new Error(SELECTED_WAREHOUSE_OTHER_COMPANY_MESSAGE);
           }
 

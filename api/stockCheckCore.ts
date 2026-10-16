@@ -289,8 +289,8 @@ async function assertItemExists(
   }
 }
 
-function isBidsphereCompany(company: string | null | undefined): boolean {
-  return (company || "").trim().toLowerCase() === "bidsphere";
+function isBidsphereCompany(_company: string | null | undefined): boolean {
+  return false;
 }
 
 async function assertWarehouse(
@@ -321,10 +321,20 @@ async function assertWarehouse(
     console.log("Warehouse Company:", warehouseCompany || "(unknown)");
     console.log("Stock Company:", stockCompany);
 
-    // Never read stock from Bidsphere warehouses.
-    if (isBidsphereCompany(warehouseCompany)) {
+    // Validate warehouse company against stockCompany / mrCompany (case-insensitive)
+    const whCompNorm = warehouseCompany.trim().toLowerCase();
+    const stockCompNorm = stockCompany.trim().toLowerCase();
+    const mrCompNorm = (mrCompany || "").trim().toLowerCase();
+
+    if (
+      whCompNorm &&
+      stockCompNorm &&
+      whCompNorm !== stockCompNorm &&
+      mrCompNorm &&
+      whCompNorm !== mrCompNorm
+    ) {
       throw new StockCheckError(
-        `Warehouse ${warehouse} belongs to Company Bidsphere and cannot be used for Warehouse Issue. Use a Netlink warehouse (e.g. Stores - NSGAI).`,
+        `Warehouse ${warehouse} belongs to Company ${warehouseCompany} and cannot be used for Company ${stockCompany}.`,
         400,
         "company_mismatch",
       );
@@ -334,7 +344,7 @@ async function assertWarehouse(
     if (
       mrCompany &&
       warehouseCompany &&
-      mrCompany.trim() !== warehouseCompany.trim()
+      mrCompNorm !== whCompNorm
     ) {
       // Soft business notice — do not block stock lookup (MR may still say Bidsphere).
       notice =
@@ -346,7 +356,7 @@ async function assertWarehouse(
     if (
       stockCompany &&
       warehouseCompany &&
-      stockCompany.trim() !== warehouseCompany.trim()
+      stockCompNorm !== whCompNorm
     ) {
       // Prefer warehouse company for Bin/SLE when app stock company string differs.
       notice =
@@ -392,7 +402,7 @@ async function listCompanyWarehouses(
     },
   );
   return (Array.isArray(data) ? data : [])
-    .filter((w) => w.name && !isBidsphereCompany(w.company))
+    .filter((w) => Boolean(w.name))
     .map((w) => String(w.name).trim())
     .filter(Boolean);
 }

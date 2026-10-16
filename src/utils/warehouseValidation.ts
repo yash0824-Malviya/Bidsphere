@@ -13,7 +13,10 @@ export async function validateWarehouseBelongsToCompany(
     const warehouse = await apiGet<{ company?: string }>(
       `/api/resource/Warehouse/${encodeURIComponent(warehouseName)}`,
     );
-    return warehouse?.company === company;
+    return (
+      (warehouse?.company || "").trim().toLowerCase() ===
+      company.trim().toLowerCase()
+    );
   } catch (error) {
     console.error(
       `Failed to validate warehouse ${warehouseName} for company ${company}:`,
@@ -101,7 +104,9 @@ export async function assertWarehouseBelongsToCompany(
       `${role} warehouse "${warehouseName}" was not found in ERPNext.`,
     );
   }
-  if (actualCompany !== expectedCompany) {
+  if (
+    actualCompany.trim().toLowerCase() !== expectedCompany.trim().toLowerCase()
+  ) {
     throw new Error(
       warehouseCompanyMismatchMessage(
         warehouseName,

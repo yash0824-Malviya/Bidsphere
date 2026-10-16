@@ -287,14 +287,18 @@ export async function executeMaterialIssue(
   );
 
   for (const item of adjusted) {
-    await assertNetlinkWarehouse(String(item.s_warehouse || ""), "Source");
+    await assertNetlinkWarehouse(
+      String(item.s_warehouse || ""),
+      "Source",
+      mrCompany,
+    );
     if (String(item.s_warehouse) !== warehouse) {
       throw new Error(
         `Stock Entry line warehouse must be "${warehouse}" (Material Request company ${mrCompany}).`,
       );
     }
   }
-  await assertNetlinkWarehouse(warehouse, "Source");
+  await assertNetlinkWarehouse(warehouse, "Source", mrCompany);
 
   const audit = buildAuditMeta({
     created_by: input.issuedBy,
