@@ -1,5 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getAnthropicModel } from "./aiConfig.ts";
+import {
+  getAnthropicApiKey,
+  getAnthropicModel,
+  getAnthropicWorkspaceId,
+} from "./aiConfig.ts";
 import {
   calculateWeightedEvaluationScore,
   validateAndScoreEvaluation,
@@ -162,7 +166,7 @@ export class ClaudeApiError extends Error {
 export async function handleClaudeRequest(
   body: ClaudeRequestBody,
 ): Promise<ClaudeResult> {
-  const apiKey = process.env.ANTHROPIC_API_KEY || "";
+  const apiKey = getAnthropicApiKey();
   if (!apiKey) {
     throw new ClaudeApiError(
       "Anthropic API key is not configured on the BidSphere server (ANTHROPIC_API_KEY missing).",
@@ -172,7 +176,7 @@ export async function handleClaudeRequest(
     );
   }
 
-  const workspaceId = process.env.ANTHROPIC_WORKSPACE_ID?.trim();
+  const workspaceId = getAnthropicWorkspaceId();
   if (workspaceId && !/^wrkspc_[a-zA-Z0-9]+$/.test(workspaceId)) {
     throw new ClaudeApiError(
       "Invalid ANTHROPIC_WORKSPACE_ID format. Workspace ID must start with 'wrkspc_'.",

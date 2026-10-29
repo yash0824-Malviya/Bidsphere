@@ -2180,7 +2180,7 @@ function fileProxyDevMiddleware(
             }),
           });
 
-          if (!result.ok) {
+          if ("body" in result) {
             res.statusCode = result.status;
             res.setHeader("Content-Type", "application/json");
             res.end(JSON.stringify(result.body));
@@ -3730,6 +3730,18 @@ function aiClaudeDevMiddleware(): Plugin {
           return;
         }
         try {
+          // Keep Anthropic credentials in sync with latest .env in dev server
+          const currentEnv = loadEnv(server.config.mode || "development", server.config.root || process.cwd(), "");
+          if (currentEnv.ANTHROPIC_API_KEY) {
+            process.env.ANTHROPIC_API_KEY = currentEnv.ANTHROPIC_API_KEY;
+          }
+          if (currentEnv.ANTHROPIC_MODEL) {
+            process.env.ANTHROPIC_MODEL = currentEnv.ANTHROPIC_MODEL;
+          }
+          if (currentEnv.ANTHROPIC_WORKSPACE_ID !== undefined) {
+            process.env.ANTHROPIC_WORKSPACE_ID = currentEnv.ANTHROPIC_WORKSPACE_ID;
+          }
+
           const chunks: Buffer[] = [];
           for await (const chunk of req) chunks.push(chunk as Buffer);
           const raw = Buffer.concat(chunks).toString("utf8");
@@ -3791,16 +3803,16 @@ export default defineConfig(({ mode }) => {
     erpApiSecret ||
     "bidsphere-dev-session-secret";
   process.env.ANTHROPIC_API_KEY =
-    process.env.ANTHROPIC_API_KEY ||
     env.ANTHROPIC_API_KEY ||
+    process.env.ANTHROPIC_API_KEY ||
     "";
   process.env.ANTHROPIC_MODEL =
-    process.env.ANTHROPIC_MODEL ||
     env.ANTHROPIC_MODEL ||
-    "claude-3-5-sonnet-20241022";
+    process.env.ANTHROPIC_MODEL ||
+    "claude-sonnet-4-5-20250929";
   process.env.ANTHROPIC_WORKSPACE_ID =
-    process.env.ANTHROPIC_WORKSPACE_ID ||
     env.ANTHROPIC_WORKSPACE_ID ||
+    process.env.ANTHROPIC_WORKSPACE_ID ||
     "";
 
   const demoMfaEnabled =
