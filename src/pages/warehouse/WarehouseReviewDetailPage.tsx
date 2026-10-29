@@ -1217,6 +1217,7 @@ export default function WarehouseReviewDetailPage() {
       forward: forwardLines.map((i) => i.item_code),
     });
 
+    try {
       // Material Request company warehouses
       const mrCompany = assertMaterialRequestIsWarehouseCompany(mr.company);
       const companyWarehouses = await resolveNetlinkWarehouses(mrCompany);
